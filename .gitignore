@@ -1,0 +1,55 @@
+# ── 运行时产物（var/）：一律不进版本库 ────────────────────────────────
+# 目录名是 var/ 而不是 data/ —— 后者与只读归档 benchmark_data/ 读起来像同一类东西。
+# var/ 只装"运行时状态"，装进去的东西都应当是可重建或可弃的。
+# ⚠ 必须写成 var/* 而不是 var/：写 var/ 会排除**目录本身**，git 就不再向下
+#   查找，下面那条 !var/README.md 永远轮不到执行（静默失效）。
+var/*
+
+# 唯一的例外：保留 var/README.md，让这个目录在 checkout 后依然存在且有说明。
+!var/README.md
+
+# ⚠ 派生【产物】要入库，原始数据与运行时状态不入库：
+#      --configs/runs/        每次实验的配置快照      → 提交
+#      --eval/experiments/    T2 的 133 行人工标注    → 提交
+#      --eval/reports/ledger.md  结果台账             → 提交
+#   若你新增一类产出，先问它属于哪一边。
+
+# 代理评测的原始逐题产出：体积大、可重跑，
+# 且可能含受许可约束的数据内容（§12.5）。
+eval/reports/**/*.json
+eval/reports/**/*.jsonl
+eval/reports/**/*.csv
+!eval/reports/README.md
+
+# ── 密钥 ───────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# ── 编辑器 / 系统 ──────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+
+# Claude Code 的本地权限配置：内容是**本机绝对路径**（/home/buptc/project/**），
+# 换台机器就失效，且不该进公开历史。团队共享的 .claude/settings.json 不受影响。
+.claude/settings.local.json
+
+# ── 其他 ───────────────────────────────────────────────────────────────
+# 归档只读，整目录不入库（§12.3 第 8 条：其中有失败下载的残留文件）。
+# 里面的数据集有 CC BY-NC 等许可约束（§12.5），分发范围未确认前一律不提交。
+# ⚠ 因此在 benchmark_data/ 里放 README 是不会被提交的——关于归档的说明写在
+#   docs/benchmark-data.md。
+benchmark_data/

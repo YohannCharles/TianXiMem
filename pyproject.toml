@@ -1,0 +1,67 @@
+[project]
+name = "tianxi-am"
+version = "0.0.0"
+description = "TianXi_AM — AML (Agent Memory Leaderboard) 参赛系统：Add/Search 两个 HTTP 端点"
+readme = "README.md"
+
+# 3.14 是本机默认解释器，但 torch / qdrant-client 的 wheel 覆盖通常滞后一个大版本，
+# 且 §11.2 的 reranker 与 §12.1 的本地模型都压在同一个 torch 上。
+# 保守钉在 3.12（.python-version 同值）——真要抬版本，先确认 torch 有 wheel。
+requires-python = ">=3.11,<3.14"
+
+# 提交链路依赖（§2.3）：embedding 走 text-embedding-v4、LLM 走 gpt-4o-mini，
+# 两者都是 HTTP API，故不需要本地推理栈。本地模型在 [local] extra 里。
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.27",          # embedding / LLM API 客户端；harness 驱动也用它
+    "qdrant-client>=1.17,<2",  # §7.3：weights 需 ≥ v1.17.0，k 需 ≥ v1.16.0
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "tiktoken>=0.8",        # §6.4：token 必须用答案模型自己的分词器（o200k_base）
+]
+
+[project.optional-dependencies]
+# 开发期本地替代模型（§2.3 / §12.1 R1）——只跑代理评测，不进提交链路。
+# Step 5 切换后这套可以卸载，但不要删 extra：切换后仍要用它做回归对照。
+local = [
+    "torch>=2.4",
+    "transformers>=4.44",
+    "sentence-transformers>=3.0",  # BGE-M3 与 §11.2 的 cross-encoder reranker
+    "FlagEmbedding>=1.3",          # BGE-M3 官方实现，仅对照取 sparse 用（§7.1 明确不用它）
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+    "mypy>=1.13",
+]
+
+# ── 脚手架阶段的关键设置 ────────────────────────────────────────────────
+# 还没有任何 .py 文件（本次只搭目录与 README），因此项目本身不可打包。
+# package = false 让 `uv sync` 只装依赖、不尝试构建本仓库。
+# Step 1 写出 src/tianxi_am/__init__.py 之后，把它改成 true。
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "eval", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_unused_ignores = true
