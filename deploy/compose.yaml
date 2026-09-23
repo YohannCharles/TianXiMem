@@ -1,0 +1,41 @@
+# Qdrant server —— 本项目的派生索引（§6.3 / §7.3）
+#
+# 起：  docker compose -f deploy/compose.yaml up -d
+# 停：  docker compose -f deploy/compose.yaml down
+#
+# ⚠ 为什么必须是 server 模式而不是 qdrant-client 的 local 模式：
+#   local 模式会【静默丢弃 payload 索引】——create_payload_index 只打一行警告就返回，
+#   且其数据格式与 server 不兼容。而本项目的 user_id / session_id / event_time
+#   三个筛选全部依赖 payload 索引。没有降级方案。
+#
+# ⚠ 为什么 tag 钉死到完整版本号：
+#   {rrf: {weights, k}} 的 weights 自 v1.17.0 起才可用（k 自 v1.16.0）。
+#   融合行为的任何变化都会改变排名，而 Full 只有 2 次、一旦接受即版本冻结——
+#   浮动的 tag 会让"这个分数是哪个版本跑的"变成不可回答的问题。
+#   【不要改成 latest 或大版本浮标。】升级要先看 §7.3 的版本门槛。
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.17.0
+    container_name: tianxi-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # REST —— 服务与 harness 都走这个
+      - "6334:6334"   # gRPC
+    volumes:
+      # 派生数据的落点。Qdrant 可从 SQLite 全量重建，所以这个卷【不是备份对象】——
+      # 真正的备份对象是 SQLite 真源文件（见 deploy/README.md §4 的重建 runbook）。
+      - ../var/qdrant_storage:/qdrant/storage
+    environment:
+      # 单进程 24×7 运行（Full run 持续 0.5–2 天）。日志级别按需调。
+      QDRANT__LOG_LEVEL: INFO
+
+# 注意：以下集合级设置【不在本文件里】，由客户端在建集合时施加（src/tianxi_am/store/）：
+#   - 分片数 = 1            （根级融合跨分片合并，分片数变化会改变排名且无报错）
+#   - 命名向量 dense + bm25 （稀疏向量距离固定为 Dot）
+#   - payload 索引          （必须在写入数据前建，否则 HNSW 需重建才有过滤感知）
+#   - 写入 wait=true        （契约要求"响应前立即可搜"）
+#
+# 部署位置提醒：本机当前没有 docker，也没有 nvidia-smi（2026-09-23 核实）。
+# "服务跑在哪 / reranker 跑在哪 / harness 跑在哪"要在 Step 0 定下来，
+# 见 deploy/README.md §6 末段。

@@ -1,0 +1,182 @@
+# eval/datasets/ — 数据加载与 schema 落差预处理
+
+**PRD**：§12.2（代理数据集）、§12.3（已知陷阱）、§12.4（契约不统一）、§12.5（法律约束）
+
+## 要写什么
+
+```text
+longmemeval.py    lme_s_cleaned.json 加载
+locomo.py         questions.jsonl + locomo_refined.json 加载与合并
+preprocess.py     **schema 落差预处理层**（§12.3 第 9 条）
+contracts.py      其余四份 pipeline 的契约抽取（§12.4 的表就是从这份抽取来的）
+registry.py       数据指纹（版本 + 切批口径）——§13 的记录要它
+```
+
+---
+
+## ⚠ 本目录是**两头**的，不是一个加载器
+
+| 头 | 干什么 | 为什么 |
+| --- | --- | --- |
+| **(a) 加载器** | 只服务**两个计分数据集**（LoCoMo-Refined + LongMemEval） | 这两份是全部六份里**唯一共用同一套契约**的（§12.4） |
+| **(b) 契约抽取** | 从**其余四份**的 pipeline 源码里抽出记忆注入字段与裁判规则 | §11.3 的打包规则**是从它们推导出来的**——BEAM 的时间规则**正好相反**、CL-Bench 读 `text` + `created_at`、PersonaMem **忽略全部检索字段** |
+
+**只做 (a) 会漏掉一整类错误**：在 LoCoMo 上调好的注入格式，到 CL-Bench 可能被**整批丢弃**——而 (b) 就是提前知道这件事的唯一手段。
+
+---
+
+## §12.3 第 9 条：预处理层不是可选的
+
+> **归档里的数据集与 pipeline 之间存在 schema 落差，Step 0 必须写一层预处理。**
+
+**已核实的落差（真源是 pipeline 代码，不是 readme）：**
+
+### LoCoMo-Refined —— 三个落差叠在一起
+
+1. **`locomo_refined.json` 是 pretty-printed 的 JSON **数组**（10 个 conversation），而 pipeline 的 `rows()` **只解析 JSONL**——**直接喂它会解析失败**。
+2. **`questions.jsonl` 的键与 pipeline 读的键对不上**：
+   - 文件里有 `qa_id`，pipeline 读 `item["id"]` → **`KeyError`**
+   - 文件里有 `answer`（list[str]），pipeline 读 `gold_answer` / `golden_answer` / `reference_answer` / `correct_answer` → **`ValueError`**
+   - 记忆字段**为空**（文件里根本没有）
+3. **记忆注入字段在数据集里根本不存在**——`speaker_1_memories` / `retrieved_context` / `memories` 的命中数都是 0，**只能由检索方运行时注入，但用什么键名注入没有明文**（§11.3 / `docs/open-questions.md` V3）。
+
+**因此加载器必须产出一份转换后的 JSONL**，每行含：`id`（取自 `qa_id`）、`question`、四个 gold 键之一（取自 `answer`；`memory_text` 会把 list `"\n"` 拼起来）、以及**由系统注入的记忆字段**。
+
+### 喂给 Add 的对话全文取自哪个文件
+
+**`questions.jsonl` 只有 `evidence_messages`（证据轮），不是整段对话**——所以：
+
+| 用途 | 取哪个文件 |
+| --- | --- |
+| **喂给 Add 的对话全文** | `locomo_refined.json` 的 `conversation` |
+| 判断/评分用的题目与 gold | `questions.jsonl`（或 `locomo_refined.json` 的 `qa`） |
+
+**二者逐题对齐**（仅 6 处答案 int/str 差异）——所以两边都要加载、按 `qa_id` 对齐。**别假设用一个就够。**
+
+### CL-Bench
+
+raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而 `build_answer_prompt` 读的是 `system_prompt` / `question` / `qa_type` / `options` / `*_retrieval`——**这些顶层键在 raw 文件里一个都不存在**。
+
+**不做转换的后果**：答案 prompt 塌成空的 system/question + 字面量 `"(no memories)"`——**不报错，只是分数没了**。
+
+---
+
+## ⚠ 两个数据集的 turn schema **不一样**（已核实）
+
+**这是加载层最容易踩的坑**，因为 §6.2 的配对判据只依赖一个字段——"这条是不是 `user`"。
+
+| | LongMemEval | LoCoMo-Refined |
+| --- | --- | --- |
+| turn 的键 | **`role`** + `content` | **`speaker`** + `dia_id` + `text` |
+| role 取值 | `user` / `assistant` | 也是说话人，但**键名不同** |
+| 证据标记 | turn 上的 **`has_answer`**（bool，可选，只有证据轮带） | `evidence`（dia-id 列表，如 `"D1:3"`） |
+| **每 turn 有 timestamp 吗** | ❌ **没有** | ❌ 没有（时间是 session 级的） |
+
+**⇒ 加载层必须把两边都归一化成 AML 的形状（`role` / `content` / 可选 `timestamp`）**，否则 `pairing/` 的判据看不见 `role`，**会把整个 session 归成一个对，且不报错**。
+
+**`locomo_refined.json` 的 `conversation` 结构**：一个 dict，键是 `speaker_a` / `speaker_b`，然后成对出现 `session_N_date_time` / `session_N`；每个 `session_N` 是 turn 的列表。**对话全文在这里**（不在 `questions.jsonl`）。
+
+---
+
+## ⚠ LongMemEval 没有 per-turn 时间戳——`event_time` 会退化
+
+**已核实**：LongMemEval 的 turn dict **只有 `role` + `content`（和可选的 `has_answer`）**，**时间在 session 级**，存在与 `haystack_sessions` 平行的 `haystack_dates` 里（形如 `"2023/05/20 (Sat) 02:21"`）。
+
+**两个直接后果：**
+
+1. **harness 必须为每条消息合成 `timestamp`**——否则 §2.1 的可选字段为空，§6.1 的 `event_time` 全为 NULL，`created_at` 只能发 `""`（§11.3 的有定义降级路径）。
+2. **同一个 session 内所有消息拿到同一个日期** ⇒ **`event_time` 在 session 内没有区分度**——这**恰好实证了 §6.1 的判断**：
+
+   > **`event_time` 保证不了 session 内顺序**——同一秒的多条消息排序未定义，会让 `±1` 邻域扩展产生抖动，进而让消融实验不可复现。**`pair_idx` 必须连续。**
+
+   **在 LongMemEval 上这不是"可能发生"，是必然**。所以 `pair_idx` 不是可选的保险，**是唯一能保证邻域稳定的东西**。
+
+---
+
+## 两个计分数据集的形状
+
+### LongMemEval
+
+**500 条**，顶层是 JSON **数组**。每条 9 个键：`question_id` · `question_type` · `question` · `question_date` · `answer` · `answer_session_ids` · `haystack_dates` · `haystack_session_ids` · `haystack_sessions`。
+
+| 字段 | 注意 |
+| --- | --- |
+| `question` / `answer` | **`answer` 是单个字符串**（不是列表——与 LoCoMo 相反） |
+| `answer_session_ids` | 证据的 **session 级** id 列表，形如 `["answer_280352e9"]`——做 session 级 recall 用这个 |
+| `haystack_sessions` | `list[list]`——外层每个元素是一个 session，内层是 turn dict 的列表 |
+| `haystack_session_ids` / `haystack_dates` | **与 `haystack_sessions` 按下标平行**（三条数组按 index 对齐） |
+
+- **题量分布**（Step 0 建 harness 用）：`multi-session` 133 / `temporal-reasoning` 133 / `knowledge-update` 78 / `single-session-user` 70 / `single-session-assistant` 56 / `single-session-preference` 30
+- **64.8% 的问题需要 ≥2 个 session 的证据**（324/500，平均 1.896 个），其中 multi-session 类 133 题 **100%** 跨 session——**这是本项目唯一的靶子**
+
+> ⚠ **拒答题是横切标记，不是第 7 类**：`question_id` 以 `_abs` 结尾的共 **30 道**（multi-session 12 / single-session-user 6 / temporal-reasoning 6 / knowledge-update 6）。**§13 的 T2 要人工给 133 道 multi-session 题分三类，其中 12 道是拒答题，行为与其他题不同，必须单独拎出来。**
+
+#### `lme_s_cleaned.json` vs `lme_test.json` —— 已复算
+
+| 断言 | 核实结果 |
+| --- | --- |
+| 同题、同证据 | ✅ **500/500 的 `answer` 与 `answer_session_ids` 完全一致**，`question_id` 集合相等 |
+| 只在 haystack 上不同 | ✅ `s_cleaned` 的 session id 集合在 **500/500** 条里都是 `test` 的**子集**；两者共有 session 的 turn 数完全一致 |
+| 空 session | ✅ **`test` 有 1,230 个 0-turn session，`s_cleaned` 有 0 个** |
+
+**一条细化（PRD 说"1,230 个空 session 与 15 个干扰 session"，措辞可以更准）**：在 120 条的抽样里，`test` 多出的 309 个 session 中 **302 个是空的、7 个有内容**。所以"多出来的都是空的"**过强**——**是"绝大多数空 + 极少数有内容"**，而那些有内容的正是"干扰"。**结论不变：用 `lme_s_cleaned.json`。**
+
+**为什么不用 `lme_test.json`**：**空 session 会污染按"20 条消息"切批的埋点逻辑**（§6.5）——一个 0-turn session 会让切批与 `pending` 判定出现本地无法解释的边界。
+
+### LoCoMo-Refined
+
+- CC BY-NC 4.0，未饱和，**1,382 题**
+- **计数类问题集中在多跳类**：21/213 = 9.9%，单跳类 27/802 = 3.4%
+
+> ### ⚠ "计数类"的口径必须先在 harness 里固定
+>
+> 上列数字对应 `how many|how much|how often|number of|count|how long`。**只算 `how many` 时单跳类是 0.25%，多跳类 9.39%**——**换口径数字就变**，而它正是附录 A"实体层做不做"的依据。
+
+> ### ⚠ LoCoMo 发布版的分类 ID 与论文顺序不一致（§12.3 第 1 条）
+>
+> **实测映射**：`1=multi-hop, 2=temporal, 3=open-domain, 4=single-hop, 5=adversarial`
+>
+> **依据不是猜题面**，而是 **evidence 跨度**：ID 1 有 95% 跨 ≥2 个 session，ID 4 有 94.5% 只有单条 evidence，ID 5 则是 446/446 全带 `adversarial_answer` 且 `answer=null`。
+>
+> **论文 §4.1 的顺序是** `1=single-hop, 2=multi-hop, 3=temporal, 4=open-domain, 5=adversarial`——**按论文顺序映射会让 5 类里的 4 类被错标**（只有 adversarial 恰好对上），**且不会报错**。
+>
+> **实测分布可用来交叉验证这个映射**：`"4"` 802 · `"2"` 299 · `"1"` 213 · `"3"` 68（合计 1,382）。**ID 1 只有 213 条却占 9.9% 的计数类问题、ID 4 有 802 条却只占 3.4%**——与"多跳类少而集中、单跳类多而稀"一致，**与上面的映射自洽**。
+
+> ### ⚠ `category` 的类型在两个文件里不一样
+>
+> **`questions.jsonl` 里是【字符串】**（`"4"` / `"2"` / `"1"` / `"3"`），**`locomo_refined.json` 里是【整数】**（1–4）。
+>
+> **harness 不要硬编码单一类型**——`int(category)` 归一化，否则按 `category == 1` 筛选会**静默筛出 0 条**。
+
+
+---
+
+## 另外三条陷阱（§12.3）
+
+| # | 陷阱 |
+| --- | --- |
+| **2** | **ScriptMem 做不了代理评测**——对话原文因版权原因未发布 |
+| **3** | **不要用 MemoryAgentBench 当代理**——它不在 AML 的数据集清单里，在其上调优未必迁移 |
+| **8** | **BEAM 的数据实际上不在归档里**。`beam.json` / `beam_rows.json` 是失败下载的残留（`Entry not found` / `{"error":"Unexpected error."}`）；`beam_100k.json` 是 HuggingFace datasets-server 的**分页响应**（顶层键 `features`/`rows`/`num_rows_total`，且 `num_rows_total=20`、实际只取到 1 行），**不是数据集**。真要覆盖 BEAM，**须先把数据取回来** |
+
+**第 7 条（PersonaMem）**：三个 split 的 schema 不统一——`question_type` 的词表在 32k / 128k / 1M 之间互不相同；`correct_answer` 在 32k 里是 `(c)` 这类选项字母、在 128k/1M 里是整段选项文本。**"MCQ 精确文本匹配"必须先做归一化**，harness **不要硬编码单一词表或单一答案格式**。
+
+**并且**：PersonaMem 的 CSV **没有 `chat_history` 列、也没有 `incorrect_answers` 列**，而 `pipeline_v2_personamem.py` 缺 `incorrect_answers` 直接 `raise TypeError`，且用整段选项文本匹配——**该 pipeline 不能直接吃归档 CSV**。
+
+---
+
+## 法律约束（§12.5）
+
+**数据不得用于训练。**「微调模型」**不是暂不实现，是不允许**。
+
+| 数据集 | 许可 | 出处 |
+| ---- | ---- | ---- |
+| LoCoMo-Refined | **CC BY-NC 4.0** | 归档 readme |
+| ScriptMem | **CC BY-NC 4.0** | 归档 readme |
+| PersonaMem v2 | CC BY 4.0 | 归档 readme |
+| LongMemEval | **待确认**——早先记为 MIT，但归档 readme **没有 License 章节**，归档内无依据 | —— |
+| BEAM / CL-Bench | 归档内无许可证文本 | —— |
+
+> **NC（非商业）这一列值得注意**：LoCoMo-Refined 与 ScriptMem 都是 CC BY-NC 4.0。**不影响参赛**，但**它意味着这两份数据不能进任何商业用途的产物**——如果后续想把系统或其中组件开源/商用，**这两份数据的评测结果是引用不了的**。
+
+> **"不得训练"这条的出处提醒**：归档里**没有**这些条款的出处（全库检索 `only for the evaluation` 等措辞零命中），属**单边来源**，引用前须回原始页面/许可证文件复核。**结论不变，但不要把它当成已归档的实证。**
