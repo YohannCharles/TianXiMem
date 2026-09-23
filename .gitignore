@@ -47,6 +47,16 @@ build/
 # 换台机器就失效，且不该进公开历史。团队共享的 .claude/settings.json 不受影响。
 .claude/settings.local.json
 
+# ── 开发用数据集（eval/datasets/）───────────────────────────────────────
+# 第三方数据集以 **git clone** 形式放在这里（目录内有嵌套 .git）。**一律不入库**：
+#   - 许可约束：LoCoMo-Refined 是 **CC BY-NC 4.0**（§12.5），分发范围未确认前不提交
+#   - 嵌套 .git 会让 git 把它当 submodule 处理，留下 gitlink 记录
+# 只保留 eval/datasets/README.md 作为说明。
+# ⚠ 必须写成 eval/datasets/* 而不是 eval/datasets/：写目录会排除**目录本身**，
+#   git 就不再向下查找，下面的 ! 规则永远轮不到执行（静默失效，与 var/ 同理）。
+eval/datasets/*
+!eval/datasets/README.md
+
 # ── 其他 ───────────────────────────────────────────────────────────────
 # 归档只读，整目录不入库（§12.3 第 8 条：其中有失败下载的残留文件）。
 # 里面的数据集有 CC BY-NC 等许可约束（§12.5），分发范围未确认前一律不提交。

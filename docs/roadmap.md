@@ -40,12 +40,11 @@
       它们做 `sys.path.insert(0, Path(__file__).resolve().parents[2])` 再 `from api_config import (...)`，而 `parents[2]` 解析到 **`/home/buptc/project/`（仓库外一层）**。**该文件不存在。**
       要导出七个名字：`ANSWER_API_BASE` / `ANSWER_API_KEY` / `ANSWER_MODEL` / `JUDGE_API_BASE` / `JUDGE_API_KEY` / `JUDGE_MODEL` / `JUDGE_VERSION`（最后一个是**死引用**，五个 pipeline 全部 import 但无一使用）。
       ⚠ 它是**环境依赖，不是仓库内容** ⇒ 在 [`decisions.md`](./decisions.md) 记一条，并写进提交包说明（"clone 下来不能直接跑"）。
-- [ ] **`docker` 与 `nvidia-smi` 本机都没有**（2026-09-23 核实）
-      ⇒ §6.3 的 Qdrant **server 模式无法在本机落地**，§11.2 的显存预算**无法在本机核算**。
-      **要定下来：服务跑在哪、reranker 跑在哪、harness 跑在哪。**（`deploy/README.md` §6 末段）
-- [ ] **确认显存预算**（§1 / §11.2）——qwen3.5-9b（128K）+ BGE-M3 + reranker **三者共存于一张 L20（48GB）**。
-      **若挤不下，R1 的对冲方案需要重写。** 产出一份**可核对的预算表**，记进 `decisions.md`。
-      **显存不够时第一个该动的是 reranker**——它是唯一不限模型的组件（§2.3）。
+- [x] **`docker` 已就位**（2026-09-23 晚）——Docker Desktop 29.8.0 / `desktop-linux` context / WSL2 后端。`qdrant/qdrant:v1.17.0` 的 tag **已在 registry 核实存在**（§7.3 的版本门槛成立）。`nvidia-smi` **已不需要**（模型不在本机）。
+      **拓扑已定**（D12）：harness 与检索服务 + Qdrant 都在**本机**、三段模型经自建网关远程访问、**reranker 端点待部署**。
+- [ ] **确认显存预算**（§1 / §11.2）——⏸ **本项目延后，不阻塞开发**（D14）。
+      qwen3.5-9b（128K）+ BGE-M3 + reranker 需**共存于一张 L20（48GB）**；而**模型部署不在本项目范围内**（三段模型在自建网关，reranker 待部署）。
+      **⚠ 这是有意偏离，不是已满足**：该前提**未被核对**，若挤不下则 R1 的四条对冲需要重写——**风险已接受**（见 [`decisions.md`](./decisions.md) D14）。
 
 ### 数据侧
 
@@ -70,24 +69,28 @@
 
 ---
 
-## Step 1 — 存储 + 服务 + BM25-only
+## Step 1 — 存储 + 服务 + 混合检索
+
+> **检索只有一种模式：混合**（BM25 + Dense 两路 `prefetch` → Weighted RRF）。**没有裸 BM25 模式**（D15）。
+> 原先把"先跑通 BM25、验证后再加 dense"当作分阶段依据，那个 hedge 已撤销——Dense 与 RRF 一次到位。
 
 - [ ] SQLite 真源：`qa_pairs` + **`applied_batches`**（§6.1）
 - [ ] Qdrant server 模式（**Docker**），单分片，payload 索引**在写入前**建（§6.3）
 - [ ] `Add` 路径六步，**幂等分两层**（§15 / §6.5）
-- [ ] `Search` 路径：BM25-only，**精确 ≤ `top_k`**（§2.2）
-- [ ] **A1 必须能通过 Smoke 契约校验**（200 响应、`data` 数组、不超 `top_k`）——它是所有对照的参照点（§13）
-- [ ] **选定 Checker 的退化路径并写进配置**（§8）——**这是本阶段的前置动作，不要等到决定砍 dense 那天再补**
+- [ ] `Embedder` 协议 + 两个实现；**架构保持 embedder-agnostic**（§7.4 / §2.3）
+- [ ] **落盘的向量缓存**，键 = 渲染文本哈希（§7.2）
+- [ ] `Search` 路径：混合检索，**精确 ≤ `top_k`**（§2.2）
+- [ ] Weighted RRF：**`k=61` 显式设**、`prefetch` 每路带 `using`、根级 `limit` 取请求 `top_k`（§7.3）
+- [ ] **主路径必须能通过 Smoke 契约校验**（200 响应、`data` 数组、不超 `top_k`）——**它是所有对照的参照点**（§13）
 - [ ] **跑 T2 实验**（§13，半天工作量）：133 道 multi-session 题（12 道拒答题单列）人工分三类
 - [ ] 三个 `pending` 计数器埋点（§6.5）
 
 ---
 
-## Step 2 — Dense + RRF + Neighbor
+## Step 2 — Neighbor Expansion + 双预算
 
-- [ ] `Embedder` 协议 + 两个实现；**架构保持 embedder-agnostic**（§7.4 / §2.3）
-- [ ] **落盘的向量缓存**，键 = 渲染文本哈希（§7.2）
-- [ ] Weighted RRF：**`k=61` 显式设**、`prefetch` 每路带 `using`、根级 `limit` 取请求 `top_k`（§7.3）
+> **Dense 与 RRF 已上移到 Step 1**（检索一次到位，D15），本阶段只剩扩窗与预算。
+
 - [ ] Neighbor Expansion：种子 20、窗口 ±1、**槽位占 `top_k` 名额**（§10）
 - [ ] 双预算截断（槽位数 + token 数）（§6.4）
 

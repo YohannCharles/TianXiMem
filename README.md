@@ -16,7 +16,7 @@
 - **核心判断**：检索不是瓶颈（LongMemEval 召回已 96–99%），**选择和排序才是**。因此 Rerank + Context Packaging 是主线（PRD §4 / §11），Hybrid Retrieval 降级为待验证假设。
 - **核心 claim**：不让所有 Query 都进昂贵的 Agentic Search，**只有证据不足时才触发多轮搜索**（PRD §3.1 / §9）。
 
-**资源**：3 人 / 4–6 周 / **1×L20**。本地模型 qwen3.5-9b（128K）+ BGE-M3 + reranker **三者必须共存于同一张卡**（PRD §1 / §11.2）。
+**资源**：3 人 / 4–6 周 / **1×L20（在自建服务器上，不在开发机）**。qwen3.5-9b（128K）+ BGE-M3 + reranker **三者必须共存于同一张卡**（PRD §1 / §11.2）。
 
 ---
 
@@ -73,7 +73,7 @@
 
 由此推出一条设计约束：**架构必须 embedder-agnostic**。`text-embedding-v4` 不提供 sparse 或 ColBERT 输出，因此**任何依赖 BGE-M3 多向量能力的代码在提交时都是死重**。集合的向量维度必须由接口提供、**不能写死**。
 
-**开发期用本地 BGE-M3 + qwen3.5-9b 替代**（§12.1 风险 R1，团队已接受）——代价是本地标定出的**所有阈值、权重、排序策略在切换后都不保证成立**，四条对冲见 PRD §12.1。
+**开发期用自建网关上的 BGE-M3 + qwen3.5-9b 替代**（§12.1 风险 R1，团队已接受）——代价是**所有阈值、权重、排序策略在切换后都不保证成立**，四条对冲见 PRD §12.1。
 
 ---
 
@@ -93,27 +93,28 @@
                  Initial Candidates
                         │
                         ↓
-                Evidence Checker
-                   /           \
-          Evidence Enough     Evidence Weak
-                │                  │
-                │                  ↓
-                │          Agentic Search
-                │          - 关键词重写（Agent 每轮自产）
-                │          - Multi-round Search / Temporal Search / Evidence Note
-                │                  │
-                └──────────┬───────┘
-                           ↓
-                    Rerank（本地模型）
+             Evidence Checker 【v1：空实现】
+                        │
+                        ↓
+                    Rerank（远程 API）
                            ↓
                   Neighbor Expansion（按名次依次扩窗，直到 Top-K 用尽）
                            ↓
                    Context Packaging
                            ↓
                   ≤ Top-K（精确计数）
+
+        ═══ 以下整块为 v2，v1 不实现（见 docs/decisions.md D13）═══
+          Evidence Weak → Agentic Search
+            - 关键词重写（Agent 每轮自产）
+            - Multi-round Search / Temporal Search / Evidence Note
 ```
 
-> 图里的「**关键词重写**」是 **Agent 每轮自己产出的检索关键词**，属于 agent 循环；**不是**被砍掉的 Query Analyzer。v1 **没有**检索之前那一次独立的 query 改写（§5 / §7.2）。
+> **v1 是直通的**：Evidence Checker 恒返回「证据充足」，因此**没有证据补充路径**——正确的 QA 对不在初始候选里就永久丢了。这把 v1 的全部重量压在**排序 + token 预算分配**上（§4 / §8）。
+>
+> v1 的 Checker 是**带日志的空实现**：它不做门控，但**必须记录每轮的判定**。这不是留接口，是为了给 Step 4 攒下反事实分布——不记，就永远无法用数据回答"agent 到底值不值"（`docs/experiments.md` 的 A4）。
+
+> 图里的「**关键词重写**」是 **Agent 每轮自己产出的检索关键词**，属于 agent 循环；**不是**被砍掉的 Query Analyzer。**两者仍是两回事**——但注意：随 v1 不做 agentic，它**也一并归 v2**（v1 两条都没有，见 D13）。v1 没有检索之前那一次独立的 query 改写（§5 / §7.2）。
 
 **存储分工不可互换**（§6.3）：
 
@@ -149,8 +150,8 @@
 | 阶段 | 交付 | 状态 |
 | ---- | ---- | ---- |
 | **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval）+ **确认显存预算** | ⬜ |
-| Step 1 | 存储层 + Add/Search 服务 + BM25-only 检索（含 T2 实验） | ⬜ |
-| Step 2 | Dense + Weighted RRF + Neighbor Expansion | ⬜ |
+| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） | ⬜ |
+| Step 2 | Neighbor Expansion + 双预算截断 | ⬜ |
 | Step 3 | Rerank + Context Packaging（含 T1 实验） | ⬜ |
 | Step 4 | Conditional Agentic Search | ⬜ |
 | **Step 5** | **切换到提交模型**，重标定全部阈值，重跑 T2 与 A1 | ⬜ |
@@ -201,15 +202,19 @@
 
 **尚未开始**：任何实现。仓内**没有任何 `.py` 文件**——每个目录下的 `README.md` 说明了该目录要写什么、受哪条约束、对应哪一节，实现按 Step 0 起逐个填入。
 
-### 三个 Step 0 阻塞项（不解决则无法起步）
+### Step 0 阻塞项
 
-| # | 阻塞项 | 说明 |
+**运行形态已定**（2026-09-23，见 [`docs/decisions.md`](./docs/decisions.md) D12）：**模型（LLM / embedding / reranker）全部经自建网关远程访问；检索服务与 Qdrant 跑在本机**——本机不需要 GPU，docker 已就位。
+
+| # | 阻塞项 | 状态 |
 | --- | --- | --- |
-| 1 | **`api_config.py` 不存在** | 归档的五个 pipeline 都从 **`/home/buptc/project/`（仓库外一层）** import 它，**今天全部 import 失败**。详见 [`eval/harness/README.md`](./eval/harness/README.md) |
-| 2 | **本机无 `docker`** | §6.3 明确**必须用 Qdrant server 模式**（local 模式**静默丢弃 payload 索引**），**无法用 local 模式替代** |
-| 3 | **本机无 `nvidia-smi`** | 看不到 L20。而 §11.2 要求 reranker 与 qwen3.5-9b、BGE-M3 **共存于一张 48GB 卡**，§12.1 的 R1 对冲以此为前提 |
+| 1 | **`api_config.py` 不存在** | ⬜ **仍在**，但已降级——它只需是一个读 `.env` 的 **7 行适配器**，且**不含 embedding 配置**（归档 pipeline 不向量化）。详见 [`eval/harness/README.md`](./eval/harness/README.md) |
+| 2 | ~~本机无 `docker`~~ | ✅ **已解决**——Docker Desktop 29.8.0（WSL2 后端）已装，`localhost:6333` 直接可用；§6.3 的 Qdrant server 模式可以落地 |
+| 3 | ~~本机无 `nvidia-smi`~~ | ✅ **消失**——本机不跑任何模型，三段模型都在自建网关上 |
 
-**⇒ 要定下来：服务跑在哪、reranker 跑在哪、harness 跑在哪。** 本机默认 Python 3.14.4，已按 `>=3.11,<3.14` 保守钉在 3.12（torch / qdrant-client 的 wheel 覆盖通常滞后）。
+**reranker 点尚未部署**（部署不在本项目范围内，后续进行）。它是 Step 3 及之后的**基础设施前置项**，不是代码任务——而 v1 不做 agentic 之后，**唯一的新增价值就是 Rerank + Context Packaging**，所以这条前置项直接压在主线上。
+
+本机默认 Python 3.14.4，已按 `>=3.11,<3.14` 保守钉在 3.12（torch / qdrant-client 的 wheel 覆盖通常滞后）。
 
 完整清单见 [`docs/roadmap.md`](./docs/roadmap.md) 的 Step 0。
 

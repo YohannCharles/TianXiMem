@@ -1,5 +1,13 @@
 # agent/ — Conditional Agentic Search
 
+> ## ⛔ v1 本目录不实现（2026-09-23 → [`../../../docs/decisions.md`](../../../docs/decisions.md) D13）
+>
+> **v1 默认"证据充足"，没有 Agentic Search、没有证据补充、没有关键词重写。** 下文的循环、工具集、参数、监控**整块归 v2**。
+>
+> **但 Evidence Checker 的接缝要留在 v1**：实现为**恒返回"充足"、且必须记录每轮判定**的空实现。记录的理由见 D13——不记，**Step 4 之前永远无法用数据回答 A4「agent 值不值」**。
+>
+> **v1 的代价必须正视**：没有证据补充路径，**召回是一次性天花板**——正确的 QA 对不在初始候选里就永久丢了。**v1 的全部重量因此压在"排序 + token 预算分配"上**，而这正是 `rank/` 与 Neighbor Expansion 的职责。
+
 **PRD**：§9（含 §5 的流程图注释）、§14（监控）
 
 ## 要写什么
@@ -10,6 +18,8 @@ tools.py    search_chatrecord / take_note / finish_search
 ```
 
 **只在 Evidence Checker 判定不足时启动。这是本项目的核心 claim，不可砍**（§9）。
+
+> ⚠ **但 v1 里这条 claim 是平凡成立的**（根本没有 agentic），**不是被设计出来的**。若最终材料要引用它，**必须由 v2 或 A4a/A4b 支撑，不能引用 v1 的分数**（D13）。
 
 ---
 

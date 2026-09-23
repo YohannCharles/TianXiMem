@@ -102,6 +102,13 @@ applied_batches(
 
 > **`is_tenant` 只支持 keyword / uuid 两种类型**——别把 `user_id` 建成 integer。
 
+> ✅ **已在钉死版本上实测通过（2026-09-23，Qdrant v1.17.0 容器）**：
+> `{"type":"keyword","is_tenant":true}` 建索引返回 `acknowledged`，读回 config 确认 `"is_tenant":true` 已生效；
+> `dense`(size N, Cosine) + `bm25`(modifier `idf`) + `shard_number:1` 的集合可建；
+> `prefetch` 两路（各带 `using`）+ 根级 `rrf{weights, k:61}` + `user_id` 过滤的查询可用，
+> **且过滤确实只返回目标 tenant 的点**（测试中 `u2` 的点被正确排除）。
+> **注意**：`k=61` 与默认 `k=2` 的量级差约 30 倍、而名次都看似正常——见 [`docs/decisions.md` D5](../../../docs/decisions.md)。
+
 **融合**：`prefetch` + `rrf{weights, k}`，**`k` 必须显式设 `61`**，每个 `prefetch` 都要带 `using`（命名向量场景下不写 `using`，Qdrant 无法确定用哪一路），根级还要给 `limit`（取自请求的 `top_k`，**不要写死 100**）。完整写法见 [`../../docs/config-reference.md`](../../../docs/config-reference.md) §3。
 
 ---

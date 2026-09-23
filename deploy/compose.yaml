@@ -25,10 +25,20 @@ services:
     volumes:
       # 派生数据的落点。Qdrant 可从 SQLite 全量重建，所以这个卷【不是备份对象】——
       # 真正的备份对象是 SQLite 真源文件（见 deploy/README.md §4 的重建 runbook）。
-      - ../var/qdrant_storage:/qdrant/storage
+      #
+      # ⚠ 用【命名卷】而不是 Windows 路径的绑定挂载：Docker Desktop 会把 Windows 路径
+      #   经共享文件系统层（virtiofs/9p）送进 Linux VM，而 Qdrant 是大量小文件 +
+      #   mmap 读 segment，正是最不适合该层的访问模式。命名卷落在 VM 自己的 ext4 上。
+      #   代价是数据不再是 Windows 上可见的文件夹——但如上所述，它本来就不是备份对象。
+      - qdrant_storage:/qdrant/storage
     environment:
       # 单进程 24×7 运行（Full run 持续 0.5–2 天）。日志级别按需调。
       QDRANT__LOG_LEVEL: INFO
+
+volumes:
+  # 落在 Docker Desktop 的 VM 内 ext4 上，不走 Windows 共享文件系统层（见上文的挂载说明）。
+  # Qdrant 可从 SQLite 全量重建 ⇒ 这个卷不是备份对象，删掉即可重建。
+  qdrant_storage:
 
 # 注意：以下集合级设置【不在本文件里】，由客户端在建集合时施加（src/tianxi_am/store/）：
 #   - 分片数 = 1            （根级融合跨分片合并，分片数变化会改变排名且无报错）
@@ -36,6 +46,9 @@ services:
 #   - payload 索引          （必须在写入数据前建，否则 HNSW 需重建才有过滤感知）
 #   - 写入 wait=true        （契约要求"响应前立即可搜"）
 #
-# 部署位置提醒：本机当前没有 docker，也没有 nvidia-smi（2026-09-23 核实）。
-# "服务跑在哪 / reranker 跑在哪 / harness 跑在哪"要在 Step 0 定下来，
-# 见 deploy/README.md §6 末段。
+# 部署位置（2026-09-23 定，见 docs/decisions.md D12）：
+#   检索服务 + Qdrant 跑在【本机】；三段模型经自建网关远程访问；harness 也在本机。
+#   本机已装 Docker Desktop 29.8.0（desktop-linux context，WSL2 后端，无额外用户发行版）：
+#   daemon 走 Windows 命名管道 ⇒ docker 命令直接从 Git Bash 可用，不必进 WSL；
+#   容器虽在 Docker Desktop 的 VM 内，但发布端口转发到 Windows 主机 ⇒
+#   服务在本机访问 localhost:6333 成立。**本机无 GPU，但已不需要**（模型不在本机）。
