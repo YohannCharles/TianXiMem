@@ -2,7 +2,7 @@
 
 **PRD**：§6.1（真源 DDL）、§6.3（派生索引 Qdrant）；邻域查询的 SQL 属 §10
 
-## 要写什么
+## 本模块的构成（**实现已存在**）
 
 ```text
 schema.sql        qa_pairs + applied_batches 的 DDL（§6.1）
@@ -32,7 +32,7 @@ qdrant_store.py   collection 建/写/查、payload 过滤、prefetch+RRF
 
 **为什么正文不复制进 Qdrant payload**：会有两份正文，一旦不一致**就无法判断该信哪一份**。而按主键批量取正文是**微秒级操作**，没有性能理由去复制。
 
-**时序**：Qdrant 出 `id` → 回 SQLite 按 `id` 批量取正文 → 渲染 → 打包。"取正文"这一步**没有缓存层，也不应该有**：正文的可信来源只有一处。
+**时序**：Qdrant 出 `id` → 回 SQLite 按 `id` 批量取正文 → 渲染 → 打包。"取正文"这一步**没有缓存层，也不应该**：正文的可信来源只有一处。
 
 ---
 
@@ -88,12 +88,12 @@ applied_batches(
 
 ---
 
-## Qdrant 配置要点（§6.3）
+## Qdrant 配置要点（§6.3）—— **本表是唯一声明处**
 
 | 项 | 值 | 理由 |
 | -- | -- | ---- |
 | 模式 | **server（Docker）** | local 模式**静默丢弃 payload 索引**——`create_payload_index` 只打一行警告就返回，且数据格式与 server 不兼容 |
-| 版本 | **钉死 ≥ v1.17.0** | §7.3：`weights` 需 ≥ v1.17.0 |
+| 版本 | **钉死 ≥ v1.17.0** | §7.3：`weights` 需 ≥ v1.17.0。落地在 [`../../deploy/`](../../../deploy/) |
 | 集合分片数 | **1** | 根级融合跨分片合并，**分片数变化会改变排名**——为可复现必须单分片（官方文档亦指出分片数改变排名且**无报错**） |
 | 命名向量 | `dense` + `bm25` | 稀疏向量的距离固定为 **Dot** |
 | payload 索引 | `user_id`（**keyword** + `is_tenant`）/ `session_id`（keyword）/ `event_time`（integer） | **必须在写入数据前建**，否则 HNSW 需要重建才有过滤感知 |
@@ -102,14 +102,9 @@ applied_batches(
 
 > **`is_tenant` 只支持 keyword / uuid 两种类型**——别把 `user_id` 建成 integer。
 
-> ✅ **已在钉死版本上实测通过（2026-09-23，Qdrant v1.17.0 容器）**：
-> `{"type":"keyword","is_tenant":true}` 建索引返回 `acknowledged`，读回 config 确认 `"is_tenant":true` 已生效；
-> `dense`(size N, Cosine) + `bm25`(modifier `idf`) + `shard_number:1` 的集合可建；
-> `prefetch` 两路（各带 `using`）+ 根级 `rrf{weights, k:61}` + `user_id` 过滤的查询可用，
-> **且过滤确实只返回目标 tenant 的点**（测试中 `u2` 的点被正确排除）。
-> **注意**：`k=61` 与默认 `k=2` 的量级差约 30 倍、而名次都看似正常——见 [`docs/decisions.md` D5](../../../docs/decisions.md)。
+> ✅ **已在钉死版本上实测通过（2026-09-23，Qdrant v1.17.0 容器）**：`is_tenant` 建索引返回 `acknowledged` 且读回 config 已生效；`dense` + `bm25`（modifier `idf`）+ `shard_number:1` 的集合可建；`prefetch` 两路 + 根级 `rrf{weights, k:61}` + `user_id` 过滤的查询可用，**且过滤确实只返回目标 tenant 的点**。
 
-**融合**：`prefetch` + `rrf{weights, k}`，**`k` 必须显式设 `61`**，每个 `prefetch` 都要带 `using`（命名向量场景下不写 `using`，Qdrant 无法确定用哪一路），根级还要给 `limit`（取自请求的 `top_k`，**不要写死 100**）。完整写法见 [`../../docs/config-reference.md`](../../../docs/config-reference.md) §3。
+**融合写法**：`prefetch` + `rrf{weights, k}`，**`k` 必须显式设 `61`**，每个 `prefetch` 都要带 `using`（命名向量场景下不写 `using`，Qdrant 无法确定用哪一路），根级还要给 `limit`（取自请求的 `top_k`，**不要写死 100**）。完整写法见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §3；`k=61` 的由来见 D5。
 
 ---
 

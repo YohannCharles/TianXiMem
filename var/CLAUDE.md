@@ -30,9 +30,9 @@ var/
 | `qdrant_storage/` | 可从 `tianxi.db` 的正文全量重建（这正是"Qdrant 是派生读存储"的意思，§6.3） |
 | `embed_cache/` | 可重建，**但要重付一遍 embedding 的钱**——本地模型是电费，线上是 API 账单 |
 
-**所以 Step 5 的重建 runbook 里"备份 SQLite"是第 2 步**（见 [`../deploy/README.md`](../deploy/README.md) §4）——**顺序不能反**。
+**所以 Step 5 的重建 runbook 里"备份 SQLite"是第 2 步**（见 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4）——**顺序不能反**。
 
-**并且 SQLite 文件随 run 归档**（§15）——它是 `eval/reports/` 里那条"归档"字段指向的东西。
+**并且 SQLite 文件随 run 归档**（§15）——它是 [`../eval/reports/`](../eval/reports/) 里那条"归档"字段指向的东西。
 
 ---
 
@@ -41,7 +41,7 @@ var/
 | 约束 | 说明 |
 | --- | --- |
 | **不要往这里提交任何东西** | 整目录被忽略，提交了也看不见——**若你写的东西需要入库，它就不属于 `var/`**（派生【产物】的归属见 `.gitignore` 里那条说明） |
-| **embedding 缓存必须落盘**（§7.2） | 不是优化项，是**成本结构**：v1 的 Add 阶段不调用任何 LLM，embedding 是唯一的 Add 侧成本，**且只与内容有关——缓存后即成为一次性成本，与迭代次数无关** |
+| **embedding 缓存必须落盘**（§7.2） | 不是优化项，是**成本结构**：v1 的 Add 阶段不调用任何 LLM，embedding 是唯一的 Add 侧成本，**且只与内容有关——缓存后即成为一次性成本，与迭代次数无关**（实现要求见 [`../src/tianxi_am/embed/CLAUDE.md`](../src/tianxi_am/embed/CLAUDE.md)） |
 
 > **缓存键是"渲染后文本的哈希"，不含模型标识**。所以 Step 5 切模型时**必须主动作废整个缓存目录**——否则旧向量会**静默命中**，而维度不同的表现只是"检索结果很差"，**不会报错**。
 
@@ -49,6 +49,4 @@ var/
 
 ## 一条本地限制（别误读数字）
 
-`pending_*` 三个计数器在本地测出的值与线上**必然对不上**——AML 按"20 条消息 **或** 2,000 个 **Adapter 计数的词**"切批，而 **"Adapter" 官方从未定义**，本地只能按 20 条复现（§6.5 / §12.3 第 5 条）。
-
-**所以本地日志里的 `pending_*` 不能用来判断配对质量**，只能用来验证续接逻辑自身自洽。
+`pending_*` 三个计数器在本地测出的值与线上**必然对不上**——原因与推论见 [`../src/tianxi_am/observability/CLAUDE.md`](../src/tianxi_am/observability/CLAUDE.md)（§6.5 / §12.3 第 5 条）。**本目录不重复。**

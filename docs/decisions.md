@@ -34,7 +34,7 @@
 
 **代价**：embedding 与 agent 循环**两处的模型都被替换**，因此**本地标定出的所有阈值、权重、排序策略在切换后都不保证成立**。
 
-**四条对冲**（PRD §12.1 R1）：① 按内容哈希缓存 embedding；② 切换后立刻重跑 T2 与 A1；③ **所有阈值必须是配置项、不得硬编码**；④ **切换要单独占一个阶段**，不与任何设计改动同时进行。
+**四条对冲**（PRD §12.1 R1）：① 按内容哈希缓存 embedding；② 切换后立刻重跑 **T2**；③ **所有阈值必须是配置项、不得硬编码**；④ **切换要单独占一个阶段**，不与任何设计改动同时进行。
 
 **⚠ 一条 PRD §6.4 要求补入但尚未进对冲清单的**：本地 qwen3.5-9b 的分词器与 `gpt-4o-mini` 不同，**本地量出的"能装多少对"不能直接搬到线上**——**Step 5 切换后必须重新量一次**（见 `docs/open-questions.md` E7）。
 
@@ -235,7 +235,7 @@
 | 原记录 | 现状 |
 | --- | --- |
 | D7：「**两者别混：前者 v1 有，后者 v1 没有**」 | **该标签失效**——关键词重写属于 agent 循环，随 agentic 一并归 v2，**v1 两条都没有**。但 **D7 的区分本身仍然成立**（前者是 Agent 自产的检索词、后者是检索前独立的 query 改写），废掉的只是"v1 有"这个标签 |
-| `src/tianxi_am/agent/README.md`：「这是本项目的核心 claim，**不可砍**」 | v1 **不砍，但也不实现**——见下 |
+| `src/tianxi_am/agent/CLAUDE.md`：「这是本项目的核心 claim，**不可砍**」 | v1 **不砍，但也不实现**——见下 |
 
 **为什么 Checker 仍要做成空实现（而不是干脆不写）**：
 
@@ -258,29 +258,19 @@
 
 **边界**：[`roadmap.md`](./roadmap.md) 的 Step 0 仍保留该项，标为 ⏸ 延后。**不要在 Step 0 完成度上把它算作已办。**
 
-**连带确认（不需另立决策）**：向量库拓扑**已经是规格**，无需再定——单集合 + `user_id` 作 tenant 过滤，含 `is_tenant` 索引、分片数 1、payload 索引必须先于写数据建立。原文见 [`../src/tianxi_am/store/README.md`](../src/tianxi_am/store/README.md) 的"Qdrant 配置要点"。
+**连带确认（不需另立决策）**：向量库拓扑**已经是规格**，无需再定——单集合 + `user_id` 作 tenant 过滤，含 `is_tenant` 索引、分片数 1、payload 索引必须先于写数据建立。原文见 [`../src/tianxi_am/store/CLAUDE.md`](../src/tianxi_am/store/CLAUDE.md) 的"Qdrant 配置要点"。
 
 ---
 
 ## D15 · 混合检索无条件使用：删掉裸 BM25 与"验证后再加 dense"的分阶段（2026-09-23）
 
-**决策**：**检索只有一种模式——混合（BM25 + Dense 两路 `prefetch` → Weighted RRF）。不使用裸 BM25。** 原先把 Step 1 定为"BM25-only 检索"、Step 2 才加 dense 的分阶段**作废**：**Dense 与 Weighted RRF 上移到 Step 1**，Step 2 只剩 Neighbor Expansion 与双预算截断。
+**决策**：**检索只有一种模式——混合（BM25 + Dense 两路 `prefetch` → Weighted RRF）。不使用裸 BM25。** Dense 与 Weighted RRF 归 **Step 1**，Step 2 只剩 Neighbor Expansion 与双预算截断。
 
-**它撤销的是什么**：**D8 那条 hedge**——"Hybrid Retrieval 降级为**待验证假设**（必须有 BM25-only 对照）"。**该表述作废：hybrid 不再是待验证假设，是既定的检索形态。**
+**取代 D8 的那条 hedge**（"Hybrid Retrieval 降级为**待验证假设**，必须有 BM25-only 对照"）——hybrid 是**既定的检索形态**。
 
-**⚠ 这原本是一条对 PRD 的有意偏离**，涉及三处：
+**连带消失的三项**：§8 的 Checker 退化路径问题（dense 永不关 ⇒ Checker 永不退化）、§13 的 **A1 / A2 两个对照**、`open-questions.md` 的 **E2** 与"待决事项 2"。**理由是 §13 自己的原则**：「若一个实验的两种结果会导致同一个下一步动作，它不该做」——参照点改由**混合主路径自身**承担。
 
-| PRD 位置 | 原文 | 现状 |
-| --- | --- | --- |
-| §4（第 132 行表格） | Hybrid Retrieval **降级为待验证假设，必须有 BM25-only 对照** | **已撤销** |
-| §13 实验登记 | **A1** 裸 BM25 单轮；**A2** Hybrid（若 A2 ≤ A1 则砍掉 dense 与 RRF） | **两者 ⛔ 作废**，行保留并注明原因 |
-| §8 | Checker 的判据建立在"分别跑 `bm25-only` 与 `dense-only`"之上，**要求 dense 一路存在**；若 dense 被砍则 Checker 需退化路径，**且必须在 Step 1 选定** | **退化路径问题随之消失**——dense 永不关，Checker 永不退化。**⚠ 这一条对 v1 无实际影响**（v1 的 Checker 是空实现，见 D13），但它同时消掉了 [`open-questions.md`](./open-questions.md) 的 **E2** 与"待决事项 2" |
-
-> **✅ 同日已同步更正 PRD 本身**，故**本条不再是"对 PRD 的偏离"，它就是 PRD 的当前状态**。上面这表保留——它的用处是说明**改了 PRD 的哪几处**。同步的位置：§4 表格与更正注、§8 的 dense 依赖段与副产品段、§13 的 A1/A2 行与 Smoke 段与 A0 sanity、§15 的 Step 1 与 Step 5 行、§17.2 的 E2 行。
-
-**为什么 A1 / A2 作废而不是保留**：按 §13 自己的原则——"**若一个实验的两种结果会导致同一个下一步动作，它不该做**"。既然 hybrid 无条件使用，A2 的两种结果都不改变动作；A1 也就失去了它作为"参照物"的意义（参照点改由**混合主路径自身**承担）。
-
-**保留的部分**：`dense` 开关**仍是配置项**（§15 要求所有消融项可配），只是**不再有"关掉 dense 后 Checker 怎么办"这个下游问题**。
+**保留的部分**：`dense` 开关**仍是配置项**（§15 要求所有消融项可配），只是**不再有下游依赖**；Checker 的开关 `checker.enabled` 也必须可配（§15 的清单里原本漏了它，因为 §13 的 A4 要关它做对照）。
 
 **残余风险（写在这里，以免它消失）**：D8 的四条证据里，**第 3 条**是"ReFind 的消融显示 dense 与 hybrid 都打不过纯 BM25"。**撤销 BM25 对照意味着这条反证不再被本地检验。** 判断依据是：那条证据的限定条件很窄（**GPT-5-mini backbone 下的 matched 子集消融**，不能直接推及 `gpt-4o-mini` 场景），而 D8 的第 1、4 条（LME 召回接近天花板、AML 按 117,760 token 前缀截断）才是主推。**⇒ 若日后分数不及预期，第一个该复检的就是这一条。**
 
@@ -301,7 +291,7 @@
 | **`role` 取值** | 只有两个值——`user` 2,951 / `assistant` 2,931。**且与 `speaker_a`/`speaker_b` 100% 一致**（speaker_a→`user`、speaker_b→`assistant`，零例外、零缺失） |
 | **逐条内容等价性** | 5,882 条中：**5,673 完全相同 · 209 条仅首尾空白不同 · 0 条内部空白不同 · 0 条真实内容不同**；且 209 条**全部同向**——`conversations.jsonl` 的 text **恰为** `locomo_refined.json` 的去首尾空白版 |
 
-**⇒ 采用理由不是"格式方便"，而是它同时修掉一类契约违规**：[`tests/README.md`](../tests/README.md) 要求 content **首尾无空白**（因为 AML 只做 `"\n".join(...)`、不插分隔符）。**用 `locomo_refined.json` 作源会直接引入 209 条契约违规**；`conversations.jsonl` 天然合规。
+**⇒ 采用理由不是"格式方便"，而是它同时修掉一类契约违规**：[`tests/CLAUDE.md`](../tests/CLAUDE.md) 要求 content **首尾无空白**（因为 AML 只做 `"\n".join(...)`、不插分隔符）。**用 `locomo_refined.json` 作源会直接引入 209 条契约违规**；`conversations.jsonl` 天然合规。
 
 **顺带消掉的落差**：归档文档记的"落差 #1"是——**`locomo_refined.json` 是 pretty-printed JSON 数组，而 pipeline 的 `rows()` 只解析 JSONL**。改用 `conversations.jsonl`（**本身即 JSONL**，一行一个 conversation）后，**这层格式转换不必写**。
 
@@ -326,9 +316,8 @@
 | # | 事项 | 何时必须定 |
 | --- | --- | --- |
 | 1 | **reranker 具体模型** | Step 3 前（§11.2）。**端点尚未部署**（部署不在本项目范围内），选型在提交时不得更换（D12） |
-| 7 | **归档（`benchmark_data/`）放哪台机器** | **立刻**。归档目前不在开发机（`d:\MemoryProject\` 下只有仓库本体），而 harness 在本机、且必须读归档 |
-| 2 | ~~**Checker 的退化路径**（`never_agent` 还是 `bm25_gap`）~~ | ✅ **已消失**（D15）：dense 永不关 ⇒ Checker 永不退化。`dense` 开关仍保留为配置项 |
 | 3 | **渲染模板定稿** | Step 3（E6）——**改模板 = 重建索引** |
 | 4 | **S1 的判别实验设计** | Smoke 第一次跑通后**立刻**（§17.1） |
 | 5 | **B1 包装 ReFind 的工作量估算** | **真要跑 B1 之前**（§13）——目前**未计入任何 Step** |
 | 6 | **`benchmark_data/` 是否入库** | 入库前确认分发范围——内含 CC BY-NC 数据 |
+| 7 | **归档（`benchmark_data/`）放哪台机器** | **立刻**。归档目前不在开发机（`d:\MemoryProject\` 下只有仓库本体），而 harness 在本机、且必须读归档 |

@@ -46,11 +46,11 @@ runs/              每次 run 的原始产出（**gitignored**，见下）
 6. Rules and process execution
 7. **Epistemic safety and privacy**
 
-> **第 4、7 两维**在早期设计里**完全未被覆盖**，是 §3.2 要求**在设计里显式回应**的（映射见 [`../../docs/architecture.md`](../../docs/architecture.md)）。**报告里这两维为空的 run，等于没测。**
+> **第 4、7 两维**在早期设计里**完全未被覆盖**，是 §3.2 要求**在设计里显式回应**的（映射见 [`../../../docs/architecture.md`](../../docs/architecture.md)）。**报告里这两维为空的 run，等于没测。**
 
 ### ⚠ `pending_orphaned` 要拆成两个字段
 
-见 [`../../src/tianxi_am/observability/README.md`](../../src/tianxi_am/observability/README.md)：**(i) 真·残缺**（正常）与 **(ii) 误判残留**（**是 bug**）必须分开统计。**合成一个数，这条信号就废了。**
+**(i) 真·残缺**（正常）与 **(ii) 误判残留**（**是 bug**）必须分开统计——**定义与读法在 [`../../src/tianxi_am/observability/CLAUDE.md`](../../src/tianxi_am/observability/CLAUDE.md)（本目录不重复）。合成一个数，这条信号就废了。**
 
 ---
 

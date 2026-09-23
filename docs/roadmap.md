@@ -2,7 +2,7 @@
 
 > 最后核对：2026-09-23，对应 PRD §16（+ §1 / §6.4 / §11.2 / §12.1 的阶段要求）。**冲突以 PRD 为准。**
 
-**状态**：全部 ⬜ 未开始。当前处于脚手架阶段，Step 0 尚未动手。
+**状态**：Step 1 的实现**已开工**（`store/` `pairing/` `embed/` `common/render.py` 与 8 个测试文件已存在，见根 `CLAUDE.md`）；下方勾选状态尚未逐项回填，**以根 `CLAUDE.md` 为准**。
 
 ---
 
@@ -11,11 +11,11 @@
 | 阶段 | 交付 | 状态 |
 | ---- | ---- | ---- |
 | **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval）+ **确认显存预算** | ⬜ |
-| Step 1 | 存储层 + Add/Search 服务 + BM25-only 检索（含 T2 实验） | ⬜ |
-| Step 2 | Dense + Weighted RRF + Neighbor Expansion | ⬜ |
+| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） | ⬜ |
+| Step 2 | **Neighbor Expansion + 双预算截断** | ⬜ |
 | Step 3 | Rerank + Context Packaging（含 T1 实验） | ⬜ |
 | Step 4 | Conditional Agentic Search | ⬜ |
-| **Step 5** | **切换到提交模型**，重标定全部阈值，重跑 T2 与 A1 | ⬜ |
+| **Step 5** | **切换到提交模型**，重标定全部阈值，重跑 T2 | ⬜ |
 | Step 6 | 对照实验（§13）+ Smoke 验证 + Full 定稿 | ⬜ |
 
 ---
@@ -49,16 +49,13 @@
 ### 数据侧
 
 - [ ] **数据加载层 + schema 落差预处理**（§12.3 第 9 条）——**不是"读个 JSON 就能跑"**。已核实的落差：
-      - **`locomo_refined.json` 是 JSON 数组，而 pipeline 的 `rows()` 只解析 JSONL** ⇒ 两边都要加载、按下标对齐
+      - **喂给 Add 的对话全文取 `data/public/conversations.jsonl`**（D16）——它本身即 JSONL、**每条 message 自带 `role`**，天然满足 content 首尾无空白的要求（用 `locomo_refined.json` 会引入 209 条契约违规）
+      - **`questions.jsonl` 只有 `evidence_messages`（证据轮，不是整段对话）**，但含 1,382 题与 gold ⇒ **与上一条按 `qa_id` 逐题对齐使用**（仅 6 处答案 int/str 差异）
       - **`questions.jsonl` 的键与 pipeline 读的键对不上**（有 `qa_id` 无 `id`；有 `answer` 无 `gold_answer`）⇒ **直接喂会 `KeyError` + `ValueError`**
-      - **两个数据集的 turn schema 不同**：LongMemEval 是 `role`+`content`，**LoCoMo 是 `speaker`+`dia_id`+`text`** ⇒ 必须归一化，否则 **`pairing/` 看不见 `role`，整个 session 归成一个对且不报错**
+      - **两个数据集的 turn schema 不同**：LongMemEval 是 `role`+`content`，**LoCoMo 的 `conversations.jsonl` 是 `role`+`text`+`dia_id`** ⇒ 必须归一化，否则 **`pairing/` 看不见 `role`，整个 session 归成一个对且不报错**
       - **`category` 类型不一致**：`questions.jsonl` 里是字符串 `"4"`，`locomo_refined.json` 里是整数 `4` ⇒ 不归一化会**静默筛出 0 条**
       - PersonaMem 的 CSV **没有 `chat_history` 列、也没有 `incorrect_answers` 列**，而 pipeline 缺后者直接 `raise TypeError`
       - **答案字段名以 pipeline 代码为准**：规范字段是 **`generated_answer`**（CL-Bench 写 `model_output`）。**readme 写的 `predicted_answer` / `hypothesis` 没有 pipeline 读**
-- [ ] **确认"喂给 Add 的对话全文"从哪个文件取**（§12.2）——归档里有**两个** LoCoMo-Refined 文件，**别假设用一个就够**：
-      - `questions.jsonl`：1,382 题，含 `evidence_messages`（**只有证据轮，不是整段对话**）
-      - `locomo_refined.json`：含 `conversation` **全文**（`speaker_a`/`speaker_b` + 成对的 `session_N_date_time`/`session_N`）
-      - 二者逐题对齐（仅 6 处答案 int/str 差异）
 - [ ] **LongMemEval 用 `lme_s_cleaned.json`**，**不要用 `lme_test.json`**——已复算：`test` 有 **1,230 个 0-turn session**，`s_cleaned` 有 0 个。**空 session 会污染按"20 条消息"切批的埋点逻辑**（§6.5）
 - [ ] **给 LongMemEval 合成 per-message `timestamp`**——它的 turn **只有 `role`+`content`**，时间在 **session 级**的 `haystack_dates` 里（形如 `"2023/05/20 (Sat) 02:21"`）。不合成则 `event_time` 全 NULL、`created_at` 只能发 `""`
       > **副作用是有价值的**：同一 session 内所有消息拿到同一日期 ⇒ **实证了 §6.1 的判断**——`event_time` 保证不了 session 内顺序，**`pair_idx` 是唯一能保证邻域稳定的东西**
@@ -72,7 +69,6 @@
 ## Step 1 — 存储 + 服务 + 混合检索
 
 > **检索只有一种模式：混合**（BM25 + Dense 两路 `prefetch` → Weighted RRF）。**没有裸 BM25 模式**（D15）。
-> 原先把"先跑通 BM25、验证后再加 dense"当作分阶段依据，那个 hedge 已撤销——Dense 与 RRF 一次到位。
 
 - [ ] SQLite 真源：`qa_pairs` + **`applied_batches`**（§6.1）
 - [ ] Qdrant server 模式（**Docker**），单分片，payload 索引**在写入前**建（§6.3）
@@ -89,7 +85,7 @@
 
 ## Step 2 — Neighbor Expansion + 双预算
 
-> **Dense 与 RRF 已上移到 Step 1**（检索一次到位，D15），本阶段只剩扩窗与预算。
+> **Dense 与 RRF 归 Step 1**（检索一次到位，D15），本阶段只剩扩窗与预算。
 
 - [ ] Neighbor Expansion：种子 20、窗口 ±1、**槽位占 `top_k` 名额**（§10）
 - [ ] 双预算截断（槽位数 + token 数）（§6.4）
@@ -125,7 +121,7 @@
 - [ ] 切到 `text-embedding-v4` + `gpt-4o-mini`（§2.3）
 - [ ] **按新维度重建向量集合**（§2.3 / §16）——embedding 缓存整体失效（§7.2）
 - [ ] **重标定全部阈值与权重**（§12.1 R1）
-- [ ] **重跑 T2 与 A1**，确认切换没引入系统性偏移——**这两组对外部模型依赖最小，先用它们确认，再去信其他实验**（§12.1 R1 对冲 2）
+- [ ] **重跑 T2**，确认切换没引入系统性偏移——**它对外部模型依赖最小（纯 BM25 检索 + 人工判读，不调用任何模型），先用它确认，再去信其他实验**（§12.1 R1 对冲 2）
 - [ ] **重新量一次单请求实际返回的对数**（§6.4 补录的对冲 / `docs/open-questions.md` E7）——本地分词器与 `o200k_base` 不同，**本地量的不能直接搬**
 - [ ] 确认无硬编码残留：扫一遍 `docs/config-reference.md` §11
 

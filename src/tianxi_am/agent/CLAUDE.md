@@ -6,11 +6,11 @@
 >
 > **但 Evidence Checker 的接缝要留在 v1**：实现为**恒返回"充足"、且必须记录每轮判定**的空实现。记录的理由见 D13——不记，**Step 4 之前永远无法用数据回答 A4「agent 值不值」**。
 >
-> **v1 的代价必须正视**：没有证据补充路径，**召回是一次性天花板**——正确的 QA 对不在初始候选里就永久丢了。**v1 的全部重量因此压在"排序 + token 预算分配"上**，而这正是 `rank/` 与 Neighbor Expansion 的职责。
+> **v1 的代价必须正视**：没有证据补充路径，**召回是一次性天花板**——正确的 QA 对不在初始候选里就永久丢了。**v1 的全部重量因此压在"排序 + token 预算分配"上**，而这正是 [`../rank/`](../rank/) 与 Neighbor Expansion 的职责。
 
-**PRD**：§9（含 §5 的流程图注释）、§14（监控）
+**PRD**：§9（含 §5 的流程图注释）
 
-## 要写什么
+## 要写什么（v2）
 
 ```text
 loop.py     agent 循环：门控、轮数、合并
@@ -36,7 +36,7 @@ tools.py    search_chatrecord / take_note / finish_search
 | **门控太松** | Agent Trigger Rate 偏高 | Checker 太保守 |
 | **门控太紧** | Agent Trigger Rate **接近 0** | **agent 没起作用**——核心 claim 事实上没有被验证 |
 
-**只看平均分看不出这两种失败**——必须同时看 Trigger Rate。这也是 §13 要把 A4 拆成 A4a/A4b 两个 arm 的原因（见 [`../../docs/experiments.md`](../../../docs/experiments.md)）。
+**只看平均分看不出这两种失败**——必须同时看 Trigger Rate。这也是 §13 要把 A4 拆成 A4a/A4b 两个 arm 的原因（见 [`../../../docs/experiments.md`](../../../docs/experiments.md)）。
 
 ---
 
@@ -77,7 +77,7 @@ tools.py    search_chatrecord / take_note / finish_search
 
 ## 产出与初始候选是"合并"关系，不是替换（§9）
 
-**两者一起进 `rank/` 的 Rerank，按 `id` 去重。**
+**两者一起进 [`../rank/`](../rank/) 的 Rerank，按 `id` 去重。**
 
 **理由**：初始那一路里**往往已经有正确答案**——Agent 的价值是**补上它找不到的那部分，而不是推翻它**。
 
@@ -93,15 +93,9 @@ Multi-hop · Temporal · Knowledge Update · Ambiguous · 信息分散
 
 ---
 
-## 监控（§14）
+## 监控
 
-本目录是这几个指标的**发射方**，聚合在 [`../observability/`](../observability/)：
-
-| 指标 | 异常时触发什么 |
-| --- | --- |
-| **Agent Trigger Rate** | 太高 → Checker 太保守；**接近 0 → agent 没起作用** |
-| Agent 平均轮数 / Rewrite 次数 | **异常升高说明 prompt 崩了** |
-| latency/query | 契约允许 30 分钟，但 **Full run 要连续跑 0.5–2 天**；接近上限就**削减 agent 轮数** |
+本目录是 **Agent Trigger Rate / 平均轮数 / Rewrite 次数**的**发射方**；读法、阈值含义与聚合都在 [`../observability/CLAUDE.md`](../observability/CLAUDE.md)。
 
 ---
 

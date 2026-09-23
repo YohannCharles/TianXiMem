@@ -1,4 +1,4 @@
--- 真源 DDL —— 逐字对应 PRD §6.1（与 src/tianxi_am/store/README.md 的 DDL 要点一致）。
+-- 真源 DDL —— 逐字对应 PRD §6.1（与 src/tianxi_am/store/CLAUDE.md 的 DDL 要点一致）。
 --
 -- 两张表：qa_pairs（业务正文）+ applied_batches（唯一旁表 = 批次级幂等守卫）。
 --

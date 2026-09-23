@@ -6,7 +6,7 @@
 本模块【不认识】Qdrant、embedding、渲染，也【不认识】任何数据集——
 它只认 §2.1 的 canonical Add 契约字段（`user_id` / `session_id` / `request_id` / 消息）。
 
-不变式归属（store/README.md 的五条）：
+不变式归属（store/CLAUDE.md 的五条）：
   1. `id` 位置派生 .................... `make_pair_id()` + `schema.sql` 的 PRIMARY KEY
   2. `pair_idx` session 内连续 ........ `next_pair_idx()`（读-改-写在**一个事务**里）
   3. `applied_batches` 只增不改 ....... `record_batch()`（只 INSERT，不 UPDATE）

@@ -50,9 +50,9 @@ pipeline_v2_personamem.py      PersonaMem v2
 
 **harness 的 I/O 以这些代码为准，不要照 readme**（§12.3 第 9 条）：readme 写 `predicted_answer` / `hypothesis`，而代码实际读写的是 **`generated_answer`**。
 
-**踩坑要点已整理到**：[`../eval/datasets/README.md`](../eval/datasets/README.md)（schema 落差、分类 ID 映射、切批口径）与 [`../eval/harness/README.md`](../eval/harness/README.md)（`api_config` 依赖、字段名表、调用细节）。
+**踩坑要点已整理到**：[`../eval/datasets/CLAUDE.md`](../eval/datasets/CLAUDE.md)（schema 落差、分类 ID 映射、切批口径）与 [`../eval/harness/CLAUDE.md`](../eval/harness/CLAUDE.md)（`api_config` 依赖、字段名表、调用细节）。
 
-> **一个容易漏的依赖**：五个 pipeline 都从 `Path(__file__).resolve().parents[2]`（即 **`/home/buptc/project/`**，**仓库外**）import `api_config`，而**该文件目前不存在**。详见 [`../eval/harness/README.md`](../eval/harness/README.md) §"三个必须先解决的阻塞项"。
+> **一个容易漏的依赖**：五个 pipeline 都从 `Path(__file__).resolve().parents[2]`（即 **`/home/buptc/project/`**，**仓库外**）import `api_config`，而**该文件目前不存在**。详见 [`../eval/harness/CLAUDE.md`](../eval/harness/CLAUDE.md) §"三个必须先解决的阻塞项"。
 
 ---
 

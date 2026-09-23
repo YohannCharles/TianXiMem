@@ -2,11 +2,11 @@
 # 目录名是 var/ 而不是 data/ —— 后者与只读归档 benchmark_data/ 读起来像同一类东西。
 # var/ 只装"运行时状态"，装进去的东西都应当是可重建或可弃的。
 # ⚠ 必须写成 var/* 而不是 var/：写 var/ 会排除**目录本身**，git 就不再向下
-#   查找，下面那条 !var/README.md 永远轮不到执行（静默失效）。
+#   查找，下面那条 !var/CLAUDE.md 永远轮不到执行（静默失效）。
 var/*
 
-# 唯一的例外：保留 var/README.md，让这个目录在 checkout 后依然存在且有说明。
-!var/README.md
+# 唯一的例外：保留 var/CLAUDE.md，让这个目录在 checkout 后依然存在且有说明。
+!var/CLAUDE.md
 
 # ⚠ 派生【产物】要入库，原始数据与运行时状态不入库：
 #      --configs/runs/        每次实验的配置快照      → 提交
@@ -19,7 +19,7 @@ var/*
 eval/reports/**/*.json
 eval/reports/**/*.jsonl
 eval/reports/**/*.csv
-!eval/reports/README.md
+!eval/reports/CLAUDE.md
 
 # ── 密钥 ───────────────────────────────────────────────────────────────
 .env
@@ -51,11 +51,11 @@ build/
 # 第三方数据集以 **git clone** 形式放在这里（目录内有嵌套 .git）。**一律不入库**：
 #   - 许可约束：LoCoMo-Refined 是 **CC BY-NC 4.0**（§12.5），分发范围未确认前不提交
 #   - 嵌套 .git 会让 git 把它当 submodule 处理，留下 gitlink 记录
-# 只保留 eval/datasets/README.md 作为说明。
+# 只保留 eval/datasets/CLAUDE.md 作为说明。
 # ⚠ 必须写成 eval/datasets/* 而不是 eval/datasets/：写目录会排除**目录本身**，
 #   git 就不再向下查找，下面的 ! 规则永远轮不到执行（静默失效，与 var/ 同理）。
 eval/datasets/*
-!eval/datasets/README.md
+!eval/datasets/CLAUDE.md
 
 # ── 其他 ───────────────────────────────────────────────────────────────
 # 归档只读，整目录不入库（§12.3 第 8 条：其中有失败下载的残留文件）。

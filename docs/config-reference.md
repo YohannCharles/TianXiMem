@@ -63,30 +63,13 @@ R1 是团队**主动接受**的一次偏离——开发期用本地 BGE-M3 + qwe
 | `agent` | 一律不走 Agentic Search | `checker`（门控时） | **打包顺序不变**（只是候选少了 agent 补的那部分） | §9 |
 
 > **最后一列是 §13 的纯度规则**：**开关必须只影响它命名的那一件事。** 否则对照不成立——**而结果看起来完全正常，只是结论错了**。
-> 对应测试见 [`../tests/README.md`](../tests/README.md) §5——**那组测试很便宜，而它保护的是整个 §13 实验计划。**
+> 对应测试见 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) §5——**那组测试很便宜，而它保护的是整个 §13 实验计划。**
 
-**`rrf` 实际上也下游于 `dense`**：§13 的 A2 决定写的是"**砍掉 dense 与 RRF**"——两者一起砍。所以 `dense: false` 时 `rrf` 是否还生效是个**定义问题**，要显式规定，**不要让它在实现里自然发生**。
+**`dense: false` 时 `rrf` 是否还生效仍要显式规定**，不要让它在实现里自然发生。
 
 **两个不在 §15 清单里、但同样要可配的对照项**：T1 的时间戳前缀渲染变体（§11.3）与 A0 的 recency-only（§13）。
 
-### ⚠ `checker` 是 `dense` 的下游
-
-**这不是一条实现细节，是一条必然的耦合**（§8）：Evidence Checker 的判据建立在"分别跑一次 `bm25-only` 与一次 `dense-only`，用两者返回的排名做判断"之上——**它要求 dense 一路存在**。
-
-而 §13 的 A2 准备在 "A2 ≤ A1" 时砍掉 dense。**真砍了，Checker 的判据就塌了。** 所以退化路径只有两条，且**必须在 Step 1 就选定并写进配置**，不要等到决定砍 dense 的那天再补：
-
-| 退化路径 | 行为 |
-| --- | --- |
-| `checker.degradation: never_agent` | dense 关掉时**一律不触发 Agent** |
-| `checker.degradation: bm25_gap` | 改用 **BM25 自身的名次间隔**做判据 |
-
-> **让这条要求活下来的机制是一个校验规则**，而不是文档里的一句话：
->
-> **配置加载必须在 `dense: false` 且 `checker.degradation` 未设时【拒绝启动】。**
->
-> 否则它会在 deadline 前第一个被忘掉。落地位置见 [`../src/tianxi_am/common/README.md`](../src/tianxi_am/common/README.md) §3。
-
-**若 dense 被砍，§13 的 A2 对照同时失去意义**，A1（裸 BM25 单轮）成为唯一基线（§8）。
+**`checker.enabled` 必须可配**（§15 的开关清单里原本漏了它）——§13 的 A4 要关它做对照。
 
 **为什么不用融合分数做判据**（§8）：RRF 融合后的分数**不是校准量**。Qdrant 官方明确警告不要把单路阈值用到根级 `score_threshold`——"照搬 dense-only 的阈值会静默截断结果"。因此判据只能用**名次**。
 
@@ -124,11 +107,10 @@ R1 是团队**主动接受**的一次偏离——开发期用本地 BGE-M3 + qwe
 
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
-| `checker.enabled` | `true` | 见上面的下游关系 |
+| `checker.enabled` | `true` | §13 的 A4 要关它做对照 |
 | `checker.top1_identical` | `true` | 两路 top1 相同 → 足够 |
 | `checker.top5_overlap_min` | `3` | 两路 top-5 重叠 ≥ 3 → 足够 |
 | `checker.bm25_top1_in_dense_top` | `3` | bm25 top1 的名次在 dense 结果中位于前 3 → 足够 |
-| `checker.degradation` | **Step 1 选定** | 见 §2 的两条退化路径。**`dense: false` 而此项未设时，配置加载必须拒绝启动** |
 
 阈值**需在代理评测上标定**，初值如上。
 

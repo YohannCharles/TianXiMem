@@ -1,6 +1,6 @@
 """Embedding 后端：维度来源、落盘缓存、坐标系失效、HTTP 响应解析。
 
-对应 [`../tests/README.md`](../tests/README.md) 与 embed/README.md §缓存。
+对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 与 embed/CLAUDE.md §缓存。
 ⚠ **全部用例都不碰网络**——缓存与维度用 `FakeEmbedder`，HTTP 用桩客户端。
 """
 

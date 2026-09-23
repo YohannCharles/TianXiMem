@@ -1,6 +1,6 @@
 """单元测试的共用 fixture。
 
-测试清单的权威来源是 [`../tests/README.md`](../tests/README.md)：
+测试清单的权威来源是 [`../tests/CLAUDE.md`](../tests/CLAUDE.md)：
 配对 / 续接 / 幂等 / 契约 / 隔离 / 开关纯度 / 存储。
 
 ⚠ 本目录的测试**只用合成的 canonical 消息**（`role` / `content` / 可选 `timestamp`），

@@ -6,12 +6,13 @@
 
 ```text
 run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告
-a1_a2_retrieval.py    A1 裸 BM25 / A2 Hybrid
 a3_rerank.py          A3 Rerank 开/关
 a4_agent.py           A4a 门控 / A4b always-on
 t1_timestamp.py       T1 时间戳前缀 带/不带
 t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）
 ```
+
+> **纯 BM25 检索是本目录的 T2 手段**（见下），**不是一条被评分的 arm**——检索只有混合一种形态，参照点由**混合主路径自身**承担（§13）。
 
 **协议登记在 [`../../docs/experiments.md`](../../docs/experiments.md)**——那个文件回答"这个对照决定什么"，本目录只回答"**怎么跑**"。数字落 [`../reports/`](../reports/)。
 
@@ -25,7 +26,7 @@ t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）
 
 **这是从零搭建特有的陷阱**（复用既有代码时不会犯，因为开关早就有了）。
 
-**跑之前先在 [`../../configs/README.md`](../../configs/README.md) 核对**：这个开关的"关"分支是否真的只改了它命名的那一步。对应测试见 [`../../tests/README.md`](../../tests/README.md)。
+**跑之前先在 [`../../../docs/config-reference.md`](../../docs/config-reference.md) 核对**——**开关的依赖图与"关掉时不得改变什么"一处声明在那里**。对应测试见 [`../../tests/CLAUDE.md`](../../tests/CLAUDE.md)。
 
 ### 2. 每个 arm 都要冻结配置
 
@@ -33,7 +34,7 @@ t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）
 
 ### 3. 记录端到端总分 + 各维度子分
 
-**latency / 成本只在明显变差时才追**（§13）。**不看 Recall@K**（§14）。
+**latency / 成本只在明显变差时才追**（§13）。**不看 Recall@K**（§14）。字段清单见 [`../reports/CLAUDE.md`](../reports/CLAUDE.md)。
 
 ---
 
@@ -41,13 +42,10 @@ t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）
 
 | 对照 | arm | 注意 |
 | --- | --- | --- |
-| **A1** | 裸 BM25 单轮 | **必须能通过 Smoke 契约校验**——它是参照点，自己先得合规 |
-| **A2** | Hybrid | **若 A2 ≤ A1，砍 dense 与 RRF**——但**砍之前必须先选定 Checker 退化路径**（§8） |
-| **A3** | Rerank 开 / 关 | §11 主线的验证。若不值，L20 算力改投他处 |
+| **A3** | Rerank 开 / 关 | §11 主线的验证。若不值，把算力挪去别处 |
 | **A4** | **A4a 门控** / **A4b always-on** | **两个 arm 都要**，见下 |
 | **T1** | 时间戳前缀 带 / 不带 | 测出差异时**归因不要默认只来自一条机制**（§11.3 的两条独立规则） |
 | **T2** | 跨 session 失败归因 | **人工标注**，见下 |
-| **A0** | recency-only | 可选 sanity，成本约等于零 |
 
 ### A4 必须拆成两个 arm
 
@@ -56,17 +54,19 @@ t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）
 | **A4a** | agent **受 Checker 门控** | 当前设计（§3.1 的成本主张）值不值 |
 | **A4b** | agent **always-on** | agent 的**上限**在哪 |
 
-**只做 A4a 无法区分"agent 没用"与"Checker 卡太严"**——这两种失败要求完全相反的下一步动作（砍 agent vs 放松 Checker）。而 §14 的 Agent Trigger Rate 是区分它们的关键信号。
+**只做 A4a 无法区分"agent 没用"与"Checker 卡太严"**——这两种失败要求完全相反的下一步动作（砍 agent vs 放松 Checker），而 Agent Trigger Rate 是区分它们的关键信号（§14）。
+
+> **A4 的完整协议与两臂的设计理由在 [`../../../docs/experiments.md`](../../docs/experiments.md)**（本目录不重复）。
 
 ---
 
 ## T2：本目录里唯一需要**人工产出**的实验
 
-**半天工作量**（§13）。
+**半天工作量的前置实验**（§13）。
 
 ```text
 输入：lme_s_cleaned.json 的 133 道 multi-session 题
-检索：纯 BM25
+检索：**纯 BM25**
 动作：**人工**把失败样本分三类
   (i)   没召回
   (ii)  召回了但被 top-100 截断
@@ -85,7 +85,7 @@ t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）
 | 主因是"**措辞不同导致漏召**" | **别名归并值得做**（附录 A 的实体层） |
 | 主因是"**召回但被截断 / 排序靠后**" | **实体层解决的不是本项目的瓶颈**——v1 不做 |
 
-**Step 5 后要重跑**（§12.1 R1 对冲 2）。
+**Step 5 后要重跑 T2**（§12.1 R1 对冲 2）——它是**对外部模型依赖最小**的一组（纯 BM25 检索 + 人工判读，**不调用任何模型**），先用它确认切换没引入系统性偏移，**再去信其他实验**。
 
 ---
 

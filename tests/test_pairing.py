@@ -1,6 +1,6 @@
 """§6.2 的配对判据（三种真实情况 + 未知 role）+ §6.5 第 3 步的纯逻辑。
 
-对应 [`../tests/README.md`](../tests/README.md) 一、配对与续接。
+对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 一、配对与续接。
 全部是纯函数测试：**不碰数据库**，因此失败时一定是配对逻辑本身的问题。
 """
 
@@ -42,7 +42,7 @@ def test_status_literals_match_ddl() -> None:
     assert STATUS_PENDING == "pending"
 
 
-# ── 三种真实情况（pairing/README.md 的表）───────────────────────────────
+# ── 三种真实情况（pairing/CLAUDE.md 的表）───────────────────────────────
 
 
 def test_consecutive_user_messages_close_previous(M: Callable[..., Message]) -> None:

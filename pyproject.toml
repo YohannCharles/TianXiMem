@@ -62,7 +62,7 @@ src = ["src", "eval", "tests"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 # ⚠ 必须排除 Markdown：`ruff format` 会**重排 .md 里 fenced 的 Python 代码块**，
-#   而本仓的文档大量依赖"逐字引用"——例如 eval/harness/README.md 里那段
+#   而本仓的文档大量依赖"逐字引用"——例如 eval/harness/CLAUDE.md 里那段
 #   `from api_config import (...)` 是归档 pipeline 的**原样引用**，
 #   展开成多行之后就不再是原样引用了。实测：排除前 `make fmt` 每次都会去改它。
 [tool.ruff.format]

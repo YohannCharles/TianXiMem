@@ -1,7 +1,7 @@
 """§6.2 的配对判据 + §6.5 三步挂接的**纯逻辑**部分。
 
 **这是全项目逻辑最绕、也最容易静默出错的一层**——出错的表现是"某些记忆永远检索不到"，
-而**不会有任何报错**（pairing/README.md）。
+而**不会有任何报错**（pairing/CLAUDE.md）。
 
 本模块是**纯函数**：不认识 SQLite、不认识 Qdrant、不认识任何数据集。
 它只接受 §2.1 的 canonical Add 契约形状（`role` / `content` / 可选 `timestamp`），
@@ -116,7 +116,7 @@ class ResumeActions:
     """3b：本批出现首个 user 消息 ⇒ 把它标 `complete`。
 
     ⚠ **最容易漏的一步**：漏了它会永久挂在 pending，而且现象会**伪装成 AML 的切分行为**，
-    让人跑去改配对规则——**方向完全错了**（pairing/README.md）。
+    让人跑去改配对规则——**方向完全错了**（pairing/CLAUDE.md）。
     """
 
     final_status: Status | None

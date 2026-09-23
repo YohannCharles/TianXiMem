@@ -4,7 +4,7 @@
 Step 5 之后应停止使用。
 
 ⚠ **本实现只产出 Dense 向量。** 不产出 sparse、不产出 ColBERT——理由见
-[`README.md`](./README.md)：词法那一路走 Qdrant 原生 `qdrant/bm25`（§7.1），
+[`CLAUDE.md`](./CLAUDE.md)：词法那一路走 Qdrant 原生 `qdrant/bm25`（§7.1），
 **不使用 BGE-M3 的 sparse 输出**（它的 sparse 是学出来的词法权重而非 BM25，
 而且提交时的 `text-embedding-v4` 不提供该能力 ⇒ 任何依赖它的代码在提交时都是**死重**）。
 

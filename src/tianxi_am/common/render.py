@@ -8,7 +8,7 @@
 **因此本模块是唯一拼 QA 对文本的地方**：
 [`../embed/`](../embed/) 不自己拼字符串，[`../rank/`](../rank/) 的 packaging 也不自己拼。
 
-**本模块不依赖任何业务层**（common/README.md 的分层要求）——它只是
+**本模块不依赖任何业务层**（common/CLAUDE.md 的分层要求）——它只是
 `(question, answer) -> str` 的纯函数，**不认识 SQLite、不认识 Qdrant、不认识任何数据集**。
 调用方自己取 `pair.question` / `pair.answer` 传进来。
 """
@@ -24,7 +24,7 @@ TEMPLATE_VERSION: str = "v1"
 QUESTION_PREFIX: str = "Q: "
 ANSWER_PREFIX: str = "A: "
 
-# Q 与 A 之间的分隔。rank/README.md 与 PRD §11.3 的【模板块】都是一个换行；
+# Q 与 A 之间的分隔。rank/CLAUDE.md 与 PRD §11.3 的【模板块】都是一个换行；
 # 同节的示例里画成了空行（两个换行）——两处文档都有这个矛盾。
 # 这里取模板块的字面（规范表述优先于示意），并把"改它"集中到这一行。
 QUESTION_ANSWER_SEP: str = "\n"
@@ -33,7 +33,7 @@ QUESTION_ANSWER_SEP: str = "\n"
 def render(question: str | None, answer: str | None) -> str:
     """把一个 QA 对渲染成最终文本。**这是唯一一处拼装。**
 
-    规则（rank/README.md §4 = 渲染规则的唯一出处）：
+    规则（rank/CLAUDE.md §4 = 渲染规则的唯一出处）：
 
     | 输入 | 输出 |
     | --- | --- |

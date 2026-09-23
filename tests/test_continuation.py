@@ -1,6 +1,6 @@
 """§6.5 的批次续接三步（3a / 3b / 3c / 3d）——接真源一起测。
 
-对应 [`../tests/README.md`](../tests/README.md) 一、配对与续接。
+对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 一、配对与续接。
 **这是唯一能同时验证"配对逻辑"与"落库结果"的一层。**
 """
 
@@ -110,7 +110,7 @@ def test_3b_leaves_no_pending_behind(store: SqliteStore) -> None:
 def test_pure_continuation_batch_closes_pending(store: SqliteStore) -> None:
     """零条 user 消息的批次：被追加的那个 pending 就是最后一带，同样要标状态。
 
-    ⚠ 不标的话它会**一直挂到 session 结束**（pairing/README.md 的 ※）。
+    ⚠ 不标的话它会**一直挂到 session 结束**（pairing/CLAUDE.md 的 ※）。
     """
     limits = BatchLimits(max_messages=2, max_words=1000)
     _apply(store, "A", (_msg("user", "Q1"), _msg("assistant", "A1")), limits=limits)

@@ -1,11 +1,11 @@
 """§6.5 的三个 `pending` 计数器。
 
-这三个计数器是**判断 AML 切分是否频繁打断 QA 对的唯一手段**（pairing/README.md），
+这三个计数器是**判断 AML 切分是否频繁打断 QA 对的唯一手段**（pairing/CLAUDE.md），
 持续偏高说明配对规则需要调整。它们属于 `observability/` 的聚合，但在本层发射。
 
 ### ⚠ 一个必须说清的局限：`pending_orphaned` 有两种来源，本层**无法区分**
 
-pairing/README.md 要求把两种来源分开，否则会把 bug 当成 AML 的切分行为：
+pairing/CLAUDE.md 要求把两种来源分开，否则会把 bug 当成 AML 的切分行为：
 
 | 来源 | 说明 |
 | --- | --- |
@@ -44,7 +44,7 @@ __all__ = [
 
 @dataclass(slots=True)
 class PendingCounters:
-    """三个计数器的值。字段名与 pairing/README.md 一致。"""
+    """三个计数器的值。字段名与 pairing/CLAUDE.md 一致。"""
 
     pending_created: int = 0
     pending_completed: int = 0

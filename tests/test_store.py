@@ -1,6 +1,6 @@
 """§6.1 / §6.3 的存储层：DDL、位置派生 id、单向状态、邻域查询、隔离、事务原子性。
 
-对应 [`../tests/README.md`](../tests/README.md) 六、存储。
+对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 六、存储。
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """§6.5 / §15 的批次级幂等——**唯一能抓到"位置重分配"的一组用例**。
 
-对应 [`../tests/README.md`](../tests/README.md) 二、幂等。
+对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 二、幂等。
 
 核心事实（D4）：**内容幂等与位置幂等解决的是两个不同的问题。**
 "只填空不覆盖"管得住内容，**管不住位置**——`pair_idx` 的分配是读-改-写。
@@ -138,7 +138,7 @@ def test_without_guard_positions_are_reallocated(store: SqliteStore) -> None:
     位置会被重新分配到**新的** `pair_idx` 上 —— 落成重复记录，**且不会报错**。
 
     ⚠ 注意这里必须先让 `MAX(pair_idx)` 前移，这与"简单重复 POST 两次"不同：
-    重复 POST 时状态相同，抓不到这个 bug（tests/README.md）。
+    重复 POST 时状态相同，抓不到这个 bug（tests/CLAUDE.md）。
     """
     _apply(store, _batch("A"))
     assert [p.pair_idx for p in _pairs(store)] == [0]

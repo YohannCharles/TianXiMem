@@ -24,7 +24,7 @@ services:
       - "6334:6334"   # gRPC
     volumes:
       # 派生数据的落点。Qdrant 可从 SQLite 全量重建，所以这个卷【不是备份对象】——
-      # 真正的备份对象是 SQLite 真源文件（见 deploy/README.md §4 的重建 runbook）。
+      # 真正的备份对象是 SQLite 真源文件（见 deploy/CLAUDE.md §4 的重建 runbook）。
       #
       # ⚠ 用【命名卷】而不是 Windows 路径的绑定挂载：Docker Desktop 会把 Windows 路径
       #   经共享文件系统层（virtiofs/9p）送进 Linux VM，而 Qdrant 是大量小文件 +

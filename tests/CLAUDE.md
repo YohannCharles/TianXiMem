@@ -21,6 +21,8 @@ test_store.py           §6.1 / §6.3 DDL、连续性与索引
 
 **这是全项目逻辑最绕的一层，出错的表现是"某些记忆永远检索不到"，而不会有任何报错。**
 
+**规则本身一处声明在 [`../src/tianxi_am/pairing/CLAUDE.md`](../src/tianxi_am/pairing/CLAUDE.md)**，本节只列**要覆盖的用例**：
+
 | 用例 | 覆盖 |
 | --- | --- |
 | 连续多条 user 消息 | 前一对被下一条 user 关闭 |
@@ -33,14 +35,14 @@ test_store.py           §6.1 / §6.3 DDL、连续性与索引
 
 ### `pending_orphaned` 的两种来源必须可区分
 
-**用例要能分别触发这两种**：
+**用例要能分别触发这两种**（两种来源的定义见 [`../src/tianxi_am/observability/CLAUDE.md`](../src/tianxi_am/observability/CLAUDE.md)）：
 
 | 来源 | 期望 |
 | --- | --- |
 | **(i) 真·残缺** | session 结束，对里确实少一半 —— **正常** |
 | **(ii) 误判残留** | 本批命中上限、最后一对**其实已完整**，下一批以 user 开头 —— **应被 3b 关掉；没关掉就是 bug** |
 
-**若测试里这两种无法区分，那三个计数器就没有诊断价值**（见 [`../src/tianxi_am/observability/README.md`](../src/tianxi_am/observability/README.md)）。
+**若测试里这两种无法区分，那三个计数器就没有诊断价值。**
 
 ---
 
@@ -112,19 +114,9 @@ test_store.py           §6.1 / §6.3 DDL、连续性与索引
 | `rerank: false` | **候选数量**不变（只是顺序变了） |
 | `agent: false` | **打包顺序**不变（只是候选少了 agent 补的那部分） |
 | `neighbor: false` | 种子集合不变（只是没有扩窗） |
-| `dense: false` | ——（2026-09-23：`checker` **已不是**它的下游，见下） |
+| `dense: false` | ——（**无下游依赖**，见下） |
 
 **这组测试很便宜，而它保护的是整个 §13 实验计划。** 没有它，所有消融结论都不可信。
-
-### ~~`dense: false` 的校验（§8）~~ —— ⛔ **已作废**（2026-09-23，D15）
-
-原断言是"**`dense: false` 且 `checker.degradation` 未设 → 配置加载必须失败**"，理由是 §8 要求 Checker 的退化路径**在 Step 1 就选定并写进配置**。
-
-**D15 之后这个前提消失**：hybrid **无条件使用**、**dense 永不关** ⇒ **Checker 永不退化** ⇒ **不存在"退化路径"要选定**，这条校验失去了对象。
-
-- `dense` 开关**仍是配置项**（§15 要求消融项可配），但**不再有下游依赖**
-- **⚠ 不要照旧实现这条校验**——它会要求一个已经不存在的配置项（`checker.degradation`），
-  而那条要求原本的存在理由也一并消失了
 
 ---
 
@@ -138,6 +130,7 @@ test_store.py           §6.1 / §6.3 DDL、连续性与索引
 | 补全时**重算 embedding 并 upsert 覆盖原 point** | §6.5 |
 | **配的向量维度来自接口，不是常量** | §2.3 / §7.4——写死会在 Step 5 静默错 |
 | **能仅凭 SQLite 全量重建 Qdrant** | §6.3 的"派生读存储"就是这条的意思 |
+| **代码中没有硬编码 `benchmark_data/` 或 `eval/datasets/`** | D16：路径一律走 `TIANXI_BENCHMARK_DIR` |
 
 ---
 
@@ -147,4 +140,4 @@ test_store.py           §6.1 / §6.3 DDL、连续性与索引
 make test      # 目前未实现，见 Makefile
 ```
 
-**契约相关的断言也要能被 `make contract-check` 在**服务**上跑一遍**——单元测试验证函数，`eval/smoke/preflight.py` 验证**真的 HTTP 响应**。两者都要（§13 要求 A1 能通过 Smoke 契约校验）。
+**契约相关的断言也要能被 `make contract-check` 在**服务**上跑一遍**——单元测试验证函数，[`../eval/smoke/preflight.py`](../eval/smoke/) 验证**真的 HTTP 响应**。两者都要（§13 要求主路径能通过 Smoke 契约校验）。
