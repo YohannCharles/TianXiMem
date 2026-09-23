@@ -407,6 +407,7 @@ v1 的 Add 阶段不调用任何 LLM，embedding 是唯一的 Add 侧成本，�
 ```python
 class Embedder(Protocol):
     dim: int
+
     def encode(self, texts: list[str]) -> list[list[float]]: ...
 ```
 
