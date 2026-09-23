@@ -1,0 +1,67 @@
+# configs/ — 运行时配置
+
+> **状态**：本目录**目前只有这份 README，还没有 YAML 文件**——脚手架阶段按"只建目录 + README"执行。
+> **完整配置项清单见 [`../docs/config-reference.md`](../docs/config-reference.md)**（每个配置项、默认值、出处 §）。本文件只说**为什么这么组织**。
+
+---
+
+## 三个 profile
+
+| 文件（待建） | 用途 | 模型 |
+| --- | --- | --- |
+| `default.yaml` | 基线值，其余 profile 的父级 | —— |
+| `local.yaml` | **开发期**：代理评测、迭代、消融 | BGE-M3 + qwen3.5-9b |
+| `submit.yaml` | **提交期**：Full 定稿 | `text-embedding-v4` + `gpt-4o-mini` |
+
+`local.yaml` 与 `submit.yaml` **只覆盖模型与由模型派生的量**（向量维度、实测 token 预算、全部标定阈值），其余继承 `default.yaml`。
+
+**为什么不干脆分两套完整配置**：因为"哪些量随模型变"本身就是要被看见的信息。全部复制一遍，Step 5 切换时**没人知道该重标定哪些**——而这正是 R1 对冲 3 想防的事。
+
+---
+
+## 一条容易被忽略的纪律
+
+**阈值放配置，密钥放环境变量**（`.env`）。二者不要混：
+
+- 阈值 / 权重 / 开关 → `configs/*.yaml`
+- API key / 路径 / 镜像 tag → `.env`
+
+理由：§12.1 R1 对冲 4 要求**切换模型单独占一个阶段**。若阈值藏在环境变量里，切换就变成了改 shell 脚本或 CI 变量——**改了什么无法 diff、无法评审**，而归因恰恰是这一步唯一的目的。
+
+---
+
+## 目录里最终会有什么
+
+```text
+configs/
+├── default.yaml     # 全部开关与阈值（§15 的七个消融项都在这里）
+├── local.yaml       # 开发期覆盖
+├── submit.yaml      # 提交期覆盖（Step 5 产出）
+└── runs/            # 每次对照实验的配置快照（哪个实验、什么时候、哪套模型）
+```
+
+`runs/` 的用途：`docs/experiments.md` 要求记录**配置指纹**。让每个实验留下**冻结的配置副本**，而不是"当时的 local.yaml 大概是这样"——**后者在 Step 5 之后就无法重建了**。
+
+---
+
+## 建 YAML 时先看这四条
+
+1. **`k=61` 不是调参项**，是正确性常量——写进配置但**不要放进"可调阈值"分组**（§7.3 / `docs/decisions.md` D5）。
+2. **先分清常量与阈值**：见 [`../docs/config-reference.md`](../docs/config-reference.md) §1.5 的 A / B / C 三分类。**"配置化"不等于"可调"**——`top_k = 100` 与 `k = 61` 都是写进配置但**不许动**的。
+3. **`checker` 是 `dense` 的下游**，且其退化路径**必须在 Step 1 选定**：
+   | 字段 | 取值 |
+   | --- | --- |
+   | `checker.degradation` | `never_agent`（dense 关掉时一律不触发 Agent）· `bm25_gap`（改用 BM25 自身的名次间隔做判据） |
+
+   > **让这条要求活下来的机制是校验，不是文档**：配置加载**必须在 `dense: false` 且 `checker.degradation` 未设时【拒绝启动】**。
+   > 否则它会在 deadline 前第一个被忘掉。落地在 [`../src/tianxi_am/common/`](../src/tianxi_am/common/)。
+
+4. **每个开关在"关"分支下只影响它命名的那一件事**——否则 §13 的对照不成立，**而结果看起来完全正常，只是结论错了**（§13）。
+
+   | 开关 | 关掉时**不得改变** |
+   | --- | --- |
+   | `rerank` | **候选数量** |
+   | `agent` | **打包顺序** |
+   | `neighbor` | **种子集合** |
+
+   完整的依赖图与"关掉时不得改变什么"列在 [`../docs/config-reference.md`](../docs/config-reference.md) §2——**那是开关的唯一声明处**，本文件不另列一份。
