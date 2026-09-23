@@ -17,7 +17,12 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "httpx>=0.27",          # embedding / LLM API 客户端；harness 驱动也用它
-    "qdrant-client>=1.17,<2",  # §7.3：weights 需 ≥ v1.17.0，k 需 ≥ v1.16.0
+    "qdrant-client>=1.17,<1.18",  # §7.3：weights 需 ≥ v1.17.0，k 需 ≥ v1.16.0
+    # ⚠ 上界钉在 1.18 而不是 2：**客户端 minor 必须与服务端同档**。
+    #   实测 qdrant-client 1.19.1 × server 1.17.0 时，客户端每次连接都告警
+    #   "minor version difference must not exceed 1"——服务端钉死在 v1.17.0
+    #   （deploy/compose.yaml），客户端就不能自己往上漂。
+    #   升服务端时要**同时**改这里与 compose 的 tag。
     "numpy>=1.26",
     "pyyaml>=6.0",
     "tiktoken>=0.8",        # §6.4：token 必须用答案模型自己的分词器（o200k_base）
@@ -55,6 +60,13 @@ src = ["src", "eval", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+# ⚠ 必须排除 Markdown：`ruff format` 会**重排 .md 里 fenced 的 Python 代码块**，
+#   而本仓的文档大量依赖"逐字引用"——例如 eval/harness/README.md 里那段
+#   `from api_config import (...)` 是归档 pipeline 的**原样引用**，
+#   展开成多行之后就不再是原样引用了。实测：排除前 `make fmt` 每次都会去改它。
+[tool.ruff.format]
+exclude = ["*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

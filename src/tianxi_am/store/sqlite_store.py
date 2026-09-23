@@ -375,6 +375,26 @@ class SqliteStore:
         # 保持调用方给来的顺序（检索名次顺序），而不是数据库返回的顺序
         return [by_id[pid] for pid in pair_ids if pid in by_id]
 
+    def iter_pairs(self, conn: sqlite3.Connection, *, user_id: str | None = None) -> list[QaPair]:
+        """枚举全部对（可选按 `user_id` 限定），按 `(session_id, pair_idx)` 排序。
+
+        ⚠ **② 新增的只读访问器**，不改动 ① 的任何既有语义。存在的理由是 §6.3 那条
+        "Qdrant 可从 SQLite 全量重建"：重建需要一次枚举，而让 `qdrant_store.py`
+        自己写 SQL 会破坏"store/ 是唯一接触 SQLite 的目录"。
+
+        **不是检索路径**——检索按主键批量取正文走 `fetch_pairs_by_ids`。
+        """
+        if user_id is None:
+            rows = conn.execute(
+                f"SELECT {_COLUMNS} FROM qa_pairs ORDER BY session_id, pair_idx"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT {_COLUMNS} FROM qa_pairs WHERE user_id = ? ORDER BY session_id, pair_idx",
+                (user_id,),
+            ).fetchall()
+        return [_to_pair(r) for r in rows]
+
     def assert_isolation(self, conn: sqlite3.Connection, user_id: str) -> list[QaPair]:
         """取某 user 的全部对（供隔离测试断言用）。
 
