@@ -14,6 +14,14 @@ registry.py       数据指纹（版本 + 切批口径）——§13 的记录要
 
 ---
 
+> **⚠ 一条边界（D16）**：**本目录是唯一允许知道具体数据集文件名的地方**（`conversations.jsonl` / `questions.jsonl` / `locomo_refined.json` / `lme_s_cleaned.json` …）。
+>
+> **`pairing/` 与 `store/` 只能看见归一化后的 AML 契约形状**——`role` / `content` / 可选 `timestamp`。
+>
+> **理由**：同一套 `Add` / `Search` 最终要接 **LongMemEval / PersonaMem / BEAM 以及未来的真实 API 请求**。**任何数据集的便利格式都不得向上渗透**——`conversations.jsonl` 的"本身即 JSONL / 自带 `role`"止步于此。
+
+---
+
 ## ⚠ 本目录是**两头**的，不是一个加载器
 
 | 头 | 干什么 | 为什么 |
@@ -31,9 +39,10 @@ registry.py       数据指纹（版本 + 切批口径）——§13 的记录要
 
 **已核实的落差（真源是 pipeline 代码，不是 readme）：**
 
-### LoCoMo-Refined —— 三个落差叠在一起
+### LoCoMo-Refined —— 三个落差叠在一起（**其一已由 D16 消掉**）
 
-1. **`locomo_refined.json` 是 pretty-printed 的 JSON **数组**（10 个 conversation），而 pipeline 的 `rows()` **只解析 JSONL**——**直接喂它会解析失败**。
+1. ~~**`locomo_refined.json` 是 pretty-printed 的 JSON **数组**（10 个 conversation），而 pipeline 的 `rows()` **只解析 JSONL**——**直接喂它会解析失败**。~~
+   → **2026-09-23（D16）：改用 `conversations.jsonl`（本身即 JSONL）后，这一条不必处理。** 该文件仍是 JSON 数组，但**我们不再用它喂 Add**。
 2. **`questions.jsonl` 的键与 pipeline 读的键对不上**：
    - 文件里有 `qa_id`，pipeline 读 `item["id"]` → **`KeyError`**
    - 文件里有 `answer`（list[str]），pipeline 读 `gold_answer` / `golden_answer` / `reference_answer` / `correct_answer` → **`ValueError`**
@@ -48,10 +57,27 @@ registry.py       数据指纹（版本 + 切批口径）——§13 的记录要
 
 | 用途 | 取哪个文件 |
 | --- | --- |
-| **喂给 Add 的对话全文** | `locomo_refined.json` 的 `conversation` |
+| **喂给 Add 的对话全文** | **`data/public/conversations.jsonl`**（D16，2026-09-23 改） |
 | 判断/评分用的题目与 gold | `questions.jsonl`（或 `locomo_refined.json` 的 `qa`） |
 
 **二者逐题对齐**（仅 6 处答案 int/str 差异）——所以两边都要加载、按 `qa_id` 对齐。**别假设用一个就够。**
+
+> **⚠ 2026-09-23 更正（D16）：Add 的源从 `locomo_refined.json` 改为 `conversations.jsonl`。**
+>
+> 已实测的两项前置验证（均通过）：
+>
+> | 验证项 | 结果 |
+> | --- | --- |
+> | **`role` 取值** | 只有两个值——`user` 2,951 / `assistant` 2,931，**且与 `speaker_a`/`speaker_b` 100% 一致**（零例外、零缺失） |
+> | **逐条等价性** | 5,882 条中 **5,673 完全相同 · 209 条仅首尾空白不同 · 0 条内部空白 · 0 条真实内容不同**；209 条**全部同向**——`conversations.jsonl` 的 text **恰为** `locomo_refined.json` 的去首尾空白版 |
+>
+> 结构侧同样确认：10 个 conversation 的 session/message 数零差异、`dia_id` 多重集零差异、无重复 `dia_id`、无缺失。
+>
+> **⇒ 采用理由不是"格式方便"**：[`tests/README.md`](../../tests/README.md) 要求 content **首尾无空白**（AML 只做 `"\n".join(...)`、不插分隔符）。**用 `locomo_refined.json` 作源会直接引入 209 条契约违规**，用 `conversations.jsonl` 天然合规。
+>
+> **顺带**：`conversations.jsonl` **每条 message 已带 `role`**（`locomo_refined.json` 只有 `dia_id`/`speaker`/`text`），所以下面那条"LoCoMo 侧要归一化出 `role`"的工作**对 LoCoMo 是白送的**——但仍要写归一化，因为 LongMemEval 那边走的是另一条路。
+>
+> **⚠ 语义注意**：LoCoMo 是**两个真人在对话**，此处的 `user`/`assistant` 是**数据集给 `speaker_a`/`speaker_b` 的约定标签，不是"用户 vs 助手"**。在 LoCoMo 上配对规则实际是"speaker_a 的一轮 + 对方回应，直到 speaker_a 的下一轮"。**LongMemEval 的 `role: user` 才是真 user**——两边语义不同，别混。
 
 ### CL-Bench
 
@@ -67,12 +93,16 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 
 | | LongMemEval | LoCoMo-Refined |
 | --- | --- | --- |
-| turn 的键 | **`role`** + `content` | **`speaker`** + `dia_id` + `text` |
-| role 取值 | `user` / `assistant` | 也是说话人，但**键名不同** |
+| turn 的键 | **`role`** + `content` | `locomo_refined.json`：**`speaker`** + `dia_id` + `text`<br>`conversations.jsonl`：**`role`** + `text` + `dia_id` + `speaker` + `session_date_time`（**D16 后的 Add 源，已带 `role`**） |
+| role 取值 | `user` / `assistant`——**真 user** | 也是 `user` / `assistant`，**但那是 `speaker_a`/`speaker_b` 的约定标签**，不是"用户 vs 助手"（D16） |
 | 证据标记 | turn 上的 **`has_answer`**（bool，可选，只有证据轮带） | `evidence`（dia-id 列表，如 `"D1:3"`） |
-| **每 turn 有 timestamp 吗** | ❌ **没有** | ❌ 没有（时间是 session 级的） |
+| **每 turn 有 timestamp 吗** | ❌ **没有**（时间在 session 级 `haystack_dates`） | ❌ 没有——是 **session 级**；但 `conversations.jsonl` 把 `session_date_time` **复制到了每条 message 上**（值相同，仍无 session 内区分度） |
 
 **⇒ 加载层必须把两边都归一化成 AML 的形状（`role` / `content` / 可选 `timestamp`）**，否则 `pairing/` 的判据看不见 `role`，**会把整个 session 归成一个对，且不报错**。
+
+> **D16 之后 LoCoMo 侧已经不用"归化出 role"**（`conversations.jsonl` 自带）——**但归一化层仍要写**，因为 LongMemEval 走的是 `role`+`content` 那条路，而**两边的输出必须先统一，`pairing/` 才只依赖一个字段**。
+>
+> ⚠ **两个数据集都没有 per-turn 时间戳** ⇒ `event_time` 在 session 内**必然没有区分度**（不是"可能"）。**这正是 `pair_idx` 必须连续的原因**——它是唯一能保证 ±1 邻域稳定的东西。
 
 **`locomo_refined.json` 的 `conversation` 结构**：一个 dict，键是 `speaker_a` / `speaker_b`，然后成对出现 `session_N_date_time` / `session_N`；每个 `session_N` 是 turn 的列表。**对话全文在这里**（不在 `questions.jsonl`）。
 

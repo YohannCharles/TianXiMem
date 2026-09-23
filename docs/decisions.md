@@ -286,6 +286,41 @@
 
 ---
 
+## D16 · 数据路径统一走 `TIANXI_BENCHMARK_DIR`；LoCoMo 的 Add 源改用 `conversations.jsonl`（2026-09-23）
+
+**决策一 —— 路径口径**：**数据路径一律通过 `TIANXI_BENCHMARK_DIR` 读取，代码中不得硬编码 `benchmark_data/` 或 `eval/datasets/`。** 默认值仍是 `benchmark_data/`；本地开发通过 `.env` 指向实际数据目录。
+
+**边界**：`eval/datasets/LoCoMo-Refined/data/` 是**开发与自测用**的数据，**不是最终要跑的数据集**——归档才是。两者不可混为一谈，**也不得让代码依赖任何一边**。
+
+**决策二 —— LoCoMo 的 Add 对话源**：**改用 `data/public/conversations.jsonl`**，不再用 `locomo_refined.json` 的 `conversation`。
+
+**已实测两项前置验证（均通过）：**
+
+| 验证项 | 结果 |
+| --- | --- |
+| **`role` 取值** | 只有两个值——`user` 2,951 / `assistant` 2,931。**且与 `speaker_a`/`speaker_b` 100% 一致**（speaker_a→`user`、speaker_b→`assistant`，零例外、零缺失） |
+| **逐条内容等价性** | 5,882 条中：**5,673 完全相同 · 209 条仅首尾空白不同 · 0 条内部空白不同 · 0 条真实内容不同**；且 209 条**全部同向**——`conversations.jsonl` 的 text **恰为** `locomo_refined.json` 的去首尾空白版 |
+
+**⇒ 采用理由不是"格式方便"，而是它同时修掉一类契约违规**：[`tests/README.md`](../tests/README.md) 要求 content **首尾无空白**（因为 AML 只做 `"\n".join(...)`、不插分隔符）。**用 `locomo_refined.json` 作源会直接引入 209 条契约违规**；`conversations.jsonl` 天然合规。
+
+**顺带消掉的落差**：归档文档记的"落差 #1"是——**`locomo_refined.json` 是 pretty-printed JSON 数组，而 pipeline 的 `rows()` 只解析 JSONL**。改用 `conversations.jsonl`（**本身即 JSONL**，一行一个 conversation）后，**这层格式转换不必写**。
+
+**⚠ 残余注意（不得忽略）**：LoCoMo 是**两个真人在对话**，此处的 `user`/`assistant` 是**数据集对 `speaker_a`/`speaker_b` 的约定标签，不是"用户 vs 助手"**。所以在 LoCoMo 上配对规则实际是"**speaker_a 的一轮 + 对方回应，直到 speaker_a 的下一轮**"。这不构成问题（与 ReFind 的 turn 粒度一致，消融对比才干净），但**不要把它当成真用户会话**——**LongMemEval 的 `role: user` 才是真 user，两边语义不同。**
+
+**量级预期**：LoCoMo 的 `user` 消息 2,951 条 ⇒ 单独的 QA 对数约 **2,951**（实际略少：session 边界与 assistant 开头的 session 会产生无问的对，且一条 user 会被下一条 user 关掉）。
+
+**⚠ 一条边界（不得跨越）：`conversations.jsonl` 只作加载层的输入源，不成为核心系统格式。**
+
+`pairing/` 与 `store/` 只能看见 **AML 契约的形状**——`messages: [{role, content, timestamp?}]` + `user_id` / `session_id` / `request_id`。**知道 `conversations.jsonl` 存在的，只允许是 [`eval/datasets/`](../eval/datasets/)。**
+
+**理由**：同一套 `Add` / `Search` 最终要接 **LongMemEval / PersonaMem / BEAM 等不同数据集，以及未来的真实 API 请求**。LoCoMo 的三点便利（本身即 JSONL / 自带 `role` / 带 `session_date_time`）**全部止步于加载层，不得向上渗透**。
+
+> 这与 D2 推出的 **"架构必须 embedder-agnostic"** 是同一个原则的另一面：**核心系统只依赖契约，不依赖任何具体的输入来源。**
+
+**连带的时间安排**：**先用 LoCoMo 把链路搞通**，LongMemEval 等数据集的适配**放到链路跑通之后**，不阻塞开发。
+
+---
+
 ## 待决事项（尚无决策）
 
 | # | 事项 | 何时必须定 |
