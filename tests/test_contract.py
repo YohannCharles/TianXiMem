@@ -323,3 +323,17 @@ def test_http_rejects_illegal_request_at_the_boundary(wired: Wired) -> None:
     with TestClient(create_app(wired.services)) as client:
         resp = client.post("/search", json={"user_id": "u1", "query": "q", "top_k": 0})
     assert resp.status_code == 422
+
+
+def test_http_health_is_an_unauthenticated_2xx(wired: Wired) -> None:
+    """S4：平台探的是**与 Add 同源的 `/health`**，无需鉴权，任意 2xx 即正常。
+
+    这一条的失败模式不是掉分，是**没进场**——所以它必须有测试钉住（`contract.md` §7.2）。
+    """
+    from fastapi.testclient import TestClient
+
+    from tianxi_am.service import create_app
+
+    with TestClient(create_app(wired.services)) as client:
+        resp = client.get("/health")
+    assert resp.status_code == 200

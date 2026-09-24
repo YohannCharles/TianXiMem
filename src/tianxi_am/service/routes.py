@@ -47,8 +47,22 @@ def _to_batch(request: AddRequest) -> AddBatch:
 
 
 def build_router(*, add_pipeline: AddPipeline, search_pipeline: SearchPipeline) -> APIRouter:
-    """构造两个端点。**依赖是显式传入的**——便于测试注入替身，不靠全局状态。"""
+    """构造全部端点。**依赖是显式传入的**——便于测试注入替身，不靠全局状态。"""
     router = APIRouter()
+
+    @router.get("/health")
+    def handle_health() -> dict[str, str]:
+        """探活：**无需鉴权的 GET**，任意 2xx 即视为正常
+        （[`docs/contract.md`](../../../docs/contract.md) §7.2 / S4）。
+
+        平台**未单独配置 Health 地址时探的是与 Add 同源的 `/health`**，404 可能被判为
+        不健康 ⇒ **任务根本跑不起来**——不是掉分，是**没进场**。
+
+        ⚠ **只报"这个进程活着"，不去探下游**（SQLite / Qdrant / 网关一个都不碰）：
+        探活做成深检查，任何一个抖动都会让平台判我们不健康；而本端点的**唯一作用**
+        就是让平台看得见我们。真挂了，`/add` 自己会响亮失败。
+        """
+        return {"status": "ok"}
 
     @router.post("/add", response_model=AddResponse)
     def handle_add(request: AddRequest) -> AddResponse:

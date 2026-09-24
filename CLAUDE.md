@@ -10,7 +10,7 @@
 
 # TianXi_AM — AML 参赛系统
 
-**只提供 `Add` / `Search` 两个 HTTP 端点**；答案生成、评判、聚合全部由 AML 完成。本系统的输出是**按名次排列的证据**，不是答案。
+**只提供 `Add` / `Search` 两个 HTTP 端点**（外加一个探活用、不碰下游的 `GET /health`——平台默认探它，S4）；答案生成、评判、聚合全部由 AML 完成。本系统的输出是**按名次排列的证据**，不是答案。
 
 **权威规格**：[`AML Agentic Memory 增强框架 PRD.md`](./AML%20Agentic%20Memory%20增强框架%20PRD.md)。本文件与各模块 `CLAUDE.md` 只做导航与速查；**冲突时一律以 PRD 为准**。
 
