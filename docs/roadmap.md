@@ -46,7 +46,12 @@
       （原待决事项 8 已结案）。原先记着的 6 个 `xfail(strict=True)` **已全部摘掉**，
       它们现在是回归用例：3 个 HTTP 往返 + 3 个并发用例，另加
       `test_store.py` 的 3 个连接生命周期用例与 2 个**真实并发写**压力用例。
-- [ ] **`api_config.py` —— 7 个 pipeline 今天都 import 失败**（**处置已定，2026-09-24 更新**）
+- [x] **`api_config.py` —— ✅ 已实现（2026-09-24）**，在 [`../eval/harness/api_config.py`](../eval/harness/api_config.py)
+      **结论**：就是那 7 行的 `os.environ.get` 适配器（`AML_*` → 归档要的七个名字，
+      `JUDGE_*` 留空即回落 `ANSWER_*`）。**它怎么被找到**：`judge.run_judge()` 起 subprocess 时
+      把 `eval/harness/` 放进 `PYTHONPATH`——归档保持只读，`parents[2]` 那条脆弱路径被绕开。
+      **回归用例**：`tests/test_harness.py` 的桩 pipeline **真的 `import api_config`**。
+- [ ] **`api_config.py` —— 历史记录（处置已定，2026-09-24 更新）**
       它们做 `sys.path.insert(0, Path(__file__).resolve().parents[2])` 再 `from api_config import (...)`，而 `parents[2]` 解析到**仓库外一层**。
       它要导出七个名字：`ANSWER_API_BASE` / `ANSWER_API_KEY` / `ANSWER_MODEL` / `JUDGE_API_BASE` / `JUDGE_API_KEY` / `JUDGE_MODEL` / `JUDGE_VERSION`（最后一个是**死引用**，全部 import 但无一使用）。
       ✅ **不用从零写**：AML 自己就发布了它——公开仓根目录的 `api_config.py`，520 字节、无凭据，只是 `os.environ.get(...)` 的适配器。
@@ -66,6 +71,21 @@
 
       根因修复要管理员权限（`takeown` + `icacls /reset`），或等系统重启后清理 `%TEMP%`。
 
+- [ ] ⚠ **另一台机器（WSL）上的两个环境阻塞项**（2026-09-24 实测，**与上面那条 `tmp_path` 不是同一台**）
+      那台机器上 `uv run pytest` 是好的（`280 passed, 24 skipped`），但它有两处挡住端到端：
+
+      1. **`make` 没装**——整个 Makefile 工作流用不了（`make: No such file or directory`）。
+         解法：`sudo apt install make`。**在装之前，所有 `make X` 都要照 Makefile 里的命令手敲。**
+      2. **Qdrant 容器没起**——`http://localhost:6333` 返回 **`502 Bad Gateway`**（不是"拒绝连接"）。
+         502 的含义是**转发在、容器不在**：Docker Desktop 在 Windows 侧、端口转发进 WSL，
+         但 `tianxi-qdrant` 容器没跑。解法：**Windows 侧 Git Bash** 里跑
+         `docker compose -f deploy/compose.yaml up -d`。
+         同一台机器 **WSL 里的 `docker` CLI 用不了**（`/var/run/docker.sock` 是 `root:docker`，
+         当前用户不在 `docker` 组）——这与 `deploy/CLAUDE.md` 说的"daemon 走 Windows 命名管道、
+         从 Git Bash 用"一致，**不是新问题**，只是别在 WSL 里等着它成功。
+
+      **症状速查**：`make check` 会一次把这两件事都报出来（Qdrant 那一项会说清 502 与解法）。
+
 ### 数据侧
 
 - [ ] **数据加载层 + schema 落差预处理**（§12.3 第 9 条）——**不是"读个 JSON 就能跑"**。已核实的落差：
@@ -76,12 +96,15 @@
       - **`category` 类型不一致**：`questions.jsonl` 里是字符串 `"4"`，`locomo_refined.json` 里是整数 `4` ⇒ 不归一化会**静默筛出 0 条**
       - PersonaMem 的 CSV **没有 `chat_history` 列、也没有 `incorrect_answers` 列**，而 pipeline 缺后者直接 `raise TypeError`
       - **答案字段名以 pipeline 代码为准**：规范字段是 **`generated_answer`**（CL-Bench 写 `model_output`）。**readme 写的 `predicted_answer` / `hypothesis` 没有 pipeline 读**
-- [ ] **LongMemEval 用 `lme_s_cleaned.json`**，**不要用 `lme_test.json`**——已复算：`test` 有 **1,230 个 0-turn session**，`s_cleaned` 有 0 个。**空 session 会污染按"20 条消息"切批的埋点逻辑**（§6.5）
-- [ ] **给 LongMemEval 合成 per-message `timestamp`**——它的 turn **只有 `role`+`content`**，时间在 **session 级**的 `haystack_dates` 里（形如 `"2023/05/20 (Sat) 02:21"`）。不合成则 `event_time` 全 NULL、`created_at` 只能发 `""`
+- [x] **LongMemEval 用 `lme_s_cleaned.json`**（加载器只认这一个文件名），**不要用 `lme_test.json`**——已复算：`test` 有 **1,230 个 0-turn session**，`s_cleaned` 有 0 个。**空 session 会污染按"20 条消息"切批的埋点逻辑**（§6.5）
+- [x] **给 LongMemEval 合成 per-message `timestamp`**——✅ 已实现（`longmemeval._sessions`）——它的 turn **只有 `role`+`content`**，时间在 **session 级**的 `haystack_dates` 里（形如 `"2023/05/20 (Sat) 02:21"`）。不合成则 `event_time` 全 NULL、`created_at` 只能发 `""`
       > **副作用是有价值的**：同一 session 内所有消息拿到同一日期 ⇒ **实证了 §6.1 的判断**——`event_time` 保证不了 session 内顺序，**`pair_idx` 是唯一能保证邻域稳定的东西**
 - [ ] **固定"计数类"问题的口径**（§12.2）——**换口径数字就变**，而它正是附录 A"实体层做不做"的依据。上列数字对应 `how many|how much|how often|number of|count|how long`
-- [ ] **切批模拟**：本地只能按 20 条复现词数那一路（§12.3 第 5 条）
-- [ ] 题量分布核对（§12.2）：single-session-user 70 / single-session-assistant 56 / single-session-preference 30 / temporal-reasoning 133 / knowledge-update 78 / multi-session 133
+- [x] **切批模拟**：本地只能按 20 条复现词数那一路（§12.3 第 5 条）——✅ 已实现（[`../eval/harness/batching.py`](../eval/harness/batching.py)）
+      **量级已测（2026-09-24，全量两份数据）**：LoCoMo 单条消息**最长 87 词**（中位 20），**从不触到 2,000 词上限** ⇒ 两条路径在它上面**完全重合**；
+      LongMemEval 中位 75 / 均值 159 / **最长 11,661 词**，**60 条消息超 2,000 词**，且**40%（9,528/23,867）的 session 首批是被词数上限切开的**。
+      ⇒ **词数那一路只在 LongMemEval 上有分量**，而它正是 S2 未清的那一半。**别用 LoCoMo 的"完全重合"去推断 LongMemEval。**
+- [x] 题量分布核对（§12.2）——✅ **已核**：`multi-session` 133 / `temporal-reasoning` 133 / `knowledge-update` 78 / `single-session-user` 70 / `single-session-assistant` 56 / `single-session-preference` 30，**与本节记载逐项一致**；`_abs` 拒答题 30 道：single-session-user 70 / single-session-assistant 56 / single-session-preference 30 / temporal-reasoning 133 / knowledge-update 78 / multi-session 133
 - [ ] **重点指标是端到端，不是 Recall@K**（§12.2 / §14）
 
 ---

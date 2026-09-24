@@ -14,15 +14,17 @@
 
 **权威规格**：[`AML Agentic Memory 增强框架 PRD.md`](./AML%20Agentic%20Memory%20增强框架%20PRD.md)。本文件与各模块 `CLAUDE.md` 只做导航与速查；**冲突时一律以 PRD 为准**。
 
-**当前状态（2026-09-23）**：**实现已开工，不是空脚手架。**
+**当前状态（2026-09-24）**：**实现已开工，不是空脚手架。**
 
 | 状态 | 模块 |
 | --- | --- |
 | ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）· [`retrieve/`](src/tianxi_am/retrieve/)（**策略与参数所有权** + §8 判据）· [`rank/`](src/tianxi_am/rank/) 的 **`packaging.py`**（**Step 1 的最小打包切片**，⚠ 非最终 pipeline）——测试在 [`tests/`](tests/) |
-| ⬜ **未实现** | [`service/`](src/tianxi_am/service/) · [`rank/`](src/tianxi_am/rank/) 的 `reranker.py` / `neighbor.py` · [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `common/` 的 `tokens.py` / `config.py` · `embed/` 的 `text_embedding_v4.py` · 整个 [`eval/`](eval/) · `configs/*.yaml` |
+| ✅ **已实现（补）** | [`service/`](src/tianxi_am/service/)（两个端点 + 编排 + `(user_id, session_id)` 串行化 + D17 的连接模型）· [`eval/datasets/`](eval/datasets/)（加载层 + schema 落差预处理）· [`eval/harness/`](eval/harness/)（HTTP 驱动 / 切批 / 裁判包装 / run record + `api_config.py` 适配器）· [`eval/smoke/preflight.py`](eval/smoke/)（契约预检，`make contract-check`）· [`tools/check_env.py`](tools/check_env.py)（`make check`） |
+| ⬜ **未实现** | [`rank/`](src/tianxi_am/rank/) 的 `reranker.py` / `neighbor.py` · [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `common/` 的 `tokens.py` / `config.py` · `embed/` 的 `text_embedding_v4.py` · `configs/*.yaml` · **`eval/` 里还没写的**：`datasets/contracts.py`、`smoke/{quota,s1_discriminator,s2_probe,s3_probe}.py`、`reports/ledger.md`、`experiments/`、`baselines/`（含 B1 包装 ReFind） |
 | ⛔ **v1 不做** | [`agent/`](src/tianxi_am/agent/)（D13） |
 
-**已实现的部分**：对照 `docs/roadmap.md`，落在 **Step 1** 内（存储层 + 配对）。
+**已实现的部分**：对照 `docs/roadmap.md`，`src/` 落在 **Step 1** 内（存储层 → 服务 → 混合检索）；
+**`eval/` 是 Step 0 的主体，已开工**——但 **Step 0 还没走完**（见 `docs/roadmap.md` 的勾选状态）。
 
 > **⚠ 状态描述是本仓最易过期的东西**：改动状态时，**连同搜一遍所有声称"未实现 / 未开始"的地方**——`docs/` 里散着好几处。
 

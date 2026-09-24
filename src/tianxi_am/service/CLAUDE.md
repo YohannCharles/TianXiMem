@@ -66,4 +66,4 @@ SQLite 是阻塞调用，本地 reranker 是 GPU 推理——都会**堵住事�
 
 跑 Smoke 之前逐条过 [`../../../docs/contract.md`](../../../docs/contract.md) §4 的清单。**Smoke 次数有限（每轨道 ≤30 次），不要拿它当调试器。**
 
-`Makefile` 里预留了 `make contract-check` 目标（尚未实现），自动化清单的实现在 [`../../eval/smoke/`](../../../eval/smoke/)——**尤其是"No.1 精确计数"和"No.3 created_at 始终存在"这两条**，它们最容易在加了邻域扩展之后悄悄破掉。
+`make contract-check` 已接通（2026-09-24，指 [`../../eval/smoke/preflight.py`](../../../eval/smoke/preflight.py)）——**尤其是"No.1 精确计数"和"No.3 created_at 始终存在"这两条**，它们最容易在加了邻域扩展之后悄悄破掉。

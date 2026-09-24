@@ -146,7 +146,7 @@
 | 状态 | 模块 |
 | --- | --- |
 | ✅ **已实现** | `store/`（SQLite 真源 + Qdrant + schema）· `pairing/`（配对 / 续接三步 / 计数器）· `embed/`（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存）· `common/render.py`（渲染唯一实现）——另有 **8 个测试文件**在 `tests/` |
-| ⬜ **未实现** | `service/` · `retrieve/` · `rank/` · `llm/` · `observability/` · `common/` 的 `tokens.py` / `config.py` · `embed/` 的 `text_embedding_v4.py` · 整个 `eval/` · `configs/*.yaml` |
+| ⬜ **未实现** | `rank/` 的 `reranker.py` / `neighbor.py` · `llm/` · `observability/` · `common/` 的 `tokens.py` / `config.py` · `embed/` 的 `text_embedding_v4.py` · `configs/*.yaml` · `eval/` 的 `datasets/contracts.py` / `smoke/{quota,s1_discriminator,s2_probe,s3_probe}.py` / `reports/ledger.md` / `experiments/` / `baselines/`<br>（**状态表的唯一权威在根 `CLAUDE.md`**，这里只是镜像） |
 | ⛔ **v1 不做** | `agent/`（D13） |
 
 已实现的部分对应 `docs/roadmap.md` 的 **Step 1**。**每个目录下的 `CLAUDE.md` 说明了该目录要写什么、受哪条约束、对应哪一节。**

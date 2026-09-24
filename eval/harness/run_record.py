@@ -1,0 +1,166 @@
+"""把一次 run 组装成 run record——**配置指纹 + 数据指纹 + 结果**（§13）。
+
+> **数字只有 [`../reports/`](../reports/) 一个家**（`schema.py` 定形状，本模块组装）。
+> 别处引用数字一律指回去。
+
+## 三个指纹各防什么
+
+| 指纹 | 不记的后果 |
+| --- | --- |
+| **配置**（profile + 开关 + 快照 hash） | 改过开关的两次 run 被当成同一次，**无法归因** |
+| **数据**（数据集 + 版本 + 切批口径） | 归档被换掉、或 `limit=` 截断过，数字却看着可比 |
+| **模型**（embedder / LLM / reranker） | §12.1 R1：换模型会让阈值与权重**全部失效** |
+
+## 七维子分：**代理评测产不出，就不填**
+
+`architecture.md` §3 里七个维度是**由设计机制回应**的，不是由题面回应。
+所以这里填的是"证据在哪"，不是一个编出来的数——理由见
+[`schema.PROXY_SCORE_NOTE`](../reports/schema.py)。
+
+**真正可用的信号是 `breakdown`**：按数据集自己的分类统计准确率。
+这正是"哪一类在掉"的输入，而 §14 砍掉的是**按问题类型做收益归因**那种论文式分析。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+from eval.datasets import Sample
+from eval.reports.schema import DIMENSIONS, PROXY_SCORE_NOTE, SWITCH_NOTE, RunRecord
+
+from .judge import JudgeResult
+
+__all__ = ["build_record", "config_fingerprint", "summarize", "write_record"]
+
+
+def config_fingerprint(
+    profile: str, switches: dict[str, Any] | None = None, snapshot: Path | None = None
+) -> dict[str, Any]:
+    """配置指纹（§13）。
+
+    **`switches` 目前只能是空字典**：开关集属于 `configs/*.yaml`，那是 Step 1 的
+    ③-d 切片、尚未落地。空字典的含义写进 `note`——**别让它读起来像"没有开关"**。
+
+    `snapshot` 是配置快照文件的路径（`.gitignore` 已定：`configs/runs/**` 要入库）。
+    它的内容哈希进指纹，于是"改了配置文件但没改开关"也能被发现。
+    """
+    switches = dict(switches or {})
+    canonical = json.dumps(switches, sort_keys=True, ensure_ascii=False)
+    return {
+        "profile": profile,
+        "switches": switches,
+        "switches_hash": hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16],
+        "snapshot": str(snapshot) if snapshot else "",
+        "snapshot_hash": _file_hash(snapshot) if snapshot else "",
+        "note": SWITCH_NOTE,
+    }
+
+
+def _file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def summarize(results: list[JudgeResult], samples: list[Sample]) -> dict[str, Any]:
+    """算总分与分类明细。
+
+    **拒答题单列**：`question_id` 以 `_abs` 结尾的题**行为与其他题不同**
+    （正确答案是拒答），混进总分会让一个分类的数字失真（§12.2）。
+    """
+    category_of = {q.qid: q.category for s in samples for q in s.questions}
+    abstention_of = {q.qid: q.is_abstention for s in samples for q in s.questions}
+
+    by_category: dict[str, list[bool]] = {}
+    abstention: list[bool] = []
+    overall: list[bool] = []
+    for result in results:
+        overall.append(result.is_correct)
+        if abstention_of.get(result.qid, False):
+            abstention.append(result.is_correct)
+            continue
+        by_category.setdefault(category_of.get(result.qid, "unknown"), []).append(result.is_correct)
+
+    return {
+        "overall": _accuracy(overall),
+        "n": len(overall),
+        "breakdown": {
+            category: {"accuracy": _accuracy(values), "n": len(values)}
+            for category, values in sorted(by_category.items())
+        },
+        "abstention": {"accuracy": _accuracy(abstention), "n": len(abstention)},
+    }
+
+
+def _accuracy(values: list[bool]) -> float | None:
+    """**空集合返回 `None` 而不是 0**——`0.0` 会被读成"全错"，而它其实是"没测到"。"""
+    if not values:
+        return None
+    return round(sum(values) / len(values), 6)
+
+
+def build_record(
+    *,
+    run_id: str,
+    step: str,
+    profile: str,
+    bench_dir: Path,
+    samples: list[Sample],
+    results: list[JudgeResult],
+    data_fingerprint: dict[str, Any],
+    models: dict[str, str],
+    switches: dict[str, Any] | None = None,
+    snapshot: Path | None = None,
+    metrics: dict[str, Any] | None = None,
+    counters: dict[str, Any] | None = None,
+    archive: str = "",
+    notes: str = "",
+) -> RunRecord:
+    """组装一条 run record。**七维子分一律 `None` + 理由**（代理评测产不出它们）。"""
+    summary = summarize(results, samples)
+    scores: dict[str, Any] = {
+        "overall": summary["overall"],
+        "by_dimension_note": PROXY_SCORE_NOTE,
+        **{dimension: None for dimension in DIMENSIONS},
+    }
+    record = RunRecord(
+        run_id=run_id,
+        step=step,
+        profile=profile,
+        config_fingerprint=config_fingerprint(profile, switches, snapshot),
+        data_fingerprint=data_fingerprint,
+        models=models,
+        scores=scores,
+        breakdown=summary["breakdown"] | {"abstention": summary["abstention"]},
+        metrics=metrics or {},
+        counters=counters or _unavailable_counters(),
+        archive=archive,
+        notes=notes,
+    )
+    record.validate()
+    return record
+
+
+def _unavailable_counters() -> dict[str, Any]:
+    """§6.5 的三个计数器**今天的真正状态**。
+
+    发射端在 `pairing/instrument.py` 已有，但**聚合端 `observability/` 未实现**
+    ⇒ 这里没有任何数字可填。**不填 0**：`0` 会被读成"没有 pending"，而事实是"没读"。
+    """
+    return {
+        "pending_created": None,
+        "pending_completed": None,
+        "pending_orphaned_real": None,
+        "pending_orphaned_misjudged": None,
+        "note": "聚合端 observability/ 未实现（发射在 pairing/instrument.py）——**不是 0**",
+    }
+
+
+def write_record(record: RunRecord, reports_dir: Path) -> Path:
+    """落到 `eval/reports/runs/<run_id>.json`。
+
+    ⚠ `eval/reports/**/*.json` 已被 `.gitignore` 忽略（体积大、可重跑，且逐题结果可能
+    含受许可约束的数据内容，§12.5）。**结论进 `ledger.md`，原始产出进 `runs/`。**
+    """
+    return record.write(Path(reports_dir) / "runs" / f"{record.run_id}.json")

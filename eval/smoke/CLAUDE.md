@@ -35,7 +35,8 @@ s3_probe.py     S3 探针（created_at 是否被消费）
 | **`created_at` 始终存在** | 日粒度或 `""`，**不能缺字段** |
 | **`score` 单调递减** | 且**不是**原始 RRF 分数 |
 
-`Makefile` 里预留了 `make contract-check` 目标（尚未实现）指向这里。
+`make contract-check` 已接通（2026-09-24）：`uv run python -m eval.smoke.preflight --base-url $SERVICE_URL`。
+**⚠ 它会往那个服务写一小份数据**（`user_id` 带随机后缀，不与别的 run 冲突）。
 
 ---
 

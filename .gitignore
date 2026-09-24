@@ -25,6 +25,9 @@ eval/reports/**/*.csv
 .env
 .env.*
 !.env.example
+# 团队网关文档：**正文里有可用的 API Key**（文档自己写着"严禁提交至 GitHub 仓库"）。
+# 它不属版本库——要共享就把密钥那两行摘掉，或放团队内部的密码管理器。
+L20-推理服务API.md
 
 # ── Python ─────────────────────────────────────────────────────────────
 __pycache__/
@@ -51,11 +54,14 @@ build/
 # 第三方数据集以 **git clone** 形式放在这里（目录内有嵌套 .git）。**一律不入库**：
 #   - 许可约束：LoCoMo-Refined 是 **CC BY-NC 4.0**（§12.5），分发范围未确认前不提交
 #   - 嵌套 .git 会让 git 把它当 submodule 处理，留下 gitlink 记录
-# 只保留 eval/datasets/CLAUDE.md 作为说明。
-# ⚠ 必须写成 eval/datasets/* 而不是 eval/datasets/：写目录会排除**目录本身**，
-#   git 就不再向下查找，下面的 ! 规则永远轮不到执行（静默失效，与 var/ 同理）。
-eval/datasets/*
-!eval/datasets/CLAUDE.md
+#
+# ⚠ **只逐个忽略克隆下来的目录，不要写成 `eval/datasets/*`**（2026-09-24 修正）：
+#   那个写法会把**我们自己写在这个目录下的加载器**（`locomo.py` / `longmemeval.py` /
+#   `preprocess.py` / `registry.py`）也一起忽略——它们在 `git status` 里**根本不出现**，
+#   提交时静默丢失，而 D16 恰恰把"知道数据集文件名"的职责放在这里。
+#   ⇒ 又一处"不报错就丢东西"，与 `var/` 那条注释同一类。
+#   **新增一个 clone 时，在这里补一行它的目录名。**
+eval/datasets/LoCoMo-Refined/
 
 # ── 其他 ───────────────────────────────────────────────────────────────
 # 归档只读，整目录不入库。**理由是分发边界，不是体积**（2026-09-24 核对）：

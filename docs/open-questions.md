@@ -77,11 +77,12 @@
 | --- | --- | --- |
 | **V1** | **Qdrant `qdrant/bm25` 的分词行为**——要实测一次（拿一两个多语言长文档的 case 对照），**别默认它等价于 Lucene Analyzer** | §7.1 |
 | **V2** | **`created_at` 的日粒度**是否真的更安全（秒级会诱发"粒度变细"判负）——**与 T1 同批测** | §11.3 |
-| **V3** | **"LLM 记忆注入字段"的键名**：LoCoMo/LME 的 `speaker_1_memories` / `retrieved_context` / `memories` 在数据集里**根本不存在**（命中数都是 0），**只能由检索方运行时注入，但用什么键名注入没有明文** | §11.3 |
+| **V3** | **"LLM 记忆注入字段"的键名** | §11.3 |
+| ✅ **V3 答掉一半（2026-09-24）** | **键名是有明文的**——不在数据集里，在**归档 pipeline 的源码**里：`benchmark_data/pipeline_locomo-refined.py:107-120`。主字段 = **`speaker_1_memories`**（回退链 `speaker_1_memories → retrieved_context → memories`）；**`speaker_2_memories` 没有回退，缺即空串**（这条不对称就是 `eval/CLAUDE.md` 那张表的出处）。<br>**剩下未知的是「怎么分」而不是「用哪个键」**：真实 AML 侧按什么把我们的返回列表切成两个 speaker 块，**归档里看不到**。代理评测按"全部塞进 `speaker_1_memories`、`speaker_2_memories` 留空"执行（[`../eval/harness/judge.py`](../eval/harness/judge.py)）——**那是显式的代理假设，不是已验证的契约**。 | 归档代码 |
 | **V4** | **时间语义的整体假设**（筛选走 `event_time` 列、正文保留原始表述）——**待 T1 验证**，但验证之前按此执行，**它是安全的那一侧** | §11.3 |
 | **V5** | **`content` 是否被原样注入**——AML 侧仅按 `memory_text()` 做字符串拼接，但**检索结果 → `memories` 字段的映射在 AML 那一侧，归档里看不到** | §11.3 |
 | **V7** | **归档 pipeline 是否传 `enable_thinking: False`**——自建网关的 Qwen3.5-9B **需要显式关闭思考**（`extra_body.chat_template_kwargs`），而 `api_config` 只导出 base_url / key / model **三个字段，带不动 `extra_body`**。若网关默认开思考，thinking 会挤占 token 或混进 `generated_answer`，**裁判读到的就是推理过程而不是答案**。<br>**✅ 2026-09-24 答掉一半**：归档代码到手后第一项核对已做——**7 个 pipeline 里只有 `pipeline_beam.py:263` 传了**；**LoCoMo-Refined 与 LongMemEval（代理评测真正用的那两份）都没传**（`complete()` 只发 `{model, messages, temperature}`）。⇒ **我们自己的 harness 必须显式关思考**。**剩余未知**：网关默认开不开——默认关则本条彻底清掉 | 归档代码 + 开发网关文档 |
-| **V10** | **网关是否按 `last_token_pool` + L2 normalize 提供 Qwen3-Embedding-8B**——模型卡明确要求这两步（**`last_token_pool` 而非 mean pooling**），而它们是**服务端**的事，我们只看到 `/embeddings` 的返回。做错了**不报错**，只表现为"检索变差"。**本地可先验一条**：返回向量的 L2 范数应 ≈ 1；明显偏离 1 就说明没有归一化 | 模型卡 |
+| ✅ **V10 已清（2026-09-24）** | **网关的归一化是对的**——实测 `POST /embeddings` 返回 `dim=1024`、**L2 范数 = 1.000000**（两条输入都是）。⇒ "本地可先验一条"那条通过。<br>**⚠ 仍未验的是池化方式**：L2 范数 ≈ 1 只证明"归一化了"，**证不了用的是 `last_token_pool` 而不是 mean pooling**（后者归一化后范数同样是 1）。要区分只能拿服务端源码或做对照检索。**这条降级为"低风险残留"**，不是清空。<br>**复现**：`make check` 的 Embedding 那一项每次都会重新量这个范数。 | 模型卡 + 2026-09-24 实测 |
 | **V8** | **自建网关是开发环路的单点**：answer / judge / embed / rerank **四条**都打它，而 harness 会同时驱动 Add/Search（embed + rerank）与答案/裁判生成。**必须有客户端并发上限**，否则排队超时会伪装成"模型变差了" | D12 |
 | **V9** | **各对照实验之间的 Qdrant 集合如何隔离**：集合内容**随 arm 变化**（T1 改渲染 ⇒ 全部重新 embedding；A4 关 agent 时候选集不同），而写入是**按 `id` upsert**——**上一 arm 遗留的、本 arm 不会覆盖的 point 会静默留在集合里**，污染下一 arm 且不报错 | §13 / §6.3 |
 
@@ -91,6 +92,21 @@
 
 > **V7 何时能清**：~~拿到归档源码后第一项核对~~ —— ✅ **已做（2026-09-24）**，结论见上表（只有 BEAM 传 `enable_thinking`）。
 > **剩下的那一半**（网关默认值）要问网关那侧的人，或直接发一个只在 `generated_answer` 里能看出来的探针请求。
+
+---
+
+### V7 的结论（**2026-09-24 全清**）
+
+网关**默认不开思考**——实测探针（只让它回 `OK`）：
+
+| 网关默认 | `content` | completion_tokens |
+| --- | --- | --- |
+| **改之前** | `'Thinking Process:\n\n1. **Analyze the Request:**...'`（推理混在 `content` 里，**不是**单独的 `reasoning_content` 字段） | **167** |
+| **改之后**（管理员已把默认改为关） | `'OK'` | **2** |
+
+**为什么这条曾经是硬阻塞**：归档的 7 个 pipeline 里**只有 `pipeline_beam.py` 传 `enable_thinking: False`**，而代理评测真正用的 **LoCoMo-Refined 与 LongMemEval 都没传**。网关默认开着 ⇒ 推理过程会进 `generated_answer` ⇒ **裁判读到的是推理而不是答案**，且不报错。
+
+**⇒ 归档 pipeline 可以直连网关，不需要自己加一层 shim。** 探针已固化进 `make check`（LLM 那一项）——**每次环境自检都会重新验一遍**，所以它回退成"默认开"不会静默。
 
 ---
 

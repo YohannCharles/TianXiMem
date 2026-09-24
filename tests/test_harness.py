@@ -1,0 +1,493 @@
+"""`eval/harness/` —— 切批 / HTTP 驱动 / 注入 / 裁判包装 / run record（§13）。
+
+**这些用例一律不碰网络、不碰归档 pipeline**：
+驱动用 `httpx.MockTransport`，裁判包装用 `tmp_path` 里的**桩 pipeline**
+（它模仿归档脚本的 CLI 契约，并且**真的去 `import api_config`**——那是 PYTHONPATH
+注入这条机制的端到端验证）。
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+from eval.datasets import Message, Question, Sample, Session
+from eval.harness import (
+    MAX_MESSAGES_PER_BATCH,
+    ServiceClient,
+    batches,
+    build_input_items,
+    build_record,
+    config_fingerprint,
+    render_memories,
+    request_id_for,
+    run_judge,
+    summarize,
+)
+from eval.harness.driver import SearchHit
+from eval.harness.judge import JudgeResult
+from eval.reports.schema import DIMENSIONS, RunRecord
+
+
+# ── fixture ────────────────────────────────────────────────────────────────
+def _messages(n: int) -> tuple[Message, ...]:
+    return tuple(
+        Message(role="user" if i % 2 == 0 else "assistant", content=f"m{i}", timestamp_ms=1000 + i)
+        for i in range(n)
+    )
+
+
+def _sample(n_messages: int = 3, n_questions: int = 2) -> Sample:
+    return Sample(
+        user_id="conv-1",
+        dataset="locomo-refined",
+        sessions=(Session("conv-1#s1", _messages(n_messages)),),
+        questions=tuple(
+            Question(qid=f"conv-1#q{i:04d}", question=f"Q{i}?", gold=[f"A{i}"], category="4")
+            for i in range(n_questions)
+        ),
+        speaker_names=("Sam", "Rae"),
+    )
+
+
+class _Recorder:
+    """记录发出去的请求，并按需要给出响应。"""
+
+    def __init__(self, search_response: dict | None = None) -> None:
+        self.requests: list[tuple[str, dict]] = []
+        self.search_response = search_response or {"data": []}
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        self.requests.append((request.url.path, body))
+        if request.url.path == "/add":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    **{k: body[k] for k in ("request_id", "user_id", "session_id")},
+                },
+            )
+        return httpx.Response(200, json=self.search_response)
+
+    def client(self) -> ServiceClient:
+        return ServiceClient(
+            "http://stub", client=httpx.Client(transport=httpx.MockTransport(self.handler))
+        )
+
+
+# ── 切批（§6.5）──
+def test_batches_are_20_and_keep_source_order():
+    """**源序就是 `pair_idx` 的最终依据**——重排会静默改变邻域，绝不能做。"""
+    got = batches(_messages(45))
+    assert [len(b) for b in got] == [20, 20, 5]
+    assert [m.content for b in got for m in b] == [f"m{i}" for i in range(45)]
+    assert MAX_MESSAGES_PER_BATCH == 20
+
+
+def test_batches_empty_input_gives_no_batches():
+    """空 session 产出 **0 批**，不是一个空批——空批在服务端是响亮失败（422）。"""
+    assert batches(()) == []
+
+
+def test_batches_rejects_nonpositive_limit():
+    with pytest.raises(ValueError):
+        batches(_messages(3), max_messages=0)
+
+
+def test_request_id_is_deterministic():
+    """§2.2 规定重试沿用同一个 `request_id` ——随机 id 会让"重跑一遍"变成"写第二遍"。"""
+    assert request_id_for("u", "s", 0) == request_id_for("u", "s", 0)
+    assert request_id_for("u", "s", 0) != request_id_for("u", "s", 1)
+    assert request_id_for("u", "s", 0) != request_id_for("u", "s2", 0)
+
+
+# ── HTTP 驱动 ──────────────────────────────────────────────────────────────
+def test_add_payload_matches_contract_shape():
+    """§2.1：`request_id` / `user_id` / `session_id` / `messages[]`；
+    message 只有 `role` / `content` / 可选 `timestamp`（D16 的 canonical 形状）。"""
+    recorder = _Recorder()
+    recorder.client().add(request_id="rid", user_id="u1", session_id="s1", messages=_messages(2))
+    path, body = recorder.requests[0]
+    assert path == "/add"
+    assert set(body) == {"request_id", "user_id", "session_id", "messages"}
+    assert body["messages"][0] == {"role": "user", "content": "m0", "timestamp": 1000}
+    assert body["request_id"] == "rid"
+
+
+def test_message_without_timestamp_omits_the_key():
+    """`timestamp` 缺省时**不能发 `null`**——`event_time` 为 NULL 时 `created_at` 发 `""` 是
+    §11.3 那条**有定义的降级路径**，而 `null` 走的是另一条。"""
+    recorder = _Recorder()
+    recorder.client().add(
+        request_id="r", user_id="u", session_id="s", messages=(Message(role="user", content="x"),)
+    )
+    assert "timestamp" not in recorder.requests[0][1]["messages"][0]
+
+
+def test_search_over_limit_is_a_loud_failure():
+    """**§2.2 的核心那条**：返回超过 `top_k` 是**契约错误**，**AML 不会被静默截断**。
+
+    本地必须抓死：等到 Smoke 那 30 次配额里才发现，代价就是配额本身。
+    """
+    recorder = _Recorder(
+        {"data": [{"id": "1", "content": "c", "created_at": "", "score": 1.0}] * 3}
+    )
+    with pytest.raises(AssertionError, match="契约错误"):
+        recorder.client().search(user_id="u", query="q", top_k=2)
+
+
+def test_search_null_data_is_rejected():
+    """空结果必须是 `[]` 而不是 `null`（§2.1）。`null` 会让下游静默变成"没有记忆"。"""
+    recorder = _Recorder({"data": None})
+    with pytest.raises(AssertionError, match="必须是数组"):
+        recorder.client().search(user_id="u", query="q", top_k=10)
+
+
+def test_search_returns_hits_verbatim():
+    recorder = _Recorder(
+        {"data": [{"id": "i", "content": "c", "created_at": "2023-05-08", "score": 0.5}]}
+    )
+    hits = recorder.client().search(user_id="u", query="q", top_k=10)
+    assert hits == [SearchHit(id="i", content="c", created_at="2023-05-08", score=0.5)]
+
+
+def test_ingest_sends_one_batch_per_20_messages():
+    """21 条消息 ⇒ **两批**，且两批的 `request_id` 分别是 0 与 1。"""
+    recorder = _Recorder()
+    sample = _sample(n_messages=21)
+    assert recorder.client().ingest(sample) == 2
+    assert [b["request_id"] for _, b in recorder.requests] == [
+        "conv-1|conv-1#s1|0",
+        "conv-1|conv-1#s1|1",
+    ]
+    assert [len(b["messages"]) for _, b in recorder.requests] == [20, 1]
+
+
+# ── 注入（V3 / S1 的落点）──
+def test_memories_go_to_speaker_1_and_speaker_2_stays_empty():
+    """键名 `speaker_1_memories` 由 pipeline 源码确定；**怎么分是未知的**（见 judge docstring）。
+
+    这条断言钉的是**当前那个显式的代理假设**——它变了就是一次有意改动，不是静默漂移。
+    """
+    hits = [
+        SearchHit(id="a", content="first", created_at="", score=1.0),
+        SearchHit(id="b", content="second", created_at="", score=0.5),
+    ]
+    items = build_input_items(_sample(), {"conv-1#q0000": hits, "conv-1#q0001": []})
+    assert items[0]["speaker_1_memories"] == "first\nsecond"
+    assert items[0]["speaker_2_memories"] == ""
+    assert items[1]["speaker_1_memories"] == ""
+
+
+def test_input_item_fields_follow_pipeline_not_readme():
+    """字段名**以 pipeline 代码为准**：stage 间规范字段是 `generated_answer`，
+    输入要带 `id` / `question` / gold 四键之一 / `speaker_*_name`；
+    readme 写的 `predicted_answer` / `hypothesis` **没有 pipeline 读**。"""
+    items = build_input_items(_sample(), {"conv-1#q0000": [], "conv-1#q0001": []})
+    assert set(items[0]) == {
+        "id",
+        "question",
+        "gold_answer",
+        "speaker_1_name",
+        "speaker_2_name",
+        "speaker_2_memories",
+        "speaker_1_memories",
+    }
+    assert items[0]["id"] == "conv-1#q0000"
+    # gold 保留**原始 list**——归档的 `gold_answer()` 走 `memory_text()`，列表由它自己拼
+    assert items[0]["gold_answer"] == ["A0"]
+    assert "hypothesis" not in items[0] and "predicted_answer" not in items[0]
+
+
+def test_render_memories_uses_newline_like_the_pipeline_does():
+    """归档的 `memory_text()` 对列表正是 `"\\n".join(...)`——所以两种拼法**逐字相同**。"""
+    hits = [
+        SearchHit(id="a", content="x", created_at="", score=1.0),
+        SearchHit(id="b", content="y", created_at="", score=0.5),
+    ]
+    assert render_memories(hits) == "\n".join(["x", "y"])
+
+
+# ── 裁判包装（subprocess + PYTHONPATH 注入）──
+_STUB_PIPELINE = '''\
+"""模仿归档 pipeline 的 CLI 契约；并证明 `api_config` 在 PYTHONPATH 上可 import。"""
+import argparse, json, sys
+from api_config import ANSWER_MODEL, JUDGE_MODEL, JUDGE_VERSION  # noqa: F401
+
+def rows(path):
+    return [json.loads(l) for l in open(path, encoding="utf-8").read().splitlines() if l.strip()]
+
+def main():
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers(dest="command", required=True)
+    a = sub.add_parser("answer")
+    for name in ("input", "output"):
+        a.add_argument(f"--{name}", required=True)
+    a.add_argument("--max-tokens", type=int, default=256)
+    e = sub.add_parser("evaluate")
+    for name in ("input", "answers", "output"):
+        e.add_argument(f"--{name}", required=True)
+    e.add_argument("--max-tokens", type=int, default=256)
+    args = p.parse_args()
+
+    if args.command == "answer":
+        with open(args.output, "a", encoding="utf-8") as fh:
+            for item in rows(args.input):
+                # 把注入的记忆原样当作"答案"，方便断言注入确实到了模型侧
+                fh.write(json.dumps({"id": item["id"],
+                                     "generated_answer": item["speaker_1_memories"]}) + "\\n")
+        return
+    with open(args.output, "w", encoding="utf-8") as fh:
+        for item in rows(args.input):
+            fh.write(json.dumps({"id": item["id"], "label": "CORRECT", "is_correct": True,
+                                 "judge_response": '{"label": "CORRECT"}'}) + "\\n")
+
+main()
+'''
+
+
+@pytest.fixture
+def stub_pipeline(tmp_path: Path) -> Path:
+    path = tmp_path / "pipeline_stub.py"
+    path.write_text(_STUB_PIPELINE, encoding="utf-8")
+    return path
+
+
+def test_run_judge_wires_through_and_parses(stub_pipeline, tmp_path):
+    """端到端（无网络）：回答步 → 判分步 → 解析。
+
+    **桩脚本里那行 `import api_config` 就是 PYTHONPATH 注入的验证**——
+    归档的 7 个 pipeline 今天全部 import 失败，这条路径必须真的通。
+    """
+    hits = [SearchHit(id="a", content="memory text", created_at="", score=1.0)]
+    items = build_input_items(_sample(), {"conv-1#q0000": hits, "conv-1#q0001": []})
+    results = run_judge(stub_pipeline, items, tmp_path / "out")
+
+    assert [r.qid for r in results] == ["conv-1#q0000", "conv-1#q0001"]
+    assert all(r.is_correct and r.label == "CORRECT" for r in results)
+    # 注入的记忆确实到了脚本侧（桩脚本把它当成 generated_answer 回写）
+    assert results[0].generated_answer == "memory text"
+
+
+def test_run_judge_creates_output_dir(stub_pipeline, tmp_path):
+    """**`out_dir` 必须由调用方建**——`pipeline_locomo-refined.py` 不会 `mkdir(parents=True)`。"""
+    target = tmp_path / "deep" / "nested"
+    run_judge(stub_pipeline, build_input_items(_sample(), {}), target)
+    assert (target / "input.jsonl").exists()
+
+
+def test_run_judge_surfaces_pipeline_failure(tmp_path):
+    """pipeline 非 0 退出必须**带上 stderr 一起抛**——否则只剩一句"跑失败了"。"""
+    broken = tmp_path / "broken.py"
+    broken.write_text("import sys; sys.stderr.write('boom\\n'); sys.exit(3)", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="exit 3"):
+        run_judge(broken, build_input_items(_sample(), {}), tmp_path / "out")
+
+
+# ── run record（§13）──
+def _results(*flags: bool) -> list[JudgeResult]:
+    return [
+        JudgeResult(
+            qid=f"conv-1#q{i:04d}",
+            is_correct=flag,
+            label="",
+            judge_response="",
+            generated_answer="",
+        )
+        for i, flag in enumerate(flags)
+    ]
+
+
+def test_summarize_keeps_abstention_out_of_the_total():
+    """**拒答题行为与其他题不同**（正确答案是拒答），混进分类会失真（§12.2）。"""
+    sample = Sample(
+        user_id="u",
+        dataset="longmemeval-s",
+        sessions=(),
+        questions=(
+            Question("q0", "?", "g", "multi-session"),
+            Question("q1_abs", "?", "g", "multi-session", is_abstention=True),
+        ),
+    )
+    results = [
+        JudgeResult("q0", is_correct=True, label="", judge_response="", generated_answer=""),
+        JudgeResult("q1_abs", is_correct=False, label="", judge_response="", generated_answer=""),
+    ]
+    summary = summarize(results, [sample])
+    assert summary["overall"] == 0.5  # 拒答题**算进总分**，只是不混进分类
+    assert summary["breakdown"]["multi-session"] == {"accuracy": 1.0, "n": 1}
+    assert summary["abstention"] == {"accuracy": 0.0, "n": 1}
+
+
+def test_summarize_empty_is_none_not_zero():
+    """空集合必须是 `None`——`0.0` 会被读成"全错"，而它其实是"没测到"。"""
+    assert summarize([], [])["overall"] is None
+
+
+def test_config_fingerprint_hash_is_order_insensitive():
+    """指纹对字典顺序不敏感——否则"同一个配置"会因为书写顺序不同而看起来变过。"""
+    a = config_fingerprint("local", {"rerank": False, "agent": False})
+    b = config_fingerprint("local", {"agent": False, "rerank": False})
+    assert a["switches_hash"] == b["switches_hash"]
+    assert config_fingerprint("local")["switches_hash"] != a["switches_hash"]
+
+
+def test_config_fingerprint_says_switches_are_not_wired_yet():
+    """**空开关 ≠ 没有开关**：③-d 之前必须说清楚，否则会被读成"配置一致"。"""
+    assert "未落地" in config_fingerprint("local")["note"]
+
+
+def test_build_record_validates_and_states_why_dimensions_are_empty(tmp_path):
+    fp = {"dataset": "locomo-refined", "files": [{"name": "questions.jsonl"}]}
+    record = build_record(
+        run_id="r1",
+        step="Step 1",
+        profile="local",
+        bench_dir=tmp_path,
+        samples=[_sample()],
+        results=_results(True, False),
+        data_fingerprint=fp,
+        models={"embedder": "Qwen/Qwen3-Embedding-8B"},
+    )
+    assert set(DIMENSIONS) <= set(record.scores)
+    assert all(record.scores[d] is None for d in DIMENSIONS)
+    # **空值必须带理由**——否则与"跑了但没分"无法区分（§3.2）
+    assert record.scores["by_dimension_note"].startswith("代理评测的七个维度子分")
+    assert "observability/ 未实现" in record.counters["note"]
+    assert record.counters["pending_orphaned_real"] is None
+    # 第 4/7 维的证据指向机制与单测，不是一个编出来的数
+    assert "test_idempotency" in record.dimension_mechanism["Memory governance"]
+
+
+def test_build_record_merges_override_counters(tmp_path):
+    """接上聚合端之后，调用方可以覆盖计数器——但**两个来源仍必须都在**。"""
+    with pytest.raises(ValueError, match="pending_orphaned_real"):
+        build_record(
+            run_id="r",
+            step="Step 1",
+            profile="local",
+            bench_dir=tmp_path,
+            samples=[_sample()],
+            results=_results(True),
+            data_fingerprint={"d": 1},
+            models={"m": "x"},
+            counters={"pending_created": 3},
+        )
+
+
+def test_run_record_rejects_missing_dimension():
+    """七个维度必须**逐维记录**（§3.2 / reports/CLAUDE.md）。"""
+    with pytest.raises(ValueError, match="缺维度"):
+        RunRecord(
+            run_id="r",
+            step="Step 1",
+            profile="local",
+            config_fingerprint={"a": 1},
+            data_fingerprint={"b": 2},
+            models={"c": "3"},
+            scores={"overall": 1.0, "Explicit fact recall": 1.0},
+            counters={"pending_orphaned_real": 0, "pending_orphaned_misjudged": 0},
+        ).validate()
+
+
+def test_run_record_rejects_empty_dimension_without_reason():
+    with pytest.raises(ValueError, match="没说理由"):
+        RunRecord(
+            run_id="r",
+            step="Step 1",
+            profile="local",
+            config_fingerprint={"a": 1},
+            data_fingerprint={"b": 2},
+            models={"c": "3"},
+            scores={"overall": 1.0, **{d: None for d in DIMENSIONS}},
+            counters={"pending_orphaned_real": 0, "pending_orphaned_misjudged": 0},
+        ).validate()
+
+
+def test_run_record_rejects_missing_fingerprint():
+    """三个指纹缺一个，两次 run 就不可比（§13）。"""
+    with pytest.raises(ValueError, match="models 为空"):
+        RunRecord(
+            run_id="r",
+            step="Step 1",
+            profile="local",
+            config_fingerprint={"a": 1},
+            data_fingerprint={"b": 2},
+            models={},
+            scores={"overall": 1.0, **{d: None for d in DIMENSIONS}, "by_dimension_note": "n/a"},
+            counters={"pending_orphaned_real": 0, "pending_orphaned_misjudged": 0},
+        ).validate()
+
+
+def test_run_record_scope_carries_the_extrapolation_warning(tmp_path):
+    """§12.4 / P3：代理评测**不可线性外推**——这句话跟着每一个数字走。"""
+    record = build_record(
+        run_id="r",
+        step="Step 1",
+        profile="local",
+        bench_dir=tmp_path,
+        samples=[_sample()],
+        results=_results(True),
+        data_fingerprint={"d": 1},
+        models={"m": "x"},
+    )
+    assert "relative comparisons only" in record.scope
+
+
+def test_write_record_lands_in_runs_dir(tmp_path):
+    record = build_record(
+        run_id="r9",
+        step="Step 1",
+        profile="local",
+        bench_dir=tmp_path,
+        samples=[_sample()],
+        results=_results(True),
+        data_fingerprint={"d": 1},
+        models={"m": "x"},
+    )
+    from eval.harness import write_record
+
+    path = write_record(record, tmp_path / "reports")
+    assert path == tmp_path / "reports" / "runs" / "r9.json"
+    assert json.loads(path.read_text(encoding="utf-8"))["run_id"] == "r9"
+
+
+def test_harness_does_not_import_src():
+    """**全目录最硬的一条边界**：harness 打 HTTP，**不 import `src/tianxi_am`**。
+
+    走进程内调用会让 B1（ReFind）变成特例、两条基线不可比，而且**碰不到契约层**
+    （[`../../eval/CLAUDE.md`](../../eval/CLAUDE.md)）。
+
+    用 AST 扫 **import 语句**而不是扫文本——docstring 里提到 `src/tianxi_am`
+    （比如 `api_config` 解释"embedding 配置只属于哪一边"）是说明，不是依赖。
+    """
+    harness = Path(__file__).resolve().parents[1] / "eval" / "harness"
+    offenders = []
+    for path in harness.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+            offenders += [
+                f"{path.name}:{node.lineno}: {name}" for name in names if "tianxi_am" in name
+            ]
+    assert not offenders, "harness 依赖了 src/：\n" + "\n".join(offenders)
+
+
+def test_harness_sources_have_no_src_path_hack():
+    """`sys.path` 里塞 `src/` 与直接 import 等价——两条都算越界。"""
+    harness = Path(__file__).resolve().parents[1] / "eval" / "harness"
+    for path in harness.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "insert":
+                text = ast.unparse(node)
+                assert "src" not in text, f"{path.name}:{node.lineno}: {text}"
