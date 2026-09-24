@@ -264,13 +264,35 @@
 
 ---
 
-## D16 · 数据路径统一走 `TIANXI_BENCHMARK_DIR`；LoCoMo 的 Add 源改用 `conversations.jsonl`（2026-09-23）
+## D16 · 数据路径统一走 `TIANXI_BENCHMARK_DIR`；LoCoMo 的 Add 源改用 `conversations.jsonl`（2026-09-23，**决策二 2026-09-24 修订**）
 
 **决策一 —— 路径口径**：**数据路径一律通过 `TIANXI_BENCHMARK_DIR` 读取，代码中不得硬编码 `benchmark_data/` 或 `eval/datasets/`。** 默认值仍是 `benchmark_data/`；本地开发通过 `.env` 指向实际数据目录。
 
 **边界**：`eval/datasets/LoCoMo-Refined/data/` 是**开发与自测用**的数据，**不是最终要跑的数据集**——归档才是。两者不可混为一谈，**也不得让代码依赖任何一边**。
 
-**决策二 —— LoCoMo 的 Add 对话源**：**改用 `data/public/conversations.jsonl`**，不再用 `locomo_refined.json` 的 `conversation`。
+**决策二（2026-09-24 修订）—— LoCoMo 的 Add 对话源**：~~**改用 `data/public/conversations.jsonl`**，不再用 `locomo_refined.json` 的 `conversation`。~~
+
+> ### ⚠ 修订原因：**归档里根本没有 `conversations.jsonl`**
+>
+> `tools/fetch_benchmark_data.py` 的清单**明写它不收录**（原文："data/public/conversations.jsonl，本清单不收录**——它属 eval/datasets/ 的 clone（D16）"），
+> 所以**纯归档路径下这条决策无法执行**。原决策默认了 clone 在场。
+>
+> **改后的口径**：加载器**两个来源都支持**——`conversations.jsonl` 在场时优先，
+> 否则退回 `locomo_refined.json` 的 `conversation` **并逐条 `strip()`**。
+> **两者产出的 `Message` 流逐字相同**（见下表的实测，2026-09-24 在**全量**上复核过）；
+> 由 `tests/test_datasets.py` 的 `test_locomo_two_source_layouts_are_identical`
+> 与 `test_archive_locomo_matches_conversations_jsonl` 钉住（后者在 clone 不在场时 skip）。
+>
+> **原"采用理由"的落点变了**：它说的是"用 `locomo_refined.json` 会引入 209 条契约违规"——
+> **那句的前提是"不 strip"**。归一化层（[`eval/datasets/preprocess.normalize_content`](../eval/datasets/preprocess.py)）
+> 对**两条路径都强制 `strip()`**，所以那条违规在新口径下**不可能出现**。
+> ⇒ **契约合规不再依赖"选哪个文件"，而依赖"加载层做了归一化"**（后者才是唯一实现处）。
+>
+> **净效果：不再需要 `eval/datasets/` 的 clone 也能跑代理评测**——归档单独就够。
+>
+> **⚠ 这条修订没有推翻"落差 #1"**：`locomo_refined.json` 仍是 pretty-printed JSON 数组、
+> 而归档 pipeline 的 `rows()` 只解析 JSONL——只是**那层转换不该由 Add 源来承担**：
+> harness 自己按 pipeline 的契约构造 JSONL 输入（[`eval/harness/judge.py`](../eval/harness/judge.py) 的 `build_input_items`）。
 
 **已实测两项前置验证（均通过）：**
 
@@ -386,6 +408,39 @@ thread.`。`TestClient` 也在另一个线程里跑 app，所以**所有 HTTP �
 **一处纪律**：同一事务里调用的每个 helper **必须复用外层传进来的那个 `conn`**——
 helper 自己 `connect()` 会落到另一个事务里（拿不到写锁、也看不到未提交的中间态），
 helper 自己 `commit()` 则让"半批"落库。**两种情况都不报错。**
+
+---
+
+## D18 · 网关环境变量的语义**以本项目为准**：`AML_EMB_*` = embedding（主网关）（2026-09-24）
+
+**决策**：`.env` 里这几个名字的语义**按本仓代码的读法定死**，不按网关文档的运维命名：
+
+| 变量 | 指向 | 谁读它 |
+| --- | --- | --- |
+| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` / `AML_EMB_MODEL` | **主网关** `memory.021130.xyz`（**Embedding**） | [`service/settings.py`](../src/tianxi_am/service/settings.py) 的 `ServiceSettings.from_env()` |
+| `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` | **memory2** `memory2.021130.xyz`（**LLM 对话**） | harness / 归档 pipeline（经 `api_config.py` 适配器） |
+| `TIANXI_RERANKER_BASE_URL` / `_API_KEY` | **主网关**（**Reranker**） | Step 3 的 `rank/reranker.py`（未实现） |
+
+**冲突来自哪**：网关文档（`L20-推理服务API.md` §2.1）写着"**变量名 `AML_EMB_*` 是 memory2 的固定命名，不要改**"——
+在**他们那边** `AML_EMB_*` 指内存网关（对话）。而本仓把 `AML_EMB_*` 读成 **embedding 端点**。**语义相反。**
+
+**为什么以本项目为准**（而不是反过来改我们的代码）：
+
+1. **那些变量是我们自己的 `.env` 里的，唯一的消费者是本仓代码。** 网关文档那句话约束的是
+   **他们运维侧的 env 文件**（`/data/hechj/AML_Model/llm/etc/llm.env`、`etc/bge-m3.env`）——
+   "改名会让已配置的调用方连不上"说的是**他们的**调用方，不是我们的变量名。
+2. **反过来做会静默坏掉**：把我们的 `AML_EMB_*` 填成 memory2，服务每次 embedding 都打对话网关
+   ⇒ **404**（文档自己写着"调错域名只会拿到 404"），而**服务启动不会失败**——它只校验变量非空。
+3. **能力确实不重叠，已实测（2026-09-24）**：memory2 的 `/v1/models` 只列 `Qwen/Qwen3.5-9B`；
+   主网关只列 `Qwen/Qwen3-Embedding-8B` 与 `Qwen/Qwen3-Reranker-4B`。
+
+**纪律**：**两个网关的 base_url 与 key 都不同，不能混用**；调错域名拿到的是 404（不是鉴权失败）。
+
+**可选的后续（不是必须）**：③-d 把配置集中到 `common/config.py` 时，可顺手改名
+`AML_EMBED_*` / `AML_LLM_*`，与网关文档的运维命名彻底解耦。**语义已由本条锁定，
+所以改名是清洁工作，不是修复。**
+
+**复现**：`make check` 的 Embedding 与 LLM 两项分别打两个域名——**都通过才说明没混用**。
 
 ---
 
