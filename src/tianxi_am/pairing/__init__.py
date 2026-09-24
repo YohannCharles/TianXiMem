@@ -19,6 +19,7 @@ from tianxi_am.pairing.pairing import (
     ResumeActions,
     encode_answer,
     is_user,
+    join_question,
     plan_batch,
 )
 
@@ -37,5 +38,6 @@ __all__ = [
     "apply_batch",
     "encode_answer",
     "is_user",
+    "join_question",
     "plan_batch",
 ]

@@ -27,12 +27,14 @@ test_config.py          §15 配置唯一入口（**AST 静态断言** + 校验 
 
 | 用例 | 覆盖 |
 | --- | --- |
-| 连续多条 user 消息 | 前一对被下一条 user 关闭 |
-| 一条 user 后跟多条 assistant | 全部归入该对 |
+| 连续多条 user 消息 | **并进同一个 `question`**（[D19](../docs/decisions.md) 对 §6.2 字面的修正） |
+| **同 role 的 user 消息跨批到达**（超长消息被切开 / 各占一个 Add） | **仍并进同一个 `question`**，且**不依赖词数计数**——见 `test_cross_batch_fragments_*` |
+| **前一个对已有 `answer`** | 下一条 user 必须开**新**对（防过度合并） |
+| 一条 user 后跟多条 assistant | 全部归入该对，**每条带 role 标记** |
 | session 以 assistant 开头 | `question` 为空的对 |
 | **遇到未知 role** | **不得丢消息**——判据只依赖"是不是 `user`"，**不要枚举白名单**（§6.2） |
-| 跨批续接三步 | **3a / 3b / 3c 逐条**，**特别是 3b** |
-| **纯接续批**（零条 user 消息） | 3d 的"也走这一步"——被追加的 pending 对要标 `complete` |
+| 跨批续接三步 | **3a′ / 3a / 3b / 3c 逐条**，**特别是 3b** |
+| **纯接续批**（零条 user 消息） | 3d 的"也走这一步"——被续写的那个对要标 `complete` |
 | `pair_idx` 连续性 | 迭代若干批后仍无空洞 |
 
 ### `pending_orphaned` 的两种来源必须可区分

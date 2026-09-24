@@ -63,7 +63,7 @@ def test_different_request_id_with_same_payload_is_a_different_batch(
     _apply(store, _batch("B"))
 
     assert [p.pair_idx for p in _pairs(store)] == [0, 1]
-    assert rd(store, store.pending_pair, "u1", "s1") is not None
+    assert rd(store, store.open_pair, "u1", "s1") is not None
 
 
 # ── 核心用例：事务已提交、响应未发出 ⇒ AML 重试 ─────────────────────────
@@ -104,7 +104,7 @@ def test_retry_after_a_later_batch_still_dedupes(store: SqliteStore) -> None:
     重放 A 会**重复应用**（落到新的 `pair_idx` 上）。
     """
     _apply(store, _batch("A"))
-    pending = rd(store, store.pending_pair, "u1", "s1")
+    pending = rd(store, store.open_pair, "u1", "s1")
     assert pending is not None
     assert pending.request_id == "A"
 

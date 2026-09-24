@@ -210,16 +210,33 @@ def test_append_answer_ignores_empty_text(store: SqliteStore) -> None:
     assert _one(store, 0).answer is None
 
 
-def test_fill_question_if_null_never_overwrites(store: SqliteStore) -> None:
-    """`question` **只在原值为 NULL 时**写入。"""
-    _seed(store, [(0, "原始问题", None), (1, None, None)])
+def test_append_question_fills_then_appends(store: SqliteStore) -> None:
+    """`question` 现在是 **填空 + 追加**（append-only）——与 `answer` 同一个写模式。
+
+    旧版是 `fill_question_if_null`（只在 NULL 时写入），那条规则的前提是
+    "一个 `question` 恰好来自一条 user 消息"。**这个前提被 D19 修正了**：
+    连续 user 消息（AML 拆超长 message 的产物）并进**同一个** `question`，
+    而它们可能落在不同批次里 ⇒ 必须允许追加。
+    """
+    _seed(store, [(0, None, None)])  # 无问的对
+    pid = make_pair_id("u1", "s1", 0)
 
     with store.transaction() as conn:
-        assert store.fill_question_if_null(conn, make_pair_id("u1", "s1", 0), "改掉它") is False
-        assert store.fill_question_if_null(conn, make_pair_id("u1", "s1", 1), "补上的问题") is True
+        assert store.append_question(conn, pid, "第一段") is True
+    assert _one(store, 0).question == "第一段"
 
-    assert _one(store, 0).question == "原始问题"
-    assert _one(store, 1).question == "补上的问题"
+    with store.transaction() as conn:
+        assert store.append_question(conn, pid, "第二段") is True
+    # 与 append_answer 一样用单个换行连接（§11.3：AML 只做 "\n".join，不插分隔符）
+    assert _one(store, 0).question == "第一段\n第二段"
+
+
+def test_append_question_ignores_empty_text(store: SqliteStore) -> None:
+    _seed(store, [(0, None, None)])
+    pid = make_pair_id("u1", "s1", 0)
+    with store.transaction() as conn:
+        assert store.append_question(conn, pid, "") is False
+    assert _one(store, 0).question is None
 
 
 # ── 单向状态 ───────────────────────────────────────────────────────────
@@ -285,7 +302,19 @@ def test_batch_write_rolls_back_entirely_on_error(
     with pytest.raises(RuntimeError, match="模拟中途失败"):
         apply_batch(
             store,
-            AddBatch("r1", "u1", "s1", (_msg("user", "Q1"), _msg("user", "Q2"))),
+            AddBatch(
+                "r1",
+                "u1",
+                "s1",
+                # ⚠ 必须产出**两个**对，否则 `insert_pair` 只被调一次、第二轮永远不炸
+                #    （连续 user 消息会并成一个 question，所以这里刻意用交替形状）
+                (
+                    _msg("user", "Q1"),
+                    _msg("assistant", "A1"),
+                    _msg("user", "Q2"),
+                    _msg("assistant", "A2"),
+                ),
+            ),
             limits=limits,
         )
 

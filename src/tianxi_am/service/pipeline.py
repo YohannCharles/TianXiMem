@@ -146,7 +146,7 @@ class AddPipeline:
         # 正常路径：精确到本批【触碰过】的对——新建的 + 被续接/关闭的那个 pending
         ids = [make_pair_id(batch.user_id, batch.session_id, d.pair_idx) for d in plan.new_pairs]
         if plan.resume is not None:
-            ids.append(plan.resume.pending_id)
+            ids.append(plan.resume.open_pair_id)
         # 去重但保序（`dict.fromkeys`）：本批可能既新建又关闭，id 不会重合，但别依赖这一点
         ids = list(dict.fromkeys(ids))
         if not ids:
