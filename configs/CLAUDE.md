@@ -42,7 +42,17 @@
 
 **为什么不干脆分两套完整配置**：因为"哪些量随模型变"本身就是要被看见的信息。全部复制一遍，Step 5 切换时**没人知道该重标定哪些**——而这正是 R1 对冲 3 想防的事。
 
-**切换 profile 用 `TIANXI_PROFILE`**（默认 `default`）；指向另一份配置目录用 `TIANXI_CONFIG_DIR`（替代集合就靠它）。
+**两个 profile 之外的加载细节**（实现在 [`../src/tianxi_am/common/config.py`](../src/tianxi_am/common/config.py)）：
+
+| 变量 | 作用 |
+| --- | --- |
+| `TIANXI_PROFILE` | 选 `configs/<name>.yaml`（默认 `default`） |
+| `TIANXI_CONFIG_DIR` | 换一份配置**目录**（替代集合的 arm 快照就靠它，见下 `runs/`） |
+| `TIANXI_ENV_FILE` | 换 `.env` 的位置（默认 cwd 下的 `.env`） |
+
+⚠ **`.env` 由 `common/config.py` 读取**（2026-09-24 补）。它**不是**一条独立来源，而是"这台机器的环境"的本地副本——**排在真实环境变量之下**，`export` 过的值压过它。
+（在此之前 `.env` 只是被文档声明成"密钥的家"，而**没有任何东西读它**：`uv run` 不加载 `.env`，Makefile 也不 include 它 ⇒ `make serve` 会在启动时缺密钥。）
+
 
 ---
 

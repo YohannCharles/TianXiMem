@@ -74,6 +74,10 @@ tokens.py    ⬜ 待写——o200k_base 计数（§6.4）
 | **环境变量**（`.env`） | 密钥、端点、**路径**、worker 数 | `AML_EMB_BASE_URL` / `TIANXI_SQLITE_PATH` / `TIANXI_WORKERS` |
 | **`configs/<profile>.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.rrf.k` / `models.embedder` / `storage.qdrant.collection` |
 
+**`.env` 也由本模块读取**——它排在真实环境变量**之下**（`export` 过的值压过它），
+且**只在 `env=None`（生产路径）时读**：测试传 `env` dict 就完全不碰磁盘。
+换位置用 `TIANXI_ENV_FILE`。
+
 > ⚠ **不认识的键一律报错**（env 的那几项写进 yaml 也算）：拼错的键被静默忽略 ⇒ 跑的是默认值，
 > 而**没有任何人会发现**——这正是本项目反复要避免的那一类失败。
 

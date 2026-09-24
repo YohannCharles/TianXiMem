@@ -5,11 +5,11 @@
 ## 要写什么
 
 ```text
-preflight.py    契约预检（**跑 Smoke 之前先本地过一遍**）
-quota.py        Smoke 配额与节流记账
-s1_discriminator.py   **S1 的最小判别实验**
-s2_probe.py     S2 探针（切批口径）
-s3_probe.py     S3 探针（created_at 是否被消费）
+preflight.py     ✅ 已实现——契约预检（**跑 Smoke 之前先本地过一遍**）
+quota.py         ⬜ Smoke 配额与节流记账
+s1_discriminator.py   ⬜ **S1 的最小判别实验**
+s2_probe.py      ⬜ S2 探针（切批口径）
+s3_probe.py      ⬜ S3 探针（created_at 是否被消费）
 ```
 
 ## 为什么单独一层
@@ -35,7 +35,36 @@ s3_probe.py     S3 探针（created_at 是否被消费）
 | **`created_at` 始终存在** | 日粒度或 `""`，**不能缺字段** |
 | **`score` 单调递减** | 且**不是**原始 RRF 分数 |
 
-`Makefile` 里预留了 `make contract-check` 目标（尚未实现）指向这里。
+### ✅ 已实现（2026-09-24，③-e）
+
+```bash
+make contract-check                     # 自启一个隔离实例，跑完关掉
+uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000   # 打已在跑的
+```
+
+**14 条检查**，覆盖 §4 清单里**本地可验证**的全部（Add 回显/4xx · data 形状与四个字段 ·
+`created_at` 日粒度或空串 · content 的四条性质 · score 由名次生成 · 精确计数 · 空结果 ·
+隔离 · `session_id` 不是过滤器 · 幂等重放）。
+
+**三条设计决定**（完整理由在 [`preflight.py`](./preflight.py) 的 docstring）：
+
+1. **自己拉起服务**——一条命令、一个退出码（`0` 全过 / `1` 有检查没过 / `2` 前置不满足）
+2. **不 `import tianxi_am`**：契约层只有打 HTTP 才碰得到；而且**用我们自己的 `render`
+   算出"期望的 content"是循环论证**——所以断言的是 content 的**性质**，不是它等于什么
+3. **不碰开发期的集合**：用临时 `configs/` 把集合换成 `memories_preflight`，跑完 drop
+   （否则预检的记忆会永久留在 `memories_dev` 里——**V9** 的形状）
+
+**"检查真的会失败"有测试钉住**：`tests/test_contract_preflight.py` 塞一个故意违规的假服务，
+逐条确认对应的检查报 FAIL，并用合规的假服务做**阳性对照**。
+⚠ **一个永远不会 FAIL 的门禁不是门禁**。
+
+**⚠ 本地可验证 ≠ 全部。** §4 清单里还有三条**做不到**，必须留给别处：
+
+| 做不到的 | 为什么 | 去哪 |
+| --- | --- | --- |
+| 拼接后 token ≤ 117,760 | 需要 `common/tokens.py`（`o200k_base`），**尚未实现** | Step 2 的双预算截断 |
+| 前缀截断的安全性 | 需要扩窗（Step 2）才有"窗口边界"可言 | Step 2 |
+| "两个相邻项拼在一起能分清边界" | 需要真实的检索结果相邻性 | [`../harness/`](../harness/) |
 
 ---
 

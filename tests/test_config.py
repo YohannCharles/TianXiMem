@@ -25,6 +25,7 @@ from tianxi_am.common.config import (
     ENV_CONFIG_DIR,
     ENV_EMBED_API_KEY,
     ENV_EMBED_BASE_URL,
+    ENV_FILE,
     ENV_PROFILE,
     ENV_SQLITE_PATH,
     ENV_WORKERS,
@@ -504,3 +505,116 @@ def test_run_parallel_in_this_session_is_not_a_child() -> None:
     thread.start()
     thread.join(timeout=30)
     assert results == [None]
+
+
+# ── 9. `.env` 的读取 ───────────────────────────────────────────────────
+#
+# ⚠ 这一组**全部不碰真实环境、也不读仓库根的 `.env`**：`load_config()` 只在 `env=None`
+# （生产路径）时读 `.env`，而这里一律用 `env_file=` 指到 `tmp_path`。
+
+
+def test_dotenv_is_read_on_the_production_path(config_dir: Path, tmp_path: Path) -> None:
+    """**`env=None` 时会读 `.env`**——否则 `make serve` 会在启动时"缺密钥"。
+
+    这条补上一个真缺口：`.env` 一直被文档声明成"密钥的家"，但在 ③-e 之前
+    **没有任何东西读它**（`uv run` 不加载 `.env`，Makefile 也不 include 它）。
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "AML_EMB_BASE_URL=https://gw.example/v1\nAML_EMB_API_KEY=sk-from-dotenv\n",
+        encoding="utf-8",
+    )
+
+    cfg = load_config(config_dir=_REPO / "configs", env_file=env_file)
+
+    assert cfg.embed_base_url == "https://gw.example/v1"
+    assert cfg.embed_api_key == "sk-from-dotenv"
+
+
+def test_dotenv_parses_our_own_file_format(config_dir: Path, tmp_path: Path) -> None:
+    """`.env.example` 里用到的写法都要能解析：空行、注释、`export`、引号、行内注释。"""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "# 一整行注释\n"
+        "\n"
+        "   \n"
+        "AML_EMB_BASE_URL=https://gw/v1\n"
+        "export AML_EMB_API_KEY=sk-exported\n"
+        'TIANXI_SQLITE_PATH="var/quoted.db"\n'
+        "TIANXI_QDRANT_URL=http://localhost:6333   # 这一行是行内注释\n"
+        "TIANXI_EMBED_CACHE_DIR=/tmp/cache#不是注释（# 前没有空白）\n",
+        encoding="utf-8",
+    )
+
+    cfg = load_config(config_dir=_REPO / "configs", env_file=env_file)
+
+    assert cfg.embed_base_url == "https://gw/v1"
+    assert cfg.embed_api_key == "sk-exported"
+    assert cfg.storage.sqlite.path == "var/quoted.db"  # 引号被剥掉
+    assert cfg.storage.qdrant.url == "http://localhost:6333"  # 行内注释被剥掉
+    assert cfg.cache.embed.dir == "/tmp/cache#不是注释（# 前没有空白）"
+
+
+def test_real_env_vars_beat_dotenv(config_dir: Path, tmp_path: Path, monkeypatch) -> None:
+    """**真实环境变量压过 `.env`**——`.env` 只是"这台机器的环境"的本地副本。
+
+    顺序反了的话，`export AML_EMB_API_KEY=...` 会被 `.env` 里的旧值悄悄盖掉。
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "AML_EMB_BASE_URL=https://from-dotenv/v1\nAML_EMB_API_KEY=sk-dotenv\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AML_EMB_API_KEY", "sk-from-shell")
+
+    cfg = load_config(config_dir=_REPO / "configs", env_file=env_file)
+
+    assert cfg.embed_api_key == "sk-from-shell"  # shell 说了算
+    assert cfg.embed_base_url == "https://from-dotenv/v1"  # 只有 .env 有的那个照旧生效
+
+
+def test_missing_dotenv_is_fine_but_missing_keys_is_not(config_dir: Path, tmp_path: Path) -> None:
+    """**没有 `.env` 不是错误**（CI / 容器里直接用真实环境变量）——但缺密钥仍然要响。"""
+    env = {**_MIN_ENV}
+    # 只有 base_url、没有 key ⇒ 仍然要响亮失败
+    with pytest.raises(ConfigError, match="embed.api_key"):
+        load_config(
+            {"AML_EMB_BASE_URL": "https://gw/v1"},
+            config_dir=config_dir,
+            env_file=tmp_path / "no.env",
+        )
+    assert env[ENV_EMBED_API_KEY]  # _MIN_ENV 本身是完整的
+
+
+def test_env_dict_never_reads_dotenv(config_dir: Path, tmp_path: Path, monkeypatch) -> None:
+    """**传了 `env` dict 就绝不读磁盘上的 `.env`。**
+
+    否则"测试不依赖真实环境变量"这条纪律就破了——机器上的一份 `.env`
+    会悄悄改变测试结果。
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "AML_EMB_BASE_URL=https://should-not-be-read/v1\nAML_EMB_API_KEY=sk-should-not\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="embed.base_url"):
+        load_config({}, config_dir=_REPO / "configs")  # 传了 env（空 dict）⇒ 不读 .env
+
+
+def test_env_file_location_is_overridable(config_dir: Path, tmp_path: Path, monkeypatch) -> None:
+    """`TIANXI_ENV_FILE` 能换 `.env` 的位置（预检靠它做到不依赖机器状态）。
+
+    ⚠ 这条**必须走生产路径**（`env=None`）：传 `env` dict 时根本不读磁盘，
+    在 dict 里放 `TIANXI_ENV_FILE` 是没有意义的（它管的是"去哪读环境"）。
+    """
+    other = tmp_path / "custom.env"
+    other.write_text("AML_EMB_BASE_URL=https://custom/v1\nAML_EMB_API_KEY=k\n", encoding="utf-8")
+
+    monkeypatch.setenv(ENV_FILE, str(other))
+    monkeypatch.delenv("AML_EMB_BASE_URL", raising=False)
+    monkeypatch.delenv("AML_EMB_API_KEY", raising=False)
+
+    cfg = load_config(config_dir=_REPO / "configs")
+
+    assert cfg.embed_base_url == "https://custom/v1"

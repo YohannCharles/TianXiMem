@@ -99,7 +99,10 @@
 - [x] **`common/config.py`：配置的唯一入口**（③-d，2026-09-24）——`service/` 等**五个目录都不再读 `os.environ`**（静态测试钉住）；`configs/default.yaml` + `local.yaml` 已建；`rrf_k != 61` 与 `workers != 1` 都**拒绝启动**
 - [x] `Search` 路径：混合检索，**精确 ≤ `top_k`**（§2.2）
 - [ ] Weighted RRF：**`k=61` 显式设**、`prefetch` 每路带 `using`、根级 `limit` 取请求 `top_k`（§7.3）
-- [ ] **主路径必须能通过 Smoke 契约校验**（200 响应、`data` 数组、不超 `top_k`）——**它是所有对照的参照点**（§13）
+- [x] **主路径必须能通过 Smoke 契约校验**（200 响应、`data` 数组、不超 `top_k`）——**它是所有对照的参照点**（§13）
+      **✅ 本地自动化已就位（③-e，2026-09-24）**：`make contract-check` → [`../eval/smoke/preflight.py`](../eval/smoke/preflight.py)，
+      **14 条检查全过**（打真 HTTP、真 embedding、真 Qdrant；自启隔离实例，跑完 drop 集合）。
+      ⚠ 但**"本地过"≠"Smoke 过"**：§4 清单里还有三条本地做不到（token 预算要 `tokens.py`、窗口边界要 Step 2 的扩窗、相邻项拼接要 harness）。
 - [ ] **跑 T2 实验**（§13，半天工作量）：133 道 multi-session 题（12 道拒答题单列）人工分三类
 - [ ] 三个 `pending` 计数器埋点（§6.5）——**发射已在 `pairing/instrument.py`**，聚合在 `observability/`（未接）
 

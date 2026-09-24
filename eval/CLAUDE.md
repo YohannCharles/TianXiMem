@@ -14,7 +14,7 @@
 | [`harness/`](./harness/) | **怎么跑一轮**：模拟 AML 切批喂 Add、调 Search、接裁判 |
 | [`experiments/`](./experiments/) | **怎么跑一个对照**：A3 / A4 / T1 / T2 的 arm 定义 + T2 的标注产物 |
 | [`baselines/`](./baselines/) | A0 recency sanity · B1 ReFind（**Vendor，禁止被 `src/` import**） |
-| [`smoke/`](./smoke/) | **只打真 AML 的那一层**：配额/节流、契约预检、S1/S2/S3 判别实验 |
+| [`smoke/`](./smoke/) | **只打真 AML 的那一层**：配额/节流、契约预检（✅ `preflight.py`）、S1/S2/S3 判别实验 |
 | [`reports/`](./reports/) | **数字的唯一落点**：结果台账 + 每次 run 的归档 |
 
 > **三处都叫"实验"是刻意的，但边界不能糊**（否则必然漂移）：

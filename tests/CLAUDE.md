@@ -8,11 +8,13 @@
 test_pairing.py         §6.2 配对判据（三种真实情况）
 test_continuation.py    §6.5 续接三步 + pending 判定
 test_idempotency.py     §6.5 / §15 批次级守卫
-test_contract.py        §2.1 / §2.2 契约形状与计数
+test_contract.py        §2.1 / §2.2 契约形状与计数（含真 HTTP 往返）
+test_contract_preflight.py  `eval/smoke/preflight.py` 的静态一致性与**检查是否真会失败**
 test_isolation.py       §2.2 user_id 隔离
 test_render.py          §7.2 / §11.3 同一份渲染
 test_switch_purity.py   §13 开关只影响它命名的那一件事
-test_store.py           §6.1 / §6.3 DDL、连续性与索引
+test_store.py           §6.1 / §6.3 DDL、连续性与索引、**连接生命周期与并发**
+test_config.py          §15 配置唯一入口（**AST 静态断言** + 校验 + `.env` 读取）
 ```
 
 ---
@@ -163,3 +165,6 @@ make test      # uv run pytest
 ```
 
 **契约相关的断言也要能被 `make contract-check` 在**服务**上跑一遍**——单元测试验证函数，[`../eval/smoke/preflight.py`](../eval/smoke/) 验证**真的 HTTP 响应**。两者都要（§13 要求主路径能通过 Smoke 契约校验）。
+
+⚠ **"门禁必须能失败"本身也要有测试**：[`test_contract_preflight.py`](./test_contract_preflight.py) 塞一个**故意违规的假服务**，逐条确认对应的检查报 FAIL，再用合规的假服务做**阳性对照**。
+**一个永远不会 FAIL 的检查等于没有检查**——而"没有检查"与"检查通过"在屏幕上是同一个样子。

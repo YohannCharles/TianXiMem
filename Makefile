@@ -1,8 +1,13 @@
 # TianXi_AM — 常用命令入口
 #
-# 已经能真跑：`sync` / `lock` / `fmt` / `lint` / `test` / `data-check` / `fetch-data`。
+# 已经能真跑：`sync` / `lock` / `fmt` / `lint` / `test` / `serve` / `contract-check` /
+# `data-check` / `fetch-data`。
 # 其余目标仍指向尚未存在的模块，先以 echo 占位——**别让它们静默成功**，
 # 否则会误以为某一步已经实现。Step 0 / Step 1 起逐个替换为真命令。
+#
+# ⚠ **本机没有装 `make`**（2026-09-24 核实：`which make` 与 `where make` 都找不到）。
+#   Makefile 仍是命令的唯一声明处，但今天要手敲每个目标下面那一行命令。
+#   装一个之后（`choco install make` 或 Git Bash 的 make 包）这些目标即可直接用。
 
 .PHONY: help sync check fmt lint test qdrant-up qdrant-down serve contract-check smoke t2 clean \
         fetch-data data-check
@@ -63,9 +68,13 @@ serve:  ## 起 Add/Search 服务（FastAPI + uvicorn，单进程）
 test:  ## 跑单元测试
 	uv run pytest
 
-contract-check:  ## §2 契约合规自查（top_k 精确计数 / 200 形状 / 字段齐全）
-	@echo "TODO(Step 1)"
-	@false
+contract-check:  ## §2 契约合规自查（打真 HTTP：本地自启服务，**不消耗 Smoke 配额**）
+	uv run python eval/smoke/preflight.py
+# 打真 HTTP、看真响应——契约层只有走 HTTP 才碰得到（eval/CLAUDE.md 的边界）。
+# 缺省自己起一个 uvicorn（临时库 + 临时缓存 + 独立的 memories_preflight 集合），跑完关掉并 drop。
+# 退出码：0 全过 · 1 有检查没过 · 2 前置条件不满足（Qdrant 或 embedding 网关不可达）。
+# ⚠ 需要 .env 里的 AML_EMB_BASE_URL / AML_EMB_API_KEY（由 common/config.py 读）与可达的 Qdrant。
+# 打已经在跑的服务：uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
 
 t2:  ## §13 的 T2 实验：跨 session 失败归因（半天工作量）
 	@echo "TODO(Step 1): 133 道 multi-session 题（含 12 道拒答题单列）"

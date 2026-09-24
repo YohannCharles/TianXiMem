@@ -26,9 +26,18 @@
 内置默认值（本文件的 dataclass 默认值）
   ← configs/default.yaml                  （缺失 ⇒ 报错，不静默退回内置默认值）
   ← configs/<profile>.yaml                （profile 来自 TIANXI_PROFILE，默认 default）
-  ← 环境变量                              （**只覆盖它拥有的那几项**）
+  ← .env                                  （**最低优先级的"环境"**，见下）
+  ← 真实的环境变量                         （**压过 .env**：export 过的值说了算）
   → 校验                                  （不合法的值在这里响亮失败）
 ```
+
+**`.env` 由本模块读取**（2026-09-24 补）。它**不是**一条独立来源，而是"这台机器的环境"的
+本地副本——所以它排在真实环境变量**之下**，且在 CI / `export` 过的场景下自动让位。
+**这样 `.env` 才真的生效**：在此之前它只是被文档声明成"密钥的家"，而没有任何东西读它
+（`uv run` 不加载 `.env`，Makefile 也不 include 它）⇒ `make serve` 会在启动时缺密钥。
+
+> ⚠ **只有 `env=None`（生产路径）才读 `.env`。** 测试传一个 `env` dict 时**绝不碰磁盘**——
+> 否则"测试不依赖真实环境变量"这条纪律就破了。换 `.env` 的位置用 `TIANXI_ENV_FILE`。
 
 **选了一个不存在的 profile 同样报错**（不静默忽略）——静默回退会让"我明明选了 submit"
 变成一个查不出来的问题。
@@ -53,6 +62,7 @@ __all__ = [
     "ENV_EMBED_API_KEY",
     "ENV_EMBED_BASE_URL",
     "ENV_EMBED_CACHE_DIR",
+    "ENV_FILE",
     "ENV_PROFILE",
     "ENV_QDRANT_URL",
     "ENV_SQLITE_PATH",
@@ -80,9 +90,12 @@ ENV_EMBED_BASE_URL: Final[str] = "AML_EMB_BASE_URL"
 ENV_EMBED_API_KEY: Final[str] = "AML_EMB_API_KEY"
 ENV_EMBED_CACHE_DIR: Final[str] = "TIANXI_EMBED_CACHE_DIR"
 ENV_WORKERS: Final[str] = "TIANXI_WORKERS"
+#: `.env` 文件的位置（默认 cwd 下的 `.env`）。⚠ 它**不是**一个配置项，是"去哪读环境"。
+ENV_FILE: Final[str] = "TIANXI_ENV_FILE"
 
 DEFAULT_PROFILE: Final[str] = "default"
 DEFAULT_CONFIG_DIR: Final[str] = "configs"
+DEFAULT_ENV_FILE: Final[str] = ".env"
 
 #: **正确性常量，不是可调项**（D5）：Qdrant 默认 `k=2`、文献是 60，而 Qdrant 的秩 0-based，
 #: 只有 61 才等价于文献的 60。**填错不报错**——两种写法的名次都"看起来正常"，
@@ -302,6 +315,49 @@ def _deep_merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str
     return merged
 
 
+# ── `.env` 的读取 ──────────────────────────────────────────────────────
+
+
+def _parse_env_line(raw: str) -> tuple[str, str] | None:
+    """把一行 `.env` 解析成 `(key, value)`；空行、注释行与非 `KEY=value` 行返回 `None`。
+
+    支持我们**自己的** `.env.example` 用到的全部写法，不多支持：
+    `KEY=value` · `export KEY=value` · 行内 `# 注释` · 引号包起来的值。
+
+    ⚠ **`#` 前必须有空白才算注释**——否则 `KEY=a#b` 会被截成 `a`（这是 dotenv 的通例）。
+    ⚠ **坏的行使值缺失 ⇒ 由 `validate()` 响亮失败**（"AML_EMB_API_KEY 没填"），
+    所以这里**跳过**而不是报错：`.env` 是给人写的，一个多出来的空行不该让服务起不来。
+    """
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        return None
+    if line.startswith("export "):
+        line = line[len("export ") :].lstrip()
+    key, sep, value = line.partition("=")
+    if not sep or not key.strip():
+        return None
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return key.strip(), value[1:-1]  # 引号包起来 ⇒ 原样，不剥注释
+    for index, char in enumerate(value):
+        if char == "#" and (index == 0 or value[index - 1].isspace()):
+            value = value[:index].strip()
+            break
+    return key.strip(), value
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    """读一个 `.env`。**文件不存在 ⇒ 空 dict**（生产上可能直接用真实环境变量）。"""
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        parsed = _parse_env_line(raw)
+        if parsed is not None:
+            values[parsed[0]] = parsed[1]
+    return values
+
+
 # ── 各段的构造（显式写出来，错误信息才能指名道姓）──────────────────────
 
 
@@ -461,13 +517,23 @@ def load_config(
     /,
     *,
     config_dir: str | Path | None = None,
+    env_file: str | Path | None = None,
 ) -> AppConfig:
-    """按"默认值 ← default.yaml ← <profile>.yaml ← 环境变量"合成并校验。
+    """按"默认值 ← default.yaml ← <profile>.yaml ← .env ← 真实环境变量"合成并校验。
 
-    `env` 是为了**可测试**：传一个 dict 就完全不碰真实环境（`tests/test_config.py` 用它）。
-    生产入口 `create_app_from_env()` 不传，走 `os.environ`。
+    `env` 是为了**可测试**：传一个 dict 就完全不碰真实环境、**也不读磁盘上的 `.env`**
+    （`tests/test_config.py` 用它）。生产入口 `create_app_from_env()` 不传，于是会读 `.env`。
+
+    `env_file` 指定 `.env` 的位置；不传则由 `TIANXI_ENV_FILE` 决定，再退回 cwd 下的 `.env`。
     """
-    src: Mapping[str, str] = os.environ if env is None else env
+    if env is None:
+        # .env 是"这台机器的环境"的本地副本 ⇒ 排在真实环境变量**之下**，自动让位
+        file_path = Path(
+            env_file if env_file is not None else (os.environ.get(ENV_FILE) or DEFAULT_ENV_FILE)
+        )
+        src: Mapping[str, str] = {**_read_env_file(file_path), **os.environ}
+    else:
+        src = env
 
     profile = (src.get(ENV_PROFILE) or DEFAULT_PROFILE).strip() or DEFAULT_PROFILE
     where = Path(
