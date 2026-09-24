@@ -299,6 +299,96 @@
 
 ---
 
+## D17 · `SqliteStore` 的连接模型：**短生命周期连接** + 交给 SQLite 自己串行化（2026-09-24）
+
+**决策**：`SqliteStore` **不长期持有** `sqlite3.Connection`。连接的生命周期恰好是**一次逻辑操作**：
+
+```text
+写： connect → BEGIN IMMEDIATE → 读改写 → COMMIT / ROLLBACK → close
+读： connect → SELECT                                        → close
+```
+
+**不用 thread-local 长连接，也不用单一共享连接。** 本类只保存 `db_path` 与存储逻辑。
+
+**它修的是什么（③-c 发现的硬阻塞）**：`SqliteStore` 原持有**单个** `sqlite3.Connection`
+（在启动线程里建），而 FastAPI 的 `def` 路由跑在**线程池**里 ⇒ **每个请求**都抛
+`sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same
+thread.`。`TestClient` 也在另一个线程里跑 app，所以**所有 HTTP 级用例**同样跑不了。
+⇒ **这不是测试问题：服务层当时根本跑不起来。**
+
+**三条被排除的路**：
+
+| 候选 | 为什么不用 |
+| --- | --- |
+| `check_same_thread=False` **单独用** | 一个连接上并发 `BEGIN IMMEDIATE` 会抛 "cannot start a transaction within a transaction"；且会让**不同 session 互相阻塞**（那正是 `SessionLocks` 要避免的） |
+| **thread-local 长连接** | 能修好线程问题，但把"连接与线程的关系"变成一份**需要被记住**的长期状态：线程池会回收/新建线程，`close()` 的时机就没有主人了 |
+| **服务层包一层 per-thread provider** | 要把 `AddPipeline` / `SearchPipeline` / `rank.package` 的依赖从 `store` 改成 provider，**每个上层都要懂这条约束** |
+
+**短生命周期为什么更好**：连接**永远在同一次调用的同一个线程里建与关** ⇒ "连接与线程"
+这条约束**不需要泄漏到任何上层**，也不需要谁记得清理。代价是每次操作多一次 `connect`
+（约几十微秒）——相对一次远程 embedding（~百毫秒）可忽略。
+
+**PRAGMA 分两层（这是本条最容易写错的地方）**：
+
+| 层 | 项 | 落点 |
+| --- | --- | --- |
+| **数据库级**（写进库文件、对所有后续连接持续生效） | `journal_mode = WAL` | **只在 `open()` 里执行一次**——重复执行只是白跑一次 IO |
+| **每连接级**（新连接**不继承**） | `busy_timeout` / `synchronous` / `foreign_keys` / `row_factory` | **每个新连接都要设**（`_connect()`） |
+
+> ⚠ **不能"启动时配一次、然后假设所有新连接自动继承"**——`foreign_keys` 尤其如此：
+> SQLite 的默认值是 **OFF**，而它是每连接生效的。
+> （当前 schema 里没有外键 ⇒ 它现在是**空转**，但留着它，将来加 FK 时不会静默失效。）
+
+**并发分工：两层锁，管的是两件不同的事**（不叠加、也不互相替代）
+
+| | `SessionLocks`（`service/`） | SQLite writer 串行化（`store/` + SQLite 自己） |
+| --- | --- | --- |
+| 键 | `(user_id, session_id)` | 整个库文件 |
+| 保证 | 同一 session 的 Add **业务顺序**（§15） | 同时只有一个写事务；输的一方**等** `busy_timeout`，不抛 `SQLITE_BUSY` |
+| 范围 | **进程内** ⇒ 必须 `--workers 1` | 跨连接、跨线程（同一进程内） |
+| 粒度后果 | 不同 session **可以并发** | 并发进入的多个 session 在 SQLite 处**排队** |
+
+**不新增应用层写锁**：writer 串行化由 SQLite 负责。只有在压力测试**真的**出现
+`SQLITE_BUSY` 或高尾延迟时，才考虑加应用层写锁**作为优化**——**不作为正确性基础**。
+
+**`BEGIN IMMEDIATE` 是这条结论的前提（已实测，2026-09-24）**：把 `transaction()` 里那一行
+换成默认的 `BEGIN`，`tests/test_store.py` 的两条并发压力用例**双双失败**，报
+`OperationalError('database is locked')` ×5。两个**独立**原因：
+
+1. `pair_idx` 的分配是**读-改-写**，deferred 事务在第一次写时才拿写锁 ⇒ 两个事务读到同一个 `MAX(pair_idx)`
+2. **升级写锁时 `busy_timeout` 不生效**：已持读锁的事务要升级成写锁、而对方正持写锁时，
+   SQLite **立刻**返回 `SQLITE_BUSY`——它宁可立刻报错也不冒死锁的险
+
+> **第 2 条比第 1 条覆盖面大得多**：实测里**跨 session 的那条用例也失败**——即使两个事务
+> 写的是**不同的** `(user_id, session_id)`（UNIQUE 键毫不相干）也一样撞。
+> ⇒ **"排队而不是互锁"这件事本身就是 `IMMEDIATE` 换来的**，不只是防位置撞车。
+
+**连带修掉的同类问题**：`embed/base.py` 的 `DiskVectorCache` 有**同一个 bug、同一个形状**
+（构造时建连接、之后长期复用），只是被 `SqliteStore` 那一份挡住了、测试没抓到
+（并发用例当时在 `SqliteStore` 上就抛了）。**两处必须同一套模型**，否则修好一处、
+另一处照样炸。它的 `journal_mode=WAL` 也只在构造时落一次。
+
+**回归覆盖**（原先是 6 个 `xfail(strict=True)`，**已全部摘掉**）：
+
+| 用例 | 覆盖 |
+| --- | --- |
+| `test_contract.py` 三个 HTTP 往返 | 真的 `TestClient` 往返：`/search` 字段集合、`/add` 回显、非法请求 422 |
+| `test_service_add.py::test_same_session_is_serialized` | 同 session 串行（peak 并发 = 1）且 `pair_idx` 无重复无空洞 |
+| `test_service_add.py::test_different_sessions_do_not_block_each_other` | `Barrier(2)` 证明不同 session **能同时在** `index_pairs` 里 |
+| `test_service_add.py::test_different_users_do_not_block_each_other` | 不同 user 不互相阻塞 |
+| `test_service_add.py::test_different_sessions_write_to_sqlite_concurrently` | **走完整 Service 路径**的并发真写：无丢批、每 session `pair_idx` 连续、无跨 session 污染 |
+| `test_store.py::test_concurrent_write_transactions_across_sessions` | **压力**：6 线程同时 `BEGIN IMMEDIATE`，持写锁 10ms 制造必然排队 ⇒ 无 `SQLITE_BUSY`、无嵌套错误、无丢失、无污染 |
+| `test_store.py::test_same_session_concurrent_writers_never_take_the_same_pair_idx` | **压力**：6 线程写**同一个** session ⇒ `pair_idx` 连续无重复。**这条才是 `BEGIN IMMEDIATE` 的必要性用例**（上面那条跨 session 的线程各写各的键，但它实测也会失败——见上文第 2 条原因） |
+| `test_store.py::test_store_is_usable_from_another_thread` | 另一个线程里读+写都正常（旧模型的**直接**回归用例） |
+| `test_store.py::test_each_operation_gets_its_own_connection` | 两次 `read()` 拿到的不是同一个连接对象 |
+| `test_store.py::test_transaction_rolls_back_and_closes_on_exception` | 异常路径：**先回滚**（半批不落库）**再关连接**（不泄漏） |
+
+**一处纪律**：同一事务里调用的每个 helper **必须复用外层传进来的那个 `conn`**——
+helper 自己 `connect()` 会落到另一个事务里（拿不到写锁、也看不到未提交的中间态），
+helper 自己 `commit()` 则让"半批"落库。**两种情况都不报错。**
+
+---
+
 ## 待决事项（尚无决策）
 
 | # | 事项 | 何时必须定 |
@@ -306,3 +396,7 @@
 | 3 | **渲染模板定稿** | Step 3（E6）——**改模板 = 重建索引** |
 | 4 | **S1 的判别实验设计** | Smoke 第一次跑通后**立刻**（§17.1） |
 | 5 | **B1 包装 ReFind 的工作量估算** | **真要跑 B1 之前**（§13）——目前**未计入任何 Step** |
+
+> **事项 8（`SqliteStore` 的连接与线程模型）已决，2026-09-24 结案 ⇒ 升格为 [D17](#d17--sqlitestore-的连接模型短生命周期连接--交给-sqlite-自己串行化2026-09-24)。**
+> 它当时登记的现状是"6 个 `xfail(strict=True)` 记在 `tests/test_service_add.py` 与
+> `tests/test_contract.py`"——**那 6 个标记已全部摘掉**，它们是 D17 的回归用例。

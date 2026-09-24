@@ -147,8 +147,10 @@ def package(
     if not ids:
         return PackagedResponse(items=(), dropped_missing=0)
 
-    # 只读路径：直接用连接，**不要**用 transaction()——那会拿写锁（BEGIN IMMEDIATE）
-    pairs = store.fetch_pairs_by_ids(store.connection, ids)
+    # 只读路径：用 `read()` 开一个**短生命周期只读连接**，用完即关。
+    # **不要**用 transaction()——那会拿写锁（BEGIN IMMEDIATE），让一次只读去和写事务抢。
+    with store.read() as conn:
+        pairs = store.fetch_pairs_by_ids(conn, ids)
     by_id: dict[str, QaPair] = {p.id: p for p in pairs}
 
     items: list[ResponseItem] = []

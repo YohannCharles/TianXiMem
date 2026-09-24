@@ -100,6 +100,28 @@ applied_batches(
 
 ---
 
+## 连接模型：**一次逻辑操作一个连接**（D17）
+
+`SqliteStore` **不长期持有连接**。写是 `connect → BEGIN IMMEDIATE → 读改写 → COMMIT/ROLLBACK → close`，读是 `connect → SELECT → close`；本类只保存 `db_path` 与存储逻辑。
+
+**三条不许越过的线**：
+
+| # | 线 | 为什么 |
+| --- | --- | --- |
+| 1 | **同一事务里的每个 helper 都必须复用外层传进来的 `conn`** | helper 自己 `connect()` 会落到**另一个事务**里：拿不到本事务的写锁、也看不到它未提交的中间态 |
+| 2 | helper **绝不自作 `commit` / `rollback`** | 那会让"半批"落库——§6.5 的三步必须同事务 |
+| 3 | `journal_mode = WAL` **只在 `open()` 落一次**；`busy_timeout` / `synchronous` / `foreign_keys` / `row_factory` **每个新连接都要设** | 前者是**数据库级**（写进库文件、对后续所有连接生效）；后三者是**每连接级**，新连接**不继承**——`foreign_keys` 尤其（SQLite 默认 **OFF**） |
+
+**并发由 SQLite 自己串行化**（WAL + `busy_timeout`）：抢不到写锁的一方**等待**，不抛 `SQLITE_BUSY`。**不新增应用层写锁**——真出现高尾延迟时它是**优化**，不是正确性基础。
+
+> **但这一切的前提是 `BEGIN IMMEDIATE`**（已实测，2026-09-24）：换成默认的 `BEGIN`，两条并发压力用例双双报 `database is locked`——**连"各写各的 session"那条也失败**，因为**升级写锁时 `busy_timeout` 不生效**（SQLite 宁可立刻报错也不冒死锁的险）。**不要把它当成"只是个位置分配优化"。**
+
+> **按 session 的业务顺序不在这里**，属 `service/` 的 `SessionLocks`（§15）。两者管的是两件不同的事——职责对照表见 D17，**不要在这里重述**。
+
+**为什么是短生命周期，而不是 thread-local 长连接 / 单一共享连接**：见 [D17](../../../docs/decisions.md)。一句话是"**连接与线程的约束不该泄漏到任何上层**"，而 FastAPI 的 `def` 路由**就跑在线程池里**。
+
+---
+
 ## Qdrant 配置要点（§6.3）—— **本表是唯一声明处**
 
 | 项 | 值 | 理由 |

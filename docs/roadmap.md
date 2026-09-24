@@ -36,6 +36,16 @@
 
 ### 环境阻塞项（不解决则本步无法完成）
 
+- [x] **`SqliteStore` 单连接 × 多线程服务 —— 已修**（2026-09-24，**结案**）
+      `SqliteStore` 曾持有**单个** `sqlite3.Connection`（在启动线程里建），而 FastAPI 的
+      `def` 路由跑在**线程池**里 ⇒ **每个请求**都抛
+      `sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread.`
+      （`TestClient` 也在另一个线程里跑 app，所以 HTTP 级用例同样跑不了。）
+      ⇒ **修法是短生命周期连接**（连接限定在"一次逻辑操作 / 一个事务"内，用完即关），
+      不用 thread-local、也不用单一共享连接。**决策与三条被排除的路见 [D17](./decisions.md)**
+      （原待决事项 8 已结案）。原先记着的 6 个 `xfail(strict=True)` **已全部摘掉**，
+      它们现在是回归用例：3 个 HTTP 往返 + 3 个并发用例，另加
+      `test_store.py` 的 3 个连接生命周期用例与 2 个**真实并发写**压力用例。
 - [ ] **`api_config.py` —— 7 个 pipeline 今天都 import 失败**（**处置已定，2026-09-24 更新**）
       它们做 `sys.path.insert(0, Path(__file__).resolve().parents[2])` 再 `from api_config import (...)`，而 `parents[2]` 解析到**仓库外一层**。
       它要导出七个名字：`ANSWER_API_BASE` / `ANSWER_API_KEY` / `ANSWER_MODEL` / `JUDGE_API_BASE` / `JUDGE_API_KEY` / `JUDGE_MODEL` / `JUDGE_VERSION`（最后一个是**死引用**，全部 import 但无一使用）。
@@ -44,6 +54,17 @@
       细则与理由见 [`../eval/harness/CLAUDE.md`](../eval/harness/CLAUDE.md) 与 [`.env.example`](../.env.example) 末尾。
 - [x] **`docker` 已就位**（2026-09-23 晚）——Docker Desktop 29.8.0 / `desktop-linux` context / WSL2 后端。`qdrant/qdrant:v1.17.0` 的 tag **已在 registry 核实存在**（§7.3 的版本门槛成立）。
       **拓扑已定**（D12）：harness 与检索服务 + Qdrant 都在**本机**、三段模型经自建网关远程访问、**reranker 端点待部署**。
+- [ ] ⚠ **本机 `tmp_path` 故障**（2026-09-24）——`C:\Users\r0304\AppData\Local\Temp\pytest-of-r0304`
+      的 ACL 已损坏：`ls` / `icacls` / `Remove-Item` **全部拒绝访问**，于是**所有用 `tmp_path` 的用例**
+      在 fixture setup 阶段就报 `PermissionError`（`uv run pytest` 表现为 **128 passed, 111 errors**）。
+      **与代码无关，是机器状态。** 绕法（已验证可用，**不写进 `Makefile`**——那是机器专属路径）：
+
+      ```bash
+      mkdir -p "$TEMP/tianxi-tmp"
+      PYTEST_DEBUG_TEMPROOT="$TEMP/tianxi-tmp" uv run pytest
+      ```
+
+      根因修复要管理员权限（`takeown` + `icacls /reset`），或等系统重启后清理 `%TEMP%`。
 
 ### 数据侧
 

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from tests.conftest import rd
+
 from tianxi_am.pairing.continuation import AddBatch, apply_batch
 from tianxi_am.pairing.instrument import InMemoryPendingInstrument
 from tianxi_am.pairing.pairing import BatchLimits, Message
@@ -35,7 +37,7 @@ def _apply(
 
 
 def _all(store: SqliteStore, user_id: str = "u1"):
-    return sorted(store.assert_isolation(store.connection, user_id), key=lambda p: p.pair_idx)
+    return sorted(rd(store, store.assert_isolation, user_id), key=lambda p: p.pair_idx)
 
 
 # ── 跨批续接：3a 追加 + 3b 关闭 ────────────────────────────────────────
@@ -95,12 +97,12 @@ def test_3b_leaves_no_pending_behind(store: SqliteStore) -> None:
     """
     limits = BatchLimits(max_messages=2, max_words=1000)
     _apply(store, "A", (_msg("user", "Q1"), _msg("assistant", "A1")), limits=limits)
-    assert store.pending_pair(store.connection, "u1", "s1") is not None
+    assert rd(store, store.pending_pair, "u1", "s1") is not None
 
     # B 批直接以 user 开头 ⇒ 只有 3b 这一条路能关掉它
     _apply(store, "B", (_msg("user", "Q2"),), limits=limits)
 
-    assert store.pending_pair(store.connection, "u1", "s1") is None
+    assert rd(store, store.pending_pair, "u1", "s1") is None
     assert _all(store)[0].status == STATUS_COMPLETE
 
 
@@ -185,7 +187,7 @@ def test_pair_idx_continues_and_never_resets(store: SqliteStore) -> None:
 
     idxs = [p.pair_idx for p in _all(store)]
     assert idxs == list(range(len(idxs)))  # 连续、从 0 起、无空洞
-    assert store.next_pair_idx(store.connection, "u1", "s1") == len(idxs)
+    assert rd(store, store.next_pair_idx, "u1", "s1") == len(idxs)
 
 
 def test_mid_batch_pairs_are_complete(store: SqliteStore) -> None:
@@ -207,8 +209,8 @@ def test_sessions_are_independent(store: SqliteStore) -> None:
     _apply(store, "A", (_msg("user", "Q"),), limits=limits, session_id="s1")
     _apply(store, "B", (_msg("user", "Q"),), limits=limits, session_id="s2")
 
-    assert store.next_pair_idx(store.connection, "u1", "s1") == 1
-    assert store.next_pair_idx(store.connection, "u1", "s2") == 1
+    assert rd(store, store.next_pair_idx, "u1", "s1") == 1
+    assert rd(store, store.next_pair_idx, "u1", "s2") == 1
 
 
 # ── 三个计数器 ─────────────────────────────────────────────────────────

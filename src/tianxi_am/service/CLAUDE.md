@@ -5,12 +5,19 @@
 ## 要写什么
 
 ```text
-app.py        FastAPI 实例、lifespan（起连接池 / 加载模型）、--workers 1
-routes.py     POST /add、POST /search
-schemas.py    请求与响应模型（pydantic）
+app.py        FastAPI 实例 + 对象图装配（`--factory` 入口）、lifespan
+routes.py     POST /add、POST /search（薄路由，只做形状映射）
+schemas.py    请求与响应模型（pydantic）= §2.1 的字面翻译
+pipeline.py   Add / Search 的**编排**（"按什么顺序调"）
 locks.py      按 (user_id, session_id) 的串行化
 errors.py     异常 → 保持"可重试"的边界处理
+settings.py   路径与密钥（**过渡**：③-d 迁到 common/config.py）
 ```
+
+> **为什么有 `pipeline.py`**：本层"不做检索、不做配对、不碰存储"指的是**不重新实现**
+> 那些逻辑（全部往下调用）。而 Search 的链横跨 `retrieve/` 与 `rank/`、Add 的链横跨
+> `pairing/`、`store/`、`embed/`——**没有任何单个下层模块能拥有整条链**，
+> 所以"顺序"必须有人拥有，就在这里。路由仍然是薄的（`routes.py` 只有形状映射）。
 
 ## 这一层只做三件事
 
@@ -44,6 +51,8 @@ errors.py     异常 → 保持"可重试"的边界处理
 第 4 条用的是**进程内锁**。多 worker 会**静默失效**——每个 worker 各有各的锁，两个批次照旧并发。
 
 > **SQLite 的写事务不足以单独解决它**（§15）：两次事务读到的 `MAX(pair_idx)` **会相同**。
+
+> ⚠ **别把 `SessionLocks` 和 SQLite 的 writer 串行化当成一件事**（D17）：前者管同一 session 的**业务顺序**（键 `(user_id, session_id)`、**进程内**），后者管"同时只有一个写事务"（键是整个库文件）。⇒ **不同 session 可以并发进入本层**，它们在 SQLite 处排队。**不要再叠一层应用层写库锁**——职责对照表见 [D17](../../../docs/decisions.md)。
 
 ### FastAPI 是 async，但这一层的下游是阻塞的
 

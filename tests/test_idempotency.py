@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from tests.conftest import rd
+
 from tianxi_am.pairing.continuation import AddBatch, apply_batch
 from tianxi_am.pairing.pairing import BatchLimits, Message
 from tianxi_am.store.sqlite_store import SqliteStore, make_pair_id
@@ -34,7 +36,7 @@ def _apply(store: SqliteStore, batch: AddBatch):
 
 
 def _pairs(store: SqliteStore):
-    return sorted(store.assert_isolation(store.connection, "u1"), key=lambda p: p.pair_idx)
+    return sorted(rd(store, store.assert_isolation, "u1"), key=lambda p: p.pair_idx)
 
 
 # ── 基本幂等：同一 request_id 至多应用一次 ──────────────────────────────
@@ -61,7 +63,7 @@ def test_different_request_id_with_same_payload_is_a_different_batch(
     _apply(store, _batch("B"))
 
     assert [p.pair_idx for p in _pairs(store)] == [0, 1]
-    assert store.pending_pair(store.connection, "u1", "s1") is not None
+    assert rd(store, store.pending_pair, "u1", "s1") is not None
 
 
 # ── 核心用例：事务已提交、响应未发出 ⇒ AML 重试 ─────────────────────────
@@ -85,16 +87,13 @@ def test_retry_after_lost_response_does_not_reallocate_positions(
     before = [(p.id, p.pair_idx, p.answer) for p in _pairs(store)]
     # 此刻事务已提交（apply_batch 内部已 COMMIT），但"响应还未发出"
 
-    store.close()
-    reopened = SqliteStore.open(store.db_path)  # ← 新连接 = 模拟进程重启
-    try:
-        replayed = apply_batch(reopened, _batch("A"), limits=_LIMITS)
+    # 换一个**全新的 store 实例**（新对象、无内存状态）＝模拟进程重启后重连同一个库
+    reopened = SqliteStore.open(store.db_path)
+    replayed = apply_batch(reopened, _batch("A"), limits=_LIMITS)
 
-        assert replayed.applied is False
-        after = [(p.id, p.pair_idx, p.answer) for p in _pairs(reopened)]
-        assert after == before  # 行数、位置、内容都不变
-    finally:
-        reopened.close()
+    assert replayed.applied is False
+    after = [(p.id, p.pair_idx, p.answer) for p in _pairs(reopened)]
+    assert after == before  # 行数、位置、内容都不变
 
 
 def test_retry_after_a_later_batch_still_dedupes(store: SqliteStore) -> None:
@@ -105,7 +104,7 @@ def test_retry_after_a_later_batch_still_dedupes(store: SqliteStore) -> None:
     重放 A 会**重复应用**（落到新的 `pair_idx` 上）。
     """
     _apply(store, _batch("A"))
-    pending = store.pending_pair(store.connection, "u1", "s1")
+    pending = rd(store, store.pending_pair, "u1", "s1")
     assert pending is not None
     assert pending.request_id == "A"
 
@@ -115,12 +114,12 @@ def test_retry_after_a_later_batch_still_dedupes(store: SqliteStore) -> None:
         AddBatch("B", "u1", "s1", (_msg("assistant", "A1b"),)),
     )
 
-    touched = store.fetch_pairs_by_ids(store.connection, [pending.id])[0]
+    touched = rd(store, store.fetch_pairs_by_ids, [pending.id])[0]
     assert touched.status == "complete"
     assert touched.request_id == "B"  # ← A 的指纹在 qa_pairs 里已经没了
 
     # 但 applied_batches 里还在 ⇒ 重放 A 必须被拦住
-    assert store.is_batch_applied(store.connection, "A") is True
+    assert rd(store, store.is_batch_applied, "A") is True
 
     rows_before = len(_pairs(store))
     replayed = _apply(store, _batch("A"))
@@ -181,9 +180,10 @@ def test_applied_batches_is_append_only(store: SqliteStore) -> None:
     with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
         store.record_batch(conn, "A", "u1", "s1")
 
-    rows = store.connection.execute(
-        "SELECT request_id, user_id, session_id FROM applied_batches"
-    ).fetchall()
+    with store.read() as conn:
+        rows = conn.execute(
+            "SELECT request_id, user_id, session_id FROM applied_batches"
+        ).fetchall()
     assert [r["request_id"] for r in rows] == ["A"]
 
     # store 的公开方法里没有能改写旁表的手段
@@ -196,6 +196,6 @@ def test_guard_is_per_request_id_not_per_session(store: SqliteStore) -> None:
     _apply(store, _batch("A"))
     _apply(store, _batch("B"))
 
-    assert store.is_batch_applied(store.connection, "A") is True
-    assert store.is_batch_applied(store.connection, "B") is True
-    assert store.is_batch_applied(store.connection, "C") is False
+    assert rd(store, store.is_batch_applied, "A") is True
+    assert rd(store, store.is_batch_applied, "B") is True
+    assert rd(store, store.is_batch_applied, "C") is False

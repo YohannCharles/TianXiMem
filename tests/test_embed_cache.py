@@ -135,7 +135,6 @@ def test_cache_is_persisted_on_disk(tmp_path) -> None:
     cache = DiskVectorCache(tmp_path / "cache", COORD)
     wrapped = CachingEmbedder(inner, cache)
     wrapped.encode(["Q: persisted"])
-    cache.close()
 
     assert cache.path.exists()
 
@@ -222,7 +221,8 @@ def test_template_version_change_does_not_hit_old_cache(tmp_path) -> None:
 def test_cache_file_is_self_describing(tmp_path) -> None:
     """坐标系也写进**文件内容**——万一有人改名或复制文件，第二道锁会响。"""
     cache = DiskVectorCache(tmp_path, COORD)
-    row = cache._conn.execute("SELECT v FROM meta WHERE k='coordinate'").fetchone()
+    with cache.read() as conn:
+        row = conn.execute("SELECT v FROM meta WHERE k='coordinate'").fetchone()
     assert row is not None
     assert COORD.describe() in row[0]
 
@@ -230,7 +230,7 @@ def test_cache_file_is_self_describing(tmp_path) -> None:
 def test_corrupt_cache_entry_fails_loudly(tmp_path) -> None:
     """缓存条目自称的维度与 blob 长度不符 ⇒ 响亮失败，不静默用坏数据。"""
     cache = DiskVectorCache(tmp_path, COORD)
-    cache.close()
+    # 用外部连接直接篡改缓存文件（模拟损坏/被手改）
     conn = sqlite3.connect(str(cache.path))
     conn.execute(
         "INSERT OR REPLACE INTO vectors (content_hash, dim, vec, created_at) VALUES (?, ?, ?, 0)",
@@ -240,9 +240,12 @@ def test_corrupt_cache_entry_fails_loudly(tmp_path) -> None:
     conn.close()
 
     reopened = DiskVectorCache(tmp_path, COORD)
-    # 直接查那一条（用其真实哈希）
-    reopened._conn.execute("UPDATE vectors SET content_hash = ? WHERE dim = 999", (_hash("t"),))
-    reopened._conn.commit()
+    # 把那一条的哈希换成真实的（内容哈希是私有函数，这里手工算）
+    conn = sqlite3.connect(str(reopened.path))
+    conn.execute("UPDATE vectors SET content_hash = ? WHERE dim = 999", (_hash("t"),))
+    conn.commit()
+    conn.close()
+
     with pytest.raises(DimensionMismatchError, match="自称 999 维"):
         reopened.get("t")
 

@@ -132,6 +132,25 @@ test_store.py           §6.1 / §6.3 DDL、连续性与索引
 | **能仅凭 SQLite 全量重建 Qdrant** | §6.3 的"派生读存储"就是这条的意思 |
 | **代码中没有硬编码 `benchmark_data/` 或 `eval/datasets/`** | D16：路径一律走 `TIANXI_BENCHMARK_DIR` |
 
+### 连接生命周期与并发（D17）
+
+| 断言 | 说明 |
+| --- | --- |
+| **连接不跨线程复用**：在另一个线程里读 + 写都正常 | 旧模型（长期持有一个连接）在这里抛 `ProgrammingError`——而 FastAPI 的 `def` 路由**就在线程池里** |
+| 同一操作**各拿一个连接**（两次 `read()` 不是同一个对象） | 短生命周期模型最直接的可观测性质 |
+| **异常后：事务已回滚 + 连接已关** | 只断言回滚会漏掉连接泄漏；只断言关闭会漏掉脏数据。**两条都要** |
+| **并发写不丢不串**：多 session 同时 `BEGIN IMMEDIATE` ⇒ 无 `SQLITE_BUSY`、每 session `pair_idx` 连续、无跨 session 污染 | 见 `test_store.py` 与 `test_service_add.py` 的**压力**用例 |
+| **同 session 串行 / 不同 session 不互相阻塞** | 后者用 `Barrier` **证明**（而不是靠 sleep 赌时间）——若被串行化，barrier 会超时 |
+
+> **测试里读一律写 `rd(store, store.<方法>, ...)`**（[`conftest.py`](./conftest.py)）：
+> 它对应生产代码的 `with store.read() as conn:`——**一次逻辑操作一个连接**（D17）。
+> **写必须走 `store.transaction()`**，绝不自己开连接。
+>
+> ⚠ **别把 `xfail` 当成"记录缺口"的长久手段**：缺口修好后它们会 XPASS，而
+> `strict=True` 会提醒摘标记——**但也可能像 2026-09-24 那次一样，把用例里的另一个真 bug
+> 一起盖住**（当时 `_Overlap` 被重复计数，peak 恒为 3、断言写的是 2）。摘标记时要
+> 确认它是因为"该过的过了"而 XPASS，不是"换了个失败理由"。
+
 ---
 
 ## 跑之前

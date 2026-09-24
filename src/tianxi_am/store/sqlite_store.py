@@ -85,38 +85,89 @@ def _now_ms() -> int:
 class SqliteStore:
     """`qa_pairs` + `applied_batches` 的读写与事务。
 
-    **事务边界由调用方持有**：所有写方法都要求传入一个 `conn`，并且必须在
-    `transaction()` 里调用。这样 §6.5 的三步（守卫查表 → 位置恢复 → 挂接 + 记录本批）
-    才能落在**同一个事务**里——否则崩溃在中间会留下半个批次。
+    ## 连接模型：**短生命周期**（2026-09-24 改）
+
+    本类**只保存 `db_path` 与存储逻辑**，**不长期持有** `sqlite3.Connection`。
+    连接的生命周期恰好是**一次逻辑操作**：
+
+    ```text
+    写： connect → BEGIN IMMEDIATE → 读改写 → COMMIT / ROLLBACK → close
+    读： connect → SELECT                                        → close
+    ```
+
+    **为什么必须这样**：FastAPI 的 `def` 路由跑在**线程池**里，而 `sqlite3` 的连接
+    **只能被创建它的线程使用**。任何"启动时建一个连接、之后长期复用"的写法，
+    到线上就是**每个请求都抛** `sqlite3.ProgrammingError`（2026-09-24 实测）。
+    短生命周期把这个问题**从根上消掉**——连接永远在同一次调用的同一个线程里建与关，
+    于是"连接与线程的约束"**不需要泄漏到任何上层**。
+
+    代价是每次操作多一次 `connect`（约几十微秒）。用 WAL + `busy_timeout` 让
+    **SQLite 自己**负责多连接之间的 writer 串行化，**不另加应用层写锁**。
+
+    ## 事务边界由调用方持有
+
+    所有方法都要求传入 `conn`，并且**不做 connect、不做 commit/rollback**——
+    只有 [`transaction()`][SqliteStore.transaction] 管这两件事。
+    这样 §6.5 的三步（守卫查表 → 位置恢复 → 挂接 + 记录本批）才能落在**同一个事务**里。
+
+    ⚠ **同一事务里的所有 helper 必须复用外层传进来的那个 `conn`**，
+    **禁止 helper 自己 connect、也禁止 helper 自己 commit**——否则原子性就破了，
+    而且**不会报错**（半批数据看起来完全正常）。
     """
 
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = str(db_path)
-        self._conn: sqlite3.Connection | None = None
 
     # ── 生命周期 ────────────────────────────────────────────────────────
 
     @classmethod
     def open(cls, db_path: str | Path) -> SqliteStore:
-        """连接 + 建表，一步到位（建表是幂等的）。"""
+        """建表（幂等），并**把数据库级设置落一次**。
+
+        ⚠ **`journal_mode = WAL` 只在这里执行一次**，不在每个短生命周期连接上重复：
+        它写进数据库文件、对后续所有连接持续生效（`PRAGMA journal_mode` 返回的是
+        设置**之后**的模式，所以重复执行只是白跑一次 IO）。
+        与之相对，`busy_timeout` / `synchronous` / `foreign_keys` / `row_factory`
+        是**每连接**的，必须每次新连接都设——见 `_connect()`。
+        """
         store = cls(db_path)
-        store.connect()
         store.init_schema()
+        store._init_journal_mode()
         return store
 
-    def connect(self) -> sqlite3.Connection:
-        if self._conn is not None:
-            return self._conn
+    def _init_journal_mode(self) -> None:
+        """把 `journal_mode = WAL` **落到数据库文件**上。只在 `open()` 里调用一次。
+
+        WAL 是**数据库级**设置：它写进库文件头，对**之后所有连接**持续生效
+        （WAL 下读不阻塞写、写不阻塞读）。所以**不需要**在每个短生命周期连接上重复执行
+        ——重复执行只是白跑一次 IO，且 `PRAGMA journal_mode` 会返回设置**之后**的模式，
+        看起来"生效了"，掩盖了它本来就已经生效这件事。
+
+        ⚠ `PRAGMA journal_mode` **不能在事务里执行**。这里用的是自管事务的连接
+        （`isolation_level=None`），处于自动提交态，所以直接可用。
+        """
+        conn = self._connect()
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+        finally:
+            conn.close()
+
+    def _connect(self) -> sqlite3.Connection:
+        """造一个**已配好必要 PRAGMA** 的新连接。调用方负责关它。
+
+        **每连接级**的设置都在这里；**数据库级**的（WAL）在 `open()` 里落一次。
+        """
         conn = sqlite3.connect(self._db_path, isolation_level=None)  # 自己管事务
-        # WAL：读写不互相阻塞，且崩溃后能恢复。
-        conn.execute("PRAGMA journal_mode = WAL")
         # synchronous=FULL：契约要求"持久化完成且立即可搜索"后才能响应（§2.1）。
         # 用 NORMAL 会在 OS/断电级崩溃下丢掉最后几个已提交事务——那正是"重试"的来源，
         # 虽然幂等守卫兜得住，但没有理由在这里省。
         conn.execute("PRAGMA synchronous = FULL")
+        # 多连接并发写时，让**输的那一方等待**而不是立刻抛 SQLITE_BUSY。
         conn.execute("PRAGMA busy_timeout = 5000")
+        # 外键约束默认是 **OFF**（SQLite 的默认值），且它是**每连接**生效的。
+        # 当前 schema 里没有外键 ⇒ 这条是**空转**；但留着它，将来加 FK 时不会静默失效。
+        conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
-        self._conn = conn
         return conn
 
     @property
@@ -128,48 +179,78 @@ class SqliteStore:
         """
         return self._db_path
 
-    @property
-    def connection(self) -> sqlite3.Connection:
-        if self._conn is None:
-            raise RuntimeError("store 尚未 connect()")
-        return self._conn
+    @contextmanager
+    def read(self) -> Iterator[sqlite3.Connection]:
+        """一次**只读**操作的作用域：开连接 → 交给调用方 SELECT → 关。
 
-    def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
-
-    def __enter__(self) -> SqliteStore:
-        self.connect()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
+        ⚠ **不要为读拿 `BEGIN IMMEDIATE`**——那会取写锁，让只读查询去和写事务抢。
+        WAL 下读不阻塞写、写不阻塞读。
+        """
+        conn = self._connect()
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def init_schema(self) -> None:
-        """执行 `schema.sql`（`IF NOT EXISTS`，可重复调用）。"""
-        self.connection.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        """执行 `schema.sql`（`IF NOT EXISTS`，可重复调用）。
+
+        用自己的**短生命周期连接**跑——因为建表本身是幂等的，**不需要**包在写事务里，
+        也**不应该**去拿 `BEGIN IMMEDIATE` 的写锁。
+        """
+        conn = self._connect()
+        try:
+            conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        finally:
+            conn.close()
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
-        """一个写事务。
+        """一个写事务。**这是唯一管 "connect / begin / commit / rollback / close" 的地方。**
 
-        **`BEGIN IMMEDIATE` 而不是默认的 `BEGIN`**：`pair_idx` 的分配是**读-改-写**
-        （`MAX(pair_idx)` → 写位置）。默认事务在第一次**写**的时候才拿写锁，
-        两个并发批次会先读到同一个 `MAX(pair_idx)`、再先后写入 ⇒ 位置撞车。
-        IMMEDIATE 在事务开头就拿写锁，把读-改-写整体串行化。
+        **`BEGIN IMMEDIATE` 而不是默认的 `BEGIN`**（**已实测，不是引文档**）：
+
+        * **读-改-写**：`pair_idx` 的分配是 `MAX(pair_idx)` → 写位置。deferred `BEGIN`
+          在第一次**写**的时候才拿写锁，两个并发事务会先读到同一个 `MAX(pair_idx)`
+          ⇒ 位置撞车（撞 `UNIQUE`）。
+        * **升级写锁时 `busy_timeout` 不生效**：deferred 事务已持读锁，要写时得**升级**成
+          写锁；若对方正持写锁，SQLite **立刻**返回 `SQLITE_BUSY`（"database is locked"）
+          ——它宁可立刻报错也不冒死锁的险，**不应用 `busy_timeout`**。
+
+        2026-09-24 实测：把这一行换成 `BEGIN`，`tests/test_store.py` 的两条并发压力用例
+        **双双失败**，报 `OperationalError('database is locked')` ×5——**而且跨 session
+        那条也失败**（不同 `(user_id, session_id)` 一样撞），所以这不只是"位置撞车"的防护。
+
+        IMMEDIATE 在事务开头就拿写锁，把整个读-改-写串行化，也让并发写事务退化成
+        "排队"而不是"互锁"。
 
         ⚠ 这只解决**单库内**的并发。§15 还要求 Add 按 `(user_id, session_id)` 串行化
         （进程内按 session 的锁），那一层属 `service/`，不在本模块。
+
+        事务体里的**每一个 helper 都必须复用这里 yield 出去的 `conn`**——
+        helper 自己 `connect()` 会落到另一个事务里（拿不到本事务的写锁、也看不到本事务
+        未提交的中间态），helper 自己 `commit()` 则会让"半批"落库。**两种情况都不报错。**
+
+        WAL 下**多个连接**可以同时开事务：写与写之间由 SQLite 自己串行化
+        （拿不到写锁的那一方等 `busy_timeout`，不是立刻抛），读与写互不阻塞。
+        所以除了这条 `BEGIN IMMEDIATE`，**不需要**再叠一层应用层的写锁。
         """
-        conn = self.connection
-        conn.execute("BEGIN IMMEDIATE")
+        conn = self._connect()
         try:
-            yield conn
-        except BaseException:
-            conn.execute("ROLLBACK")
-            raise
-        conn.execute("COMMIT")
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield conn
+            except BaseException:
+                # 用 `conn.rollback()` 而不是 `execute("ROLLBACK")`：前者在"无事务可回滚"时
+                # 是 no-op，后者会抛 `no transaction is active` 并**盖掉真正的异常**。
+                conn.rollback()
+                raise
+            else:
+                conn.commit()
+        finally:
+            # `close()` 放在 finally：异常路径、成功路径、commit 自身失败，都要还掉这个连接。
+            # （若关闭时还有未提交事务，SQLite 会隐式回滚——不会留下半个批次的脏数据。）
+            conn.close()
 
     # ── 第 1 步：幂等守卫（§6.5）────────────────────────────────────────
 

@@ -37,7 +37,7 @@
 | `src/tianxi_am/<模块>/` 下任何代码 | 该目录的 `CLAUDE.md`（要写什么、边界在哪、本层的坑） |
 | 契约层（service、Add/Search 形状） | [`docs/contract.md`](docs/contract.md) |
 | 任何阈值 / 权重 / 开关 | [`docs/config-reference.md`](docs/config-reference.md)（**开关的唯一声明处**） |
-| 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（D1–D16 + 待决事项） |
+| 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（D1–D17 + 待决事项） |
 | 跑对照实验 | [`docs/experiments.md`](docs/experiments.md)（协议）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（怎么跑） |
 | 数据集加载 / harness | [`docs/benchmark-data.md`](docs/benchmark-data.md) + [`eval/datasets/CLAUDE.md`](eval/datasets/CLAUDE.md) |
 | **取回 / 校验 `benchmark_data/`**（新机器、数据缺了、要确认手上的是不是同一份） | [`docs/benchmark-data.md`](docs/benchmark-data.md) 的"出处链" + [`tools/fetch_benchmark_data.py`](tools/fetch_benchmark_data.py)。`make fetch-data` / `make data-check` |

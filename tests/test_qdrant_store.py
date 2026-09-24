@@ -11,7 +11,7 @@ import hashlib
 import uuid
 
 import pytest
-from tests.conftest import FakeEmbedder, unit_vector
+from tests.conftest import FakeEmbedder, rd, unit_vector
 
 from tianxi_am.common.render import render
 from tianxi_am.store.qdrant_store import (
@@ -459,7 +459,7 @@ def test_rebuild_from_sqlite_reproduces_search(store, make_store, emb: FakeEmbed
     )
     apply_batch(store, AddBatch("r1", "u1", "s1", msgs), limits=limits)
 
-    pairs = store.iter_pairs(store.connection, user_id="u1")
+    pairs = rd(store, store.iter_pairs, user_id="u1")
     assert len(pairs) == 2, "① 落库的对数不是预期的 2"
 
     # 预设两条渲染文本的 dense 向量：一条与查询完全一致、另一条正交 ⇒ 两路都不并列
@@ -526,7 +526,7 @@ def test_index_pairs_renders_through_common_render(store, make_store, emb: FakeE
         limits=BatchLimits(),
     )
     qstore = make_store()
-    pairs = store.iter_pairs(store.connection, user_id="u1")
+    pairs = rd(store, store.iter_pairs, user_id="u1")
     qstore.index_pairs(pairs, emb, renderer=render)
 
     assert emb.encoded_texts() == ["Q: 问题\nA: [assistant] 回答"]

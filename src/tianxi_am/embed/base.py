@@ -39,7 +39,8 @@ import hashlib
 import json
 import sqlite3
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -139,6 +140,18 @@ class DiskVectorCache:
 
     一个坐标系一个文件：`<cache_dir>/<coordinate_key>.db`。
     文件里也存一份坐标系（自描述），便于人工核对与排错。
+
+    ## 连接模型：**短生命周期**（2026-09-24 改）
+
+    和 `store/sqlite_store.py` 同一套模型：**本类不长期持有 `sqlite3.Connection`**，
+    每次读/写各自 `connect → … → close`。
+
+    ⚠ **为什么这条对本类同样致命**：缓存的调用方是 `CachingEmbedder`，而它跑在
+    **FastAPI 的线程池**里（索引侧在 `Add` 请求线程、查询侧在 `Search` 请求线程）。
+    `sqlite3` 的连接**只能被创建它的线程使用** ⇒ 之前那种"构造时建一个连接、之后长期复用"
+    的写法，会在**第一个请求**就抛 `sqlite3.ProgrammingError`。
+    测试没抓到它，只是因为并发用例当时被 `SqliteStore` 的那一份挡住了（同一个根因、
+    同一个形状）。**两处的修法必须一致**，否则修好一处、另一处照样炸。
     """
 
     def __init__(self, cache_dir: str | Path, coordinate: EmbeddingCoordinate) -> None:
@@ -146,21 +159,50 @@ class DiskVectorCache:
         self._dir.mkdir(parents=True, exist_ok=True)
         self._coordinate = coordinate
         self._path = self._dir / f"{coordinate.key()}.db"
-        self._conn = sqlite3.connect(str(self._path))
-        self._conn.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS vectors ("
-            " content_hash TEXT PRIMARY KEY,"
-            " dim INTEGER NOT NULL,"
-            " vec BLOB NOT NULL,"
-            " created_at INTEGER NOT NULL)"
-        )
-        self._conn.execute(
-            "INSERT OR IGNORE INTO meta (k, v) VALUES ('coordinate', ?)",
-            (coordinate.describe(),),
-        )
-        self._conn.commit()
+        self._init_schema()
         self._verify_coordinate()
+
+    # ── 生命周期 ───────────────────────────────────────────────────────
+
+    def _connect(self) -> sqlite3.Connection:
+        """造一个配好必要 PRAGMA 的新连接。调用方负责关它。"""
+        conn = sqlite3.connect(str(self._path), isolation_level=None)  # 自己管事务
+        # 缓存**不是真源**：丢了只需重算一次向量，不会丢业务数据。
+        # 所以用 NORMAL（WAL 下不会损坏，最坏丢最后几个已提交条目）而不是 FULL——
+        # 索引侧会成批写，每条都 fsync 的代价落在最热的路径上，不划算。
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
+
+    def _init_schema(self) -> None:
+        """建表 + 把 `journal_mode = WAL` 落一次（**数据库级**，不在每个连接上重复）。"""
+        conn = self._connect()
+        try:
+            # WAL：多线程/多连接读写不互相阻塞。写进库文件，对后续连接持续生效。
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS vectors ("
+                " content_hash TEXT PRIMARY KEY,"
+                " dim INTEGER NOT NULL,"
+                " vec BLOB NOT NULL,"
+                " created_at INTEGER NOT NULL)"
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO meta (k, v) VALUES ('coordinate', ?)",
+                (self._coordinate.describe(),),
+            )
+        finally:
+            conn.close()
+
+    @contextmanager
+    def read(self) -> Iterator[sqlite3.Connection]:
+        """一次**只读**操作的作用域（同类内部与测试都用它）。"""
+        conn = self._connect()
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     # ── 自检 ───────────────────────────────────────────────────────────
 
@@ -170,7 +212,8 @@ class DiskVectorCache:
         文件名已经保证了这件事；这一层是**第二道锁**——万一有人改名或复制文件，
         这里会响而不是静默用错缓存。
         """
-        row = self._conn.execute("SELECT v FROM meta WHERE k = 'coordinate'").fetchone()
+        with self.read() as conn:
+            row = conn.execute("SELECT v FROM meta WHERE k = 'coordinate'").fetchone()
         if row is not None and row[0] != self._coordinate.describe():
             raise DimensionMismatchError(
                 f"缓存文件的坐标系不符：文件里是 {row[0]!r}，当前是 "
@@ -188,9 +231,10 @@ class DiskVectorCache:
         return self._coordinate
 
     def get(self, text: str) -> list[float] | None:
-        row = self._conn.execute(
-            "SELECT dim, vec FROM vectors WHERE content_hash = ?", (_content_hash(text),)
-        ).fetchone()
+        with self.read() as conn:
+            row = conn.execute(
+                "SELECT dim, vec FROM vectors WHERE content_hash = ?", (_content_hash(text),)
+            ).fetchone()
         if row is None:
             return None
         dim, blob = int(row[0]), bytes(row[1])
@@ -209,23 +253,31 @@ class DiskVectorCache:
             rows.append((_content_hash(text), int(arr.shape[0]), arr.tobytes(), now))
         if not rows:
             return 0
-        self._conn.executemany(
-            "INSERT OR REPLACE INTO vectors (content_hash, dim, vec, created_at)"
-            " VALUES (?, ?, ?, ?)",
-            rows,
-        )
-        self._conn.commit()
+        # 一个写事务、一个连接：成批写要么全落要么全不落（不会留半个批次的条目）
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.executemany(
+                "INSERT OR REPLACE INTO vectors (content_hash, dim, vec, created_at)"
+                " VALUES (?, ?, ?, ?)",
+                rows,
+            )
+            conn.commit()
+        except BaseException:
+            conn.rollback()  # 无事务可回滚时是 no-op（`execute("ROLLBACK")` 会抛）
+            raise
+        finally:
+            conn.close()
         return len(rows)
 
     def known_dims(self) -> set[int]:
         """缓存里出现过的所有维度（用于与新鲜返回交叉校验）。"""
-        return {int(r[0]) for r in self._conn.execute("SELECT DISTINCT dim FROM vectors")}
+        with self.read() as conn:
+            return {int(r[0]) for r in conn.execute("SELECT DISTINCT dim FROM vectors")}
 
     def count(self) -> int:
-        return int(self._conn.execute("SELECT COUNT(*) FROM vectors").fetchone()[0])
-
-    def close(self) -> None:
-        self._conn.close()
+        with self.read() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM vectors").fetchone()[0])
 
 
 class CachingEmbedder:
