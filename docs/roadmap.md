@@ -78,7 +78,15 @@
 - [ ] Weighted RRF：**`k=61` 显式设**、`prefetch` 每路带 `using`、根级 `limit` 取请求 `top_k`（§7.3）
 - [ ] **主路径必须能通过 Smoke 契约校验**（200 响应、`data` 数组、不超 `top_k`）——**它是所有对照的参照点**（§13）
 - [ ] **跑 T2 实验**（§13，半天工作量）：133 道 multi-session 题（12 道拒答题单列）人工分三类
-- [ ] 三个 `pending` 计数器埋点（§6.5）
+- [ ] 三个 `pending` 计数器埋点（§6.5）——**发射已在 `pairing/instrument.py`**，聚合在 `observability/`（未接）
+
+### 独立后续切片：Checker 的两路分离查询（**已登记，未实现；不阻塞 Step 1**）
+
+**链条**：`Qdrant arm_search`（单路查询）→ `service` 提供 BM25 / Dense 两路排名 → `Checker` 记录 `criterion_would_say` / **A4 分布**。
+
+**它解决什么**：[`../src/tianxi_am/retrieve/checker.py`](../src/tianxi_am/retrieve/checker.py) 的判据**已经写全并测到**（§8 的三条规则），但 v1 的调用方**不传**两路排名，于是 `criterion_would_say` 恒为 `None` ⇒ **D13 想要的那份 A4 反事实分布拿不到**。
+
+**为什么现在不做**：要跑那两次查询，得给 [`../src/tianxi_am/store/qdrant_store.py`](../src/tianxi_am/store/qdrant_store.py) 加一个**单路查询**（现有的 `hybrid_search` 只做融合）——而 ③-b 的口径是"不改 ①② 已稳定代码"。它也**不是通过 Smoke 契约校验所必需的**（Smoke 只看响应形状）。
 
 ---
 

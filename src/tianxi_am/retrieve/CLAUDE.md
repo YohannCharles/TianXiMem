@@ -5,11 +5,24 @@
 ## 要写什么
 
 ```text
-bm25.py      Qdrant 原生 qdrant/bm25 一路
-dense.py     Embedder 一路
-fusion.py    prefetch + weighted RRF
+bm25.py      词法那一路：查询侧原样送（不含改写）
+dense.py     语义那一路：Embedder 调用（**每查询恰好 1 次**）
+fusion.py    **检索策略与参数所有权**（prefetch_limit / weights / k / top_k）
 checker.py   §8 名次一致性判据
 ```
+
+> ### ⚠ 分工（2026-09-24 定）：**参数归本目录，执行归 `store/`**
+>
+> | | 谁 | 内容 |
+> | --- | --- | --- |
+> | **策略与参数** | **本目录** | `prefetch_limit` / `weights` / `k` / `top_k` 的**取值、校验、标定**；两路怎么组、权重多少 |
+> | **请求构造与执行** | [`../store/qdrant_store.py`](../store/qdrant_store.py) | 把参数翻成 `prefetch` + `rrf` 的 Qdrant 调用，结果还原成领域对象 |
+>
+> **为什么这样切**：`k=61` / `prefetch` 每路带 `using` / 根级 `limit` 的**写法**是 Qdrant 的语法知识，
+> 与"用哪个模型、权重要不要调"是不同的关注点。**已实测的那份执行代码不搬**（② 的成果），
+> **参数的所有权**上移到本目录——因为它们是检索策略，而且**要能被配置驱动、能被 ablation 检验**。
+>
+> ⚠ 因此 **`k=61` 的校验写在本目录**：它是正确性常量，配错要**拒绝启动**，不是"顺手调"（D5）。
 
 **本目录只负责"拿到候选 + 判断够不够"。** rerank 之后的链路（**Neighbor Expansion、Context Packaging**）在 [`../rank/`](../rank/)——§10 明确它的顺序是"**排序 → 扩窗 → 打包**"，扩窗跑在 rerank **之后**。
 

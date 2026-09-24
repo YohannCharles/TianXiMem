@@ -14,7 +14,7 @@
 | [`pairing/`](./pairing/) | QA 对配对判据；批次续接三步；`pending` 判定 | §6.2、§6.5、§15 |
 | [`store/`](./store/) | SQLite 真源 + Qdrant 派生索引 + 邻域查询的 SQL | §6.1、§6.3 |
 | [`embed/`](./embed/) | `Embedder` 协议 + 两个实现 + **落盘向量缓存** | §7.4、§7.2 |
-| [`retrieve/`](./retrieve/) | BM25；dense；Weighted RRF；Evidence Checker（**到 rerank 为止**） | §7.1–§7.3、§8 |
+| [`retrieve/`](./retrieve/) | BM25；dense；**混合检索的策略与参数所有权**；Evidence Checker（**到 rerank 为止**） | §7.1–§7.3、§8 |
 | [`rank/`](./rank/) | rerank → **Neighbor Expansion（§10）** → Context Packaging | §10、§11 |
 | [`agent/`](./agent/) | Conditional Agentic Search 循环与工具（**v1 不实现**，D13） | §9 |
 | [`llm/`](./llm/) | LLM 后端抽象 | §2.3、§12.1 |

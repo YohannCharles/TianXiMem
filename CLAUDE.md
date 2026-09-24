@@ -18,8 +18,8 @@
 
 | 状态 | 模块 |
 | --- | --- |
-| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）——另有 **8 个测试文件**在 [`tests/`](tests/) |
-| ⬜ **未实现** | [`service/`](src/tianxi_am/service/) · [`retrieve/`](src/tianxi_am/retrieve/) · [`rank/`](src/tianxi_am/rank/) · [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `common/` 的 `tokens.py` / `config.py` · `embed/` 的 `text_embedding_v4.py` · 整个 [`eval/`](eval/) · `configs/*.yaml` |
+| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）· [`retrieve/`](src/tianxi_am/retrieve/)（**策略与参数所有权** + §8 判据）· [`rank/`](src/tianxi_am/rank/) 的 **`packaging.py`**（**Step 1 的最小打包切片**，⚠ 非最终 pipeline）——测试在 [`tests/`](tests/) |
+| ⬜ **未实现** | [`service/`](src/tianxi_am/service/) · [`rank/`](src/tianxi_am/rank/) 的 `reranker.py` / `neighbor.py` · [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `common/` 的 `tokens.py` / `config.py` · `embed/` 的 `text_embedding_v4.py` · 整个 [`eval/`](eval/) · `configs/*.yaml` |
 | ⛔ **v1 不做** | [`agent/`](src/tianxi_am/agent/)（D13） |
 
 **已实现的部分**：对照 `docs/roadmap.md`，落在 **Step 1** 内（存储层 + 配对）。

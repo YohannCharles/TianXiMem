@@ -7,10 +7,22 @@
 ```text
 schema.sql        qa_pairs + applied_batches 的 DDL（§6.1）
 sqlite_store.py   真源读写、事务、批次守卫、邻域查询（§10 的 SQL 也在这里）
-qdrant_store.py   collection 建/写/查、payload 过滤、prefetch+RRF
+qdrant_store.py   collection 建/写/查、payload 过滤、**按传入参数执行** prefetch+RRF
 ```
 
 **这是唯一接触 SQLite 与 Qdrant 的目录。** 上层拿到的是领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`——§6.3 的分工表只有在读写收口到一处时才守得住。
+
+> ### ⚠ 检索的**参数所有权**不在本目录（2026-09-24 定）
+>
+> `prefetch_limit` / `weights` / `k` / `top_k` 的**取值、校验与标定**归 [`../retrieve/`](../retrieve/)。
+> 本目录只做 **Qdrant 的请求构造与执行**——把传进来的参数翻成 `prefetch` + `rrf` 的调用，
+> 并把结果还原成领域对象。**两条边界**：
+>
+> * 本目录**不决定**用哪个 `k`（`k=61` 是正确性常量，由 `retrieve/` 校验，见 D5）
+> * 本目录**不决定** `top_k`（它来自请求，由 `retrieve/` 传入；**写死 100 是契约错误**）
+>
+> ⇒ **分工是一句话：`retrieve/` 说"用什么参数"，`store/` 说"怎么发给 Qdrant"。**
+> §7.3 那张表的**数值**属于 `retrieve/`，**写法**（`prefetch` 每路带 `using`、根级 `limit`）属于本目录。
 
 > **向量缓存不在这里**——它在 [`../embed/`](../embed/)，因为缓存键是"渲染后文本的哈希"，属渲染 + embedding 的关注点（§7.2）。**§6.3 把这层定义为恰好两样东西**（SQLite 真源 + Qdrant 派生索引，且明确"不可互换"），塞进第三个存储会削弱那条规则。
 
@@ -24,7 +36,7 @@ qdrant_store.py   collection 建/写/查、payload 过滤、prefetch+RRF
 | -- | -- | ---- |
 | 存 | QA 对正文、`status`、`pair_idx`、`event_time`、`id` | 向量（`dense` + `bm25`）+ 过滤键 payload |
 | 不存 | 向量 | **正文** |
-| 能做的事 | 事务、关系查询 | 向量检索、payload 过滤、RRF 融合 |
+| 能做的事 | 事务、关系查询 | 向量检索、payload 过滤、**按给定参数**执行 RRF 融合 |
 | 不能做的事 | 向量检索 | 跨 point 事务、关系查询 |
 | 坏了怎么办 | —— | **可从 SQLite 全文重建** |
 

@@ -5,14 +5,67 @@
 ## 要写什么
 
 ```text
-reranker.py   自托管 cross-encoder
-neighbor.py   §10 扩窗与回填（SQL 在 store/）
-packaging.py  §11.3 渲染 + 打包 + 组内/组间顺序
+reranker.py   自托管 cross-encoder（**未实现**，Step 3）
+neighbor.py   §10 扩窗与回填（SQL 在 store/）（**未实现**，Step 2）
+packaging.py  §11.3 渲染 + 打包 + 组内/组间顺序（**已实现最小切片**，见下）
 ```
 
 **本目录是"排序 → 扩窗 → 打包"三连环的落地点，顺序不可换。**
 
-**为什么是主线**：§4 的四条独立证据指向同一结论——**检索不是瓶颈，选择和排序才是**；外加一条规则理由（§11.1）：§2.3 把 embedding 与 LLM 都钉死了，**只有 Reranker 不作规定**——**这是唯一能自己投入算力的环节**。完整论证见 PRD §4 / §11.1。
+---
+
+## ⚠⚠ 两个阶段，别把前者当后者（2026-09-24 定）
+
+`packaging.py` **目前只是 Step 1 的最小切片**，好让 `Search` 能产出合法响应、通过契约校验。
+**它不是最终的 Search Pipeline。**
+
+**当前（Step 1）—— 阶段性实现：**
+
+```text
+Hybrid Retrieval
+→ Initial Candidates
+→ Checker（v1 passthrough）
+→ Minimal Packaging        ← 只有这一步存在
+→ ≤ top_k
+```
+
+**最终 v1 —— 目标形态（**不可**把上面那个当成它）：**
+
+```text
+Hybrid Retrieval
+→ Initial Candidates
+→ Checker（v1 passthrough）
+→ Remote Rerank            ← Step 3 接入
+→ Neighbor Expansion       ← Step 2 接入
+→ Context Packaging        ← 那时才名副其实
+→ ≤ top_k
+```
+
+> **两条插入方向都是"上游"**：Rerank 与扩窗都插在 packaging **之前**，所以现在建 packaging
+> **不需要为它们预留接口**，但**也不得**假定"名次就是 Hybrid 的名次"——见下一节。
+
+### 最小切片**不做**的四件事（写在这里，免得被当成遗漏）
+
+| 不做 | 为什么现在不做 |
+| --- | --- |
+| **Rerank** | Step 3。**排序才是主线**（D8），所以切片出的分数是**地板价**，不是竞争力 |
+| **Neighbor Expansion** | Step 2。§10 明确它跑在 rerank **之后** |
+| **双预算截断**（槽位 + token） | Step 2。**现在还没有 117,760 token 的前缀约束**在管，所以条目可能多到超预算 |
+| **组内/组间顺序**（§11.2 两条规则） | 那是扩窗出现之后才有意义的概念（组 = 种子 + 它的邻域） |
+
+---
+
+## ⚠ `score` 的语义随阶段变——**所以它不固化在任何上游类型里**
+
+返回项里的 `score` **不是**融合分数（那**不是校准量**，§8），而是**最终名次的函数**：
+
+| 阶段 | 名次来自 | `score` |
+| --- | --- | --- |
+| **当前最小切片** | Hybrid + Checker 之后的名次 | `1/(rank+1)` |
+| **Rerank 接入后** | **rerank 之后的最终名次** | 必须**重新生成** |
+
+⇒ **`score` 由本目录在生成响应时现算**，`Candidate` / `retrieve/` 都**不携带** `score`——
+这不是"暂时不传"，是**结构性防止透传**：上游手里根本没有那个值，也就漏不出去。
 
 ---
 

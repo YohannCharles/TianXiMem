@@ -56,20 +56,21 @@ query → BM25 ┐
 | `pairing/` | QA 对配对判据；批次续接三步；`pending` 判定；**§15 写入路径的唯一所有者** | §6.2、§6.5、§15 |
 | `store/` | SQLite 真源（`qa_pairs` + `applied_batches`）；Qdrant 派生索引；邻域查询的 SQL | §6.1、§6.3 |
 | `embed/` | `Embedder` 协议 + 两个实现；**落盘的向量缓存** | §7.4、§7.2 |
-| `retrieve/` | BM25；dense；Weighted RRF；Evidence Checker（**到 rerank 为止**） | §7.1–§7.3、§8 |
+| `retrieve/` | BM25；dense；**混合检索的策略与参数所有权**；Evidence Checker（**到 rerank 为止**） | §7.1–§7.3、§8 |
 | `rank/` | rerank → **Neighbor Expansion（§10）** → Context Packaging —— "排序 → 扩窗 → 打包"三连环 | §10、§11 |
 | `agent/` | Conditional Agentic Search 循环与三个工具 | §9 |
 | `llm/` | LLM 后端抽象（`gpt-4o-mini` / qwen3.5-9b） | §2.3、§12.1 |
 | `common/` | **渲染模板的唯一实现**；token 计数；配置加载 + **开关校验** | §11.3、§6.4、§15 |
 | `observability/` | §14 指标 + §6.5 三个 `pending` 计数器的聚合 | §14、§6.5 |
 
-### 三处容易摆错的位置
+### 四处容易摆错的位置
 
 | 东西 | 该在哪 | 为什么不在别处 |
 | --- | --- | --- |
 | **Neighbor Expansion** | **`rank/`** | §10 明确它跑在 rerank **之后**，属"排序 → 扩窗 → 打包"；且它是 SQLite 读，不是 Qdrant 操作。**在 §5 的流程图里它位置很靠上，极易被误读成检索的一环**（§10 开头的顺序说明是权威的） |
 | **向量缓存** | **`embed/`** | 缓存键是"渲染后文本的哈希"（§7.2），属渲染 + embedding 的关注点。且 §6.3 把这层定义为**恰好两样东西**（SQLite 真源 + Qdrant 派生索引，**明确"不可互换"**）——塞进第三个存储会削弱那条规则 |
 | **§15 的六步写入路径** | **`pairing/`** | 它是一个事务，跨"幂等守卫 → 恢复位置 → 配对 → upsert → 记旁表"。若 `service/` 也碰它，**两边会长出半个事务**。`service/` 只负责 HTTP 形状、校验、按 session 的锁，**不碰 Qdrant** |
+| **检索的"参数"与"执行"** | **参数在 `retrieve/`，执行在 `store/qdrant_store.py`** | 2026-09-24 定。`prefetch_limit` / `weights` / `k` / `top_k` 的**取值、校验、标定**是检索策略（要能被配置驱动、能被 ablation 检验）；而把它们翻成 `prefetch` + `rrf` 的**Qdrant 语法**是 `store/` 的事。**分界线**：`retrieve/` 说"用什么参数"，`store/` 说"怎么发给 Qdrant"。⚠ 一份实现**不许两边都写**——`k=61` 的由来见 D5，校验只在 `retrieve/` |
 
 ---
 
