@@ -14,15 +14,16 @@
 
 **权威规格**：[`AML Agentic Memory 增强框架 PRD.md`](./AML%20Agentic%20Memory%20增强框架%20PRD.md)。本文件与各模块 `CLAUDE.md` 只做导航与速查；**冲突时一律以 PRD 为准**。
 
-**当前状态（2026-09-23）**：**实现已开工，不是空脚手架。**
+**当前状态（2026-09-24）**：**实现已开工，不是空脚手架。**
 
 | 状态 | 模块 |
 | --- | --- |
-| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）与 **`config.py`**（**全包唯一读环境变量的地方**，③-d）· [`retrieve/`](src/tianxi_am/retrieve/)（**策略与参数所有权** + §8 判据）· [`rank/`](src/tianxi_am/rank/) 的 **`packaging.py`**（**Step 1 的最小打包切片**，⚠ 非最终 pipeline）· [`service/`](src/tianxi_am/service/)（HTTP 层 + **Add/Search 端到端编排**，③-c）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）——测试在 [`tests/`](tests/) |
-| ⬜ **未实现** | [`rank/`](src/tianxi_am/rank/) 的 `reranker.py` / `neighbor.py` · [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `common/` 的 `tokens.py` · `embed/` 的 `text_embedding_v4.py` · `configs/submit.yaml` + `configs/runs/` · **`eval/` 的其余部分**（harness / datasets / experiments / reports / baselines）· 各节的消融开关（`checker.*` / `neighbor.*` / `rerank.*` / `agent.*` / `budget.*` 的落点已定，**消费方未接线**） |
+| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）与 **`config.py`**（**全包唯一读环境变量的地方**，③-d）· [`retrieve/`](src/tianxi_am/retrieve/)（**策略与参数所有权** + §8 判据）· [`rank/`](src/tianxi_am/rank/) 的 **`packaging.py`**（**Step 1 的最小打包切片**，⚠ 非最终 pipeline）· [`service/`](src/tianxi_am/service/)（HTTP 层 + **Add/Search 端到端编排**，③-c）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）· [`eval/datasets/`](eval/datasets/)（**加载层 + schema 落差预处理**）· [`eval/harness/`](eval/harness/)（**HTTP 驱动 / 切批 / 裁判包装 / run record + `api_config.py`**）· [`eval/reports/schema.py`](eval/reports/schema.py)（**run record 的形状**）· [`tools/check_env.py`](tools/check_env.py)（**环境自检，含 V7 探针**）——测试在 [`tests/`](tests/) |
+| ⬜ **未实现** | [`rank/`](src/tianxi_am/rank/) 的 `reranker.py` / `neighbor.py` · [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `common/` 的 `tokens.py` · `embed/` 的 `text_embedding_v4.py` · `configs/submit.yaml` + `configs/runs/` · **`eval/` 还没写的**：`datasets/contracts.py`、`experiments/`（各对照的 arm 定义）、`baselines/`（**含 B1 包装 ReFind**）、`smoke/` 的 S1/S2/S3 探针与 `quota.py`、`reports/ledger.md` · 各节的消融开关（`checker.*` / `neighbor.*` / `rerank.*` / `agent.*` / `budget.*` 的落点已定，**消费方未接线**） |
 | ⛔ **v1 不做** | [`agent/`](src/tianxi_am/agent/)（D13） |
 
-**已实现的部分**：对照 `docs/roadmap.md`，落在 **Step 1** 内（存储层 + 配对 + 检索 + 最小服务）。
+**已实现的部分**：对照 `docs/roadmap.md`，`src/` 落在 **Step 1** 内（存储层 + 配对 + 检索 + 最小服务）；
+**`eval/` 是 Step 0 的主体，已开工**——但 **Step 0 还没走完**（见 `docs/roadmap.md` 的勾选状态）。
 
 > **⚠ 状态描述是本仓最易过期的东西**：改动状态时，**连同搜一遍所有声称"未实现 / 未开始"的地方**——`docs/` 里散着好几处。
 
@@ -37,7 +38,7 @@
 | `src/tianxi_am/<模块>/` 下任何代码 | 该目录的 `CLAUDE.md`（要写什么、边界在哪、本层的坑） |
 | 契约层（service、Add/Search 形状） | [`docs/contract.md`](docs/contract.md) |
 | 任何阈值 / 权重 / 开关 | [`docs/config-reference.md`](docs/config-reference.md)（**开关的唯一声明处**）+ [`configs/CLAUDE.md`](configs/CLAUDE.md)（**每个键住在 `.env` 还是 yaml**）。**全包只有 [`common/config.py`](src/tianxi_am/common/config.py) 读环境变量**——有静态测试钉住 |
-| 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（D1–D17 + 待决事项） |
+| 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（D1–D18 + 待决事项） |
 | 跑对照实验 | [`docs/experiments.md`](docs/experiments.md)（协议）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（怎么跑） |
 | 数据集加载 / harness | [`docs/benchmark-data.md`](docs/benchmark-data.md) + [`eval/datasets/CLAUDE.md`](eval/datasets/CLAUDE.md) |
 | **取回 / 校验 `benchmark_data/`**（新机器、数据缺了、要确认手上的是不是同一份） | [`docs/benchmark-data.md`](docs/benchmark-data.md) 的"出处链" + [`tools/fetch_benchmark_data.py`](tools/fetch_benchmark_data.py)。`make fetch-data` / `make data-check` |

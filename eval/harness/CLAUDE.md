@@ -17,7 +17,7 @@ run_record.py  每次 run 的配置指纹 + 数据指纹 + 结果
 
 ## ⚠ 三个必须先解决的阻塞项
 
-### 1. `api_config.py` —— **处置已定（2026-09-24），实现未写**
+### 1. `api_config.py` —— ✅ **已实现（2026-09-24）**，见 [`api_config.py`](./api_config.py)
 
 **7 个 pipeline 都做这两件事**：
 
@@ -37,7 +37,10 @@ from api_config import (ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL,
 2. **不用放在仓库外**：放**仓库内**，由 harness 在 subprocess 里注入 `PYTHONPATH`——`sys.path.insert(0, <不存在路径>)` 只是塞进一个没有该模块的条目，**import 会继续往后找到 `PYTHONPATH` 里的那份**。归档保持只读、`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。
 3. **不含 embedding 配置**——归档 pipeline 不向量化，Qwen3-Embedding-8B 只属于 `src/tianxi_am`。
 
-**⇒ "clone 下来不能直接跑"不再成立**：仓库内那份 + `.env` 就够。注意两边的名字不一样——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组，**适配器或 harness 要负责接上**。
+**⇒ "clone 下来不能直接跑"不再成立**：仓库内那份 + `.env` 就够。注意两边的名字不一样——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组：**适配器负责接上，已写在 [`api_config.py`](./api_config.py) 里**（`JUDGE_*` 留空即回落 `ANSWER_*`——网关只有一个对话模型）。
+
+> **它是怎么被找到的**：`judge.run_judge()` 起 subprocess 时把 **本目录**放进 `PYTHONPATH`（见 `judge._subprocess_env`）。
+> **回归用例**：`tests/test_harness.py` 里那个桩 pipeline **真的 `import api_config`**——这条路径断了会立刻红。
 
 ### 2. 那些 CLI 参数是死的
 
