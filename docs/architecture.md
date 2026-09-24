@@ -12,8 +12,9 @@
 
 ```text
 1. 幂等守卫         查 applied_batches；命中 → 直接 200，不写任何东西
-2. 恢复位置         next_idx = MAX(pair_idx)+1；定位 pending 对
-3. 挂接本批消息     前导非 user → 追加到 pending；首个 user → 关闭 pending；
+2. 恢复位置         next_idx = MAX(pair_idx)+1；定位**可续写的对**
+3. 挂接本批消息     前导 user → 并入它的 question；前导非 user → 追加到它的 answer；
+                    首个 user **且它已有 answer** → 关闭它；
                     其余按 §6.2 配对，pair_idx 从 next_idx 起连续赋值
 4. 同一事务         upsert qa_pairs（填空 + 追加，绝不覆盖）
                     + 向 applied_batches 插入本批记录

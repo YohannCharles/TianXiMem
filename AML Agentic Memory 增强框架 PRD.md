@@ -230,15 +230,17 @@ applied_batches(
 
 ### 6.2 一个 QA 对是什么
 
-> **一个 QA 对 = 从一条 user 消息开始，到（不含）下一条 user 消息之前的全部消息。**
+> **一个 QA 对 = 它的 `question` 是一段连续 user 消息，`answer` 是其后直到下一条 user 消息为止的全部非 user 消息。**
 
-这样定义而不是"严格 user + 紧邻 assistant"，是为了覆盖三种真实情况：连续多条 user 消息、一条 user 后跟多条 assistant 消息（工具调用等）、session 以 assistant 开头（此时 `question` 为空，构成一个无问的对）。
+这样定义而不是"严格 user + 紧邻 assistant"，是为了覆盖三种真实情况：连续多条 user 消息（它们构成**同一个** `question`）、一条 user 后跟多条 assistant 消息（工具调用等）、session 以 assistant 开头（此时 `question` 为空，构成一个无问的对）。
+
+**为什么 `question` 是一段而不是一条**：AML 可能按句边界把**一条超长 user 消息**物理切开（§17.1 的 **S5**），于是 `q q q a` 这种形状会出现，而它在语义上仍是一问一答。**完整论证、代价与"仍然未知"清单见 [`docs/decisions.md`](docs/decisions.md) D20。**
 
 **配对的作用域是整个 session，不是一个 Add 批次。** 一个 QA 对可以跨批次（§6.5 的续接），批次只是 AML 的传输单位。这一点直接决定了 `pair_idx` 必须 session 内连续、新批次要接着数——§6.5 的三步续接全部由此而来。
 
 **配对只做一种判断：这条消息的 `role` 是不是 `user`。** 其他 role（`assistant` / `system` / 工具输出…）一律归入当前对。**实现里不要枚举 role 白名单**——AML 传入的取值域没有文档，白名单会在遇到没见过的 role 时**静默丢消息**。
 
-定义与 ReFind 的 turn 粒度一致——**与外部基线同粒度，消融对比才干净**。
+定义与 ReFind 的 turn 粒度一致——**与外部基线同粒度，消融对比才干净**。唯一例外是连续 user 消息：我们把它并成一个对，此时产出的对**比 ReFind 少**（实测影响面 ≈0，见 D20）。
 
 ### 6.3 派生索引：Qdrant
 
@@ -306,20 +308,26 @@ AML 按 20 条消息**或 2,000 词**切批，切点由它决定。**一个 QA �
 
 2. 恢复位置
    next_idx = COALESCE(MAX(pair_idx) + 1, 0)        -- 限于该 (user_id, session_id)
-   pending  = 该 session 中 status = 'pending' 的那一对
+   可续写的对 = 该 session 中 status = 'pending' **或 answer 为空**的那一对
               （至多一个，且必在末尾：ORDER BY pair_idx DESC LIMIT 1）
 
 3. 挂接本批消息
-   a. 本批开头、首个 user 消息之前的消息 → 追加到 pending 的 answer
-      若此时不存在 pending → 按 §6.2 处理（批次以 assistant 开头，建一个 question 为空的对）
-   b. 本批出现首个 user 消息 → 把前一个 pending 对标 complete
-      （它是被两条连续 user 消息关掉的，没有内容可填；漏了这一步它会永久挂在 pending）
+   a′. 本批开头的 user 消息，**若那个可续写的对的 `answer` 还空着** → 并入它的 `question`
+       （跨批续写 question 的落点；不关对、不建新对）
+   a. 本批开头、首个 user 消息之前的消息 → 追加到那个可续写的对的 answer
+      若此时不存在可续写的对 → 按 §6.2 处理（批次以 assistant 开头，建一个 question 为空的对）
+   b. 本批出现首个 user 消息、**且那个对已有 answer** → 把前一个对标 complete
+      （漏了这一步它会永久挂在 pending）
    c. 其余消息按 §6.2 配对，pair_idx 从 next_idx 起连续赋值
    d. 收尾：按上面的"判定 pending"给涉及到的最后一对标 status——
       本批两限都未命中 ⇒ session 已结束 ⇒ 标 complete
-      ※ **纯接续批（零条 user 消息）也走这一步**：此时被追加的那个 pending 对
+      ※ **纯接续批（零条 user 消息）也走这一步**：此时被续写的那个对
         就是最后一带，同样要标 complete，否则它会一直挂到 session 结束
 ```
+
+**第 2 步的两个析取项都不能省。** `status = 'pending'` 来自"本批是否命中上限"，而上限里的**词数计数官方从未定义**（§17.1 的 **S2**）——一旦它与我们不一致，那一对会被标成 `complete`，下一批的碎片**再也接不上**（静默退化，不报错）。`answer 为空` 是**内容事实**，与任何计数无关。
+
+**3a′ 与 3b 是互补的两条**：那个对的 `answer` 还空着 ⇒ 本批开头的 user 消息是它 `question` 的**续写**（3a′，不关对、不建新对）；已有 `answer` ⇒ 本批首个 user 消息**关掉**它（3b）。
 
 > **为什么第 1 步不能省——这是本项目最容易踩的一个陷阱。**
 >
@@ -334,12 +342,12 @@ AML 按 20 条消息**或 2,000 词**切批，切点由它决定。**一个 QA �
 #### 写入规则——填空 + 追加，绝不覆盖
 
 ```text
-question      只在原值为 NULL 时写入
-answer        只在原值为 NULL 时写入；跨批续接时允许**追加**（append-only）
+question      填空 + 追加（append-only）——与 answer 同一写模式
+answer        填空 + 追加（append-only）
 status        只允许 pending → complete，不允许反向
 ```
 
-`answer` 必须允许追加，是因为 §6.2 承认"一条 user 后跟多条 assistant 消息（工具调用等）"——这类对若跨批次，续接批次带来的 assistant 消息必须并进去，而不是丢掉。**追加的安全性由上面的批次级守卫保证**（同一批至多被应用一次），不需要额外的判重逻辑。
+`question` 与 `answer` 都必须允许追加：一个 `question` 是**一段连续 user 消息**的拼接（可能跨批次），一个 `answer` 可能来自**多条非 user 消息**（§6.2 的工具调用情形，同样可能跨批次）——续接批次带来的消息必须并进去，而不是丢掉。**追加的安全性由上面的批次级守卫保证**（同一批至多被应用一次），不需要额外的判重逻辑。
 
 **补全时必须做的两件事**：
 
@@ -786,9 +794,10 @@ A: [assistant] Let me check the schedule.
 
 ```text
 1. 幂等守卫：查 applied_batches，本 request_id 已应用过 → 直接返回 200，不写任何东西（§6.5）
-2. 恢复 session 上下文：next_idx = MAX(pair_idx) + 1；定位 pending 对（§6.5）
-3. 挂接本批消息：前导非 user 消息追加到 pending 对；首个 user 消息关闭 pending 对；
-   其余按 §6.2 切成 QA 对，pair_idx 从 next_idx 起连续赋值
+2. 恢复 session 上下文：next_idx = MAX(pair_idx) + 1；定位**可续写的对**（§6.5）
+3. 挂接本批消息：前导 user 消息**并入**它的 `question`；前导非 user 消息追加到它的 `answer`；
+   出现首个 user 消息**且该对已有 `answer`** → 关闭它；其余按 §6.2 切成 QA 对，
+   pair_idx 从 next_idx 起连续赋值
 4. **同一事务内**：upsert 到 qa_pairs（填空 + 追加，绝不覆盖）+ 向 applied_batches 插入本批记录
 5. 对新增或内容变更的对，同步 upsert Qdrant（wait=true）；补全时必须重算 embedding
 6. 返回 200
@@ -800,8 +809,7 @@ A: [assistant] Let me check the schedule.
 
 - **并发**：Add 必须按 `(user_id, session_id)` 串行化——第 2 步读位置、第 4 步写位置是"读-改-写"，两个并发批次会拿到同一个 `next_idx`。单进程下用一把按 session 的锁即可；SQLite 的写事务不足以单独解决它（两次事务读到的 `MAX(pair_idx)` 会相同）
 
-- **运行时开关**：所有消融项（dense / **checker** / rrf / neighbor / rerank / packaging / agent）必须是配置项，否则 §13 无法执行。
-  > ⚠ **2026-09-23 更正（D15）**：本条原写"**注意 `checker` 是 `dense` 的下游**——两者不是独立开关，退化路径见 §8"。**那条依赖已删除**：检索只有混合一种模式（没有裸 BM25），`dense` 永不关 ⇒ `checker` 也就永不退化，§8 现在没有退化路径。**`checker` 与 `dense` 是彼此独立的开关。**
+- **运行时开关**：所有消融项（dense / **checker** / rrf / neighbor / rerank / packaging / agent）必须是配置项，否则 §13 无法执行。**`checker` 与 `dense` 是彼此独立的开关**（检索只有混合一种模式，`dense` 永不关 ⇒ §8 没有退化路径）。
 
 
 ---
@@ -831,8 +839,12 @@ A: [assistant] Let me check the schedule.
 | # | 未知 | 不消除的后果 | 何时必须清掉 |
 | -- | ---- | ------------ | ------------ |
 | **S1** | AML 从返回项里取哪个字段（`content`？`text`？），取出的是字符串还是整个 dict | 记忆可能被**整批丢弃**或退化成原始 JSON，**两种都不报错** | Step 6 之前，越早越好（§11.3） |
-| **S2** | 线上是否真按 20 条 / 2,000 词切批，"Adapter 计的词"怎么算 | `pending` 三个埋点与线上对不上，误判配对质量（§6.5） | Step 6 |
+| **S2** | 线上是否真按 20 条 / 2,000 词切批，"Adapter 计的词"怎么算 | `pending` 三个埋点与线上对不上，误判配对质量（§6.5）。⚠ 暴露面已收窄：**`question` 侧不依赖它，只剩 `answer` 侧** | Step 6 |
 | **S3** | `created_at` 是否被 CL-Bench 那条路径消费 | 白白放弃该数据集的时间信息（§11.3） | Step 6 |
+| **S4** | 平台会不会探 `/health`、探的是不是那个路径——端点**已实现**（`GET /health` → `{"status":"ok"}`，§7.2 于 contract.md） | ~~404 可能被判为不健康，任务根本跑不起来~~ **404 这条路已堵死**；剩下的只是"探了会不会有别的形状要求" | Step 6 之前 |
+| **S5** | **单条消息超过 2,000 词时，Adapter 是整条放行，还是在句边界切开成多条同 role 消息**（官方对此**没有规定**，原话是建议问主办方） | 若切开 ⇒ `q q q a` 这种形状出现。**配对已按"会切开"设防**（§6.2 / §6.5）⇒ 后果从"静默错"降级为"降分" | Smoke #1 顺带观测（成本≈0），并同时问主办方 |
+
+> **S5 怎么观测、基线是什么、本地为什么复现不了**——见 [`docs/open-questions.md`](docs/open-questions.md) 的"S5 的现状"。**若答案是"会切开"，不需要再改代码。**
 
 ### 17.2 靠代理评测消除（§13 的实验回答）
 

@@ -81,7 +81,7 @@
 
 **存储分工不可互换**（§6.3）：**SQLite 是真源**（QA 对正文、`status`、`pair_idx`、`event_time`），**Qdrant 是派生索引**（向量 + 过滤键 payload，**不含正文**，坏了可从 SQLite 全文重建）。
 
-**索引单元 = 一个 QA 对**（不是一个 message），一对一个向量。一个 QA 对 = **一段连续 user 消息，加上直到下一条 user 消息为止的全部非 user 消息**（§6.2；连续 user 并入同一个 `question` 这一处偏离见 [D20](docs/decisions.md)）。
+**索引单元 = 一个 QA 对**（不是一个 message），一对一个向量。一个 QA 对 = **一段连续 user 消息，加上直到下一条 user 消息为止的全部非 user 消息**（§6.2；理由见 [D20](docs/decisions.md)）。
 
 ---
 
