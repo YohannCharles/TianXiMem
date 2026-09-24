@@ -15,6 +15,9 @@ test_render.py          §7.2 / §11.3 同一份渲染
 test_switch_purity.py   §13 开关只影响它命名的那一件事
 test_store.py           §6.1 / §6.3 DDL、连续性与索引、**连接生命周期与并发**
 test_config.py          §15 配置唯一入口（**AST 静态断言** + 校验 + `.env` 读取）
+test_neighbor.py        §10 / §11.2 扩窗 + 段合并（**24 条清单的主体**）
+test_packaging.py       §11.3 段级打包 + 双预算（段进来之后的事）
+test_reranker.py        §11.2 远端精排：线格式、降级、两个计数器、装配（**不发真请求**）
 ```
 
 ---
@@ -72,12 +75,28 @@ test_config.py          §15 配置唯一入口（**AST 静态断言** + 校验 
 
 | 断言 | 说明 |
 | --- | --- |
-| **`len(data) <= top_k` 精确成立** | **含邻域扩展加进来的槽位**（它们占 `top_k` 名额，§10）——**加邻域之后最容易悄悄破掉的就是这条** |
+| **`len(data) <= top_k` 精确成立** | 但**数的单位是段，不是 raw memory**（2026-09-24）——见下面的"段模型改了四件事" |
 | 空结果是 `[]` 不是 `null` | §2.1 |
 | 每项含 `id` / `content` / **`created_at`** | `created_at` **始终存在**：日粒度或 `""`（§11.3） |
 | `score` 单调递减 | 且**不是**原始 RRF 分数（§11.3） |
 | 200 响应原样回显三个字段 | `request_id` / `user_id` / `session_id` |
 | **根级 `limit` 取自请求的 `top_k`** | **没写死 100**——写死会在 AML 传更小值时变成"返回超限"，那是**契约错误**（§7.3） |
+
+### ⚠ 段模型改了四件事——写用例前必须知道（2026-09-24）
+
+扩窗 + 段合并落地之后，**同一个响应**的含义变了。**四条都会让"照着旧假设写的断言"变成空过**，
+而它们**全都不会报错**：
+
+| 变了什么 | 旧假设（已失效） | 现在怎么造用例 |
+| --- | --- | --- |
+| **一个候选 ≠ 一项** | "落 N 条记忆 ⇒ 返回 N 项" | 想要 N 项就**把 `pair_idx` 隔开**（`0,2,4…`，见 `test_contract._idx`），或者**分属 N 个 session** |
+| **相邻会被扩进来** | "只落了 1 条 ⇒ 只返回那 1 条" | 落单条时它会把 `±1` 的邻居**一起带回来**（`test_neighbor` 的那几条整链用例） |
+| **重复写入 ≠ 多一项** | "重复 POST ⇒ 检索里多一条" | 多出来的行与旧行**相邻 ⇒ 合进同一段**、只是**段变宽**。**必须比 `content`、不能只比 `id` 与条数**（`preflight.check_replay_does_not_write_again` 的两个新断言） |
+| **`score` 数的是段的位置** | "`score = 1/(rerank 名次+1)`" | 是 `1/(**输出位置**+1)`——预算跳段时照抄名次会出现空洞，而"还是单调递减" |
+
+> **这就是"一个永远不会 FAIL 的检查等于没有检查"的又一次具体教训**：
+> 预检里"`top_k` 真的会截断"那条一度**静默空过**（3 条相邻记忆 = 1 段，
+> `top_k=1` 返回 1 条成了必然）。⇒ **段模型落地时，凡是"要多条才能验"的检查都要回头看一眼**。
 
 ### 隔离（§2.2）
 
@@ -87,6 +106,8 @@ test_config.py          §15 配置唯一入口（**AST 静态断言** + 校验 
 | `session_id` **没有**被当成 Search 的过滤条件 | 它是分组字段，不是过滤器 |
 
 **隔离要按"路径"逐个测**，不能只测主检索路径——**邻域扩展是 SQL 查询，很容易忘记带 `user_id` 条件**。
+⇒ ✅ 已覆盖：`test_neighbor.py::test_expansion_never_crosses_sessions`（同 `pair_idx`、不同 session / 不同 user
+三种行同时摆在库里，只有同 `(user_id, session_id)` 的那条能进）。
 
 ---
 
@@ -117,6 +138,41 @@ test_config.py          §15 配置唯一入口（**AST 静态断言** + 校验 
 | `agent: false` | **打包顺序**不变（只是候选少了 agent 补的那部分） |
 | `neighbor: false` | 种子集合不变（只是没有扩窗） |
 | `dense: false` | ——（**无下游依赖**：D15 删掉了裸 BM25 模式与"验证后再加 dense"的分阶段，所以没有任何东西依赖它） |
+
+> ✅ **`rerank` 那条的纯度断言已经能写了（2026-09-24）**：
+> `test_reranker.py::test_candidate_set_is_unchanged_by_rerank` 断言"精排把顺序整个倒过来之后，
+> **id 集合一个不多一个不少**"；`test_rerank_does_not_touch_the_token_budget` 断言
+> "开/关精排**不改变 token 计数的次数**"（段数变则计数变，而段数由数据决定）。
+>
+> > ⚠ **这条纯度是结构性保证，不是"我们记得别改集合"**：`RemoteReranker.score()` 返回的是
+> > **按输入位置对齐**的分数，重排由 `pipeline._maybe_rerank` 对**同一个列表**做——
+> > 那条链上**没有第二条路径**能改动候选集合。若哪天有人让 reranker 返回"排好序的 id 列表"，
+> > 这条纯度就只剩一句注释了。
+
+> ✅ `neighbor` 那条的**纯度断言已经能写**（2026-09-24）：扩窗的旋钮是 `neighbor.radius`，
+> `test_neighbor.py::test_neighbors_do_not_change_segment_priority` 把 `radius=0` 与 `=1` 对比，
+> 断言**段的 `best_rank` 与锚点一字不变**（只有段的长度变了）。
+> ⚠ 但 **`neighbor.enabled` 这个开关本身还没接线**（见 `config-reference.md` §2）——
+> 现在能关的只有 `radius`，**别把"能关半径"当成"开关已落地"**。
+
+### 精排测试的三层（`test_reranker.py`）—— **不发真请求**
+
+| 层 | 怎么隔离 | 为什么这么切 |
+| --- | --- | --- |
+| `RemoteReranker` | `httpx.MockTransport` | 让"超时 / 5xx / 坏 JSON / NaN"变成**可精确构造**的输入 |
+| `SearchPipeline._maybe_rerank` | `FakeReranker`（协议级） | 恰好一次、降级、两个计数器——**不需要 HTTP** |
+| `build_reranker` / `build_services` | 真 `AppConfig` + tmp 路径 | 装配漏了 `None` 是**静默**的：Search 照常工作，只是没精排 |
+
+> ⚠ **超时要用"抛 `httpx.ReadTimeout`"来模拟，不要让假传输层真的睡**：
+> `MockTransport` 不参与超时计时，睡多久都不会触发超时——那样写的用例是**空过的**。
+> 真超时与它是同一个 `httpx.HTTPError` 分支。
+>
+> ⚠ **`NaN` / `Infinity` 只能手工构造原始文本**（`httpx` 的 `json=` 走 `allow_nan=False`），
+> 而 Python 的 `json.loads` **默认接受**这三个非标准字面量——所以"字段是数字"的检查挡不住它们，
+> 必须显式 `isfinite`。
+>
+> ⚠ 真端点那一路在 [`../tools/probe_reranker.py`](../tools/probe_reranker.py)（`make probe-reranker`）：
+> **单元测试用假传输层，真连通性用探针**——两者都要，不能互相替代。
 
 **这组测试很便宜，而它保护的是整个 §13 实验计划。** 没有它，所有消融结论都不可信。
 

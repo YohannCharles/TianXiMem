@@ -51,10 +51,19 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 **下面各节的标题会标出本节是否已落地**：
 **✅ 已落地**（键已进 `configs/*.yaml` 或 `.env`，有代码消费方）· **⬜ 待接线**（落点已定，消费方未接）。
 
-> ⚠ **③-d 只落地了"今天有代码消费方"的键。** 本文件里 `checker.*` / `neighbor.*` / `rerank.*` /
-> `agent.*` / `budget.*` / 消融开关的**落点已经在这里声明**，但它们**还没有进 `configs/*.yaml`**——
+> ⚠ **③-d 只落地了"今天有代码消费方"的键。** 本文件里 `checker.*` / `agent.*` /
+> 消融开关的**落点已经在这里声明**，但它们**还没有进 `configs/*.yaml`**——
 > 消费方未接线时收进配置等于预留字段（§6.1 对 DDL 的同一条纪律）。
-> ⇒ **别以为现在改 yaml 就能开关 `rerank`**：那个开关还没接线。
+>
+> ✅ **2026-09-24 更新（两次）**：
+>
+> * `neighbor.*` 与 `budget.*` **已接线**（扩窗 + 段合并 + token 预算落地），
+>   它们已经住进 `configs/default.yaml`。本文件里那两节的**键名与值已按实现订正**——
+>   订正前它们写的是 PRD §10 的示例口径（`seed_count = 20` / `window = ±1`），
+>   而实现用的是 `expansion_seed_limit = 30` / `radius = 1`。**两份不同的名字是真会咬人的**。
+> * **`rerank.*` 也接线了**（§7）：`rerank.enabled` 现在**真的**能关掉精排。
+>   ⇒ 本行原先那句"别以为现在改 yaml 就能开关 `rerank`"**已经不成立**，已删除。
+>   仍然**待接线**的是 `checker.*` 与 `agent.*`。
 
 ---
 
@@ -80,17 +89,17 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 2. 消融开关（§15）—— ⬜ **待接线**
+## 2. 消融开关（§15）—— ⬜ **待接线**（已接 `rerank`）
 
 **这是开关的唯一声明处**——其它文档提到开关时一律指回这里，不要各自列一份。
 
-| 开关 | 关掉它意味着 | 依赖谁 | **关掉时不得改变什么** | 出处 |
-| --- | --- | --- | --- | --- |
-| `dense` | 检索退化为 BM25-only | —— | —— | §7.2 |
-| `checker` | 一律进 Agentic Search | —— | —— | §8 |
-| `rrf` | 不融合，只用单路 | —— | —— | §7.3 |
-| `neighbor` | 不扩窗 | —— | **种子集合不变** | §10 |
-| `rerank` | 直接用融合名次 | —— | **候选数量不变**（只是顺序变了） | §11.2 |
+| 开关 | 关掉它意味着 | 依赖谁 | **关掉时不得改变什么** | 出处 | 接线 |
+| --- | --- | --- | --- | --- | --- |
+| `dense` | 检索退化为 BM25-only | —— | —— | §7.2 | ⬜ |
+| `checker` | 一律进 Agentic Search | —— | —— | §8 | ⬜ |
+| `rrf` | 不融合，只用单路 | —— | —— | §7.3 | ⬜ |
+| `neighbor` | 不扩窗 | —— | **种子集合不变** | §10 | ⬜（只能关 `radius`） |
+| `rerank` | 直接用融合名次 | —— | **候选数量不变**（只是顺序变了） | §11.2 | ✅ `rerank.enabled` |
 | `packaging` | 不做打包策略 | —— | —— | §11.3 |
 | `agent` | 一律不走 Agentic Search | `checker`（门控时） | **打包顺序不变**（只是候选少了 agent 补的那部分） | §9 |
 
@@ -190,40 +199,64 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 6. Neighbor Expansion（§10）—— ⬜ **待接线**
+## 6. Neighbor Expansion + 段合并（§10 / §11.2）—— ✅ **已落地**（2026-09-24）
 
-| 配置项 | 初值 | 说明 |
-| --- | --- | --- |
-| `neighbor.enabled` | `true` | —— |
-| `neighbor.seed_count` | **20** | 取 rerank 后的名次前 20 作为种子 |
-| `neighbor.window` | **±1** | **单位是 QA 对**——`±1` 拿回前后各**一整对**（最多 4 条消息），不是各一条消息 |
-| `neighbor.order` | `by_rank_then_pidx` | 见 §8 |
+| 配置项 | 初值 | 类 | 说明 |
+| --- | --- | --- | --- |
+| `neighbor.expansion_seed_limit` | **30** | C | 只对 rerank 后的**前 N 条**主动扩窗；其余候选**仍保留，只是不扩展** |
+| `neighbor.radius` | **1** | C | 扩窗半径，**单位是 QA 对**——`±1` 拿回前后各**一整对**（最多 4 条消息），不是各一条消息 |
 
-**必须计入 Top-K 预算**：邻域槽位**占 `top_k` 名额**（§10）。
+> ⚠ **键名在 2026-09-24 订正过**：本节原先写的是 PRD §10 的**示例口径**
+> （`seed_count = 20` / `window = ±1` / `order`），而实现用的是
+> `expansion_seed_limit` / `radius`。**已实现的名字才是唯一声明**——旧名字已删除，
+> 因为它们会让人在 yaml 里改一个**根本不存在**的键，而服务照常启动、行为一点不变。
+>
+> ⚠ **PRD §10 的"20 种子 / 60 槽位"是一道示例算术**（用来演示预算怎么算），
+> v1 的实际取值是 **30**。两者不是一回事，别互相替换。
 
-**预算怎么算**：20 个种子 × 每颗最多 3 个槽位 = **最坏 60 个槽位**，给回填留 40 个余量。实际通常远小于此——种子密集时相邻窗口大量重叠，去重会折叠掉大部分；种子分散时才逼近 60。
+**`top_k` 约束的是段数，不是 raw memory 数**（2026-09-24 定）：100 个候选 + 40 个邻居
+= 140 条 raw，连续 `pair_idx` 合并之后可能只剩 60 段。⇒ **`top_k` 只能在合并之后生效**。
 
-> **但真正先撞上的限制是 token 而不是槽位**（§6.4）：一对的文本量约为单条消息的两倍，117,760 token 的答案窗口可能比 100 个槽位更早用尽。
+**预算怎么算**：**真正先撞上的限制是 token 而不是段数**（§6.4）——一对的文本量约为单条消息的两倍，117,760 token 的答案窗口可能比 100 个段更早用尽。
 
-> **种子数、窗口大小、Top-K、token 预算，是同一道题，任何一项调整都要重算其余四项**（§10）。
+> **种子数、窗口大小、Top-K、token 预算，是同一道题，任何一项调整都要重算其余三项**（§10）。**改 `expansion_seed_limit` 之前必须有 ablation 数据。**
 
 **窗口从 ±1 改 ±2 只需改 `BETWEEN` 的界**（§10）——`UNIQUE(user_id, session_id, pair_idx)` 建出的索引**正好就是这个查询的键**。
 
+> **`neighbor.enabled` / `neighbor.order` 这两个键没有落地**，而且是**有意的**：
+> 前者是 §15 的消融开关（**待接线**，见 §2），后者在 v1 里**不是旋钮**——
+> 段内顺序（`pair_idx` 升序）与段间顺序（`best_rank` 升序）都是 §11.2 的规格，
+> 不是可以各调各的初值。
+
 ---
 
-## 7. Rerank 与打包（§11）—— ⬜ **待接线**
+## 7. Rerank 与打包（§11）—— ✅ **已落地**（rerank + 打包，2026-09-24）
 
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
-| `rerank.enabled` | `true` | §11 是主线 |
-| `rerank.model` | **`Qwen3-Reranker-4B`** | 自托管 open weights cross-encoder。**2026-09-24 定**，提交时不得更换（D12） |
-| `packaging.render_template` | `Q:/A:` | **"贵"消融项**：改它等于改变 embedding 输入，**整个向量索引要重建** |
+| `rerank.enabled` | `true` | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`） |
+| `rerank.timeout_seconds` | **30.0** | **C 类**。实测 100 篇 ≈ 2.2s、200 篇 ≈ 5.3s ⇒ 约 10 倍余量。**太紧 ⇒ 伪降级**（网关排队被报成"reranker 坏了"）；**太松 ⇒ Search 被拖住** |
+| `TIANXI_RERANKER_BASE_URL` | `https://memory.021130.xyz/v1` | **env**。主网关（**不是 memory2**，D18） |
+| `TIANXI_RERANKER_API_KEY` | —— | **env**。与 `AML_EMB_*` 是同 host、不同 key |
+| `TIANXI_RERANKER_MODEL` | `Qwen3-Reranker-4B` | **env**。⚠ 端点是**忽略**它的（实测），它只进 run record 的指纹。**提交时不得更换**（D12） |
+| `packaging.render_template` | `Q:/A:` | **"贵"消融项**：改它等于改变 embedding 输入，**整个向量索引要重建**。唯一实现是 `common/render.py` |
 | `packaging.role_prefix` | `[assistant]` 等标记 | 一个对里有多条非 user 消息时每条带 role 标记 |
 | `packaging.inject_abs_time` | **`false`** | 见 §9 |
-| `packaging.group_inner_order` | `pair_idx` 升序 | **不把种子提到最前** |
-| `packaging.group_outer_order` | 种子名次序 | —— |
-| `packaging.created_at_granularity` | `day` | **只给到日粒度** |
-| `packaging.score_mode` | `reciprocal_rank` | `1/(rank+1)` 类单调值，**不是**原始 RRF 分数 |
+| `packaging.created_at_granularity` | `day` | **只给到日粒度**，且**固定 UTC、无旋钮** |
+| `packaging.score_mode` | `reciprocal_rank` | `1/(rank+1)`，**按输出位置**、**不是**原始 RRF 分数 |
+| `budget.max_tokens` | **117,760** | ⛔ **A 类**（AML 定的答案窗口余量）。**已落地**（2026-09-24） |
+| `budget.tokenizer` | **`o200k_base`** | ⛔ **A 类**。必须是**答案模型自己的**分词器 |
+
+> ⚠ **`rerank.model` 这个键不存在**（2026-09-24 订正）：模型名是**端点身份**、不是阈值，
+> 所以它住在 `.env` 的 `TIANXI_RERANKER_MODEL`（②层分工），本表原先把它写成 yaml 键是错的。
+> **那三个变量是缺了就降级的**（D12），与 `embed.*` 那种"缺了就拒绝启动"正相反——
+> 所以 `validate()` **不**校验它们，改由 `service/app.py` 的 `build_reranker()` 决定接不接。
+> ⚠ **"想用却没配全"会打一条 WARNING**：否则它会表现成"每次检索都静默不精排"。
+
+> **`packaging.group_inner_order` / `packaging.group_outer_order` 不再是"配置项"**（2026-09-24）：
+> 它们是 §11.2 的**规格**（段内 `pair_idx` 升序、段间 `best_rank` 升序），
+> 住在 `rank/neighbor.merge_segments` 里，**不是可以各写各的初值**。
+> §11.2 说它们是"可消融项"——真要消融时**改那一个函数**，别先立一个没人读的键。
 
 **组内顺序**（§11.2）：**窗口内部按 `pair_idx` 时间序输出，不把种子提到最前。** 窗口是一段连续对话，按时间序读才成立；把种子抽到最前会把一段话拦腰截断。而答案阶段按前缀截断——**窗口整体连续，意味着截断点落在窗口边界上**，不会切出半个窗口。
 
@@ -268,14 +301,19 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 9. 模型（§2.3）—— ✅ **已落地**（只有 `models.embedder`）
+## 9. 模型（§2.3）—— ✅ **已落地**（`models.embedder` + 三个 env 里的模型名）
 
-| 配置项 | 提交期 | 开发期 | 说明 |
-| --- | --- | --- | --- |
-| `models.embedder` | `text-embedding-v4` | Qwen3-Embedding-8B | **只能用前者**（§2.3） |
-| `models.llm` | `gpt-4o-mini` | qwen3.5-9b | **只能用前者**（§2.3） |
-| `models.reranker` | **`Qwen3-Reranker-4B`**（2026-09-24 定） | 同左 | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12） |
-| `models.embed_dim` | **由接口提供** | —— | **不能写死** |
+| 配置项 | 提交期 | 开发期 | 住哪 | 说明 |
+| --- | --- | --- | --- | --- |
+| `models.embedder` | `text-embedding-v4` | Qwen3-Embedding-8B | **yaml** | **只能用前者**（§2.3） |
+| `models.llm` | `gpt-4o-mini` | qwen3.5-9b | **env**（`AML_MODEL`） | **只能用前者**（§2.3） |
+| `TIANXI_RERANKER_MODEL` | **`Qwen3-Reranker-4B`**（2026-09-24 定） | 同左 | **env** | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12）。⚠ 端点忽略它，见 §7 |
+| `models.embed_dim` | **由接口提供** | —— | —— | **不能写死** |
+
+> ⚠ **embedding 走 yaml、另两个走 env，这不是笔误**：`models.embedder` 是 profile 之间
+> **唯一真正该变**的东西（`local.yaml` / `submit.yaml` 存在的理由就是让"哪些量随模型变"
+> 能被 diff 出来）；而 LLM 与 reranker 的模型名在开发期与提交期**是同一套网关地址上的
+> 不同部署**，属于"端点身份"，所以跟 base_url / key 一起住在 `.env`。
 
 **架构必须 embedder-agnostic**（§2.3）：开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。集合的向量维度**必须由 `§7.4` 的接口提供**，Step 5 换模型时按新维度**重建集合**。
 

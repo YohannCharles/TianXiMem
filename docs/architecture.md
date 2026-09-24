@@ -29,7 +29,7 @@
 
 ```text
 query → BM25 ┐
-             ├→ Weighted RRF → 初始候选 → Evidence Checker
+             ├→ Weighted RRF → memory_id 稳定去重 → Evidence Checker
      dense  ─┘                              ├ 证据足够 → 直接返回
                                             └ 证据不足 → Agentic Search
                                                           ↓
@@ -39,10 +39,15 @@ query → BM25 ┐
                                                           ↓
                                               Neighbor Expansion（按名次扩窗）
                                                           ↓
-                                              Context Packaging
+                                              Context Segment Merge
                                                           ↓
-                                              ≤ top_k（精确计数）
+                                              Token Budget + Context Packaging
+                                                          ↓
+                                              ≤ top_k（精确计数，**数的是段**）
 ```
+
+> **`top_k` 数的是段、不是 raw memory**（2026-09-24）：扩窗会把 raw 条数抬到 `top_k` 之上，
+> 而连续 `pair_idx` 的合并又把它降回来 ⇒ **截断只能在合并之后做**。
 
 **"合并而非替换"**（§9）：Agent 的产出与初始候选按 `id` 去重后一起进 Rerank。理由——初始那一路往往已经有正确答案，Agent 的价值是**补上它找不到的那部分**，而不是推翻它。
 

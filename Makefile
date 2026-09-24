@@ -17,7 +17,8 @@
 #   显式带 `--env-file`——它也刻意**不依赖配置层**（配置层坏了它还得能跑）。
 ENV_FILE ?= .env
 
-.PHONY: help sync check fmt lint test qdrant-up qdrant-down serve contract-check smoke t2 clean \
+.PHONY: help sync check fmt lint test qdrant-up qdrant-down serve contract-check probe-reranker \
+        smoke t2 clean \
         fetch-data data-check
 
 help:  ## 列出所有目标
@@ -81,6 +82,14 @@ contract-check:  ## §2 契约合规自查（打真 HTTP：本地自启服务，
 # 退出码：0 全过 · 1 有检查没过 · 2 前置条件不满足（Qdrant 或 embedding 网关不可达）。
 # ⚠ 需要 .env 里的 AML_EMB_BASE_URL / AML_EMB_API_KEY（由 common/config.py 读）与可达的 Qdrant。
 # 打已经在跑的服务：uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
+
+probe-reranker:  ## 精排探针：打真网关，验连通性 + 它在链上真的起作用（不消耗 Smoke 配额）
+	uv run python tools/probe_reranker.py
+# 与 contract-check 的分工：那一个验**契约形状**（不关心精排好不好用），
+# 本项验**精排这一环**（端点通不通、线格式对不对、名次有没有真的换掉）。
+# 退出码：0 端点与线格式都正常 · 1 端点不可用或线格式不符 · 2 没配 reranker。
+# ⚠ **顺序有没有变不影响退出码**——那是信息，不是判据（一个诚实但保守的 reranker
+#    完全可能给出与 RRF 相同的顺序）。
 
 t2:  ## §13 的 T2 实验：跨 session 失败归因（半天工作量）
 	@echo "TODO(Step 1): 133 道 multi-session 题（含 12 道拒答题单列）"

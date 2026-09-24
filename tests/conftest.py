@@ -58,6 +58,33 @@ def store(tmp_path) -> Iterator[SqliteStore]:
     yield SqliteStore.open(tmp_path / "tianxi.db")
 
 
+class FakeCounter:
+    """确定性计数器：**1 个字符 = 1 个 token**（空白与换行也各算 1）。
+
+    为什么不用真的 `o200k_base`：
+
+    * **单元测试不该依赖 tiktoken 的 BPE 缓存文件**（首次使用要联网下载，
+      `common/tokens.py` 的 `TokenCounterError` 就是为那条路径写的）
+    * **字符计数让预算的算术精确可推**：`count(a) + count(sep) + count(b)`
+      **恰好等于** `count(a + sep + b)`。BPE 没有这个恒等式（合并可以跨越拼接边界），
+      所以 `packaging._fit_by_budget` 的决策用的是**上界**、报告用的才是真值——
+      而上界与真值在字符计数下重合，于是"装了几个段"这件事在用例里是**算得出来的**。
+
+    ⚠ 真分词器的接线（`load_counter` / `budget.tokenizer`）由 `test_config.py` 与
+    `test_contract_preflight.py` 覆盖——**这里刻意不重叠**。
+    """
+
+    name: str = "fake-char"
+
+    def count(self, text: str) -> int:
+        return len(text)
+
+
+@pytest.fixture
+def counter() -> FakeCounter:
+    return FakeCounter()
+
+
 def rd(store: SqliteStore, method: Callable, /, *args, **kwargs):
     """在**一次短生命周期只读连接**里调用 `store` 的一个读取方法（测试用）。
 
@@ -276,6 +303,8 @@ class Wired:
     embedder: FakeEmbedder
     instrument: InMemoryCheckerInstrument
     retriever: HybridRetriever
+    counter: FakeCounter
+    budget_tokens: int
 
     def search(self, *, user_id: str = "u1", query: str = "q", top_k: int = 5):
         return self.services.search.run(user_id=user_id, query=query, top_k=top_k)
@@ -305,17 +334,33 @@ def wired(tmp_path) -> Iterator[Wired]:
     embedder = FakeEmbedder(dim=8)
     instrument = InMemoryCheckerInstrument()
     retriever = HybridRetriever(store=qdrant, dense=DenseArm(embedder), params=make_hybrid_params())
+    counter = FakeCounter()
+    #: 预算**刻意给得极大**（字符计数下的 10 万），好让 `wired` 的用例测的是它自己
+    #: 命名的那件事（契约形状 / 隔离 / 计数），而不是撞上预算提前停止。
+    #: 预算本身的行为在 `test_packaging.py` 与 `test_neighbor.py` 里**单独**测。
+    budget_tokens = 100_000
     services.search = SearchPipeline(
         store=services.store,
         qdrant=qdrant,
         retriever=retriever,
         checker=EvidenceChecker(instrument=instrument),
+        counter=counter,
+        budget_tokens=budget_tokens,
     )
     services.add = AddPipeline(
         store=services.store, qdrant=qdrant, embedder=embedder, locks=services.locks
     )
     try:
-        yield Wired(services, qdrant, services.store, embedder, instrument, retriever)
+        yield Wired(
+            services,
+            qdrant,
+            services.store,
+            embedder,
+            instrument,
+            retriever,
+            counter,
+            budget_tokens,
+        )
     finally:
         services.close()
 

@@ -15,7 +15,7 @@
 | [`store/`](./store/) | SQLite 真源 + Qdrant 派生索引 + 邻域查询的 SQL | §6.1、§6.3 |
 | [`embed/`](./embed/) | `Embedder` 协议 + 两个实现 + **落盘向量缓存** | §7.4、§7.2 |
 | [`retrieve/`](./retrieve/) | BM25；dense；**混合检索的策略与参数所有权**；Evidence Checker（**到 rerank 为止**） | §7.1–§7.3、§8 |
-| [`rank/`](./rank/) | rerank → **Neighbor Expansion（§10）** → Context Packaging | §10、§11 |
+| [`rank/`](./rank/) | **远端 rerank（`RemoteReranker`）** → **Neighbor Expansion（§10）** → Context Segment Merge → Context Packaging | §10、§11 |
 | [`agent/`](./agent/) | Conditional Agentic Search 循环与工具（**v1 不实现**，D13） | §9 |
 | [`llm/`](./llm/) | LLM 后端抽象 | §2.3、§12.1 |
 | [`common/`](./common/) | **渲染模板的唯一实现**；token 计数；配置加载 + **开关校验** | §11.3、§6.4、§15 |

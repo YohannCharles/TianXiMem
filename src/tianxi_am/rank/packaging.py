@@ -1,30 +1,29 @@
-"""Context Packaging —— **Step 1 的最小切片**（§11.3）。
+"""Context Packaging —— **段级打包 + token 预算**（§11.3 / §6.4）。
 
-> ⚠⚠ **这是阶段性实现，不是最终的 Search Pipeline。**
-> 当前：`Hybrid → Candidates → Checker(v1 passthrough) → **Minimal Packaging** → ≤ top_k`
-> 最终：`... → Checker → **Remote Rerank** → **Neighbor Expansion** → Context Packaging → ≤ top_k`
-> 两者都写在 [`CLAUDE.md`](./CLAUDE.md)，**不要把这个切片当成最终形态**。
+```text
+ContextSegment[]（已按 best_rank 升序）
+  → 按 best_rank 依次加入，直到撞上 top_k 或 token 预算
+  → data[]（id = 锚点，content = 整段，created_at = 锚点的日粒度，score = 1/(final_rank+1)）
+```
 
-## 本切片只做五件事
+> ⚠⚠ **阶段说明**：本文件原先只是"Step 1 的最小切片"，现在接上了 Neighbor Expansion
+> 与双预算里的 **token 那一半**。**分组顺序（组内 `pair_idx` / 组间 `best_rank`）在
+> [`neighbor.py`](./neighbor.py) 定**，这里只按给定的顺序消费。
+> 两个阶段都写在 [`CLAUDE.md`](./CLAUDE.md)，**不要把这个文件当成整条 Search 链**。
 
-1. 按 `Candidate` 的**当前名次**生成响应
-2. 从 SQLite 真源取正文（`fetch_pairs_by_ids`；**正文不进 Qdrant**，§6.3）
-3. `content` 用 [`../common/render.py`](../common/render.py) 的**唯一实现**
-4. `created_at` 只给到**日粒度**，`event_time` 为 NULL 时发 `""`
-5. `score = 1/(rank+1)`，且**最终数量严格 ≤ `top_k`**
+## 三条本文件独有、且**必须**守住的东西
 
-## 本切片**不**做（免得被当成遗漏）
+**1. 本函数是最终数量的守门人。** `len(data) <= top_k` 精确成立（§2.2）。
+⚠ 这里的 `top_k` 约束的是**段数**，不是中间 raw memory 数——扩窗会把 raw 数抬到
+远大于 `top_k`，而合并又会把它降回来（见 `neighbor.py` 的模块 docstring）。
 
-Rerank（Step 3）· Neighbor Expansion（Step 2）· 双预算截断（Step 2）·
-组内/组间顺序（扩窗出现后才有意义）。
+**2. 段是**原子单位**，装不下就停。** 不截半个段、不拆回单条、不跳过当前段再塞后面的。
+理由：段是"一段连续对话"，**截断点必须落在段边界上**——否则模型读到的上下文缺了一环，
+而 `content` 里**看不出来**（§11.2）。
 
-## 为什么 `content` 不通过参数注入
-
-`common/render` 是**唯一实现**（不变式 I1）：同一份渲染既是 embedding 的输入、也是
-返回给 AML 的 `content`。若这里允许传入别的渲染函数，"检索命中的是什么"与"模型读到的
-是什么"就会**漂移，且不报错**。
-
-⇒ 所以**没有 `renderer` 参数**——不是省事，是让漂移**不可能发生**。
+**3. `content` 不通过参数注入。** [`common/render`](../common/render.py) 是**唯一实现**
+（不变式 I1）：同一份渲染既是 embedding 的输入、也是返回给 AML 的 `content`。
+⇒ 所以这里**没有 `renderer` 参数**——不是省事，是让漂移**不可能发生**。
 """
 
 from __future__ import annotations
@@ -34,9 +33,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 
-from tianxi_am.common.render import render
-from tianxi_am.retrieve.fusion import Candidate
-from tianxi_am.store.sqlite_store import QaPair, SqliteStore
+from tianxi_am.common.render import SEGMENT_SEP
+from tianxi_am.common.tokens import TokenCounter
+from tianxi_am.rank.neighbor import ContextSegment
 
 __all__ = [
     "PackagedResponse",
@@ -58,8 +57,7 @@ __all__ = [
 #: 由 Adapter 按 UTC 编码成 Unix 毫秒写进 `event_time`。
 #:
 #: ⚠ **刻意不做成配置项**：一个"可以随手改的 `created_at_tz`"会与加载层脱钩——
-#: 改了它，日期整体偏一天，而**没有任何东西会报错**。要改口径就两边一起改，且那是一次
-#: 需要重新验证的决定，不是一次配置调整。
+#: 改了它，日期整体偏一天，而**没有任何东西会报错**。
 UTC_ONLY: Final[str] = "UTC"
 
 #: 日期格式：`YYYY-MM-DD`（§11.3 的示例是 `2026-07-26`）。
@@ -84,14 +82,14 @@ def day_granularity(event_time: int | None) -> str:
 
 
 def placeholder_score(rank: int) -> float:
-    """`1/(rank+1)`——**单调递减的占位值**，`rank` 是 **0-based**。
+    """`1/(rank+1)`——**单调递减的占位值**，`rank` 是 **0-based**（§11.3）。
 
-    ⚠ **不要返回原始 RRF 分数**：融合分数**不是校准量**（§8），对我们没有意义；
-    但**万一 AML 按 `score` 重排，省略 `score` 就有风险**。取最安全的一侧：
-    这个值无论 AML 是否重排，**顺序都不变**（§11.3）。
+    ⚠ **不要返回原始 RRF 分数，也不要返回 reranker 的原始分**：融合分数**不是校准量**
+    （§8），对我们没有意义；但**万一 AML 按 `score` 重排，省略 `score` 就有风险**。
+    取最安全的一侧：这个值无论 AML 是否重排，**顺序都不变**。
 
-    ⚠ Rerank 接入后**名次会变**，届时这个值要基于**最终名次**重算——
-    所以它只能在这里现算，不能固化在上游类型里。
+    ⚠ 这里的 `rank` 是**最终输出位置**（段级），不是 rerank 名次——两者在扩窗/合并
+    之后**不是一回事**。
     """
     if rank < 0:
         raise ValueError(f"rank 不得为负：{rank}")
@@ -102,7 +100,7 @@ def placeholder_score(rank: int) -> float:
 class ResponseItem:
     """`data[]` 的一项——**§2.1 的四个字段，一个不多**。
 
-    ⚠ 这里**没有** `session_id` / `pair_idx` / `score` 之外的任何内部字段。
+    ⚠ 这里**没有** `session_id` / `pair_idx` / `source_memory_ids` 之类的内部字段。
     多余的键通常被忽略，但**没有理由冒这个险**。
     """
 
@@ -114,66 +112,110 @@ class ResponseItem:
 
 @dataclass(frozen=True, slots=True)
 class PackagedResponse:
-    """打包结果。
+    """打包结果。**除 `items` 外都是诊断量**——它们不进响应，但要能被看见。
 
-    `dropped_missing` 是**真源里查不到正文的条数**——正常情况下应为 0
-    （Qdrant 是派生索引，`id` 与 SQLite 一一对应）。**非 0 说明索引与真源脱钩了**
-    （例如 SQLite 被回滚到旧状态），**不该静默**：调用方要能看到这个数。
+    | 字段 | 含义 |
+    | --- | --- |
+    | `dropped_missing` | **真源里查不到正文**的候选条数。恒应为 0；非 0 = 索引与真源脱钩 |
+    | `considered_segments` | 合并后的段总数（= 排序后、截断前的候选段数） |
+    | `truncated_by_top_k` | 因 `top_k` 而截断 |
+    | `truncated_by_budget` | 因 token 预算而提前停止（**不是**截断，是"装不下就停"） |
+    | `output_tokens` | 最终输出的**真实** token 数（对拼好的字符串数的，§6.4） |
     """
 
     items: tuple[ResponseItem, ...]
-    dropped_missing: int
+    dropped_missing: int = 0
+    considered_segments: int = 0
+    truncated_by_top_k: bool = False
+    truncated_by_budget: bool = False
+    output_tokens: int = 0
 
     @property
     def count(self) -> int:
         return len(self.items)
 
 
-def package(
-    candidates: Sequence[Candidate],
+def _fit_by_budget(
+    segments: Sequence[ContextSegment],
     *,
-    store: SqliteStore,
-    top_k: int,
-) -> PackagedResponse:
-    """把候选打包成 `data[]`。**本函数是最终数量的守门人。**
+    counter: TokenCounter,
+    max_tokens: int,
+) -> tuple[list[ContextSegment], bool]:
+    """按 `best_rank` 顺序依次加入，直到**下一个段装不下** ⇒ 停。
 
-    * **`top_k` 的边界**：`<= 0` ⇒ 空响应（**不查库**）；上游给得更多 ⇒ 先截断
-    * **绝不为凑满 `top_k` 复制或补造结果**——有多少真源行就有多少项
-    * `score` 按**输出位置**重算，不是照抄输入名次：真源缺行时中间会被跳过，
-      照抄会让 `score` 出现空洞（而它必须单调递减、且 `rank=0` 就是 `1.0`）
-    * `created_at` 固定走 **UTC 日粒度**（`day_granularity`），**没有时区参数**——
-      见模块里那条注释：一个可随手改的口径会与加载层脱钩，而**不会报错**
+    ### 决策用的是"上界"，报告的是"真值"
+
+    预算的**决策**必须便宜（每个段一次比较，不能每加一个段就把整段文本重新数一遍，
+    那是 O(S²) 的字符量）。所以这里用：
+
+    ```text
+    已用 = Σ 各段的 token + (段数 - 1) × 连接符的 token
+    ```
+
+    ⚠ **它是一个上界，不是恒等式**：BPE 的合并可以跨越拼接边界，所以
+    `count(a) + count(sep) + count(b) ≥ count(a + sep + b)`。用上界做预算**只会少装、
+    不会超装**——这是预算该有的偏向（超装的后果是 AML 按前缀截断，**排在后面的证据整段作废**）。
+
+    而**报告**出去的那个 `output_tokens` 是最终字符串的**真值**（见 `package`）。
     """
-    if top_k <= 0:
-        return PackagedResponse(items=(), dropped_missing=0)
+    if max_tokens <= 0:
+        return [], bool(segments)
 
-    head = list(candidates)[:top_k]
-    ids = [c.memory_id for c in head if c.memory_id]
-    if not ids:
-        return PackagedResponse(items=(), dropped_missing=0)
+    separator_tokens = counter.count(SEGMENT_SEP)
+    chosen: list[ContextSegment] = []
+    used = 0
+    for segment in segments:
+        extra = segment.token_count + (separator_tokens if chosen else 0)
+        if used + extra > max_tokens:
+            return chosen, True
+        used += extra
+        chosen.append(segment)
+    return chosen, False
 
-    # 只读路径：用 `read()` 开一个**短生命周期只读连接**，用完即关。
-    # **不要**用 transaction()——那会拿写锁（BEGIN IMMEDIATE），让一次只读去和写事务抢。
-    with store.read() as conn:
-        pairs = store.fetch_pairs_by_ids(conn, ids)
-    by_id: dict[str, QaPair] = {p.id: p for p in pairs}
 
-    items: list[ResponseItem] = []
-    for candidate in head:
-        pair = by_id.get(candidate.memory_id)
-        if pair is None:
-            continue  # 真源里没有 ⇒ 数进 dropped_missing，不补造
-        items.append(
-            ResponseItem(
-                id=pair.id,
-                content=render(pair.question, pair.answer),
-                created_at=day_granularity(pair.event_time),
-                # 名次按【输出位置】——见 docstring
-                score=placeholder_score(len(items)),
-            )
+def package(
+    segments: Sequence[ContextSegment],
+    *,
+    top_k: int,
+    counter: TokenCounter,
+    max_tokens: int,
+    dropped_missing: int = 0,
+) -> PackagedResponse:
+    """把**已排序**的段打包成 `data[]`。**本函数是最终数量与预算的守门人。**
+
+    * 段的顺序由调用方保证（`neighbor.merge_segments` 按 `best_rank` 升序）
+    * **`top_k` 先于预算**：先截到 `top_k` 个段，再按预算决定装几个——
+      顺序反过来的话，被预算砍掉的段会**占掉名额**，实际返回数就少于该有的
+    * **`top_k <= 0` ⇒ 空响应**，且**不数 token**（那时结果必然是空的）
+    * `score` 按**输出位置**重算，不是照抄段的名次——段可能因预算被跳过，
+      照抄会让 `score` 出现空洞（而它必须单调递减、且 `rank=0` 就是 `1.0`）
+    """
+    total_segments = len(segments)
+    if top_k <= 0 or total_segments == 0:
+        return PackagedResponse(items=(), dropped_missing=dropped_missing)
+
+    head = list(segments)[:top_k]
+    truncated_by_top_k = total_segments > len(head)
+
+    chosen, truncated_by_budget = _fit_by_budget(head, counter=counter, max_tokens=max_tokens)
+
+    items = tuple(
+        ResponseItem(
+            id=segment.anchor_memory_id,  # ★ id 是**锚点**，不是段里第一条
+            content=segment.content,
+            created_at=day_granularity(segment.anchor_event_time),
+            score=placeholder_score(output_rank),  # 名次按【输出位置】——见 docstring
         )
+        for output_rank, segment in enumerate(chosen)
+    )
 
+    # 报告**真值**：对最终那个真实字符串数一次（§6.4 要求对真实字符串计数）。
+    output_text = SEGMENT_SEP.join(segment.content for segment in chosen)
     return PackagedResponse(
-        items=tuple(items),
-        dropped_missing=len(head) - len(items),
+        items=items,
+        dropped_missing=dropped_missing,
+        considered_segments=total_segments,
+        truncated_by_top_k=truncated_by_top_k,
+        truncated_by_budget=truncated_by_budget,
+        output_tokens=counter.count(output_text),
     )

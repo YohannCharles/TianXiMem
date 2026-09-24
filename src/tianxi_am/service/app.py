@@ -30,17 +30,26 @@ uvicorn tianxi_am.service.app:create_app_from_env --factory --workers 1
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from fastapi import FastAPI
 
-from tianxi_am.common.config import AppConfig, assert_single_process, load_config
+from tianxi_am.common.config import (
+    ENV_RERANKER_API_KEY,
+    ENV_RERANKER_BASE_URL,
+    AppConfig,
+    assert_single_process,
+    load_config,
+)
+from tianxi_am.common.tokens import load_counter
 from tianxi_am.embed.base import CachingEmbedder, DiskVectorCache, EmbeddingCoordinate
 from tianxi_am.embed.query_instruction import QueryInstructionEmbedder
 from tianxi_am.embed.qwen3_embedding import Qwen3EmbeddingEmbedder
 from tianxi_am.pairing.pairing import BatchLimits
+from tianxi_am.rank import RemoteReranker
 from tianxi_am.retrieve import DenseArm, EvidenceChecker, HybridRetriever, make_hybrid_params
 from tianxi_am.service.errors import register_error_handlers
 from tianxi_am.service.locks import SessionLocks
@@ -49,7 +58,15 @@ from tianxi_am.service.routes import build_router
 from tianxi_am.store.qdrant_store import QdrantStore
 from tianxi_am.store.sqlite_store import SqliteStore
 
-__all__ = ["Services", "build_services", "create_app", "create_app_from_env"]
+__all__ = [
+    "Services",
+    "build_reranker",
+    "build_services",
+    "create_app",
+    "create_app_from_env",
+]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -69,9 +86,16 @@ class Services:
 
         ⚠ **`SqliteStore` 没有 `close()`**——它**不持有连接**（短生命周期模型：
         连接随每次读/写操作开关，见 `store/sqlite_store.py` 的连接模型一节）。
-        所以本方法只剩 Qdrant 的客户端。
+        所以本方法只剩两个 HTTP 客户端：Qdrant 与 reranker。
+
+        ⚠ reranker 从**流水线**上取（而不是在这里再存一份），免得出现"装配时接上了、
+        关闭时漏掉"的两份状态——那种漏掉的表现是**连接池在退出时没释放**，
+        平时完全看不出来。
         """
         self.qdrant.close()
+        reranker = self.search.reranker
+        if isinstance(reranker, RemoteReranker):
+            reranker.close()
 
 
 def build_services(config: AppConfig) -> Services:
@@ -132,7 +156,62 @@ def build_services(config: AppConfig) -> Services:
                 ),
             ),
             checker=EvidenceChecker(),
+            # ⚠ 分词器**在这里就加载**（不是第一次请求时才加载）：它要联网取 BPE 文件
+            #   （`common/tokens.py`），把失败暴露在**启动时**而不是某个用户的请求里。
+            counter=load_counter(config.budget.tokenizer),
+            budget_tokens=config.budget.max_tokens,
+            seed_limit=config.neighbor.expansion_seed_limit,
+            radius=config.neighbor.radius,
+            reranker=build_reranker(config),
         ),
+    )
+
+
+def build_reranker(config: AppConfig) -> RemoteReranker | None:
+    """按配置构造 reranker；**该没有的时候就是 `None`**（D12 的降级形态）。
+
+    三种结果，**每种的判据都是一句话能说清的**：
+
+    | 条件 | 结果 | 记什么 |
+    | --- | --- | --- |
+    | `rerank.enabled = false` | `None` | `rerank_disabled`——**刻意的消融**，不告警 |
+    | 端点或密钥为空 | `None` | `rerank_disabled` + **WARNING**——多半是漏配了 |
+    | 齐备 | `RemoteReranker` | 正常调用；失败走 `rerank_degraded` |
+
+    ⚠ **"没配"不报错是刻意的**：reranker 是唯一不被规则保证可用的组件（D12），
+    缺了它服务必须照常起——这与 `embed_base_url` 那种"缺了就拒绝启动"正相反。
+    但**"想用却没配全"与"明确关掉"是两件事**，所以前者要留下一条 WARNING：
+    否则它会表现为"每次检索都静默不精排"，而那正是本项目最怕的那类失败。
+
+    ⚠ 构造**不打网络**（不探活、不查 `/models`）：探活会把启动变成一次远程依赖，
+    而 reranker 不可用本来就有一条**已实现且已测**的降级路径。
+    """
+    if not config.rerank.enabled:
+        logger.info("rerank.enabled = false ⇒ 不构造 reranker，Search 直接用融合名次")
+        return None
+
+    missing = [
+        name
+        for name, value in (
+            (ENV_RERANKER_BASE_URL, config.reranker_base_url),
+            (ENV_RERANKER_API_KEY, config.reranker_api_key),
+        )
+        if not value
+    ]
+    if missing:
+        logger.warning(
+            "rerank.enabled = true，但 %s 为空 ⇒ 不构造 reranker，"
+            "每次检索都会走【未精排】的 RRF 顺序（且计入 rerank_disabled）。"
+            "填好 `.env` 或把 rerank.enabled 显式设为 false。",
+            " 与 ".join(missing),
+        )
+        return None
+
+    return RemoteReranker(
+        base_url=config.reranker_base_url,
+        api_key=config.reranker_api_key,
+        model=config.reranker_model,
+        timeout=config.rerank.timeout_seconds,
     )
 
 

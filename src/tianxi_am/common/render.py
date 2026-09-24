@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 # ── 模板版本 ────────────────────────────────────────────────────────────
 # ⚠ 改模板【必须】同时改这个版本号：它会进 embedding 缓存的坐标系
 #   （embed/base.py 的 EmbeddingCoordinate），而 §11.3 明确"改模板 = 改变 embedding
@@ -28,6 +30,13 @@ ANSWER_PREFIX: str = "A: "
 # 同节的示例里画成了空行（两个换行）——两处文档都有这个矛盾。
 # 这里取模板块的字面（规范表述优先于示意），并把"改它"集中到这一行。
 QUESTION_ANSWER_SEP: str = "\n"
+
+#: **一个 Context Segment 里各 QA 对之间的分隔**（§10 / §11.3 的扩窗之后才有段的概念）。
+#:
+#: 取单个换行，与段内的 `QUESTION_ANSWER_SEP` 一致。理由是**每一对都以 `Q:` / `A:` 开头**
+#: ——那已经是自定界的行首标记（§11.3），再加空行只是白花 token，而 token 要按
+#: **真实字符串**算进 117,760 的预算里（§6.4）。
+SEGMENT_SEP: str = "\n"
 
 
 def render(question: str | None, answer: str | None) -> str:
@@ -56,10 +65,26 @@ def render(question: str | None, answer: str | None) -> str:
     return QUESTION_ANSWER_SEP.join(lines).strip()
 
 
+def render_segment(pair_texts: Sequence[str]) -> str:
+    """把若干**已渲染**的 QA 对拼成一个 Context Segment 的 `content`。
+
+    ⚠ **它必须是拼串的唯一去处**：`rank/` 不许自己 `"\\n".join(...)`。
+    理由与 `render` 一样——两处拼法一旦不同，"模型读到的"就与"能被复现的"漂移，
+    而**漂移不报错**。
+
+    * 空输入 ⇒ **空串**（调用方不该产出空段，但空串是唯一安全的降级）
+    * 结果**首尾无空白**、内部不留空行（见 `SEGMENT_SEP` 的理由）
+    * **不改写任何一对的内容**——它们已经是 `render()` 的产物
+    """
+    return SEGMENT_SEP.join(text for text in pair_texts if text).strip()
+
+
 __all__ = [
     "ANSWER_PREFIX",
     "QUESTION_ANSWER_SEP",
     "QUESTION_PREFIX",
+    "SEGMENT_SEP",
     "TEMPLATE_VERSION",
     "render",
+    "render_segment",
 ]

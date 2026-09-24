@@ -44,13 +44,27 @@ def _as_wire(packed) -> dict:  # noqa: ANN001
     ).model_dump()
 
 
+def _idx(i: int) -> int:
+    """第 `i` 个候选的 `pair_idx`：**隔一个**（0, 2, 4, …）。
+
+    ⚠ **为什么必须隔开**：`pair_idx` 相邻的两个对会被合并成**同一个** Context Segment，
+    而扩窗（±1）也会把它们互相拉进来。本文件测的是**契约形状与计数**，需要
+    "N 个候选 ⇒ N 个返回项"这种最干净的情形；隔开之后中间那格是空的，
+    既没有相邻可合并、也没有可扩的邻居 ⇒ 一个候选恰好一段。
+
+    **合并与扩窗本身的行为在 [`test_neighbor.py`](./test_neighbor.py) 里测**
+    （那里才是它们的主场），两处刻意不重叠。
+    """
+    return i * 2
+
+
 # ── Search 响应形状（§2.1）──────────────────────────────────────────────
 
 
 def test_search_response_has_exactly_the_contract_fields(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    ids = [seed_pair(wired.store, i, f"q{i}", f"[assistant] a{i}") for i in range(3)]
+    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"[assistant] a{i}") for i in range(3)]
     wired.qdrant.by_user["u1"] = ids
 
     body = _as_wire(wired.search(top_k=5))
@@ -62,7 +76,7 @@ def test_search_response_has_exactly_the_contract_fields(
 
 
 def test_search_preserves_retrieval_order(wired: Wired, seed_pair: Callable[..., str]) -> None:
-    ids = [seed_pair(wired.store, i, f"q{i}", f"a{i}") for i in range(3)]
+    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(3)]
     wired.qdrant.by_user["u1"] = ids
 
     assert [i["id"] for i in _as_wire(wired.search(top_k=3))["data"]] == ids
@@ -73,7 +87,7 @@ def test_search_never_exceeds_top_k(
     wired: Wired, seed_pair: Callable[..., str], top_k: int
 ) -> None:
     """**精确计数**（§2.2 第一条）——返回超过 `top_k` 是契约错误，不会被静默截断。"""
-    ids = [seed_pair(wired.store, i, f"q{i}", f"a{i}") for i in range(5)]
+    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(5)]
     wired.qdrant.by_user["u1"] = ids
 
     data = _as_wire(wired.search(top_k=top_k))["data"]
@@ -91,7 +105,7 @@ def test_empty_result_is_a_list_not_null(wired: Wired) -> None:
 def test_result_shorter_than_top_k_when_fewer_pairs(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    ids = [seed_pair(wired.store, i, f"q{i}", f"a{i}") for i in range(2)]
+    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(2)]
     wired.qdrant.by_user["u1"] = ids
 
     assert len(_as_wire(wired.search(top_k=10))["data"]) == 2  # 不补造、不复制
@@ -117,7 +131,8 @@ def test_created_at_is_day_granularity_or_empty(
 ) -> None:
     """`created_at` **始终存在**：日粒度或 `""`（§11.3）。"""
     with_time = seed_pair(wired.store, 0, "q0", "a0", event_time=1683525360000)
-    without = seed_pair(wired.store, 1, "q1", "a1", event_time=None)
+    # ⚠ 第二个对的 `pair_idx` 是 2 而不是 1：相邻会被合并成一段（见 `_idx` 的说明）
+    without = seed_pair(wired.store, 2, "q1", "a1", event_time=None)
     wired.qdrant.by_user["u1"] = [with_time, without]
 
     data = _as_wire(wired.search(top_k=2))["data"]
@@ -128,7 +143,7 @@ def test_created_at_is_day_granularity_or_empty(
 
 def test_score_is_monotonic_placeholder(wired: Wired, seed_pair: Callable[..., str]) -> None:
     """`score` = `1/(rank+1)`，严格递减。"""
-    ids = [seed_pair(wired.store, i, f"q{i}", f"a{i}") for i in range(3)]
+    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(3)]
     wired.qdrant.by_user["u1"] = ids
 
     scores = [i["score"] for i in _as_wire(wired.search(top_k=3))["data"]]
@@ -144,7 +159,7 @@ def test_fused_score_never_leaks_into_the_response(
     而 `Candidate` 里**根本没有**该字段（见
     `tests/test_retrieve.py::test_candidate_carries_no_score_field`）⇒ 结构上漏不出来。
     """
-    ids = [seed_pair(wired.store, i, f"q{i}", f"a{i}") for i in range(3)]
+    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(3)]
     wired.qdrant.by_user["u1"] = ids
 
     body = _as_wire(wired.search(top_k=3))
@@ -163,7 +178,9 @@ def test_dense_embedding_called_exactly_once_per_query(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
     """**每查询恰好 1 次** embedding 调用（§7.2）。"""
-    wired.qdrant.by_user["u1"] = [seed_pair(wired.store, i, f"q{i}", f"a{i}") for i in range(2)]
+    wired.qdrant.by_user["u1"] = [
+        seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(2)
+    ]
 
     wired.search(query="火车几点开？", top_k=2)
 
@@ -187,7 +204,9 @@ def test_pipeline_order_hybrid_then_checker_then_packaging(
 
     checker 与 packaging 都不是 `hybrid` 能触发的——两者都跑到就说明顺序没被跳过。
     """
-    wired.qdrant.by_user["u1"] = [seed_pair(wired.store, i, f"q{i}", f"a{i}") for i in range(2)]
+    wired.qdrant.by_user["u1"] = [
+        seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(2)
+    ]
 
     data = _as_wire(wired.search(top_k=2))["data"]
 
@@ -208,7 +227,9 @@ def test_top_k_from_request_is_forwarded_not_hardcoded(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
     """**`top_k` 来自请求、不写死 100**（§7.3）。"""
-    wired.qdrant.by_user["u1"] = [seed_pair(wired.store, i, f"q{i}", f"a{i}") for i in range(5)]
+    wired.qdrant.by_user["u1"] = [
+        seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(5)
+    ]
 
     wired.search(top_k=3)
 

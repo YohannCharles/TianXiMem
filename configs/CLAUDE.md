@@ -69,10 +69,16 @@ configs/
 `runs/` 的用途：`docs/experiments.md` 要求记录**配置指纹**。让每个实验留下**冻结的配置副本**，而不是"当时的 local.yaml 大概是这样"——**后者在 Step 5 之后就无法重建了**。
 （跑某个 arm 用 `TIANXI_CONFIG_DIR=configs/runs/<arm>` 指向那份快照。）
 
-> ⚠ **③-d 只收了"今天有代码消费方"的键**（2026-09-24）。`checker.*` / `neighbor.*` / `rerank.*` /
-> `agent.*` / `budget.*` 的落点已经写在 [`../docs/config-reference.md`](../docs/config-reference.md)，
+> ⚠ **③-d 只收了"今天有代码消费方"的键**（2026-09-24）。`checker.*` 与 `agent.*` 的落点
+> 已经写在 [`../docs/config-reference.md`](../docs/config-reference.md)，
 > 但**没有搬进 yaml**——它们的消费方还没接线，收进来等于预留字段。
 > ⇒ **`default.yaml` 不是"§15 七个消融项都在这里"**（本节原先那句话现在不成立）。
+>
+> ✅ **2026-09-24 起 `neighbor.*` / `budget.*` / `rerank.*` 都已经搬进来了**：
+> 扩窗 + 段合并 + token 预算 + 远端精排落地，各自的 consumer 都在。
+> 见 `default.yaml` 的"扩窗与预算"与"精排"两节——它们标的是 C 类（可调但要有数据）
+> 与 A 类（`budget.*` 两个值是 AML 定的，写进来只为追溯）。
+> ⚠ `rerank` 段**只有开关与超时**：端点 / 密钥 / 模型名在 `.env`（那是端点身份，不是阈值）。
 
 ---
 

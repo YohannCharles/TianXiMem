@@ -10,10 +10,10 @@
 
 | 阶段 | 交付 | 状态 |
 | ---- | ---- | ---- |
-| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | ⬜ |
-| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） | ⬜ |
-| Step 2 | **Neighbor Expansion + 双预算截断** | ⬜ |
-| Step 3 | Rerank + Context Packaging（含 T1 实验） | ⬜ |
+| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | 🟡 主体已建（加载层 + harness + 契约预检），**T2 未跑** |
+| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） | 🟡 `src/` 已落（存储 + 配对 + 检索 + 服务），**T2 未跑** |
+| Step 2 | **Neighbor Expansion + 双预算截断** | ✅ **已完成（2026-09-24）** |
+| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 **rerank 已接 + 打包已落地**；**渲染模板定稿与 T1 未做** |
 | Step 4 | Conditional Agentic Search | ⬜ |
 | **Step 5** | **切换到提交模型**，重标定全部阈值，重跑 T2 | ⬜ |
 | Step 6 | 对照实验（§13）+ Smoke 验证 + Full 定稿 | ⬜ |
@@ -125,7 +125,9 @@
 - [x] **主路径必须能通过 Smoke 契约校验**（200 响应、`data` 数组、不超 `top_k`）——**它是所有对照的参照点**（§13）
       **✅ 本地自动化已就位（③-e，2026-09-24）**：`make contract-check` → [`../eval/smoke/preflight.py`](../eval/smoke/preflight.py)，
       **14 条检查全过**（打真 HTTP、真 embedding、真 Qdrant；自启隔离实例，跑完 drop 集合）。
-      ⚠ 但**"本地过"≠"Smoke 过"**：§4 清单里还有三条本地做不到（token 预算要 `tokens.py`、窗口边界要 Step 2 的扩窗、相邻项拼接要 harness）。
+      ⚠ 但**"本地过"≠"Smoke 过"**：§4 清单里**原先**有三条本地做不到——其中两条在 2026-09-24 已补齐
+      （**token 预算**随 `common/tokens.py` 落地、**窗口边界**随 Step 2 的扩窗落地），
+      **只剩"相邻项拼接"仍要 harness**（AML 侧怎么拼 `content`，本地看不到）。
 - [ ] **跑 T2 实验**（§13，半天工作量）：133 道 multi-session 题（12 道拒答题单列）人工分三类
 - [ ] 三个 `pending` 计数器埋点（§6.5）——**发射已在 `pairing/instrument.py`**，聚合在 `observability/`（未接）
 
@@ -139,12 +141,20 @@
 
 ---
 
-## Step 2 — Neighbor Expansion + 双预算
+## Step 2 — Neighbor Expansion + 双预算  ✅ **已完成**（2026-09-24）
 
 > **Dense 与 RRF 归 Step 1**（检索一次到位，D15），本阶段只剩扩窗与预算。
 
-- [ ] Neighbor Expansion：种子 20、窗口 ±1、**槽位占 `top_k` 名额**（§10）
-- [ ] 双预算截断（槽位数 + token 数）（§6.4）
+- [x] Neighbor Expansion：种子 `neighbor.expansion_seed_limit`（**v1 取 30**，PRD §10 的 20 只是示例算术）、窗口 `radius = ±1`（§10）
+- [x] **全部 rerank 候选一条不删**，只对前 N 条扩窗；新扩出来的邻居 `rerank_rank = None`
+- [x] 同 `(user_id, session_id)` 才扩；**禁止跨 session**
+- [x] **Context Segment Merge**：连续 `pair_idx` 合成段，段内会话序、段间 `best_rank` 序（§11.2）
+- [x] 双预算截断：**段数（`top_k`）+ token 数**（§6.4）——段是**原子单位**，装不下就停
+- [x] `common/tokens.py`：`o200k_base` 计数，对**最终拼好的字符串**数
+- [x] `rank/reranker.py` 的**接缝**（协议 + 降级）——远端实现 2026-09-24 已接，见 Step 3
+
+> ⚠ **`top_k` 约束的是段数，不是 raw memory 数**——所以它只能在合并**之后**生效。
+> 在扩窗阶段按 raw 数截断会把本该成段的邻居砍掉，而**返回的每一段看起来都合法**。
 
 ---
 
@@ -152,12 +162,20 @@
 
 > **本阶段定稿两件"贵"东西**：渲染模板与 reranker（**选型已定：`Qwen3-Reranker-4B`**）。
 
-- [ ] **reranker 接入**——**选型已定：`Qwen3-Reranker-4B`（2026-09-24）**。剩下的是端点部署（不在本项目范围）+ `rank/reranker.py` 的调用。**提交时不得更换**（D12）
-- [ ] 顺序与预算配合：按名次依次扩窗（§11.2）
-- [ ] 组内按 `pair_idx` 时间序；组间按种子名次（§11.2）
+- [x] **reranker 接入**（2026-09-24）——**选型已定：`Qwen3-Reranker-4B`**，**提交时不得更换**（D12）
+      落点：`rank/reranker.RemoteReranker` → `POST {TIANXI_RERANKER_BASE_URL}/rerank`。
+      **线格式是实测的**（`top_n` 会静默截断、`model` 被忽略、响应按分数降序——三条都写在该文件顶部）。
+      连通性与"它在链上真的起作用"用 `make probe-reranker` 验（真网关，**不消耗 Smoke 配额**）。
+      ⚠ 端点**部署**仍不在本项目范围内（D12）；端点挂了 ⇒ 降级回 RRF 顺序并记 `rerank_degraded`。
+- [x] ~~顺序与预算配合：按名次依次扩窗（§11.2）~~ —— 已在 Step 2 落地
+- [x] ~~组内按 `pair_idx` 时间序；组间按种子名次（§11.2）~~ —— 已在 Step 2 落地（`best_rank`/锚点）
 - [ ] **渲染模板定稿**——**改模板 = 重建索引**，别拖到 Step 5 之后（§11.3 / E6）
 - [ ] **跑 T1 实验**（§13），与 `created_at` 粒度那条同批测（§11.3）
-- [ ] `created_at` 只给日粒度；`event_time` 为 NULL 时发 `""`（§11.3）
+- [x] ~~`created_at` 只给日粒度；`event_time` 为 NULL 时发 `""`（§11.3）~~ —— 已落地（固定 UTC，无旋钮）
+      ⚠ **粒度变细/相对↔绝对那两条规则仍属 T1 的待验证项**，落地的只是"发日期、不发秒"
+
+> ⚠ **"接上了"不等于"有效"**：本阶段只保证**链路通**。精排值不值是 §13 的 **E3**，
+> 要在代理评测上跑对照才回答得了——**不要拿探针里的几个样例下结论**。
 
 ---
 

@@ -35,6 +35,7 @@ __all__ = [
     "RRF_K",
     "Candidate",
     "HybridRetriever",
+    "dedup_candidates",
     "make_hybrid_params",
 ]
 
@@ -108,6 +109,30 @@ def make_hybrid_params(
         weights=(w_bm25, w_dense),
         rrf_k=rrf_k,
     )
+
+
+def dedup_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
+    """按 `memory_id` **稳定去重**，并把名次**重新编成连续的 0-based**。
+
+    **"稳定"的含义**：同一个 `memory_id` 出现多次时，**保留名次最好的那一次**
+    （第一次出现），而不是最后一次——融合结果里不可能有两条完全相同的记忆，
+    真出现时只有"最早的那条"能与 RRF 的名次语义对上。
+
+    ⚠ **必须重新编号**，不能只删元素：下游有"**只对前 N 条**做扩窗"这类判据
+    （§10 的种子数），而它读的是名次。留着空洞会让"前 30 条"实际只剩 27 条，
+    而**不会报错**——只是扩得比预期少。
+
+    ⚠ 这一步在 **rerank 之前**（§10 的流水线）：留着重复项会让同一份证据
+    被 rerank 两次、在预算里占两个名额。
+    """
+    seen: dict[str, int] = {}
+    out: list[Candidate] = []
+    for candidate in candidates:
+        if candidate.memory_id in seen:
+            continue
+        seen[candidate.memory_id] = len(out)
+        out.append(Candidate(memory_id=candidate.memory_id, rank=len(out)))
+    return out
 
 
 @dataclass(frozen=True, slots=True)

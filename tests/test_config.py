@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from tianxi_am.common import config as config_module
 from tianxi_am.common.config import (
     ENV_CONFIG_DIR,
     ENV_EMBED_API_KEY,
@@ -126,6 +127,33 @@ def test_no_module_reads_config_files_directly() -> None:
             offenders.append(str(path.relative_to(_SRC)))
 
     assert offenders == [], f"这些模块自己解析 yaml 了：{offenders}"
+
+
+def test_every_env_name_is_declared_in_the_env_example() -> None:
+    """**每一个 `ENV_*` 常量都必须在 `.env.example` 里出现。**
+
+    ⚠ 这条挡的是**改名漂移**：代码里改了变量名、`.env.example` 没跟着改，
+    于是照着模板填 `.env` 的人**填的是另一个变量**——服务照常启动，
+    只是那个值从来没被读到（表现为"配了却没生效"，而**不报错**）。
+
+    反向不检查（`.env.example` 里的名字都在代码里用）：水印式的注释与
+    暂时没有消费者的变量都允许先待在模板里（例如归档 pipeline 用的 `AML_*` 组）。
+    """
+    example = (_REPO / ".env.example").read_text(encoding="utf-8")
+    declared = {
+        name: value
+        for name, value in vars(config_module).items()
+        if name.startswith("ENV_") and isinstance(value, str)
+    }
+    assert declared, "一个 ENV_* 常量都没找到 —— 这条用例是空过的"
+
+    missing = [
+        f"{name} = {value}" for name, value in sorted(declared.items()) if value not in example
+    ]
+    assert missing == [], (
+        "这些环境变量名没写进 `.env.example`（照着模板填的人会漏掉它们）：\n  "
+        + "\n  ".join(missing)
+    )
 
 
 # ── 2. 默认配置可加载 ──────────────────────────────────────────────────

@@ -57,6 +57,8 @@ from typing import Any, Final
 
 import yaml
 
+from tianxi_am.common.tokens import DEFAULT_TOKENIZER, MAX_INPUT_TOKENS
+
 __all__ = [
     "ENV_CONFIG_DIR",
     "ENV_EMBED_API_KEY",
@@ -65,8 +67,14 @@ __all__ = [
     "ENV_FILE",
     "ENV_PROFILE",
     "ENV_QDRANT_URL",
+    "ENV_RERANKER_API_KEY",
+    "ENV_RERANKER_BASE_URL",
+    "ENV_RERANKER_MODEL",
     "ENV_SQLITE_PATH",
     "ENV_WORKERS",
+    "DEFAULT_EXPANSION_SEED_LIMIT",
+    "DEFAULT_RADIUS",
+    "DEFAULT_RERANK_TIMEOUT_S",
     "RRF_K",
     "AppConfig",
     "ConfigError",
@@ -90,6 +98,17 @@ ENV_EMBED_BASE_URL: Final[str] = "AML_EMB_BASE_URL"
 ENV_EMBED_API_KEY: Final[str] = "AML_EMB_API_KEY"
 ENV_EMBED_CACHE_DIR: Final[str] = "TIANXI_EMBED_CACHE_DIR"
 ENV_WORKERS: Final[str] = "TIANXI_WORKERS"
+
+#: reranker 的三个变量（2026-09-24 接线）。**名字沿用 `.env.example` 里早就声明的那三个**，
+#: 没有另起一套——`.env.example` 是它们的家，本表只是代码侧的引用点，两处由
+#: `tests/test_config.py` 的静态断言钉住。
+#:
+#: ⚠ **主网关**（`memory.021130.xyz`），不是 memory2——两个网关 host 与 key 都不同（D18）。
+#: ⚠ 它对服务**不是必需**的：它是唯一不被规则保证可用的组件（D12），
+#: 所以缺了它服务照常启动、走 `rerank_disabled` 路径——**这与 embedding 的三个变量正相反**。
+ENV_RERANKER_BASE_URL: Final[str] = "TIANXI_RERANKER_BASE_URL"
+ENV_RERANKER_API_KEY: Final[str] = "TIANXI_RERANKER_API_KEY"
+ENV_RERANKER_MODEL: Final[str] = "TIANXI_RERANKER_MODEL"
 #: `.env` 文件的位置（默认 cwd 下的 `.env`）。⚠ 它**不是**一个配置项，是"去哪读环境"。
 ENV_FILE: Final[str] = "TIANXI_ENV_FILE"
 
@@ -105,6 +124,29 @@ DEFAULT_ENV_FILE: Final[str] = ".env"
 #: 对直接调用方的防御，不能只靠"配置层已经查过"）。两处相等由
 #: `tests/test_config.py::test_rrf_k_is_the_same_constant_in_both_places` 钉住。
 RRF_K: Final[int] = 61
+
+#: Neighbor Expansion 的 v1 初值（§10）。
+#:
+#: ⚠ **值的家在这里**（而不是 `rank/neighbor.py`）：`common/` 是**最底层**、被所有层依赖，
+#: 而反过来（`common/` import `rank/`）是分层错误。所以默认值只能住在这里，
+#: 由 `rank/neighbor.py` **引用**——这样也就不存在"代码默认值 vs 配置默认值"两处漂移。
+#:
+#: ⚠ 这两个量**不是调参项**：§10 明确"种子数、窗口大小、Top-K、token 预算**是同一道题**，
+#: 任何一项调整都要重算其余三项"。改它们之前要有消融数据（§12.1 R1 对冲 3）。
+DEFAULT_EXPANSION_SEED_LIMIT: Final[int] = 30
+DEFAULT_RADIUS: Final[int] = 1
+
+#: rerank 调用的超时（秒）。**C 类自设阈值**（`rerank.timeout_seconds`）。
+#:
+#: ⚠ 定这个值的两条约束**方向相反**，别只看着一边调：
+#:
+#: * **太紧 ⇒ 伪降级**。网关是开发环路的单点（V8：answer / judge / embed / rerank 四条都打它），
+#:   排队时延会抬高——那时超时会把"排队"报成"reranker 坏了"，而两者在计数器上长得一样。
+#: * **太松 ⇒ Search 被拖住**。单请求上限 30 分钟（§2.2），而 rerank 在关键路径上。
+#:
+#: 实测（2026-09-24，开发机，主网关）：**100 篇 ≈ 2.2s、200 篇 ≈ 5.3s**。
+#: 默认取 30s ⇒ 约 10 倍余量。**这是观测值，不是规格**；换模型或换网关后要重新量。
+DEFAULT_RERANK_TIMEOUT_S: Final[float] = 30.0
 
 
 # ── 配置树 ─────────────────────────────────────────────────────────────
@@ -193,6 +235,47 @@ class PairingConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class NeighborConfig:
+    """Neighbor Expansion（§10）。"""
+
+    #: 主动扩窗的种子数——**只对 rerank 后的前 N 条扩窗**，其余候选仍保留、只是不扩展。
+    #:
+    #: ⚠ v1 初值。§10 明确"种子数、窗口大小、Top-K、token 预算**是同一道题**，
+    #: 任何一项调整都要重算其余三项" ⇒ **改它之前要有消融数据**（§12.1 R1 对冲 3）。
+    expansion_seed_limit: int = DEFAULT_EXPANSION_SEED_LIMIT
+    #: 扩窗半径，**单位是 QA 对**：±1 拿回前后各**一整对**（最多 4 条消息）。
+    radius: int = DEFAULT_RADIUS
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetConfig:
+    """token 预算（§6.4）。**双预算里的 token 那一半**；槽位那一半是请求里的 `top_k`。"""
+
+    #: 上限（**A 类外部契约常量**：AML 定的，无权改，写进来只为追溯）。
+    max_tokens: int = MAX_INPUT_TOKENS
+    #: 分词器名。**必须是答案模型自己的那个**（§6.4）——用近似会在 100 个对上放大到几千 token。
+    tokenizer: str = DEFAULT_TOKENIZER
+
+
+@dataclass(frozen=True, slots=True)
+class RerankConfig:
+    """远程 reranker（§11.2 / D12）。**只放阈值与开关；端点与密钥在 env。**
+
+    ⚠ **本段刻意只有两个键**（2026-09-24 接线时定的）。理由：一个键要有消费者才收
+    （§6.1 对 DDL 的同一条纪律）——而 rerank 的真实旋钮只有"开不开"与"等多久"。
+    想调模型就换 `.env` 的 `TIANXI_RERANKER_MODEL`（那是端点身份，不是阈值）。
+    """
+
+    #: §15 的消融开关之一。`false` ⇒ **不构造 reranker**，Search 直接用融合名次。
+    #:
+    #: ⚠ 它的"关"分支**只该改变排名**，不得改变候选数量（§13 的开关纯度）——
+    #: `tests/test_rerank.py` 有这条断言。
+    enabled: bool = True
+    #: 单次 rerank 请求的超时（秒）。见模块顶部 `DEFAULT_RERANK_TIMEOUT_S` 的两条约束。
+    timeout_seconds: float = DEFAULT_RERANK_TIMEOUT_S
+
+
+@dataclass(frozen=True, slots=True)
 class ServerConfig:
     """服务进程形态（§15）。"""
 
@@ -210,6 +293,9 @@ class AppConfig:
     models: ModelsConfig = field(default_factory=ModelsConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     pairing: PairingConfig = field(default_factory=PairingConfig)
+    neighbor: NeighborConfig = field(default_factory=NeighborConfig)
+    budget: BudgetConfig = field(default_factory=BudgetConfig)
+    rerank: RerankConfig = field(default_factory=RerankConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
 
     #: ⚠ **密钥与端点不在 yaml 里**——它们随机器与密钥而异、不进 git（见模块 docstring）。
@@ -217,12 +303,27 @@ class AppConfig:
     embed_base_url: str = ""
     embed_api_key: str = ""
 
+    #: reranker 的端点与密钥（`TIANXI_RERANKER_*`）。
+    #:
+    #: ⚠ **与上面两个正相反：缺了不报错。** 空值 ⇒ 不构造 reranker、走 `rerank_disabled`
+    #: ——那是 D12 要求的降级形态，**不是配置错误**。所以 `validate()` 不 `_require` 它们。
+    reranker_base_url: str = ""
+    reranker_api_key: str = ""
+    #: 请求里声明的模型名（进 run record 的配置指纹；D12 要求提交时不得更换）。
+    #:
+    #: ⚠ 实测（2026-09-24）：**网关会忽略这个字段**，响应里 `model` 回的是服务端路径
+    #: （`/data/…/Qwen3-Reranker-4B`）。保留它是因为①请求该带上自己声明的模型、
+    #: ②它是 run record 里"这次用的哪个 reranker"的唯一来源。**不要拿它做路由或校验。**
+    reranker_model: str = ""
+
 
 # ── yaml 读取：**不认识的键一律报错** ────────────────────────────────────
 
 #: yaml 顶层允许的段。**env 拥有的键不出现在这里**（见模块 docstring 的分工表）：
 #: 路径 / 端点 / 密钥 / worker 数都只从环境变量来。
-_TOP_LEVEL_KEYS: Final[frozenset[str]] = frozenset({"storage", "models", "retrieval", "pairing"})
+_TOP_LEVEL_KEYS: Final[frozenset[str]] = frozenset(
+    {"storage", "models", "retrieval", "pairing", "neighbor", "budget", "rerank"}
+)
 
 
 def _group(raw: object, /, *, where: str, allowed: set[str]) -> Mapping[str, Any]:
@@ -257,6 +358,20 @@ def _str(value: object, /, *, where: str, default: str) -> str:
     if not isinstance(value, str):
         raise ConfigError(f"`{where}` 必须是字符串，收到 {value!r}")
     return value
+
+
+def _float(value: object, /, *, where: str, default: float) -> float:
+    """浮点配置项。
+
+    ⚠ **`bool` 要先挡掉**：Python 里 `True` 是 `int` 的实例，`isinstance(True, float)` 为假、
+    但 `isinstance(True, (int, float))` 为真——`timeout_seconds: true` 若不挡会变成 `1.0`，
+    于是超时被悄悄改成 1 秒，而**配置看起来完全正常**。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ConfigError(f"`{where}` 必须是数字，收到 {value!r}")
+    return float(value)
 
 
 def _weights(value: object, /, *, where: str) -> tuple[float, float]:
@@ -401,6 +516,41 @@ def _retrieval(raw: object) -> RetrievalConfig:
     )
 
 
+def _neighbor(raw: object) -> NeighborConfig:
+    g = _group(raw, where="neighbor", allowed={"expansion_seed_limit", "radius"})
+    return NeighborConfig(
+        expansion_seed_limit=_int(
+            g.get("expansion_seed_limit"),
+            where="neighbor.expansion_seed_limit",
+            default=DEFAULT_EXPANSION_SEED_LIMIT,
+        ),
+        radius=_int(g.get("radius"), where="neighbor.radius", default=DEFAULT_RADIUS),
+    )
+
+
+def _budget(raw: object) -> BudgetConfig:
+    g = _group(raw, where="budget", allowed={"max_tokens", "tokenizer"})
+    return BudgetConfig(
+        max_tokens=_int(g.get("max_tokens"), where="budget.max_tokens", default=MAX_INPUT_TOKENS),
+        tokenizer=_str(g.get("tokenizer"), where="budget.tokenizer", default=DEFAULT_TOKENIZER),
+    )
+
+
+def _rerank(raw: object) -> RerankConfig:
+    g = _group(raw, where="rerank", allowed={"enabled", "timeout_seconds"})
+    enabled = g.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ConfigError(f"`rerank.enabled` 必须是布尔值，收到 {enabled!r}")
+    return RerankConfig(
+        enabled=True if enabled is None else enabled,
+        timeout_seconds=_float(
+            g.get("timeout_seconds"),
+            where="rerank.timeout_seconds",
+            default=DEFAULT_RERANK_TIMEOUT_S,
+        ),
+    )
+
+
 def _pairing(raw: object) -> PairingConfig:
     g = _group(raw, where="pairing", allowed={"batch_max_messages", "batch_max_words"})
     return PairingConfig(
@@ -462,6 +612,12 @@ def validate(cfg: AppConfig) -> AppConfig:
         )
     if cfg.pairing.batch_max_words <= 0:
         raise ConfigError(f"`pairing.batch_max_words` 必须为正：{cfg.pairing.batch_max_words}")
+    if cfg.rerank.timeout_seconds <= 0:
+        raise ConfigError(
+            f"`rerank.timeout_seconds` 必须为正：{cfg.rerank.timeout_seconds}\n"
+            "  它挡的是【reranker 挂住不返回】——非正值会让每次 rerank 都立刻超时，"
+            "于是**每次都降级**，而响应看起来完全合法（只是名次没被精排）。"
+        )
     if cfg.server.workers != 1:
         raise ConfigError(
             f"`server.workers`（`{ENV_WORKERS}`）必须是 1，收到 {cfg.server.workers}。\n"
@@ -567,9 +723,16 @@ def load_config(
             models=_models(data.get("models")),
             retrieval=_retrieval(data.get("retrieval")),
             pairing=_pairing(data.get("pairing")),
+            neighbor=_neighbor(data.get("neighbor")),
+            budget=_budget(data.get("budget")),
+            rerank=_rerank(data.get("rerank")),
             server=ServerConfig(workers=workers),
             # 密钥与端点不在 yaml 里（见模块 docstring 的两层分工）
             embed_base_url=(src.get(ENV_EMBED_BASE_URL) or "").strip(),
             embed_api_key=(src.get(ENV_EMBED_API_KEY) or "").strip(),
+            # ⚠ 这三个**允许为空**：空 ⇒ 不构造 reranker（D12 的降级形态，不是配置错误）
+            reranker_base_url=(src.get(ENV_RERANKER_BASE_URL) or "").strip(),
+            reranker_api_key=(src.get(ENV_RERANKER_API_KEY) or "").strip(),
+            reranker_model=(src.get(ENV_RERANKER_MODEL) or "").strip(),
         )
     )

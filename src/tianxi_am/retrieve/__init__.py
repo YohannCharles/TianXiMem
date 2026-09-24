@@ -31,6 +31,7 @@ from tianxi_am.retrieve.fusion import (
     Candidate,
     HybridRetriever,
     RetrievalParamError,
+    dedup_candidates,
     make_hybrid_params,
 )
 
@@ -41,6 +42,7 @@ __all__ = [
     "RRF_K",
     "SPARSE_VECTOR",
     "Candidate",
+    "dedup_candidates",
     "CheckerDecision",
     "CheckerInstrument",
     "CheckerThresholds",

@@ -387,11 +387,23 @@ class Preflight:
         expect(isinstance(data, list), f"`data` 必须是数组（空结果要 `[]` 不是 `null`）：{data!r}")
         return data
 
-    def _seed(self, user_id: str, session_id: str, tags: list[str]) -> list[tuple[str, str]]:
+    def _seed(
+        self,
+        user_id: str,
+        session_id: str,
+        tags: list[str],
+        *,
+        separate_sessions: bool = False,
+    ) -> list[tuple[str, str]]:
         """写入若干**可识别**的记忆，返回 `[(question, answer)]`。
 
         ⚠ 每个 `request_id` 与每段正文都带本次运行的 nonce ⇒ **预检之间不会互相命中**，
         也不会命中开发期残留的数据。
+
+        ⚠ **`separate_sessions=True` 时每个 tag 各占一个 `session_id`**。
+        这不是洁癖：`pair_idx` 相邻的记忆会被合并成**同一个 Context Segment**，
+        于是响应里**只有一项**——凡是"要多条才能验"的检查（`score` 的单调性、
+        `top_k` 真的会截断）都必须让它们分属不同 session，**否则检查会静默变空过**。
         """
         made: list[tuple[str, str]] = []
         for tag in tags:
@@ -400,7 +412,7 @@ class Preflight:
             resp = self._add(
                 request_id=f"{self._nonce}-{user_id}-{tag}",
                 user_id=user_id,
-                session_id=session_id,
+                session_id=f"{session_id}-{tag}" if separate_sessions else session_id,
                 messages=[
                     {"role": "user", "content": question},
                     {"role": "assistant", "content": answer},
@@ -574,9 +586,14 @@ class Preflight:
         )
 
     def check_score_is_rank_derived(self) -> None:
-        """§11.3：`score` **单调递减**、`rank=0` 就是 `1.0`，且**不是**原始 RRF 分数。"""
+        """§11.3：`score` **单调递减**、`rank=0` 就是 `1.0`，且**不是**原始 RRF 分数。
+
+        ⚠ 三条记忆**分属三个 session**：同一个 session 里 `pair_idx` 相邻的记忆会被
+        合并成**一个** Context Segment，那样响应里只有一项，单调性就**没东西可验**了
+        （检查会静默空过——它只说"≥ 2 条"，不够，得真的拿到多条）。
+        """
         user = f"{self._nonce}-u-score"
-        self._seed(user, "s-score", ["score-a", "score-b", "score-c"])
+        self._seed(user, "s-score", ["score-a", "score-b", "score-c"], separate_sessions=True)
         data = self._data(self._search(user_id=user, query=f"{self._nonce} score", top_k=10))
         expect(len(data) >= 2, f"这条要用多条的响应来验单调性，只拿到 {len(data)} 条")
 
@@ -601,9 +618,13 @@ class Preflight:
 
         ⚠ **`<= top_k` 单独是空过的**：写死 `limit=100` 也能满足它。
         所以先用 `top_k=1` 验"**真的会截断**"——库里明明有 3 条，只许回 1 条。
+
+        ⚠ 三条记忆**分属三个 session**：同一个 session 里相邻的三条会合并成**一个**
+        Context Segment，`top_k=1` 返回 1 条就成了**必然**，
+        这条检查也就跟着空过了（它要验的是"截断"，不是"合并"）。
         """
         user = f"{self._nonce}-u-count"
-        self._seed(user, "s-count", ["count-a", "count-b", "count-c"])
+        self._seed(user, "s-count", ["count-a", "count-b", "count-c"], separate_sessions=True)
         query = f"{self._nonce} count"
 
         for top_k in (1, 10, 100):
@@ -613,9 +634,9 @@ class Preflight:
                 f"top_k={top_k} 时返回了 {len(data)} 条 —— **返回超过 top_k 是契约错误**",
             )
 
-        # 非空过的那一半：库里 3 条，top_k=1 必须**恰好** 1 条（否则 top_k 没被用上）
+        # 非空过的那一半：库里 3 条（3 个 session ⇒ 3 个段），top_k=1 必须**恰好** 1 条
         one = self._data(self._search(user_id=user, query=query, top_k=1))
-        expect(len(one) == 1, f"库里有 3 条记忆，top_k=1 却返回 {len(one)} 条——`top_k` 没被用上")
+        expect(len(one) == 1, f"库里有 3 段，top_k=1 却返回 {len(one)} 条——`top_k` 没被用上")
 
     def check_empty_result_is_a_list(self) -> None:
         """§2.1：空结果是 `[]`，**不是 `null`**。"""
@@ -697,8 +718,12 @@ class Preflight:
         """§2.2：同一 `request_id` 重复 POST（payload 不变）⇒ **库里没有新增行**。
 
         **怎么在 HTTP 层看见"没有新增行"**：重复写入会落到一个新的 `pair_idx` ⇒
-        产生一个**新的 `id`** ⇒ 同一次检索里会**多出一条内容相同的项**。
-        所以"检索到的 id 集合与次数完全一致"就是那个断言。
+        产生一个**新的 `id`**。所以"检索到的 id 集合与次数完全一致"是那个断言的一半。
+
+        ⚠ **另一半在段模型下才看得出来**：新行与旧行在同一个 session 里**相邻**
+        ⇒ 它们会被合并进**同一个** Context Segment。于是重复写入**不再表现为多一项**，
+        而是**同一段变宽**（同样的问答在 `content` 里出现两次）。
+        所以只比 `id` 与条数会**漏掉**它——必须连 `content` 一起比。
         """
         user = f"{self._nonce}-u-replay"
         question = f"{self._nonce} replay question"
@@ -737,6 +762,15 @@ class Preflight:
         expect(
             len(after) == len(before),
             f"重放后条目数从 {len(before)} 变成 {len(after)} —— 重复写入了",
+        )
+        # ★ 段模型下的那一半：多一行不会多一项，只会让**同一段**里多一份相同的原文
+        expect(
+            [str(i["content"]) for i in after] == [str(i["content"]) for i in before],
+            "重放后正文变了 —— 同一段里多出了一份相同的记忆（重复写入）",
+        )
+        expect(
+            sum(str(i["content"]).count(question) for i in after) == 1,
+            f"同一段里出现了两次相同的问题原文 —— 库里有重复行：{after[0]['content'][:200]!r}",
         )
 
     def check_search_rejects_illegal_requests(self) -> None:

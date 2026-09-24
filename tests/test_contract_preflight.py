@@ -207,7 +207,11 @@ class FakeService:
     def __call__(self, request: httpx.Request) -> httpx.Response:  # noqa: ANN001
         if request.url.path == "/add":
             payload = json.loads(request.content)
-            self.added.append(payload)
+            # ⚠ 真的服务按 `request_id` **幂等**（§2.2）；假服务必须照样做，
+            #    否则"重放不重复写入"那条检查**没有阳性对照**可言。
+            #    `merged_duplicate` 是那条检查的违规模式：重放被当成新的一批。
+            if self.mode == "merged_duplicate" or not self._already(payload["request_id"]):
+                self.added.append(payload)
             return httpx.Response(
                 200,
                 json={
@@ -222,12 +226,26 @@ class FakeService:
             return httpx.Response(200, json={"data": self._search(body)})
         return httpx.Response(404)
 
+    def _already(self, request_id: str) -> bool:
+        return any(m["request_id"] == request_id for m in self.added)
+
     def _search(self, body: dict) -> object:
         if self.mode == "null_data":
             return None
         user = body["user_id"]
         top_k = body["top_k"]
         mine = [m for m in self.added if m["user_id"] == user]
+
+        if self.mode == "merged_duplicate":
+            # 违规点：**重复写入**（见 `/add`）。而检索侧照**段模型**合并
+            # ⇒ 多出来的那一行**不表现为多一项**，而是**同一段变宽**（同一份原文出现两次）。
+            # 这正是"只比 id 与条数会漏掉它"的那个场景。
+            merged = "\n".join(
+                f"Q: {m['messages'][0]['content']}\nA: [assistant] {m['messages'][1]['content']}"
+                for m in mine
+            )
+            return [{"id": f"{user}:0", "content": merged, "created_at": "", "score": 1.0}]
+
         # 违规点：无视 top_k，把该 user 的全部返回
         count = len(mine) if self.mode == "ignore_top_k" else min(top_k, len(mine))
 
@@ -304,6 +322,9 @@ def _run_one(mode: str, method: str) -> None:
         ("fused_score", "check_score_is_rank_derived", "rank=0 的 score 必须是 1.0"),
         ("fused_tail", "check_score_is_rank_derived", "量级像融合分数"),
         ("generated", "check_content_properties", "问题原文"),
+        # ⚠ 段模型下"重复写入"**不再表现为多一项**，而是**同一段变宽**——
+        #    所以这条违规模式刻意让检索侧照段模型合并（见 `FakeService._search`）。
+        ("merged_duplicate", "check_replay_does_not_write_again", "正文变了"),
     ],
 )
 def test_check_fails_on_a_violating_service(mode: str, method: str, expected: str) -> None:
@@ -322,6 +343,7 @@ def test_check_fails_on_a_violating_service(mode: str, method: str, expected: st
         "check_score_is_rank_derived",
         "check_content_properties",
         "check_add_echoes_the_three_fields",
+        "check_replay_does_not_write_again",
     ],
 )
 def test_checks_pass_on_a_conforming_service(method: str) -> None:

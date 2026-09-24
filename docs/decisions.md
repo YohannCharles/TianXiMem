@@ -421,9 +421,14 @@ helper 自己 `commit()` 则让"半批"落库。**两种情况都不报错。**
 
 | 变量 | 指向 | 谁读它 |
 | --- | --- | --- |
-| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` / `AML_EMB_MODEL` | **主网关** `memory.021130.xyz`（**Embedding**） | [`service/settings.py`](../src/tianxi_am/service/settings.py) 的 `ServiceSettings.from_env()` |
+| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` | **主网关** `memory.021130.xyz`（**Embedding**） | [`common/config.py`](../src/tianxi_am/common/config.py) 的 `load_config()`（**全包唯一读环境变量的地方**，③-d） |
 | `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` | **memory2** `memory2.021130.xyz`（**LLM 对话**） | harness / 归档 pipeline（经 `api_config.py` 适配器） |
-| `TIANXI_RERANKER_BASE_URL` / `_API_KEY` | **主网关**（**Reranker**） | Step 3 的 `rank/reranker.py`（未实现） |
+| `TIANXI_RERANKER_BASE_URL` / `_API_KEY` / `_MODEL` | **主网关**（**Reranker**） | [`rank/reranker.py`](../src/tianxi_am/rank/reranker.py) 的 `RemoteReranker`（**已接线**，2026-09-24） |
+
+> ⚠ **`AML_EMB_MODEL` 这个变量不存在**（2026-09-24 订正）：embedding 的**模型名**住在
+> `configs/*.yaml` 的 `models.embedder`——它是 profile 之间唯一真正该变的东西，
+> 所以归配置文件（能 diff、能评审）。本表原先那行把它和端点写在一起，是 ③-d 之前的口径。
+> 同理**原先指向的 `service/settings.py` 已随 ③-d 删除**——那个文件不再存在。
 
 **冲突来自哪**：网关文档（`L20-推理服务API.md` §2.1）写着"**变量名 `AML_EMB_*` 是 memory2 的固定命名，不要改**"——
 在**他们那边** `AML_EMB_*` 指内存网关（对话）。而本仓把 `AML_EMB_*` 读成 **embedding 端点**。**语义相反。**
@@ -445,6 +450,53 @@ helper 自己 `commit()` 则让"半批"落库。**两种情况都不报错。**
 所以改名是清洁工作，不是修复。**
 
 **复现**：`make check` 的 Embedding 与 LLM 两项分别打两个域名——**都通过才说明没混用**。
+
+---
+
+## D19 · 打包的单位是 **Context Segment**，不是单条记忆（2026-09-24）
+
+**背景**：§10 的扩窗与 §11.2 的"组内/组间顺序"落地时，必须回答一个此前被绕开的问题——
+**`top_k` 数的到底是什么**。三种答案都"能跑"，而只有一种是对的。
+
+**决定**：
+
+```text
+Hybrid → 去重 → Checker → rerank（可降级）
+       → 扩窗（全部候选保留，只对前 N 条扩 ±radius）
+       → 按 (user_id, session_id) 分组、连续 pair_idx 合并成 **Context Segment**
+       → 段按 best_rank 升序 → **token 预算** → ≤ top_k **个段**
+```
+
+| # | 锁定的口径 | 换一种写法的后果（**都不报错**） |
+| --- | --- | --- |
+| 1 | **`top_k` 约束段数**，且**只能在合并之后生效** | 在扩窗阶段按 raw 条数截断 ⇒ 本该成段的邻居被砍掉，**返回的每一段看起来都合法，只是少了一大截** |
+| 2 | **段是原子单位**：不截半个段、不拆回单条、不跳过装不下的段再塞后面的 | 截半个段 = 模型读到**缺了一环的连续对话**，而 `content` 里看不出来（§11.2） |
+| 3 | **邻居不参与排名**：`best_rank = min(段内真实 rerank 名次)`，`anchor` 是那条候选 | 给邻居编个人造名次 ⇒ 段优先级指向**从没被检索选中过**的记忆，锚点跟着错 |
+| 4 | **`id` / `created_at` 取自锚点**，`score = 1/(输出位置+1)` | 取段里第一条 ⇒ `created_at` 来自一条**没被选中**的记忆；照抄 rerank 名次 ⇒ `score` 在预算跳段时出现**空洞**（而"单调递减"照样成立） |
+| 5 | **v1 不做第二次 rerank、不做 rerank tail refill、不做段内截断** | 都会让"预算不足时被牺牲的是名次最低的种子"这条（§11.2）**不再成立** |
+
+**为什么不把 `top_k` 卡在 raw 条数上**：`neighbor.expansion_seed_limit = 30`、`radius = 1`
+时，100 个候选 + 邻居可达 140 条 raw，而合并之后可能只剩 60 段。
+**中间量（raw 条数）与最终量（段数）根本不是同一个量**，拿前者卡后者必然少给。
+
+**代价（必须正视）**：
+
+* **一项可能很长**。一段连续对话可以是几十对，全进同一个 `content`——于是
+  **一旦某段装不下预算，就整段丢掉**，而丢掉的可能正是最相关的那一段。
+  v1 接受这个代价（§11.2 明确"截断点必须落在窗口边界上"）；
+  **段内截断 / 拆回单条属于 v2**。
+* **合并会减少可返回的项数**。10 条相邻的候选现在只占 1 个 `top_k` 名额——
+  好处是省预算，坏处是**`top_k=100` 很可能填不满**（而填不满**完全合法**，§2.1）。
+* **`neighbor.expansion_seed_limit = 30` 只是 v1 初值**（PRD §10 的"20 种子 / 60 槽位"是一道
+  **示例算术**，不是这个值）。它与 `radius`、`top_k`、`budget.max_tokens` 是**同一道题**
+  （§10 原文）——**改任何一个都要重算其余三个，且必须有 ablation 数据**。
+
+**复现 / 回归**：`tests/test_neighbor.py`（扩窗、合并、锚点、优先级共 37 条）+
+`tests/test_packaging.py`（段级打包 + 双预算）+ `eval/smoke/preflight.py` 的 14 条契约检查。
+
+> ⚠ **段模型还改掉了四条"旧假设"**，它们全都会让**旧用例静默空过**——
+> 清单在 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 的"段模型改了四件事"一节。
+> 落地时实测到过一例：预检里"`top_k` 真的会截断"那条**一度变成必然成立**。
 
 ---
 

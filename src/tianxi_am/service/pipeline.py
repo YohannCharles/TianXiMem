@@ -1,23 +1,28 @@
-"""`Add` 与 `Search` 的**编排**——把 ① ② ③-a ③-b 串成真能调用的两条路径。
+"""`Add` 与 `Search` 的**编排**——把各层的调用串成真能跑的两条路径。
 
 > **为什么编排在本目录**：`service/CLAUDE.md` 说这一层"不做检索、不做配对、不碰存储"——
 > 那是指它**不重新实现**那些逻辑（全部往下调用）。而"**按什么顺序调**"必须有人拥有：
 > Search 的链条横跨 `retrieve/` 与 `rank/`，Add 的链条横跨 `pairing/`、`store/`、`embed/`，
 > **没有任何单个下层模块能拥有整条链**。所以顺序在这里，逻辑在下面。
 
-## 当前 Step 1 的 Search 链（**不是最终形态**）
+## Search 链（2026-09-24：接上扩窗、合并与 token 预算）
 
 ```text
 User Query → DenseArm（每 query 恰好 1 次）
            → HybridRetriever（BM25 + Dense + RRF）
-           → Initial Candidates
-           → EvidenceChecker（v1 passthrough）
-           → Minimal Packaging（rank/）
-           → ≤ top_k
+           → memory_id 稳定去重
+           → EvidenceChecker（v1 passthrough，每轮记账）
+           → rerank（恰好一次；不可用则降级回 RRF 顺序）
+           → Neighbor Expansion（全部候选保留，只对前 N 条扩 ±radius）
+           → Context Segment Merge（段内会话序，段间 best_rank 序）
+           → Token Budget + Final Packaging
+           → ≤ top_k 个**段**
 ```
 
-最终 v1 还要在 Checker 与 Packaging 之间插入 **Remote Rerank** 与
-**Neighbor Expansion**——两个阶段都写在 [`../rank/CLAUDE.md`](../rank/CLAUDE.md)。
+**唯一还没实现的一环曾经是 rerank 的远端调用**——**2026-09-24 已接**（`RemoteReranker`
+打主网关的 `/rerank`，线格式实测过）。端点不可用时按 D12 降级回 RRF 顺序并记
+`rerank_degraded`；没配/关掉时记 `rerank_disabled`。理由与降级契约写在
+[`../rank/reranker.py`](../rank/reranker.py)。
 
 ## `Add` 的链，以及那个**必须专门处理**的失败窗口
 
@@ -63,10 +68,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from tianxi_am.common.config import DEFAULT_EXPANSION_SEED_LIMIT, DEFAULT_RADIUS
+from tianxi_am.common.render import render
+from tianxi_am.common.tokens import TokenCounter
 from tianxi_am.pairing import AddBatch, ApplyBatchResult, apply_batch
 from tianxi_am.pairing.pairing import BatchLimits
-from tianxi_am.rank import PackagedResponse, package
-from tianxi_am.retrieve import EvidenceChecker, HybridRetriever
+from tianxi_am.rank import (
+    PackagedResponse,
+    Reranker,
+    RerankUnavailable,
+    expand_neighbors,
+    merge_segments,
+    package,
+)
+from tianxi_am.retrieve import EvidenceChecker, HybridRetriever, dedup_candidates
+from tianxi_am.retrieve.fusion import Candidate
 from tianxi_am.service.locks import SessionLocks
 from tianxi_am.store.qdrant_store import QdrantStore
 from tianxi_am.store.sqlite_store import QaPair, SqliteStore, make_pair_id
@@ -163,7 +179,27 @@ class AddPipeline:
 
 
 class SearchPipeline:
-    """`Search` 的完整时序。**不重排、不扩窗、不生成答案。**"""
+    """`Search` 的完整时序。**不生成答案**（§2.1 的红线）。
+
+    ## 顺序（每一步都有理由，不要调换）
+
+    ```text
+    ① 混合检索（BM25 + Dense → RRF）   每路 1 次查询；DenseArm 保证每 query 恰好 1 次 embedding
+    ② memory_id 稳定去重 + 重编号      必须在 rerank **之前**：重复项会被排两次、占两个名额
+    ③ Evidence Checker（v1 恒"充足"）   每轮判定都记账（D13）
+    ④ rerank（**恰好一次**）            `RemoteReranker`；不可用 ⇒ 降级回 RRF 顺序（D12）
+    ⑤ Neighbor Expansion               全部候选保留；只对前 N 条扩 ±radius
+    ⑥ Context Segment Merge            连续 pair_idx 合成段（段内会话序，段间 best_rank 序）
+    ⑦ Token Budget + Final Packaging   段是原子单位；`<= top_k` 的计数在这里收口
+    ```
+
+    ## 两个"顺序错了也不会报错"的地方
+
+    * **去重必须在 rerank 之前**：不去重的话，同一份证据会被 rerank 两次、
+      在预算里占两个名额——而**名次看起来完全正常**。
+    * **`top_k` 必须在扩窗/合并之后生效**：它约束的是**段数**。在扩窗之前按
+      raw memory 数截断，会把本该形成段的邻居砍掉，最后返回的段数**少于该有的**。
+    """
 
     def __init__(
         self,
@@ -172,11 +208,34 @@ class SearchPipeline:
         qdrant: QdrantStore,
         retriever: HybridRetriever,
         checker: EvidenceChecker,
+        counter: TokenCounter,
+        budget_tokens: int,
+        seed_limit: int = DEFAULT_EXPANSION_SEED_LIMIT,
+        radius: int = DEFAULT_RADIUS,
+        reranker: Reranker | None = None,
     ) -> None:
         self._store = store
         self._qdrant = qdrant
         self._retriever = retriever
         self._checker = checker
+        self._counter = counter
+        self._budget_tokens = budget_tokens
+        self._seed_limit = seed_limit
+        self._radius = radius
+        self._reranker = reranker
+        #: 诊断计数（§14）。**不进响应**——响应的形状是契约，一个字段都不能多。
+        self.rerank_calls = 0
+        self.rerank_degraded = 0
+        self.rerank_disabled = 0
+
+    @property
+    def reranker(self) -> Reranker | None:
+        """当前接的 reranker（`None` = 没配 / 显式关掉）。
+
+        只读暴露是给两处用的：**测试**（断言装配真的接上了，不是又传了 `None`）
+        与**诊断**（§14 的 run record 要记"这次用的哪个 reranker"，D12）。
+        """
+        return self._reranker
 
     def run(self, *, user_id: str, query: str, top_k: int) -> PackagedResponse:
         """跑完整条链，返回打包好的响应。
@@ -184,15 +243,99 @@ class SearchPipeline:
         ⚠ **空库直接返回空结果**（`data: []` 是合法的，§2.1）：集合还不存在时
         Qdrant 会抛"collection not found"，而"没有数据"不是错误。
         顺带也**不为一次必然空的检索付远程 embedding 调用**。
+        ⚠ 注意这里的短路**早于** token 计数——空库时不该去加载分词器。
         """
-        if not self._qdrant.exists():
-            return PackagedResponse(items=(), dropped_missing=0)
+        if top_k <= 0 or not self._qdrant.exists():
+            return PackagedResponse(items=())
 
         # ① 混合检索（DenseArm 内部保证每 query 恰好 1 次 embedding）
         candidates = self._retriever.search(user_id=user_id, query=query, top_k=top_k)
 
-        # ② Evidence Checker：v1 恒"充足"，但每轮判定都记账（D13）
+        # ② 稳定去重 + 重编号（**在 rerank 之前**，见类 docstring）
+        ranked = dedup_candidates(candidates)
+
+        # ③ Evidence Checker：v1 恒"充足"，但每轮判定都记账（D13）
         self._checker.decide(query=query)
 
-        # ③ 最小打包：render + created_at + score(1/(rank+1)) + 精确 ≤ top_k
-        return package(candidates, store=self._store, top_k=top_k)
+        # ④ rerank —— **恰好一次**
+        ranked = self._maybe_rerank(query=query, ranked=ranked)
+
+        # ⑤⑥ 扩窗 + 合并成段（全部候选保留，只对前 N 条扩窗）
+        expansion = expand_neighbors(
+            ranked, store=self._store, seed_limit=self._seed_limit, radius=self._radius
+        )
+        segments = merge_segments(expansion.selected, counter=self._counter)
+
+        # ⑦ 预算 + 打包（段是原子单位；`top_k` 约束的是**段数**）
+        return package(
+            segments,
+            top_k=top_k,
+            counter=self._counter,
+            max_tokens=self._budget_tokens,
+            dropped_missing=expansion.missing_rows,
+        )
+
+    def _maybe_rerank(self, *, query: str, ranked: list[Candidate]) -> list[Candidate]:
+        """对候选做**一次** rerank；不可用就退回原顺序。
+
+        ⚠ **"降级"与"没开"是两件事，分开计数**（见 [`../rank/reranker.py`](../rank/reranker.py)）：
+        两者产出的名次一样，但前者说明端点坏了、后者是 v1 的既定状态。
+        混为一个计数会让"reranker 一直失败"看起来像"我们没打算用它"。
+
+        **判据是"我们有没有打算调用它"**，不是"有没有调用成功"：
+
+        | 情况 | 计数 | 为什么 |
+        | --- | --- | --- |
+        | `reranker is None`（没配 / 显式关掉） | `disabled` | 本来就没打算调 |
+        | 没有候选 | `disabled` | 没有可排序的东西，**调用是没有意义的** |
+        | 真源缺行 ⇒ 拼不出文档 | `degraded` | **打算调了**，是这一步没能兑现 |
+        | 端点不可用 / 返回形状不符 | `degraded` | 同上 |
+
+        ⚠ **降级不是吞异常**（D12 明确要求）：reranker 是唯一位于关键路径上、
+        又不被规则保证可用的组件。它挂了必须**照样产出合法响应**，而不是 5xx——
+        但**降级这件事必须留下痕迹**，不能像什么都没发生。
+        """
+        if self._reranker is None or not ranked:
+            self.rerank_disabled += 1
+            return ranked
+
+        # 取每条候选的**渲染文本**当 rerank 的输入——与索引侧、与最终 content 是同一份渲染
+        # （§7.2 / 不变式 I1）。**一次批量读**：短生命周期连接模型下，逐条查询要付 N 次 connect。
+        pairs = self._fetch_for_rerank([c.memory_id for c in ranked])
+        documents = [render(p.question, p.answer) for p in pairs if p is not None]
+        if len(documents) != len(ranked):
+            # 真源缺行 ⇒ 不 rerank（少了几条就没法一一对应）。扩窗那一步会把缺行的记下来。
+            # ⚠ 计 `degraded` 而不是 `disabled`：**我们本来是要调的**。
+            self.rerank_degraded += 1
+            return ranked
+
+        self.rerank_calls += 1
+        try:
+            scores = self._reranker.score(query=query, documents=documents)
+        except RerankUnavailable:
+            self.rerank_degraded += 1
+            return ranked  # ★ 退回未重排的 RRF 顺序（D12）
+
+        if len(scores) != len(ranked):
+            # 形状不符与端点挂了一样不可用——**静默按前缀对齐会让后半段名次错位**。
+            # ⚠ `RemoteReranker.score()` 自己保证长度一致（它校验 index 集合），
+            #   所以走到这里说明**换了一个不守规矩的实现**——那正是这条判断存在的理由。
+            self.rerank_degraded += 1
+            return ranked
+
+        # 分数降序；**同分按原名次**（稳定）——否则同分项的先后会随排序实现漂移，
+        # 而那是"消融不可复现"的经典来源。
+        #
+        # ★ 这里只对**同一个列表**重排 ⇒ 候选集合不可能改变（§13 的开关纯度）。
+        #   把"重排"留在调用方而不是 reranker 内部，就是为了让这件事是结构性的。
+        order = sorted(range(len(ranked)), key=lambda i: (-float(scores[i]), i))
+        return [
+            Candidate(memory_id=ranked[i].memory_id, rank=new_rank)
+            for new_rank, i in enumerate(order)
+        ]
+
+    def _fetch_for_rerank(self, ids: list[str]) -> list[QaPair | None]:
+        with self._store.read() as conn:
+            pairs = self._store.fetch_pairs_by_ids(conn, ids)
+        by_id = {p.id: p for p in pairs}
+        return [by_id.get(memory_id) for memory_id in ids]
