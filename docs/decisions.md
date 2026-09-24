@@ -313,6 +313,12 @@
 
 **量级预期**：LoCoMo 的 `user` 消息 2,951 条 ⇒ 单独的 QA 对数约 **2,951**（实际略少：session 边界与 assistant 开头的 session 会产生无问的对，且一条 user 会被下一条 user 关掉）。
 
+> ⚠ **2026-09-24 起**：括号里"**一条 user 会被下一条 user 关掉**"那条**已作废**（**D20**）——
+> 连续 user 现在并入同一个 `question`。**LoCoMo 上这个数不变**（5,882 条消息严格交替、
+> 同 role run ≥2 共 **0** 处）⇒ 上面的量级仍然成立，变的是理由。
+> 同理，上一段"**与 ReFind 的 turn 粒度一致**"也**不再逐字成立**（D20 之后出现连续 user
+> 时我们产出的对更少）；引用"同粒度"那条消融前提时要加上这个限定。
+
 **⚠ 一条边界（不得跨越）：`conversations.jsonl` 只作加载层的输入源，不成为核心系统格式。**
 
 `pairing/` 与 `store/` 只能看见 **AML 契约的形状**——`messages: [{role, content, timestamp?}]` + `user_id` / `session_id` / `request_id`。**知道 `conversations.jsonl` 存在的，只允许是 [`eval/datasets/`](../eval/datasets/)。**
@@ -497,6 +503,108 @@ Hybrid → 去重 → Checker → rerank（可降级）
 > ⚠ **段模型还改掉了四条"旧假设"**，它们全都会让**旧用例静默空过**——
 > 清单在 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 的"段模型改了四件事"一节。
 > 落地时实测到过一例：预检里"`top_k` 真的会截断"那条**一度变成必然成立**。
+
+---
+
+## D20 · 配对规则：连续 user 消息**并入同一个 `question`**（对 §6.2 的**有意偏离**）（2026-09-24）
+
+**决定**：
+
+> **一个对的 `question` = 一段连续 user 消息，直到第一条非 user 消息到达为止。**
+
+§6.2 的字面是"一条 user 消息关闭前一个对"。两者**只在出现连续 user 消息时不同**：
+
+| 输入 | §6.2 字面 | 本决定 |
+| --- | --- | --- |
+| `q1 q2 q3 a` | 3 个对：`(q1, ∅)` `(q2, ∅)` `(q3, a)` | **1 个对**：`(q1\nq2\nq3, a)` |
+| `q1 a1 q2 a2` | 2 个对 | **不变** |
+| `q a1 a2 a3` | 1 个对 | **不变**（这一侧本来就对） |
+| `a q a`（以非 user 开头） | 2 个对 | **不变** |
+
+### 为什么改
+
+**AML 可能把一条超长 user 消息按句边界物理切开**，于是 Add 层看到的是
+`user: Q-part1 / user: Q-part2 / …`。这种形状在逻辑上仍是一问一答，
+但 §6.2 的字面会把它切成若干个"有问无答"的对，并把助手回复只挂到最后一段上。
+
+### ⚠ 证据状态：这条风险**未被证实**，官方文档里根本没有
+
+| 查了什么 | 结果 |
+| --- | --- |
+| [官方 api-guide](https://agentmemoryleaderboard.ai/api-guide) 的切批规则 | 「Ordinary Textual splits deterministically at either 20 messages or 2,000 Adapter-counted words.」 |
+| 该页是否提到 `sentence boundary` / `complete message` | **两个短语整页都不存在** |
+| 单条 >2,000 词 message 怎么办 | **未规定**；官方口径是当作 open question、**去问主办方** |
+| fragment 元数据（原消息 id / 序号 / 段数） | **契约里不存在**，且「undeclared fields such as `metadata` are ignored」 |
+
+**同时**：[`contract.md`](./contract.md) §7.1 曾据此推出"**消息一般不会被从中间切开**"——
+那句推论**建立在二手转述上，且该转述在一手来源里无法复现**。该处已同步修正，
+并把"超长单条的行为"登记为 §17.1 的 **S5**。
+
+⇒ **两个方向都没有依据。** 本条决策是在"风险未证实"的前提下权衡后的选择，不是对已知事实的响应。
+
+### 代价与影响面（全量实测，2026-09-24）
+
+| 量 | 值 |
+| --- | --- |
+| 处在"同 role run 长度 ≥2"中的消息 | LoCoMo **0** / 5,882；LongMemEval **48** / 246,750（最长 run = 4） |
+| 本规则改变的对数 | LoCoMo **0** / 3,075；LongMemEval **24** / 124,358（**0.019%**） |
+| 跨批接缝触发合并（20 条切批路径） | **0**（两份数据集都是 0） |
+| 若碎片真存在，修复率 | 批内版约 45% → **本决定 100%** |
+
+**三条结论**：① 在正常数据上它几乎是 no-op（这正是它便宜的原因）；
+② 它**不引入** `state` / `fragment_count` / `updated_at` 之类的字段——`pending` 已经是状态位；
+③ **无 schema migration**。
+
+### 判据：`open_pair` 而不是 `pending_pair`
+
+"本批要续写哪一对"的判据从**状态位**换成**内容事实**：
+
+```text
+旧：open  ⟺  status = 'pending'                    ← 派生自"本批是否命中上限"
+新：open  ⟺  status = 'pending' OR answer IS NULL   ← 第二个析取项是内容事实
+```
+
+**为什么第二个析取项不能省**：`pending` 是从"本批是否命中上限"推出来的，
+而上限里的**词数计数我们复现不了**（S2）。若 AML 按它的口径切出接近但不足 2,000 词的碎片、
+我们算出更少，那一对会被标成 `complete`，下一批的碎片便再也接不上——**静默退化**。
+`answer IS NULL` 与任何计数无关。⇒ **这是"跨批合并"能宣称 100% 的唯一理由**
+（`test_fragments_merge_even_when_the_previous_batch_marked_the_pair_complete` 钉住它）。
+
+**顺带修掉的一类退化**：回复落在下一批、而我们上一批判成了 `complete` 时，
+旧行为会建一个 `question` 为空的"无问的对"——**回复与问题彻底脱钩**。
+新判据把它接回原对。这条**与碎片是否存在无关**，是 S2 风险的一个独立收敛。
+
+### 三个必须一起改的地方
+
+| 改动 | 理由 |
+| --- | --- |
+| `SqliteStore.pending_pair()` → **`open_pair()`** | 名字必须诚实：续写的对象不一定是 `pending` 状态 |
+| `ResumeActions.pending_id` → **`open_pair_id`** + 新增 `append_question` | 同上；3a 原来只覆盖 `answer` 侧 |
+| **删除 `fill_question_if_null()`**，改为 **`append_question()`** | 旧规则的前提是"一个 `question` 只来自一条 user 消息"——**那正是本决定推翻的**。删除它没有推翻任何有论证的不变式：它自己的 docstring 就写着"① 里没有任何代码路径会用到它" |
+
+**`question` 的拼接不加 role 标记**（与 `encode_answer` 相反）：这段文本是用户的原始发言，
+role 均一；标记会一并进 embedding（§7.2 同一份渲染），而这是**拼接**而非**渲染**——
+要让被切开的一条原消息能逐字拼回去，就不能注入源文本里没有的 token。
+§11.3 要求逐条带标记的是 `answer` 侧（那里可能混着 `assistant` / `system` / 工具输出）。
+
+### 仍然未知 / 未做
+
+| # | 事项 |
+| --- | --- |
+| **S2（与本条耦合）** | **`answer` 侧仍依赖词数计数**："这一对的答话还没写完"**没有任何内容依据**可判（一个已有 answer 的对和写完的对长得一模一样）⇒ 想彻底摆脱 S2 只能**问出"Adapter 计的词"的口径**。本条**不引入**也不消除这个风险 |
+| **S5** | 超长单条 message 到底拆不拆——**只能靠 Smoke 观测或问主办方**（§17.1） |
+| **PRD 残留** | **§6.2 的字面未改**（它是权威件）。本条是**有意偏离**，§6.2 的原文需在下一轮 PRD 修订时吸收——在此之前，**§6.2 与本条冲突处按本条执行** |
+| **旧库不满足新不变式** | `open_pair` 依赖"`answer IS NULL` 的对必在末尾"，而**按旧规则写过的库不满足它**（`q1 q2 a` 会产出非末尾的 `(q1, NULL)`）⇒ 跨 arm 必须用干净库（**V9** 已经要求这件事） |
+
+### 复现
+
+```bash
+.venv/bin/python -m pytest tests/test_pairing.py tests/test_continuation.py -q
+```
+
+关键三条：`test_consecutive_users_then_assistant_is_one_pair`（批内）、
+`test_cross_batch_fragments_merge_into_one_question`（跨批）、
+`test_fragments_merge_even_when_the_previous_batch_marked_the_pair_complete`（不依赖计数）。
 
 ---
 

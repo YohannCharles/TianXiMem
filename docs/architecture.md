@@ -57,7 +57,7 @@ query → BM25 ┐
 
 | 目录 | 负责什么 | PRD |
 | --- | --- | --- |
-| `service/` | HTTP 层：`POST /add`、`POST /search`；请求/响应模型；按 `(user_id, session_id)` 串行化 | §2.1、§15 |
+| `service/` | HTTP 层：`POST /add`、`POST /search`（+ `GET /health` 探活）；请求/响应模型；按 `(user_id, session_id)` 串行化 | §2.1、§15 |
 | `pairing/` | QA 对配对判据；批次续接三步；`pending` 判定；**§15 写入路径的唯一所有者** | §6.2、§6.5、§15 |
 | `store/` | SQLite 真源（`qa_pairs` + `applied_batches`）；Qdrant 派生索引；邻域查询的 SQL | §6.1、§6.3 |
 | `embed/` | `Embedder` 协议 + 两个实现；**落盘的向量缓存** | §7.4、§7.2 |

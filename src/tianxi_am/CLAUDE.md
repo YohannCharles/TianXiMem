@@ -10,7 +10,7 @@
 
 | 目录 | 负责什么 | PRD |
 | --- | --- | --- |
-| [`service/`](./service/) | HTTP 层：两个端点、请求/响应模型、按 `(user_id, session_id)` 串行化 | §2.1、§15 |
+| [`service/`](./service/) | HTTP 层：两个业务端点 + `/health` 探活、请求/响应模型、按 `(user_id, session_id)` 串行化 | §2.1、§15 |
 | [`pairing/`](./pairing/) | QA 对配对判据；批次续接三步；`pending` 判定 | §6.2、§6.5、§15 |
 | [`store/`](./store/) | SQLite 真源 + Qdrant 派生索引 + 邻域查询的 SQL | §6.1、§6.3 |
 | [`embed/`](./embed/) | `Embedder` 协议 + 两个实现 + **落盘向量缓存** | §7.4、§7.2 |

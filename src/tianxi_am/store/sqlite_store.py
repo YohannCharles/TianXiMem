@@ -305,16 +305,31 @@ class SqliteStore:
         ).fetchone()
         return int(row[0])
 
-    def pending_pair(
-        self, conn: sqlite3.Connection, user_id: str, session_id: str
-    ) -> QaPair | None:
-        """该 session 中 `status = 'pending'` 的那一对。
+    def open_pair(self, conn: sqlite3.Connection, user_id: str, session_id: str) -> QaPair | None:
+        """该 session 中**本批可以续写**的那一对（§6.5 第 2 步的"恢复位置"）。
 
-        至多一个，且必在末尾——所以取 `ORDER BY pair_idx DESC LIMIT 1`。
+        两个析取项，缺一不可：
+
+        * `status = 'pending'` —— §6.5 的原有判据：上一批命中了上限，答话可能还没写完。
+        * **`answer IS NULL`** —— 本轮的**内容判据**：一个对只要还没收到任何非 user 消息，
+          它的 `question` 就**还没写完** ⇒ 后续的 user 消息是它的续写（配对规则见
+          [`../pairing/pairing.py`](../pairing/pairing.py) 的 `question_is_open`）。
+
+        ⚠ **第二个析取项不能省，也不能只靠第一个。** `pending` 是从"本批是否命中上限"
+        推出来的，而上限里的**词数计数我们复现不了**（S2："Adapter 计的词"官方从未定义）。
+        若 AML 按它的口径切出接近但不足 2,000 词的碎片、我们算出更少，这一对就会被标成
+        `complete`，下一批的碎片再也接不上——**静默退化成"有问无答"的对**。
+        `answer IS NULL` 是**内容事实**，与任何计数无关。
+
+        至多一个，且**必在末尾**，所以取 `ORDER BY pair_idx DESC LIMIT 1`：
+        在配对规则下，一个 `answer IS NULL` 的对会吃掉后续的 user（并入 `question`）
+        与非 user（并入 `answer`），所以它只能是最后一对。
+        （⚠ 这条不变式是**本轮规则**带来的：旧规则下 `q1 q2 a` 会产出非末尾的 `(q1, NULL)`，
+        所以按旧规则写过的库不满足它——跨 arm 必须用干净的库，见 V9。）
         """
         row = conn.execute(
             f"SELECT {_COLUMNS} FROM qa_pairs"
-            " WHERE user_id = ? AND session_id = ? AND status = ?"
+            " WHERE user_id = ? AND session_id = ? AND (status = ? OR answer IS NULL)"
             " ORDER BY pair_idx DESC LIMIT 1",
             (user_id, session_id, STATUS_PENDING),
         ).fetchone()
@@ -358,17 +373,32 @@ class SqliteStore:
             request_id=request_id,
         )
 
-    def fill_question_if_null(self, conn: sqlite3.Connection, pair_id: str, question: str) -> bool:
-        """`question` **只在原值为 NULL 时**写入。返回是否真的写了。
+    def append_question(self, conn: sqlite3.Connection, pair_id: str, text: str) -> bool:
+        """`question` **填空 + 追加**：原值为空则填入，否则**追加**（append-only）。
 
-        ① 里没有任何代码路径会用到它——新建的对总是带着 question 落库，
-        而"无问的对"的 question 永远保持 NULL（它会被下一条 user 消息关闭，
-        那条 user 消息开的是一个**新**对）。保留它是为了让 §6.5 的写入规则
-        有一个可被直接断言的落点，而不是只写在文档里。
+        追加必须允许，理由与 `answer` 同源：一个对的 `question` 现在是一段**连续 user
+        消息**的拼接，而这段消息**可以跨批次**——续接批次带来的 user 消息是它的续写，
+        必须并进去而不是丢掉（配对规则见 `../pairing/pairing.py`）。
+
+        ⚠ 旧版的 `fill_question_if_null`（"只在原值为 NULL 时写入"）**已删除**：
+        那条规则的前提是"一个 `question` 恰好来自一条 user 消息"，而这个前提**正是本轮
+        修正的东西**（AML 可能把一条超长 user 消息按句边界切成多条同 role 消息）。
+        `question` 与 `answer` 现在是同一个写模式，所以共用同一种写法——
+        包括把空串当作空值处理，让"填空"与"追加"的边界与 `append_answer` 逐字一致。
+
+        追加的安全性由**批次级守卫**保证（同一批至多被应用一次），
+        所以这里**不需要**额外判重——与 `append_answer` 同一套论证（见 D4）。
         """
+        if not text:
+            return False
         cur = conn.execute(
-            "UPDATE qa_pairs SET question = ? WHERE id = ? AND question IS NULL",
-            (question, pair_id),
+            "UPDATE qa_pairs"
+            " SET question = CASE"
+            "   WHEN question IS NULL OR question = '' THEN ?"
+            "   ELSE question || char(10) || ?"
+            " END"
+            " WHERE id = ?",
+            (text, text, pair_id),
         )
         return cur.rowcount > 0
 

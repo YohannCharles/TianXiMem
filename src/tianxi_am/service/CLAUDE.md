@@ -6,7 +6,7 @@
 
 ```text
 app.py        FastAPI 实例 + 对象图装配（`--factory` 入口）、lifespan
-routes.py     POST /add、POST /search（薄路由，只做形状映射）
+routes.py     POST /add、POST /search、GET /health（薄路由，只做形状映射）
 schemas.py    请求与响应模型（pydantic）= §2.1 的字面翻译
 pipeline.py   Add / Search 的**编排**（"按什么顺序调"）
 locks.py      按 (user_id, session_id) 的串行化

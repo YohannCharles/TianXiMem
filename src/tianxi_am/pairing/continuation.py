@@ -4,8 +4,8 @@
 
 ```text
 1. 幂等守卫（必须最先做）
-2. 恢复位置（next_idx / 既有 pending）
-3. 挂接本批消息（3a / 3b / 3c / 3d）
+2. 恢复位置（next_idx / 可续写的对）
+3. 挂接本批消息（3a′ / 3a / 3b / 3c / 3d）
    ※ 应用成功时，在同一个事务里向 applied_batches 插入本批这一行
 ```
 
@@ -92,30 +92,36 @@ def apply_batch(
 
         # ── 第 2 步：恢复位置 ──
         next_idx = store.next_pair_idx(conn, batch.user_id, batch.session_id)
-        pending = store.pending_pair(conn, batch.user_id, batch.session_id)
+        # "可续写的对"而不是"pending 对"：判据里除了状态位还有 `answer IS NULL`
+        # 这条**内容事实**，理由见 `open_pair` 的 docstring（不依赖我们复现不了的词数计数）。
+        open_pair = store.open_pair(conn, batch.user_id, batch.session_id)
 
         # ── 第 3 步：规划 + 挂接 ──
         plan = plan_batch(
             batch.messages,
             next_idx=next_idx,
-            pending_id=None if pending is None else pending.id,
+            open_pair_id=None if open_pair is None else open_pair.id,
+            open_pair_answer=None if open_pair is None else open_pair.answer,
             limits=limits,
             word_counter=caller,
         )
 
-        # 3a / 3b / 3d —— 都作用于那个既有 pending
+        # 3a′ / 3a / 3b / 3d —— 都作用于那个可续写的对
         if plan.resume is not None:
             resume = plan.resume
+            if resume.append_question:
+                # 3a′：本批开头的 user 消息是它 question 的续写（跨批的碎片合并）
+                store.append_question(conn, resume.open_pair_id, resume.append_question)
             if resume.append_answer:
-                store.append_answer(conn, resume.pending_id, resume.append_answer)
+                store.append_answer(conn, resume.open_pair_id, resume.append_answer)
             if resume.close:
-                store.mark_complete(conn, resume.pending_id)
+                store.mark_complete(conn, resume.open_pair_id)
             elif resume.final_status == STATUS_COMPLETE:
-                # 3d 作用于既有 pending（纯接续批 + session 结束判定）
-                store.mark_complete(conn, resume.pending_id)
+                # 3d 作用于既有对（纯接续批 + session 结束判定）
+                store.mark_complete(conn, resume.open_pair_id)
             # 这一行确实被本批触碰了 ⇒ 更新溯源用的 request_id（§6.1）。
             # ⚠ 它【只用于溯源】：正因为它会被后一批覆盖，幂等守卫不能复用它（D4）。
-            store.touch_request_id(conn, resume.pending_id, batch.request_id)
+            store.touch_request_id(conn, resume.open_pair_id, batch.request_id)
 
         # 3c —— 新建的对，pair_idx 从 next_idx 起连续赋值
         for draft in plan.new_pairs:

@@ -1,4 +1,4 @@
-"""HTTP 层：`POST /add`、`POST /search`（§2.1、§2.2、§15）。
+"""HTTP 层：`POST /add`、`POST /search`、`GET /health` 探活（§2.1、§2.2、§15）。
 
 **本层只做三件事**：
 

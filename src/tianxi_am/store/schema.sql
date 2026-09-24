@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS qa_pairs (
     user_id     TEXT NOT NULL,           -- 隔离契约（唯一隔离字段）
     session_id  TEXT NOT NULL,
     pair_idx    INTEGER NOT NULL,        -- session 内连续，从 0 起
-    question    TEXT,                    -- 可空（无问的对：批次以非 user 消息开头）
+    question    TEXT,                    -- 可空（无问的对：批次以非 user 消息开头）；
+                                         -- D20 起它是一段【连续 user 消息】的拼接，可跨批【追加】
     answer      TEXT,                    -- 可空（pending 对）；跨批续接时允许【追加】
     status      TEXT NOT NULL,           -- 'complete' | 'pending'
     event_time  INTEGER,                 -- Unix 毫秒，取该对【首条消息】的 timestamp，可空

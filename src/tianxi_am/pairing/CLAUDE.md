@@ -14,25 +14,37 @@ instrument.py    三个 pending 计数器（计数器的读法与陷阱见 ../ob
 
 ---
 
-## 配对判据只有一条（§6.2）
+## 配对判据只有一条（§6.2，**2026-09-24 由 D20 修正**）
 
-> **一个 QA 对 = 从一条 user 消息开始，到（不含）下一条 user 消息之前的全部消息。**
+> **一个 QA 对 = 一段连续 user 消息（= 它的 `question`），加上直到下一条 user 消息为止的非 user 消息（= 它的 `answer`）。**
 
 **实现里只做一种判断：这条消息的 `role` 是不是 `user`。**
 
 > ⚠ **不要枚举 role 白名单。** AML 传入的取值域**没有文档**，白名单会在遇到没见过的 role 时**静默丢消息**。其他 role（`assistant` / `system` / 工具输出…）**一律归入当前对**。
 
-这样定义而不是"严格 user + 紧邻 assistant"，是为了覆盖三种真实情况：
+### ⚠ 与 §6.2 字面的一处**有意差异**（D20）
 
-| 情况 | 结果 |
-| --- | --- |
-| 连续多条 user 消息 | 前一对应被下一条 user 关闭 |
-| 一条 user 后跟多条 assistant 消息（工具调用等） | 全部归入该对 |
-| session 以 assistant 开头 | `question` 为空，构成一个**无问的对** |
+§6.2 的字面是"**一条 user 消息关闭前一个对**"。**D20 改成了"连续 user 消息并入同一个 `question`"**，
+两者**只在出现连续 user 消息时不同**：
+
+| 情况 | §6.2 字面 | 现在的行为 |
+| --- | --- | --- |
+| **连续多条 user 消息** | 前一对应被下一条 user 关闭（**有问无答**） | **并进同一个 `question`**（D20） |
+| 一条 user 后跟多条 assistant 消息（工具调用等） | 全部归入该对 | **不变** |
+| session 以 assistant 开头 | `question` 为空，构成一个**无问的对** | **不变** |
+
+**为什么改**：AML 可能把**一条超长 user 消息按句边界物理切开**，于是 `q q q a` 这种形状会出现，
+而它逻辑上仍是一问一答。**⚠ 这条风险未被证实**（官方 API guide 对"单条超长怎么办"**没有任何规定**，
+见 §17.1 的 **S5**）——D20 是在"风险未证实"下的权衡，代价已量：正常数据上只改变 **24/124,358 对（0.019%）**。
+
+**判据落在哪**：`pairing.py` 的 `_Draft.question_is_open`（"这个对的 `question` 还没写完吗"），
+以及 `store/sqlite_store.py` 的 `open_pair()`（"本批要续写哪一对"）。
+**`open_pair` 的第二个析取项 `answer IS NULL` 是关键**：它让跨批合并不依赖词数计数（S2）。
 
 **配对的作用域是整个 session，不是一个 Add 批次**（§6.5）。一个 QA 对**可以跨批次**——批次只是 AML 的传输单位。这一点直接决定了 `pair_idx` 必须 session 内连续、新批次要接着数。
 
-**与 ReFind 的 turn 粒度一致**——**与外部基线同粒度，消融对比才干净**（§6.2）。
+**与 ReFind 的 turn 粒度**：D20 之后**不再逐字一致**——出现连续 user 消息时我们产出的对更少。
+实测影响面 ≈ 0（LoCoMo 0 处、LongMemEval 10 个 run），但**引用"同粒度"那条消融前提时要加上这个限定**。
 
 ---
 
@@ -48,15 +60,18 @@ instrument.py    三个 pending 计数器（计数器的读法与陷阱见 ../ob
 
 2. 恢复位置
    next_idx = COALESCE(MAX(pair_idx) + 1, 0)        -- 限于该 (user_id, session_id)
-   pending  = 该 session 中 status = 'pending' 的那一对
+   可续写的对 = 该 session 中 status = 'pending' **或 answer IS NULL** 的那一对
               （至多一个，且必在末尾：ORDER BY pair_idx DESC LIMIT 1）
+              ⚠ 第二个析取项是 D20 加的，**不能省**——见 open_pair() 的 docstring
 
 3. 挂接本批消息
-   a. 本批开头、首个 user 消息之前的消息 → 追加到 pending 的 answer
-      若此时不存在 pending → 按 §6.2 处理（批次以 assistant 开头，建一个 question 为空的对）
-   b. 本批出现首个 user 消息 → 把前一个 pending 对标 complete
-      （它是被两条连续 user 消息关掉的，没有内容可填；漏了这一步它会永久挂在 pending）
-   c. 其余消息按 §6.2 配对，pair_idx 从 next_idx 起连续赋值
+   a′. 本批开头的 user 消息，若那个对的 answer 还空着 → **并入它的 question**
+       （D20 新增；跨批时由 append_question 落库）
+   a. 本批开头、首个 user 消息之前的消息 → 追加到那个对的 answer
+      若此时不存在可续写的对 → 按 §6.2 处理（批次以 assistant 开头，建一个 question 为空的对）
+   b. 本批出现首个 user 消息**且那个对已有 answer** → 把它标 complete
+      （⚠ 判据是"已有 answer"，**不是**"出现了 user 消息"）
+   c. 其余消息按上面的配对判据配对，pair_idx 从 next_idx 起连续赋值
    d. 收尾：给涉及到的最后一对标 status：
       本批两限都未命中 ⇒ session 已结束 ⇒ 标 complete
       ※ **纯接续批（零条 user 消息）也走这一步**
@@ -76,6 +91,12 @@ instrument.py    三个 pending 计数器（计数器的读法与陷阱见 ../ob
 
 **只要本批命中任一上限（20 条消息 或 2,000 词），本批的最后一对就是 `pending`；两限都未命中，则最后一对是 `complete`**——AML 手上已经没有这个 session 的消息了，边界即 session 末端。
 
+> ⚠ **`pending` 不再是"本批要续写哪一对"的判据**（D20）。续写的判据是
+> `status = 'pending' OR answer IS NULL`（见上文的第 2 步与 `open_pair()`）。
+> 原因：`pending` 是从"本批是否命中上限"推出来的，**而命中与否依赖那个我们复现不了的
+> 词数计数**（S2）——计数一旦与 AML 不一致，跨批合并就会**静默**失效。
+> `pending` 现在只承担两件事：**它的三计数器**（观测），与 §6.5 步 3a 的答话续接。
+
 **为什么 `pair_idx` 必须连续**：`event_time` 保证不了 session 内顺序——同一秒的多条消息排序未定义，会让 `±1` 邻域扩展产生抖动，进而**让消融实验不可复现**（§6.1）。两个计分数据集**都没有 per-turn 时间戳**，所以在它们上面这不是"可能发生"而是必然（实证见 [`../eval/datasets/CLAUDE.md`](../../../eval/datasets/CLAUDE.md)）。
 
 ### 三个埋点
@@ -90,17 +111,28 @@ instrument.py    三个 pending 计数器（计数器的读法与陷阱见 ../ob
 
 ---
 
-## 写入规则：填空 + 追加，绝不覆盖（§6.5）
+## 写入规则：填空 + 追加，绝不覆盖（§6.5，**`question` 一行由 D20 改**）
 
 ```text
-question      只在原值为 NULL 时写入
-answer        只在原值为 NULL 时写入；跨批续接时允许**追加**（append-only）
+question      填空 + 追加（append-only）——**与 answer 同一个写模式**
+answer        填空 + 追加（append-only）
 status        只允许 pending → complete，不允许反向
 ```
 
-`answer` 必须允许追加，是因为 §6.2 承认"一条 user 后跟多条 assistant 消息（工具调用等）"——这类对若跨批次，**续接批次带来的 assistant 消息必须并进去，而不是丢掉**。
+**`question` 允许追加**（D20）：它现在是**一段连续 user 消息**的拼接，而这段消息**可以跨批次**
+——续接批次带来的 user 消息是它的续写，必须并进去而不是丢掉。
+旧规则"只在原值为 NULL 时写入"的前提是"一个 `question` 恰好来自一条 user 消息"，
+**那个前提被 D20 推翻了**；对应的 `fill_question_if_null()` 已删除，换成 `append_question()`。
 
-**追加的安全性由批次级守卫保证**（同一批至多被应用一次），**不需要额外的判重逻辑**。
+**`answer` 允许追加**（§6.5）：§6.2 承认"一条 user 后跟多条 assistant 消息（工具调用等）"，
+这类对若跨批次，续接批次带来的消息必须并进去，而不是丢掉。
+
+**追加的安全性由批次级守卫保证**（同一批至多被应用一次），**不需要额外的判重逻辑**——
+`answer` 与 `question` 是同一套论证（见 D4）。
+
+**`question` 的拼接不加 role 标记**（与 `encode_answer` 相反）：这段文本是用户的原始发言，
+role 均一；标记会一并进 embedding（§7.2 同一份渲染），而它要能让**被切开的一条原消息逐字拼回去**。
+§11.3 要求逐条带标记的是 `answer` 侧（那里可能混着 `assistant` / `system` / 工具输出）。
 
 ---
 
