@@ -23,6 +23,15 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from tianxi_am.common.config import (
+    ENV_QDRANT_URL,
+    AppConfig,
+    CacheConfig,
+    EmbedCacheConfig,
+    QdrantConfig,
+    SqliteConfig,
+    StorageConfig,
+)
 from tianxi_am.common.render import render
 from tianxi_am.pairing.pairing import BatchLimits, Message
 from tianxi_am.retrieve import (
@@ -32,7 +41,7 @@ from tianxi_am.retrieve import (
     InMemoryCheckerInstrument,
     make_hybrid_params,
 )
-from tianxi_am.service import ServiceSettings, build_services
+from tianxi_am.service import build_services
 from tianxi_am.service.pipeline import AddPipeline, SearchPipeline
 from tianxi_am.store.qdrant_store import ScoredMemoryId
 from tianxi_am.store.sqlite_store import SqliteStore
@@ -176,7 +185,7 @@ def qdrant_client():
     """会话级 Qdrant 客户端；**不可达时整组用例 skip**（不静默通过）。"""
     from qdrant_client import QdrantClient
 
-    url = os.environ.get("TIANXI_QDRANT_URL", "http://localhost:6333")
+    url = os.environ.get(ENV_QDRANT_URL, "http://localhost:6333")
     client = QdrantClient(url=url, timeout=10.0)
     try:
         client.get_collections()
@@ -280,13 +289,18 @@ def wired(tmp_path) -> Iterator[Wired]:
     `AddPipeline` 用的是**真的** `Qwen3EmbeddingEmbedder`——HTTP 级的 `/add` 用例若走它，
     就会去打远程网关（违反"测试绝不调用远程模型"），而且**在没有网络时会响亮失败**。
     """
-    settings = ServiceSettings(
-        emb_base_url="http://unused/v1",
-        emb_api_key="k",
-        sqlite_path=str(tmp_path / "tianxi.db"),
-        embed_cache_dir=str(tmp_path / "cache"),
+    config = AppConfig(
+        # 不传 env ⇒ 不碰真实环境；只给必需的那几项，其余走 config.py 的内置默认值
+        storage=StorageConfig(
+            sqlite=SqliteConfig(path=str(tmp_path / "tianxi.db")),
+            # 假 Qdrant 不看 url，但 config 会校验它非空
+            qdrant=QdrantConfig(url="http://unused"),
+        ),
+        cache=CacheConfig(embed=EmbedCacheConfig(dir=str(tmp_path / "cache"))),
+        embed_base_url="http://unused/v1",
+        embed_api_key="k",
     )
-    services = build_services(settings)
+    services = build_services(config)
     qdrant = FakeQdrantSearch()
     embedder = FakeEmbedder(dim=8)
     instrument = InMemoryCheckerInstrument()

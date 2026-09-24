@@ -10,6 +10,7 @@
 把"按什么顺序调"放进了 [`pipeline.py`](./pipeline.py)。
 """
 
+from tianxi_am.common.config import AppConfig, ConfigError, assert_single_process, load_config
 from tianxi_am.service.app import Services, build_services, create_app, create_app_from_env
 from tianxi_am.service.locks import SessionLocks, SessionLockTimeout
 from tianxi_am.service.pipeline import AddOutcome, AddPipeline, SearchPipeline
@@ -21,7 +22,6 @@ from tianxi_am.service.schemas import (
     SearchResponse,
     SearchResultItem,
 )
-from tianxi_am.service.settings import ServiceSettings
 
 __all__ = [
     "AddMessage",
@@ -29,15 +29,18 @@ __all__ = [
     "AddPipeline",
     "AddRequest",
     "AddResponse",
+    "AppConfig",
+    "ConfigError",
     "SearchPipeline",
     "SearchRequest",
     "SearchResponse",
     "SearchResultItem",
-    "ServiceSettings",
     "Services",
     "SessionLockTimeout",
     "SessionLocks",
+    "assert_single_process",
     "build_services",
     "create_app",
     "create_app_from_env",
+    "load_config",
 ]

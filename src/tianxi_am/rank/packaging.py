@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime
 from typing import Final
 
 from tianxi_am.common.render import render
@@ -39,7 +39,6 @@ from tianxi_am.retrieve.fusion import Candidate
 from tianxi_am.store.sqlite_store import QaPair, SqliteStore
 
 __all__ = [
-    "DEFAULT_TZ",
     "PackagedResponse",
     "ResponseItem",
     "day_granularity",
@@ -47,24 +46,29 @@ __all__ = [
     "placeholder_score",
 ]
 
-#: `created_at` 日粒度的**时区口径**。
+#: `created_at` 的时区口径：**固定 UTC，没有旋钮**（2026-09-24 定）。
 #:
-#: ⚠ **契约没规定时区**（`docs/contract.md` §3 只说"只给到日粒度"）。取 **UTC** 的理由：
-#: 它是**与机器无关**的——用本地时区会让同一份数据在不同机器上差一天，而本项目最怕
-#: 的就是不可复现。
+#: 契约**没规定时区**（`docs/contract.md` §3 只说"只给到日粒度"）。固定 UTC 的理由：
+#: **它是与机器无关的**——用本地时区会让同一份数据在不同机器上差一天，
+#: 而本项目最怕的就是不可复现。
 #:
-#: ⚠ **它与加载层必须一致**：`event_time` 是由 harness 合成的，
-#: **合成时用哪个时区、这里就得用哪个时区**，否则日期会整体偏一天（且不报错）。
-#: ⇒ 这个量要进 `configs/`，与加载层共享（`config-reference` 的 `packaging.created_at_tz`）。
-DEFAULT_TZ: Final[tzinfo] = UTC
+#: ⚠ **它与加载层必须一致**：`event_time` 由 harness 合成，**合成时用哪个口径、
+#: 这里就得用哪个口径**，否则日期会整体偏一天（且不报错）。⇒ **加载层的口径也是
+#: UTC**：benchmark 里"没有时区"的时间按 **floating calendar time** 处理，
+#: 由 Adapter 按 UTC 编码成 Unix 毫秒写进 `event_time`。
+#:
+#: ⚠ **刻意不做成配置项**：一个"可以随手改的 `created_at_tz`"会与加载层脱钩——
+#: 改了它，日期整体偏一天，而**没有任何东西会报错**。要改口径就两边一起改，且那是一次
+#: 需要重新验证的决定，不是一次配置调整。
+UTC_ONLY: Final[str] = "UTC"
 
 #: 日期格式：`YYYY-MM-DD`（§11.3 的示例是 `2026-07-26`）。
 #: ⚠ **不要用裸 Unix 毫秒**——渲染出来是 `- [1753512557000] ...`，对模型无意义。
 _DATE_FORMAT: Final[str] = "%Y-%m-%d"
 
 
-def day_granularity(event_time: int | None, *, tz: tzinfo = DEFAULT_TZ) -> str:
-    """Unix 毫秒 → `YYYY-MM-DD`；`None` → **空串 `""`**。
+def day_granularity(event_time: int | None) -> str:
+    """Unix 毫秒 → `YYYY-MM-DD`（**UTC 口径**）；`None` → **空串 `""`**。
 
     * `event_time` 是**该对首条消息**的 timestamp（§6.1），可空
     * **NULL 时发 `""`**（§11.3）：渲染代码是 `str(item.get("created_at") or "")`，
@@ -76,7 +80,7 @@ def day_granularity(event_time: int | None, *, tz: tzinfo = DEFAULT_TZ) -> str:
     """
     if event_time is None:
         return ""
-    return datetime.fromtimestamp(event_time / 1000, tz=tz).strftime(_DATE_FORMAT)
+    return datetime.fromtimestamp(event_time / 1000, tz=UTC).strftime(_DATE_FORMAT)
 
 
 def placeholder_score(rank: int) -> float:
@@ -130,7 +134,6 @@ def package(
     *,
     store: SqliteStore,
     top_k: int,
-    tz: tzinfo = DEFAULT_TZ,
 ) -> PackagedResponse:
     """把候选打包成 `data[]`。**本函数是最终数量的守门人。**
 
@@ -138,6 +141,8 @@ def package(
     * **绝不为凑满 `top_k` 复制或补造结果**——有多少真源行就有多少项
     * `score` 按**输出位置**重算，不是照抄输入名次：真源缺行时中间会被跳过，
       照抄会让 `score` 出现空洞（而它必须单调递减、且 `rank=0` 就是 `1.0`）
+    * `created_at` 固定走 **UTC 日粒度**（`day_granularity`），**没有时区参数**——
+      见模块里那条注释：一个可随手改的口径会与加载层脱钩，而**不会报错**
     """
     if top_k <= 0:
         return PackagedResponse(items=(), dropped_missing=0)
@@ -162,7 +167,7 @@ def package(
             ResponseItem(
                 id=pair.id,
                 content=render(pair.question, pair.answer),
-                created_at=day_granularity(pair.event_time, tz=tz),
+                created_at=day_granularity(pair.event_time),
                 # 名次按【输出位置】——见 docstring
                 score=placeholder_score(len(items)),
             )

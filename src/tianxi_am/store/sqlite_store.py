@@ -115,13 +115,18 @@ class SqliteStore:
     而且**不会报错**（半批数据看起来完全正常）。
     """
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
         self._db_path = str(db_path)
+        #: 抢不到写锁时**等待**而不是立刻抛 `SQLITE_BUSY` 的毫秒数（D17）。
+        #: 来自 `configs/*.yaml` 的 `storage.sqlite.busy_timeout_ms`——
+        #: ⚠ **不要在这里读配置**：本模块只受 `store/` 与 `common/` 的约束，
+        #: 由上层的装配点把值传进来（见 `service/app.py` 的 `build_services`）。
+        self._busy_timeout_ms = busy_timeout_ms
 
     # ── 生命周期 ────────────────────────────────────────────────────────
 
     @classmethod
-    def open(cls, db_path: str | Path) -> SqliteStore:
+    def open(cls, db_path: str | Path, *, busy_timeout_ms: int = 5000) -> SqliteStore:
         """建表（幂等），并**把数据库级设置落一次**。
 
         ⚠ **`journal_mode = WAL` 只在这里执行一次**，不在每个短生命周期连接上重复：
@@ -130,7 +135,7 @@ class SqliteStore:
         与之相对，`busy_timeout` / `synchronous` / `foreign_keys` / `row_factory`
         是**每连接**的，必须每次新连接都设——见 `_connect()`。
         """
-        store = cls(db_path)
+        store = cls(db_path, busy_timeout_ms=busy_timeout_ms)
         store.init_schema()
         store._init_journal_mode()
         return store
@@ -163,7 +168,8 @@ class SqliteStore:
         # 虽然幂等守卫兜得住，但没有理由在这里省。
         conn.execute("PRAGMA synchronous = FULL")
         # 多连接并发写时，让**输的那一方等待**而不是立刻抛 SQLITE_BUSY。
-        conn.execute("PRAGMA busy_timeout = 5000")
+        # 取自配置的 `storage.sqlite.busy_timeout_ms`（默认 5000）。
+        conn.execute(f"PRAGMA busy_timeout = {int(self._busy_timeout_ms)}")
         # 外键约束默认是 **OFF**（SQLite 的默认值），且它是**每连接**生效的。
         # 当前 schema 里没有外键 ⇒ 这条是**空转**；但留着它，将来加 FK 时不会静默失效。
         conn.execute("PRAGMA foreign_keys = ON")

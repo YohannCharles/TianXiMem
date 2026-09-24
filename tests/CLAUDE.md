@@ -114,9 +114,12 @@ test_store.py           §6.1 / §6.3 DDL、连续性与索引
 | `rerank: false` | **候选数量**不变（只是顺序变了） |
 | `agent: false` | **打包顺序**不变（只是候选少了 agent 补的那部分） |
 | `neighbor: false` | 种子集合不变（只是没有扩窗） |
-| `dense: false` | ——（**无下游依赖**，见下） |
+| `dense: false` | ——（**无下游依赖**：D15 删掉了裸 BM25 模式与"验证后再加 dense"的分阶段，所以没有任何东西依赖它） |
 
 **这组测试很便宜，而它保护的是整个 §13 实验计划。** 没有它，所有消融结论都不可信。
+
+> ⚠ `checker` 与 `dense` **不再是"下游/上游"关系**（D15）——两条依赖边都已删除，
+> 见 [`../docs/config-reference.md`](../docs/config-reference.md) §2 的"两条已作废的依赖边"。
 
 ---
 

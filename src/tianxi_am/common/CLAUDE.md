@@ -2,12 +2,12 @@
 
 **PRD**：§11.3（渲染）、§6.4（token 预算）、§15（配置开关）
 
-## 本模块的构成（**部分实现**）
+## 本模块的构成
 
 ```text
 render.py    ✅ 已实现——渲染模板的**唯一实现**
+config.py    ✅ 已实现——**全包唯一**读环境变量的地方（③-d）
 tokens.py    ⬜ 待写——o200k_base 计数（§6.4）
-config.py    ⬜ 待写——配置加载 + 校验
 ```
 
 **这不是一个工具箱。** 它存在的理由是**一条不变式**，外加两个"必须只有一份实现"的量。
@@ -57,9 +57,33 @@ config.py    ⬜ 待写——配置加载 + 校验
 
 **一条不变的配置纪律**：**不得硬编码**（§12.1 R1 对冲 3）。凡是 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) 里列出的量，代码里只应有读配置的语句。**开关之间的依赖与"关掉时不得改变什么"也在那份文档**——**它是一处声明**，本文件不另列一份。
 
+### ✅ 已实现（2026-09-24，③-d）
+
+`config.py` 现在是**全包唯一**读 `os.environ` 的地方。三条结构性质，各自有测试钉住：
+
+| 性质 | 由谁保证 |
+| --- | --- |
+| **只有 `config.py` 访问 `os.environ` / `os.getenv`** | `tests/test_config.py::test_only_config_reads_the_environment`——**AST 扫描** `src/tianxi_am/**/*.py`，不是靠自觉 |
+| **只有 `config.py` 解析 yaml** | 同上的 `test_no_module_reads_config_files_directly` |
+| **每个键只有一个家**（env 或 yaml，不重叠） | `test_thresholds_are_not_overridable_from_env` + `test_env_owned_keys_are_rejected_in_yaml` |
+
+**两层分工**（一处声明在 [`../../../configs/CLAUDE.md`](../../../configs/CLAUDE.md)）：
+
+| 层 | 拥有 | 例子 |
+| --- | --- | --- |
+| **环境变量**（`.env`） | 密钥、端点、**路径**、worker 数 | `AML_EMB_BASE_URL` / `TIANXI_SQLITE_PATH` / `TIANXI_WORKERS` |
+| **`configs/<profile>.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.rrf.k` / `models.embedder` / `storage.qdrant.collection` |
+
+> ⚠ **不认识的键一律报错**（env 的那几项写进 yaml 也算）：拼错的键被静默忽略 ⇒ 跑的是默认值，
+> 而**没有任何人会发现**——这正是本项目反复要避免的那一类失败。
+
+**⚠ 配置化 ≠ 可调**。`rrf.k = 61` 与 `top_k = 100` 都是**正确性常量**，写进配置是为了追溯与切换，**不是为了调**——分组见 config-reference 的 A / B / C 三分类。**不合法的值在启动阶段就拒绝**（`rrf_k != 61`、`workers != 1` 都是硬错误，不是警告）。
+
 **一条待补的开关**：**Checker 的开关必须是配置项**（§15 的开关清单里原本漏了它），因为 §13 的 A4 要关它做对照。**§8 要求它的三个判据阈值在代理评测上标定**，所以阈值也是配置项。
 
-**⚠ 配置化 ≠ 可调**。`rrf.k = 61` 与 `top_k = 100` 都是**正确性常量**，写进配置是为了追溯与切换，**不是为了调**——分组见 config-reference 的 A / B / C 三分类。
+> **③-d 只收了"今天有代码消费方"的键**。`checker.*` / `neighbor.*` / `rerank.*` / `agent.*` /
+> `budget.*` 都还没接——那些模块有的未实现、有的还没接线。**收一个没有消费方的键等于预留字段**
+> （§6.1 对 DDL 的同一条纪律）。它们的落点已经写在 [`../../../docs/config-reference.md`](../../../docs/config-reference.md)。
 
 ---
 

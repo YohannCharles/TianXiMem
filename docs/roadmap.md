@@ -90,12 +90,14 @@
 
 > **检索只有一种模式：混合**（BM25 + Dense 两路 `prefetch` → Weighted RRF）。**没有裸 BM25 模式**（D15）。
 
-- [ ] SQLite 真源：`qa_pairs` + **`applied_batches`**（§6.1）
-- [ ] Qdrant server 模式（**Docker**），单分片，payload 索引**在写入前**建（§6.3）
-- [ ] `Add` 路径六步，**幂等分两层**（§15 / §6.5）
-- [ ] `Embedder` 协议 + 两个实现；**架构保持 embedder-agnostic**（§7.4 / §2.3）
-- [ ] **落盘的向量缓存**，键 = 渲染文本哈希（§7.2）
-- [ ] `Search` 路径：混合检索，**精确 ≤ `top_k`**（§2.2）
+- [x] SQLite 真源：`qa_pairs` + **`applied_batches`**（§6.1）
+- [x] Qdrant server 模式（**Docker**），单分片，payload 索引**在写入前**建（§6.3）
+- [x] `Add` 路径六步，**幂等分两层**（§15 / §6.5）
+- [x] **HTTP 层**：`POST /add` / `POST /search` + Add/Search 编排（③-c，2026-09-24）——契约形状钉在 pydantic 模型上
+- [x] `Embedder` 协议 + 两个实现；**架构保持 embedder-agnostic**（§7.4 / §2.3）
+- [x] **落盘的向量缓存**，键 = 渲染文本哈希（§7.2）
+- [x] **`common/config.py`：配置的唯一入口**（③-d，2026-09-24）——`service/` 等**五个目录都不再读 `os.environ`**（静态测试钉住）；`configs/default.yaml` + `local.yaml` 已建；`rrf_k != 61` 与 `workers != 1` 都**拒绝启动**
+- [x] `Search` 路径：混合检索，**精确 ≤ `top_k`**（§2.2）
 - [ ] Weighted RRF：**`k=61` 显式设**、`prefetch` 每路带 `using`、根级 `limit` 取请求 `top_k`（§7.3）
 - [ ] **主路径必须能通过 Smoke 契约校验**（200 响应、`data` 数组、不超 `top_k`）——**它是所有对照的参照点**（§13）
 - [ ] **跑 T2 实验**（§13，半天工作量）：133 道 multi-session 题（12 道拒答题单列）人工分三类

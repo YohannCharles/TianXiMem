@@ -13,22 +13,22 @@ Step 5 之后停止使用。
 **唯一不可违反的顺序：前缀必须加在缓存之上**（该模块 docstring 讲了为什么）。
 
 维度来自真实返回，**不在此声明**——见 `base.py` 的说明。
+
+⚠ **本模块不读环境变量**：`base_url` / `api_key` / `model` 都由装配点传进来
+（`common/config.py` 是全包唯一读环境变量的地方）。原先那个过渡用的 `from_env()`
+**已删除**（2026-09-24，③-d）。
 """
 
 from __future__ import annotations
 
-import os
-from collections.abc import Mapping
-
 from tianxi_am.embed.base import OpenAICompatEmbedder
 
-__all__ = ["Qwen3EmbeddingEmbedder"]
+__all__ = ["DEFAULT_MODEL", "Qwen3EmbeddingEmbedder"]
 
+#: 开发期模型名。⚠ 与 `common/config.py` 的 `ModelsConfig.embedder` 默认值是**同一个值**
+#: （那边是配置的默认，这里是直接构造这个类时的默认）。两处相等由
+#: `tests/test_config.py::test_model_default_is_the_same_in_both_places` 钉住。
 DEFAULT_MODEL: str = "Qwen/Qwen3-Embedding-8B"
-
-ENV_BASE_URL: str = "AML_EMB_BASE_URL"
-ENV_API_KEY: str = "AML_EMB_API_KEY"
-ENV_MODEL: str = "AML_EMB_MODEL"
 
 
 class Qwen3EmbeddingEmbedder(OpenAICompatEmbedder):
@@ -53,22 +53,4 @@ class Qwen3EmbeddingEmbedder(OpenAICompatEmbedder):
             model=model,
             timeout=timeout,
             batch_size=batch_size,
-        )
-
-    @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> Qwen3EmbeddingEmbedder:
-        """从环境变量构造。
-
-        ⚠ **这是过渡措施**：正经的配置加载属 `common/config.py`（§15：不得硬编码），
-        本切片里 `common/config.py` 还没实现，所以给一个显式的入口而不是散落的
-        `os.environ[...]`。缺变量时**响亮地失败**，不静默退回默认值。
-        """
-        src = os.environ if env is None else env
-        missing = [k for k in (ENV_BASE_URL, ENV_API_KEY) if not src.get(k)]
-        if missing:
-            raise ValueError(f"缺少环境变量：{', '.join(missing)}（见 .env.example）")
-        return cls(
-            base_url=src[ENV_BASE_URL],
-            api_key=src[ENV_API_KEY],
-            model=src.get(ENV_MODEL) or DEFAULT_MODEL,
         )

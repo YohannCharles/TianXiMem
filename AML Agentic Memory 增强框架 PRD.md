@@ -800,7 +800,9 @@ A: [assistant] Let me check the schedule.
 
 - **并发**：Add 必须按 `(user_id, session_id)` 串行化——第 2 步读位置、第 4 步写位置是"读-改-写"，两个并发批次会拿到同一个 `next_idx`。单进程下用一把按 session 的锁即可；SQLite 的写事务不足以单独解决它（两次事务读到的 `MAX(pair_idx)` 会相同）
 
-- **运行时开关**：所有消融项（dense / **checker** / rrf / neighbor / rerank / packaging / agent）必须是配置项，否则 §13 无法执行。**注意 `checker` 是 `dense` 的下游**——两者不是独立开关，退化路径见 §8
+- **运行时开关**：所有消融项（dense / **checker** / rrf / neighbor / rerank / packaging / agent）必须是配置项，否则 §13 无法执行。
+  > ⚠ **2026-09-23 更正（D15）**：本条原写"**注意 `checker` 是 `dense` 的下游**——两者不是独立开关，退化路径见 §8"。**那条依赖已删除**：检索只有混合一种模式（没有裸 BM25），`dense` 永不关 ⇒ `checker` 也就永不退化，§8 现在没有退化路径。**`checker` 与 `dense` 是彼此独立的开关。**
+
 
 ---
 

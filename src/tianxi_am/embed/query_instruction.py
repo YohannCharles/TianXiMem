@@ -73,8 +73,12 @@ class QueryInstructionEmbedder:
 
     用法（**顺序不能反**，理由见模块 docstring）：
 
-        inner = CachingEmbedder(Qwen3EmbeddingEmbedder.from_env(), DiskVectorCache(...))
-        embedder = QueryInstructionEmbedder(inner, instruction=cfg.query_instruction)
+        inner = CachingEmbedder(Qwen3EmbeddingEmbedder(base_url=..., api_key=..., model=...),
+                                DiskVectorCache(...))
+        embedder = QueryInstructionEmbedder(inner, instruction=cfg.retrieval.query_instruction)
+
+    ⚠ 装配点在 [`../service/app.py`](../service/app.py) 的 `build_services()`——
+    **参数由它从配置里取**，本模块不读环境变量、也不读配置。
 
     ⚠ 索引与查询两条路径**必须用同一个实例**——否则两边的 `dim` 与缓存坐标系可能不一致。
     ⚠ `encode()` 永不加前缀。文档侧的前缀会改变索引的输入，**那是"贵"消融项**（改模板 = 重建索引）。

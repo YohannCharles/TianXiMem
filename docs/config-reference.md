@@ -14,15 +14,47 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ## 1. 三个 profile
 
-| 文件 | 用途 | 模型 |
-| --- | --- | --- |
-| `configs/default.yaml` | 基线值，所有 profile 的父级 | —— |
-| `configs/local.yaml` | **开发期**：代理评测、迭代、消融 | Qwen3-Embedding-8B + qwen3.5-9b |
-| `configs/submit.yaml` | **提交期**：Full 定稿 | `text-embedding-v4` + `gpt-4o-mini` |
+| 文件 | 用途 | 模型 | 状态 |
+| --- | --- | --- | --- |
+| `configs/default.yaml` | 基线值，所有 profile 的父级 | Qwen3-Embedding-8B（**开发期唯一有活端点的**） | ✅ |
+| `configs/local.yaml` | **开发期**：代理评测、迭代、消融 | 同上 | ✅（**今天只改集合名**） |
+| `configs/submit.yaml` | **提交期**：Full 定稿 | `text-embedding-v4` + `gpt-4o-mini` | ⬜ Step 5 |
 
-`local.yaml` 与 `submit.yaml` 只覆盖**模型与由模型派生的量**（向量维度、token 预算实测量、全部标定阈值）；其余继承 `default.yaml`。
+`local.yaml` 与 `submit.yaml` 只覆盖**模型与由模型派生的量**（向量维度、token 预算实测量、全部标定阈值），其余继承 `default.yaml`。
+
+> ⚠ **`local.yaml` 今天只有一项**：`storage.qdrant.collection: memories_dev`——开发期的集合与提交期分开，
+> 避免 §6.3 的 upsert 把上一套实验的 point **静默留给下一套**（`open-questions.md` 的 **V9**）。
+> **基线今天放的是开发期模型**（唯一有活端点的那个）；Step 5 建 `submit.yaml` 时再覆盖它。
+> **profile 之间真正的差异要等到那时才出现**——现在硬凑一份"两套完整配置"只会让差异看不出来。
+
+**选 profile 用 `TIANXI_PROFILE`**（默认 `default`）；**指向另一份配置目录用 `TIANXI_CONFIG_DIR`**（替代集合的 arm 快照就靠它，见 `configs/CLAUDE.md` 的 `runs/`）。
 
 > **切换 profile 不是一次配置改动，是一个独立阶段**（§12.1 R1 对冲 4 / §16 Step 5）：**不可与任何设计改动同时进行**，否则分数变化无法归因。
+
+---
+
+## 1.2 每个键**住在哪**：`.env` 还是 `configs/*.yaml`
+
+> 加载器是 [`../src/tianxi_am/common/config.py`](../src/tianxi_am/common/config.py)——**全包唯一读环境变量的地方**（2026-09-24，③-d）。
+
+| 层 | 拥有哪些键 | 例子 |
+| --- | --- | --- |
+| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXI_SQLITE_PATH`、`TIANXI_QDRANT_URL`、`TIANXI_EMBED_CACHE_DIR`、`TIANXI_WORKERS` |
+| **`configs/<profile>.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.*`、`pairing.*`、`models.embedder`、`storage.qdrant.collection`、`storage.sqlite.busy_timeout_ms` |
+
+**每个键只有一个家，两边不重叠也不许重叠。** 在 yaml 里写一个 env 拥有的键会**直接报错**
+（反之亦然）——两处都能设的值，最终会变成"跑出来的结果和 yaml 里写的不一样，而没人知道为什么"。
+
+**为什么阈值不能藏在环境变量里**（§12.1 R1 对冲 4）：那会让 Step 5 的模型切换变成"改 shell 变量"——
+**改了什么无法 diff、无法评审**，而归因恰恰是那一步唯一的目的。
+
+**下面各节的标题会标出本节是否已落地**：
+**✅ 已落地**（键已进 `configs/*.yaml` 或 `.env`，有代码消费方）· **⬜ 待接线**（落点已定，消费方未接）。
+
+> ⚠ **③-d 只落地了"今天有代码消费方"的键。** 本文件里 `checker.*` / `neighbor.*` / `rerank.*` /
+> `agent.*` / `budget.*` / 消融开关的**落点已经在这里声明**，但它们**还没有进 `configs/*.yaml`**——
+> 消费方未接线时收进配置等于预留字段（§6.1 对 DDL 的同一条纪律）。
+> ⇒ **别以为现在改 yaml 就能开关 `rerank`**：那个开关还没接线。
 
 ---
 
@@ -48,15 +80,15 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 2. 消融开关（§15）
+## 2. 消融开关（§15）—— ⬜ **待接线**
 
 **这是开关的唯一声明处**——其它文档提到开关时一律指回这里，不要各自列一份。
 
 | 开关 | 关掉它意味着 | 依赖谁 | **关掉时不得改变什么** | 出处 |
 | --- | --- | --- | --- | --- |
 | `dense` | 检索退化为 BM25-only | —— | —— | §7.2 |
-| `checker` | 一律进 Agentic Search（或按退化判据） | **`dense`** | —— | §8 |
-| `rrf` | 不融合，只用单路 | `dense`（见下） | —— | §7.3 |
+| `checker` | 一律进 Agentic Search | —— | —— | §8 |
+| `rrf` | 不融合，只用单路 | —— | —— | §7.3 |
 | `neighbor` | 不扩窗 | —— | **种子集合不变** | §10 |
 | `rerank` | 直接用融合名次 | —— | **候选数量不变**（只是顺序变了） | §11.2 |
 | `packaging` | 不做打包策略 | —— | —— | §11.3 |
@@ -65,17 +97,33 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > **最后一列是 §13 的纯度规则**：**开关必须只影响它命名的那一件事。** 否则对照不成立——**而结果看起来完全正常，只是结论错了**。
 > 对应测试见 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) §5——**那组测试很便宜，而它保护的是整个 §13 实验计划。**
 
-**`dense: false` 时 `rrf` 是否还生效仍要显式规定**，不要让它在实现里自然发生。
+### ⚠ 两条**已作废**的依赖边（D15，2026-09-23）
 
-**两个不在 §15 清单里、但同样要可配的对照项**：T1 的时间戳前缀渲染变体（§11.3）与 A0 的 recency-only（§13）。
+上面那张表的"依赖谁"一列原先是 `dense → checker` 与 `dense → rrf`。**两条都已删除**，理由是 D15：
+
+**混合检索是既定的检索形态**（BM25 + Dense 两路无条件跑），**没有裸 BM25 模式**。
+于是 `dense: false` 不再有下游 ⇒ **`checker` 与 `rrf` 都不再依赖它**。
+
+连带消失的三项（**不要再实现**）：
+
+| 消失的 | 它曾是什么 |
+| --- | --- |
+| §8 的 **Checker 退化路径** | "dense 关掉时 Checker 按退化判据走"——dense 永不关 ⇒ 那条路径永远不触发 |
+| §13 的 **A1 / A2** 两个对照 | 参照点改由**混合主路径自身**承担 |
+| [`open-questions.md`](./open-questions.md) 的 **E2** 与"待决事项 2" | 同上 |
+
+**`dense` 开关仍然保留**（§15 要求所有消融项可配），但**它今天没有下游依赖**——
+关掉它只改变"检索走了几路"这一件事。
 
 **`checker.enabled` 必须可配**（§15 的开关清单里原本漏了它）——§13 的 A4 要关它做对照。
+
+**两个不在 §15 清单里、但同样要可配的对照项**：T1 的时间戳前缀渲染变体（§11.3）与 A0 的 recency-only（§13）。
 
 **为什么不用融合分数做判据**（§8）：RRF 融合后的分数**不是校准量**。Qdrant 官方明确警告不要把单路阈值用到根级 `score_threshold`——"照搬 dense-only 的阈值会静默截断结果"。因此判据只能用**名次**。
 
 ---
 
-## 3. 检索（§7）
+## 3. 检索（§7）—— ✅ **已落地**
 
 | 配置项 | 初值 | 类 | 说明 | 出处 |
 | --- | --- | --- | --- | --- |
@@ -104,7 +152,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 4. Evidence Checker（§8）
+## 4. Evidence Checker（§8）—— ⬜ **待接线**
 
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
@@ -115,11 +163,13 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 阈值**需在代理评测上标定**，初值如上。
 
-**副产品**：这两次分离查询的结果**正是 §13 中 hybrid-vs-BM25-only 对照所需的数据**，不额外花成本。
+**副产品**：这两次分离查询的结果**就是判据本身所需的数据**，不额外花成本。
+**⚠ 但它不为任何实验留档**（§8）——早先写的"正是 §13 中 hybrid-vs-BM25-only 对照所需的数据"
+**已随 D15 作废**（那个对照已删除）。
 
 ---
 
-## 5. Agentic Search（§9）
+## 5. Agentic Search（§9）—— ⬜ **待接线**
 
 **参数沿用 ReFind 的形状**——这套参数是在真实评测上跑出来的，**改它需要理由**。
 
@@ -140,7 +190,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 6. Neighbor Expansion（§10）
+## 6. Neighbor Expansion（§10）—— ⬜ **待接线**
 
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
@@ -161,7 +211,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 7. Rerank 与打包（§11）
+## 7. Rerank 与打包（§11）—— ⬜ **待接线**
 
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
@@ -197,7 +247,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 8. 存储（§6）
+## 8. 存储（§6）—— ✅ **已落地**
 
 | 配置项 | 值 | 理由 |
 | --- | --- | --- |
@@ -208,8 +258,8 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `storage.qdrant.payload_indexes` | `user_id`(**keyword** + `is_tenant`) / `session_id`(keyword) / `event_time`(integer) | **必须在写入数据前建**，否则 HNSW 需要重建才有过滤感知 |
 | `storage.qdrant.payload_fields` | `user_id` / `session_id` / `pair_idx` / `event_time` | **不含正文** |
 | `storage.qdrant.wait` | **`true`** | 契约要求"响应前立即可搜"；默认异步不保证 |
-| `storage.sqlite.path` | `data/tianxi.db` | 真源，文件随 run 归档 |
-| `cache.embed.dir` | `data/embed_cache` | **必须落盘** |
+| `storage.sqlite.path` | `var/tianxi.db`（`.env`） | 真源，文件随 run 归档。⚠ 是 `var/` 不是 `data/`——后者与只读归档 `benchmark_data/` 容易混（见 `var/README.md`） |
+| `cache.embed.dir` | `var/embed_cache`（`.env`） | **必须落盘** |
 | `cache.embed.key` | **渲染文本哈希** | **不能用 `id`** |
 
 > **`is_tenant` 只支持 keyword / uuid 两种类型**——别把 `user_id` 建成 integer（§6.3）。
@@ -218,7 +268,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 9. 模型（§2.3）
+## 9. 模型（§2.3）—— ✅ **已落地**（只有 `models.embedder`）
 
 | 配置项 | 提交期 | 开发期 | 说明 |
 | --- | --- | --- | --- |
@@ -234,7 +284,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 10. 数据侧常量（harness 用，§6.2 / §6.5 / §12）
+## 10. 数据侧常量（§6.2 / §6.5）—— ✅ **已落地**
 
 | 配置项 | 值 | 说明 |
 | --- | --- | --- |

@@ -52,9 +52,13 @@ qdrant-down:  ## 停 Qdrant
 serve:  ## 起 Add/Search 服务（FastAPI + uvicorn，单进程）
 	uv run uvicorn tianxi_am.service.app:create_app_from_env --factory --workers 1
 # ⚠ 必须 --workers 1：§15 的按 session 串行化用的是进程内锁，多 worker 会**静默失效**。
-#    用 --factory 而不是模块级 app：模块级 app 会让"导入本模块"就要求环境变量齐备，
+#    两条防线都会拦：`--workers N`（N>1）被 assert_single_process() 拦下，
+#    TIANXI_WORKERS != 1 被配置校验拦下（见 src/tianxi_am/common/config.py）。
+# ⚠ 用 --factory 而不是模块级 app：模块级 app 会让"导入本模块"就要求环境变量齐备，
 #    测试没法只导入工厂函数（见 src/tianxi_am/service/app.py 的 docstring）。
-# ⚠ 需要 .env 里的 AML_EMB_BASE_URL / AML_EMB_API_KEY；缺了会在启动时响亮失败。
+# ⚠ 需要 .env 里的 AML_EMB_BASE_URL / AML_EMB_API_KEY 与 configs/default.yaml；
+#    缺了会在启动时响亮失败（不会带着空值跑起来）。
+#    开发期建议 TIANXI_PROFILE=local（换用独立的 memories_dev 集合）。
 
 test:  ## 跑单元测试
 	uv run pytest

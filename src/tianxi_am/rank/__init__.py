@@ -12,7 +12,6 @@ Neighbor Expansion（Step 2）都**插在它上游**。
 """
 
 from tianxi_am.rank.packaging import (
-    DEFAULT_TZ,
     PackagedResponse,
     ResponseItem,
     day_granularity,
@@ -21,7 +20,6 @@ from tianxi_am.rank.packaging import (
 )
 
 __all__ = [
-    "DEFAULT_TZ",
     "PackagedResponse",
     "ResponseItem",
     "day_granularity",

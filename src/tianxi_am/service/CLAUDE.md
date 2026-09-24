@@ -11,8 +11,14 @@ schemas.py    请求与响应模型（pydantic）= §2.1 的字面翻译
 pipeline.py   Add / Search 的**编排**（"按什么顺序调"）
 locks.py      按 (user_id, session_id) 的串行化
 errors.py     异常 → 保持"可重试"的边界处理
-settings.py   路径与密钥（**过渡**：③-d 迁到 common/config.py）
 ```
+
+> **配置不在本目录**（2026-09-24 改，③-d）：原先的 `settings.py` 已删除。
+> 配置由 [`../common/config.py`](../common/config.py) 统一提供，**注入** `build_services()`。
+> **`service/` 自己不读 `os.environ`**——这一条有静态测试钉住
+> （`tests/test_config.py::test_only_config_reads_the_environment`）。
+>
+> ⇒ 本目录拿到的是一个 [`AppConfig`](../common/config.py) 对象；**它不知道那些值从哪来**。
 
 > **为什么有 `pipeline.py`**：本层"不做检索、不做配对、不碰存储"指的是**不重新实现**
 > 那些逻辑（全部往下调用）。而 Search 的链横跨 `retrieve/` 与 `rank/`、Add 的链横跨
@@ -49,6 +55,17 @@ settings.py   路径与密钥（**过渡**：③-d 迁到 common/config.py）
 ### 必须 `--workers 1`
 
 第 4 条用的是**进程内锁**。多 worker 会**静默失效**——每个 worker 各有各的锁，两个批次照旧并发。
+
+**这一条有两条防线，都不是文档警告**（2026-09-24 加，③-d）：
+
+| 防线 | 在哪 | 拦住什么 |
+| --- | --- | --- |
+| **配置阶段** | `common/config.py` 的 `validate()` | `TIANXI_WORKERS != 1` ⇒ `ConfigError` |
+| **进程阶段** | `common/config.py` 的 `assert_single_process()`，由 `create_app_from_env()` 调用 | **命令行**给的 `--workers 4`——配置层看不见它 |
+
+进程阶段的判据是 `multiprocessing.parent_process() is not None`：uvicorn 的 `--workers N`（N>1）会用
+`multiprocessing` 派生子进程来跑 app，而单进程启动时它是 `None`。
+⇒ **`--reload` 也会被一并拦下**（两者在子进程里形状相同，父进程只留下 pid 与名字）；开发期请用 `make serve`。
 
 > **SQLite 的写事务不足以单独解决它**（§15）：两次事务读到的 `MAX(pair_idx)` **会相同**。
 

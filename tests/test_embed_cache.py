@@ -334,26 +334,20 @@ def test_http_respects_index_order_and_batches() -> None:
 
 
 # ── Qwen3-Embedding-8B 的构造入口 ──────────────────────────────────────
+#
+# ⚠ 原先这里有三个 `Qwen3EmbeddingEmbedder.from_env()` 的用例。那个方法**已删除**
+# （2026-09-24，③-d）：环境变量现在是 `common/config.py` 的**独占**职责，
+# 「缺变量要响亮失败」「环境变量能覆盖模型名」这两件事的覆盖**整体搬到了
+# `tests/test_config.py`**——在那里测的是唯一入口，而不是每个模块各有一个小入口。
 
 
-def test_qwen3_embedding_from_env_requires_variables() -> None:
-    with pytest.raises(ValueError, match="缺少环境变量"):
-        Qwen3EmbeddingEmbedder.from_env({})
+def test_qwen3_embedding_model_default_is_not_hardcoded_away() -> None:
+    """直接构造时模型名有默认值；**同一个值也写在 `common/config.py` 里**。
 
-
-def test_qwen3_embedding_from_env_reads_variables() -> None:
-    emb = Qwen3EmbeddingEmbedder.from_env(
-        {"AML_EMB_BASE_URL": "http://gw/v1", "AML_EMB_API_KEY": "sk-x"}
-    )
-    assert emb.model == DEFAULT_MODEL == "Qwen/Qwen3-Embedding-8B"
-    assert emb._base_url == "http://gw/v1"  # noqa: SLF001 — 只验构造，不验调用
-
-
-def test_qwen3_embedding_model_can_be_overridden_by_env() -> None:
-    emb = Qwen3EmbeddingEmbedder.from_env(
-        {"AML_EMB_BASE_URL": "http://gw/v1", "AML_EMB_API_KEY": "k", "AML_EMB_MODEL": "other"}
-    )
-    assert emb.model == "other"
+    两处的相等由 `tests/test_config.py::test_model_default_is_the_same_in_both_places` 钉住
+    ——这份用例只确认这里**有**那个默认值（否则直接构造这个类的人会拿到空模型名）。
+    """
+    assert Qwen3EmbeddingEmbedder(base_url="http://gw/v1", api_key="k").model == DEFAULT_MODEL
 
 
 def test_empty_base_url_or_key_rejected() -> None:

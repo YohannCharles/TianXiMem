@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import fields
 from datetime import UTC, datetime, timedelta, timezone
 
@@ -21,9 +22,12 @@ from tianxi_am.rank import (
 from tianxi_am.retrieve import Candidate
 from tianxi_am.store.sqlite_store import SqliteStore
 
+#: 东八区——**只用来演示"如果按本地时区算，这个时间点会落到哪一天"**，
+#: 证明跨日的时间点确实能暴露口径（**不再传给任何被调函数**，见那条用例）。
 CST = timezone(timedelta(hours=8))
 
-#: 2023-05-08 23:30 UTC —— 一个**跨日**的时间点，用来暴露时区口径
+#: 2023-05-08 23:30 UTC —— 一个**跨日**的时间点，用来暴露时区口径。
+#: UTC 口径 ⇒ `2023-05-08`；东八区口径 ⇒ `2023-05-09`。
 NEAR_MIDNIGHT_UTC = int(datetime(2023, 5, 8, 23, 30, tzinfo=UTC).timestamp() * 1000)
 
 
@@ -127,26 +131,35 @@ def test_created_at_does_not_fall_back_to_write_time(store: SqliteStore) -> None
     assert datetime.now(UTC).strftime("%Y-%m-%d") not in created_at
 
 
-def test_created_at_honours_the_timezone_parameter(store: SqliteStore) -> None:
-    """时区口径必须**显式**——同一毫秒在不同时区可以落在不同日期。
+def test_created_at_is_utc_regardless_of_the_machine_timezone(store: SqliteStore) -> None:
+    """时区口径**固定 UTC，没有参数**——同一毫秒在任何机器上都得到同一个日期。
 
-    ⚠ 契约没规定时区（`docs/contract.md` §3 只说日粒度），所以这个量要进 `configs/`，
-    且**必须与加载层合成 `event_time` 时用的时区一致**，否则日期整体偏一天且不报错。
+    ⚠ 契约没规定时区（`docs/contract.md` §3 只说日粒度）。固定 UTC 的理由是
+    **与机器无关**：用本地时区会让同一份数据在不同机器上差一天，而本项目最怕的就是
+    不可复现。
+
+    ⚠ **刻意不做成配置项**（2026-09-24），见 `packaging.py` 的 `UTC_ONLY` 注释：
+    一个"可以随手改的 `created_at_tz`"会与**加载层**（合成 `event_time` 的地方）脱钩——
+    改了它日期整体偏一天，而**没有任何东西会报错**。
+    要改口径就两边一起改，那是一次需要重新验证的决定，不是一次配置调整。
+
+    ⚠ **它反过来也钉住了一件事**：`package()` / `day_granularity()` 的签名里
+    **不该再出现任何时区参数**——本用例是那件事的守门人。
     """
     mid = _seed(store, 0, "q", "a", event_time=NEAR_MIDNIGHT_UTC)
 
-    assert package(_candidates(mid), store=store, top_k=5, tz=UTC).items[0].created_at == (
-        "2023-05-08"
-    )
-    assert package(_candidates(mid), store=store, top_k=5, tz=CST).items[0].created_at == (
-        "2023-05-09"
-    )
-
-
-def test_day_granularity_default_tz_is_utc() -> None:
-    """默认 UTC——**与机器无关**。用本地时区会让同一份数据在不同机器上差一天。"""
+    # NEAR_MIDNIGHT_UTC 是 UTC 当天的 23:30 ⇒ UTC 口径下是 05-08（在东八区会是 05-09）
+    assert package(_candidates(mid), store=store, top_k=5).items[0].created_at == "2023-05-08"
     assert day_granularity(NEAR_MIDNIGHT_UTC) == "2023-05-08"
-    assert day_granularity(None) == ""
+
+    # 证明这个时间点**真的**能暴露口径（否则上面那条断言是空过的）
+    east8 = datetime.fromtimestamp(NEAR_MIDNIGHT_UTC / 1000, tz=CST).strftime("%Y-%m-%d")
+    assert east8 == "2023-05-09"
+
+    # 签名守门：不接受 tz / timezone 之类的参数
+    params = inspect.signature(day_granularity).parameters
+    assert "tz" not in params and "timezone" not in params
+    assert "tz" not in inspect.signature(package).parameters
 
 
 # ── score：1/(rank+1)，且**不是**融合分数 ───────────────────────────────
