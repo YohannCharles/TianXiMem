@@ -131,6 +131,9 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 
 #### `lme_s_cleaned.json` vs `lme_test.json` —— 已复算
 
+> **⚠ 2026-09-24 更新**：下表**是当时算的，结论仍成立**；但 **`lme_test.json` 已从归档删除**（它是个等着被误用的坑，见 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md)）。
+> **⇒ 那些数字现在无法在本地复算**——要复核"1,230"，得先从上游 LongMemEval 取回那一份（线索见 [`../../tools/fetch_benchmark_data.py`](../../tools/fetch_benchmark_data.py) 的 `DELETED` 段）。
+
 | 断言 | 核实结果 |
 | --- | --- |
 | 同题、同证据 | ✅ **500/500 的 `answer` 与 `answer_session_ids` 完全一致**，`question_id` 集合相等 |
@@ -174,7 +177,7 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 | --- | --- |
 | **2** | **ScriptMem 做不了代理评测**——对话原文因版权原因未发布 |
 | **3** | **不要用 MemoryAgentBench 当代理**——它不在 AML 的数据集清单里，在其上调优未必迁移 |
-| **8** | **BEAM 的数据实际上不在归档里**。`beam.json` / `beam_rows.json` 是失败下载的残留（`Entry not found` / `{"error":"Unexpected error."}`）；`beam_100k.json` 是 HuggingFace datasets-server 的**分页响应**（顶层键 `features`/`rows`/`num_rows_total`，且 `num_rows_total=20`、实际只取到 1 行），**不是数据集**。真要覆盖 BEAM，**须先把数据取回来** |
+| **8** | **BEAM 的数据实际上不在归档里**。`beam.json` / `beam_rows.json` 是失败下载的残留（`Entry not found` / `{"error":"Unexpected error."}`）；`beam_100k.json` 是 HuggingFace datasets-server 的**分页响应**（顶层键 `features`/`rows`/`num_rows_total`，且 `num_rows_total=20`、实际只取到 1 行），**不是数据集**。（这三份**已于 2026-09-24 删除**，所以现在归档里连"疑似数据"都没有了。）真要覆盖 BEAM，**须先把数据取回来** |
 
 **第 7 条（PersonaMem）**：三个 split 的 schema 不统一——`question_type` 的词表在 32k / 128k / 1M 之间互不相同；`correct_answer` 在 32k 里是 `(c)` 这类选项字母、在 128k/1M 里是整段选项文本。**"MCQ 精确文本匹配"必须先做归一化**，harness **不要硬编码单一词表或单一答案格式**。
 

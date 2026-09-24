@@ -310,7 +310,7 @@ class CachingEmbedder:
 class OpenAICompatEmbedder:
     """OpenAI 兼容 `/embeddings` 的 HTTP 客户端基类。
 
-    开发期的 `bge_m3.BGEM3Embedder` 与提交链路的 `text_embedding_v4` 都继承它——
+    开发期的 `qwen3_embedding.Qwen3EmbeddingEmbedder` 与提交链路的 `text_embedding_v4` 都继承它——
     两者只是 base_url / key / model 不同。
 
     **`dim` 只有在第一次真实响应之后才有值**（见模块 docstring）。

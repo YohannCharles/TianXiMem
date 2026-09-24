@@ -6,7 +6,7 @@
 > **约束速查见 [`CLAUDE.md`](./CLAUDE.md)**——它是写给 Claude Code 的、每次会话自动加载的那一份，内容与 PRD 同步维护。
 > **任何冲突以 PRD 为准。**
 
-本仓库当前处于**脚手架阶段**——只有目录与文档，**没有任何实现代码**（见下方「当前状态」）。
+本仓库**实现已开工**（2026-09-23 起）——存储层与配对已落地，见下方「当前状态」。
 
 ---
 
@@ -108,7 +108,7 @@
 
 | 阶段 | 交付 | 状态 |
 | ---- | ---- | ---- |
-| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval）+ **确认显存预算**（⏸ 见 D14） | ⬜ |
+| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | ⬜ |
 | Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF） | ⬜ |
 | Step 2 | Neighbor Expansion + 双预算截断 | ⬜ |
 | Step 3 | Rerank + Context Packaging（含 T1 实验） | ⬜ |
@@ -145,7 +145,7 @@
 
 | 状态 | 模块 |
 | --- | --- |
-| ✅ **已实现** | `store/`（SQLite 真源 + Qdrant + schema）· `pairing/`（配对 / 续接三步 / 计数器）· `embed/`（`Embedder` 协议 + BGE-M3 + 落盘缓存）· `common/render.py`（渲染唯一实现）——另有 **8 个测试文件**在 `tests/` |
+| ✅ **已实现** | `store/`（SQLite 真源 + Qdrant + schema）· `pairing/`（配对 / 续接三步 / 计数器）· `embed/`（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存）· `common/render.py`（渲染唯一实现）——另有 **8 个测试文件**在 `tests/` |
 | ⬜ **未实现** | `service/` · `retrieve/` · `rank/` · `llm/` · `observability/` · `common/` 的 `tokens.py` / `config.py` · `embed/` 的 `text_embedding_v4.py` · 整个 `eval/` · `configs/*.yaml` |
 | ⛔ **v1 不做** | `agent/`（D13） |
 
@@ -159,8 +159,8 @@
 
 | # | 阻塞项 | 状态 |
 | --- | --- | --- |
-| 1 | **`api_config.py` 不存在**（且它在**仓库外**的 `/home/buptc/project/`） | ⬜ **仍在**，但已降级——它只需是一个读 `.env` 的 **7 行适配器**，且**不含 embedding 配置**（归档 pipeline 不向量化）。详见 [`eval/harness/CLAUDE.md`](./eval/harness/CLAUDE.md) |
-| 2 | **归档 `benchmark_data/` 目前不在开发机**上 | ⬜ **立刻要有决定**（[`docs/decisions.md`](./docs/decisions.md) 待决事项 #7）——harness 在本机、且**必须读归档** |
+| 1 | **`api_config.py`** | ✅ **不再是环境依赖**（2026-09-24）：**AML 公开仓自己就发布了这个文件**（520 字节、无凭据、只读 `os.environ`），放**仓库内** + 由 harness 在 subprocess 里注入 `PYTHONPATH` 即可——**"clone 下来不能直接跑"不再成立**。实现未写。详见 [`eval/harness/CLAUDE.md`](./eval/harness/CLAUDE.md) |
+| 2 | **归档 `benchmark_data/`** | ✅ **已解决**（2026-09-24）：已在本机（635MB→**370MB**，删掉了明令不用的 `lme_test.json` 与失败下载残留）；**且不需要任何共享副本**——每一份都能按 commit / revision 从公开源取回，**出处 + sha256 进版本库**：`make fetch-data` 取回、`make data-check` 校验，清单在 [`tools/fetch_benchmark_data.py`](./tools/fetch_benchmark_data.py)。见 [`docs/decisions.md`](./docs/decisions.md) 待决 6 / 7 的清除记录 |
 
 **reranker 点尚未部署**（部署不在本项目范围内，后续进行）。它是 Step 3 及之后的**基础设施前置项**，不是代码任务——而 v1 不做 agentic 之后，**唯一的新增价值就是 Rerank + Context Packaging**，所以这条前置项直接压在主线上。
 

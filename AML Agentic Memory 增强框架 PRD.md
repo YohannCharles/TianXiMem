@@ -27,7 +27,7 @@
 
 本项目**从零搭建**，不复用任何既有代码。
 
-**资源与工期（2026-09-22 敲定）**：3 人 / 4–6 周 / **1×L20**。本地模型是 qwen3.5-9b（128K）与 BGE-M3，且 **reranker 也要跑在这同一张卡上**——三者共存是 §11.2 与 §12.1 的共同前提，**显存预算必须在 Step 0 就确认**；若挤不下，R1 的对冲方案需要重写。
+**资源与工期（2026-09-22 敲定）**：3 人 / 4–6 周。三段模型（qwen3.5-9b / Qwen3-Embedding-8B / Qwen3-Reranker-4B）**部署在服务集群上，不由本项目运维**——本项目只依赖它们的 HTTP 端点。
 
 ---
 
@@ -69,13 +69,13 @@
 | **LLM 相关组件** | **只能用 `gpt-4o-mini`** |
 | **Reranker** | **不作规定**——整份规则里唯一不限模型的组件（§11.1） |
 
-**开发期先用本地模型替代，提交前换回官方指定并重新适配。** 本地 `BGE-M3`（embedding）与 `qwen3.5-9b`（LLM 组件）只用于本地实验与代理评测，**不进提交链路**；这套替代方案及代价记在 §12.1 的 R1。
+**开发期先用本地模型替代，提交前换回官方指定并重新适配。** `Qwen3-Embedding-8B`（embedding）与 `qwen3.5-9b`（LLM 组件）只用于开发期实验与代理评测，**不进提交链路**；这套替代方案及代价记在 §12.1 的 R1。
 
 > 治理文件 `/rules` 另写着"不限定你使用的数据库、索引、向量模型或内部架构"，与上表字面冲突；AML 的 issue #19 触及此事但零回复。**本项目不据此放松**——按上表执行在两种读法下都合规。
 
 由此推出一条设计约束：
 
-- **架构必须 embedder-agnostic。** `text-embedding-v4` 不提供 sparse 或 ColBERT 输出，因此**任何依赖 BGE-M3 多向量能力的代码在提交时都是死重**。embedding 后端做成可替换接口；**集合的向量维度必须由 §7.4 的接口提供、不能写死**——Step 5 换模型时按新维度重建集合（§16）。
+- **架构必须 embedder-agnostic。** 开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。embedding 后端做成可替换接口；**集合的向量维度必须由 §7.4 的接口提供、不能写死**——Step 5 换模型时按新维度重建集合（§16）。
 
 ### 2.4 评测机会成本——本项目最大的约束
 
@@ -358,13 +358,9 @@ status        只允许 pending → complete，不允许反向
 
 使用 **Qdrant 原生 `qdrant/bm25`**（服务端推理，真 BM25，sparse + `modifier: idf`）。
 
-**不使用 BGE-M3 的 sparse 输出**，理由有二：它的 sparse 是学出来的词法权重而非 BM25；且提交时的 `text-embedding-v4` 不提供该能力。
+**不使用任何学出来的稀疏权重**（learned sparse），理由有二：它既不是 BM25；且提交时的 `text-embedding-v4` 也不提供该能力。
 
-> **"BM25 反超 BGE-M3 sparse"这条必须带前提说。** 在 MLDR 上：**用 Lucene Analyzer 分词的** BM25 得 **64.1**，反超 BGE-M3 sparse 的 **62.2**；但**改用 BGE-M3 自己的 XLM-R 分词器**时，BM25 只有 **53.6**，明显落败。**结论对分词器高度敏感。**
->
-> 所以"真 BM25"这个选择成立，但理由不是"BM25 天然更强"，而是"**配正经分词器的 BM25** 更强"。由此推出一条实现要求：**§7.1 选 `qdrant/bm25` 时，它的分词行为要实测一次**（拿一两个多语言长文档的 case 对照），别默认它等价于 Lucene Analyzer。
->
-> （数据来源：BGE-M3 论文 Table 11。本环境 `arxiv.org` 被拦截，该数值经三个独立二手来源交叉一致。）
+> **BM25 的分数对分词器高度敏感**，所以"真 BM25"这个选择成立，但理由不是"BM25 天然更强"，而是"**配正经分词器的 BM25** 更强"。由此推出一条实现要求：**§7.1 选 `qdrant/bm25` 时，它的分词行为要实测一次**（拿一两个多语言长文档的 case 对照），别默认它等价于 Lucene Analyzer。
 
 ### 7.2 Dense 一路
 
@@ -410,7 +406,7 @@ class Embedder(Protocol):
     def encode(self, texts: list[str]) -> list[list[float]]: ...
 ```
 
-v1 提供两个实现：`TextEmbeddingV4`（提交与本地评测用）与 `BGE_M3`（对照实验用）。**代码中不得出现任何依赖具体模型输出结构的逻辑。**
+v1 提供两个实现：`TextEmbeddingV4`（提交用）与 `Qwen3Embedding`（开发期对照实验用）。**代码中不得出现任何依赖具体模型输出结构的逻辑。**
 
 ---
 
@@ -511,12 +507,11 @@ ORDER BY pair_idx;
 
 ### 11.2 Rerank
 
-自托管开放权重的 cross-encoder reranker，跑在本地 L20 上（本地推理，无 API 成本，规则依据见 §11.1）。
+自托管开放权重的 cross-encoder reranker，跑在服务集群上（自托管推理，无按次 API 成本，规则依据见 §11.1）。
 
-**具体模型未定**（2026-09-23 决定：Step 3 前再选）。选型受两条约束：
+**选型已定：`Qwen3-Reranker-4B`**（2026-09-24）——**提交时不得更换**（D12）。
 
-- **显存是硬约束**——它要与 qwen3.5-9b（128K 上下文，KV cache 很占）和 BGE-M3 **共存于一张 L20**（48 GB）。**Step 0 就要把这条跑通**，否则 §1 的"显存预算"前提悬空、R1 的对冲方案要重写
-- 数据集以英文为主（§12.2），**多语言能力非必需但便宜**。顺带记住：reranker 是整份规则里**唯一不限模型**的组件，选型时不必迁就 `text-embedding-v4`
+一条约束：数据集以英文为主（§12.2），**多语言能力非必需但便宜**。顺带记住：reranker 是整份规则里**唯一不限模型**的组件，选型时不必迁就 `text-embedding-v4`
 
 对融合后的候选重排。**注意 reranker 只重排证据、不生成答案**，不触碰"Search 不得生成最终答案"的红线。
 
@@ -660,7 +655,7 @@ A: [assistant] Let me check the schedule.
 
 > ### 已知风险 R1（团队已接受，2026-09-22）
 >
-> **v1 开发期使用本地 BGE-M3 + qwen3.5-9b 跑代理评测以控制 API 成本，提交前切换到 `text-embedding-v4` + `gpt-4o-mini`。**
+> **v1 开发期使用 Qwen3-Embedding-8B + qwen3.5-9b 跑代理评测以控制 API 成本，提交前切换到 `text-embedding-v4` + `gpt-4o-mini`。**
 >
 > **代价**：embedding 与 agent 循环两处的模型都被替换，因此**本地标定出的所有阈值、权重、排序策略**在切换后都不保证成立。
 >
@@ -746,7 +741,7 @@ A: [assistant] Let me check the schedule.
 | 对照 | 回答的问题 | 决定什么 |
 | ---- | ---------- | -------- |
 | **B1. ReFind 原版**（MIT，不修改代码） | 我们赢了吗 | 是否需要继续投入 |
-| **A3. Rerank 开 / 关** | 排序值不值（§11 主线的验证） | 若没用，把 L20 的算力挪去别处 |
+| **A3. Rerank 开 / 关** | 排序值不值（§11 主线的验证） | 若没用，把这份算力挪去别处 |
 | **A4. Agent 开 / 关** | Agentic Search 值不值 | 若没用，砍掉核心 claim 之一 |
 | **T1. 时间戳前缀 带 / 不带** | §11.3 那条约束对不对 | content 的渲染方式 |
 | **T2. 跨 session 失败归因** | 失败是"找不到"还是"留不下" | v2 实体层做不做（附录 A） |
@@ -813,7 +808,7 @@ A: [assistant] Let me check the schedule.
 
 | 阶段 | 交付 |
 | ---- | ---- |
-| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval）。开发期用本地 BGE-M3 + qwen3.5-9b |
+| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval）。开发期用 Qwen3-Embedding-8B + qwen3.5-9b |
 | Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） |
 | Step 2 | **Neighbor Expansion + 双预算截断** |
 | Step 3 | Rerank + Context Packaging（含 T1 实验） |
@@ -842,7 +837,7 @@ A: [assistant] Let me check the schedule.
 | # | 未知 | 由哪个对照回答 | 牵连什么 |
 | -- | ---- | -------------- | -------- |
 | E1 | content 里加不加时间戳前缀 | **T1** | content 渲染方式；改了要重建索引 |
-| E3 | rerank 值不值 | **A3** | 不值的则 L20 算力改投他处 |
+| E3 | rerank 值不值 | **A3** | 不值的则这份算力改投他处 |
 | E4 | agent 值不值 | **A4** | 不值的则砍掉核心 claim 之一 |
 | E5 | 跨 session 失败是"找不到"还是"留不下" | **T2** | 决定附录 A 的实体层做不做 |
 | E6 | 渲染模板与组内顺序 | Step 3 定稿 | 改模板 = 重建索引（§11.3） |
@@ -886,7 +881,6 @@ A: [assistant] Let me check the schedule.
 | ActiveMemoryIndex 的排序杠杆（.6333 / .5887） | github.com/linxuhao/ActiveMemoryIndex 的 README——**自述为本地 harness + 本地 judge 的 LoCoMo 结果，非平台分**。该仓库 **MIT 许可，且 README 有完整披露章节（含 Zenodo DOI）**，不是"无溯源指针" |
 | InvMem 无论文、无第一方文档 | AML 官方 Deep Dive #1 未给出其仓库或论文链接。**"对应 repo 无 LICENSE、代码不出现 InvMem"是以第三方策展的映射为前提**——映射指向 github.com/wenxiaof345-ctrl/vanilla-rag-memory（`/license` 端点 404），但**该映射不是官方指认** |
 | Qdrant 的全部行为断言 | qdrant.tech：concepts/hybrid-queries、concepts/indexing、inference/inference-bm25、guides/multiple-partitions、articles/how-to-tune-hybrid-search，以及 **articles/before-tuning-a-qdrant-collection**——§8 的 `score_threshold` 警告与"分片数改变排名且无报错"，**出处是后者，不在 hybrid-queries 页** |
-| BGE-M3 sparse vs BM25 on MLDR | BGE-M3 论文 Table 11。**结论对分词器高度敏感**（Analyzer 64.1 vs XLM-R 53.6）；本环境 arxiv.org 被拦截，数值经三个独立二手来源交叉一致（§7.1） |
 | 各数据集问题类型分布、跨 session 比例、许可证 | 见 `benchmark_data/` 下的原始数据与 AML pipeline 源码 |
 
 **原始数据与 AML pipeline 源码已归档在 `benchmark_data/`。**

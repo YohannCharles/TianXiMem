@@ -1,12 +1,12 @@
 # 配置项参考
 
-> 最后核对：2026-09-23，对应 PRD §6–§11、§15。**冲突以 PRD 为准。**
+> 最后核对：2026-09-24，对应 PRD §6–§11、§15。**冲突以 PRD 为准。**
 
 ## 为什么这份清单存在
 
 §12.1 风险 R1 的第 3 条对冲：**"所有阈值必须是配置项、不得硬编码，否则切换等于重写代码。"**
 
-R1 是团队**主动接受**的一次偏离——开发期用本地 BGE-M3 + qwen3.5-9b，提交前才换回 `text-embedding-v4` + `gpt-4o-mini`。代价是**本地标定出的所有阈值、权重、排序策略在切换后都不保证成立**。因此本清单不是"配置文档"，是**切换可行性**的前提：凡是这里漏掉的量，Step 5 都会变成改代码。
+R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B + qwen3.5-9b，提交前才换回 `text-embedding-v4` + `gpt-4o-mini`。代价是**本地标定出的所有阈值、权重、排序策略在切换后都不保证成立**。因此本清单不是"配置文档"，是**切换可行性**的前提：凡是这里漏掉的量，Step 5 都会变成改代码。
 
 同理 §15：**所有消融项必须是配置项**，否则 §13 的对照实验无法执行。
 
@@ -17,7 +17,7 @@ R1 是团队**主动接受**的一次偏离——开发期用本地 BGE-M3 + qwe
 | 文件 | 用途 | 模型 |
 | --- | --- | --- |
 | `configs/default.yaml` | 基线值，所有 profile 的父级 | —— |
-| `configs/local.yaml` | **开发期**：代理评测、迭代、消融 | BGE-M3 + qwen3.5-9b |
+| `configs/local.yaml` | **开发期**：代理评测、迭代、消融 | Qwen3-Embedding-8B + qwen3.5-9b |
 | `configs/submit.yaml` | **提交期**：Full 定稿 | `text-embedding-v4` + `gpt-4o-mini` |
 
 `local.yaml` 与 `submit.yaml` 只覆盖**模型与由模型派生的量**（向量维度、token 预算实测量、全部标定阈值）；其余继承 `default.yaml`。
@@ -84,6 +84,7 @@ R1 是团队**主动接受**的一次偏离——开发期用本地 BGE-M3 + qwe
 | `retrieval.rrf.weights` | `[0.5, 0.5]` | **C** | **任何调整都必须有 ablation 数据支撑** | §7.3 |
 | `retrieval.bm25.model` | `qdrant/bm25` | A | 服务端推理，真 BM25，`modifier: idf` | §7.1 |
 | `retrieval.dense.rewrite` | `false` | A | v1 **没有**查询改写（属 v2）。每查询恰好 1 次调用 | §7.2 |
+| `retrieval.query_instruction` | `""` | **C** | **查询侧**的 instruction 前缀（Qwen3-Embedding 的推荐输入格式，不是"改写"）。`""` = 原样送（v1 现状）。模型卡称不加会掉约 1%–5%；**要不要开是待定的规格问题**，实现见 [`../src/tianxi_am/embed/query_instruction.py`](../src/tianxi_am/embed/query_instruction.py) | §7.2 |
 | `retrieval.query_top_k` | 请求里的 `top_k` | **A** ⛔ | **不要写死 100** | §7.3 |
 
 **类**：**A** = 外部契约常量（**无权改**）· **B** = 正确性常量（**算错就静默出错，不许"顺手调"**）· **C** = 自设阈值（**可调，但要有 ablation 数据**）。见 §1.5。
@@ -99,7 +100,7 @@ R1 是团队**主动接受**的一次偏离——开发期用本地 BGE-M3 + qwe
 
 **版本门槛**：`k` 参数自 **v1.16.0** 起可用，`weights` 自 **v1.17.0** 起可用，故要求 **≥ v1.17.0**。**部署时把 Qdrant 版本钉死**。
 
-**要实测的一条**（§7.1）：选 `qdrant/bm25` 时，**它的分词行为要实测一次**（拿一两个多语言长文档的 case 对照），别默认它等价于 Lucene Analyzer。理由——"BM25 反超 BGE-M3 sparse"这条**对分词器高度敏感**：用 Lucene Analyzer 分词的 BM25 得 64.1（反超 BGE-M3 sparse 的 62.2），但改用 BGE-M3 自己的 XLM-R 分词器时 BM25 只有 53.6（明显落败）。
+**要实测的一条**（§7.1）：选 `qdrant/bm25` 时，**它的分词行为要实测一次**（拿一两个多语言长文档的 case 对照），别默认它等价于 Lucene Analyzer——**BM25 的分数对分词器高度敏感**，而 `qdrant/bm25` 用哪个分词器是我们没有文档的一条。
 
 ---
 
@@ -165,7 +166,7 @@ R1 是团队**主动接受**的一次偏离——开发期用本地 BGE-M3 + qwe
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
 | `rerank.enabled` | `true` | §11 是主线 |
-| `rerank.model` | **Step 3 前定** | 自托管开放权重 cross-encoder |
+| `rerank.model` | **`Qwen3-Reranker-4B`** | 自托管 open weights cross-encoder。**2026-09-24 定**，提交时不得更换（D12） |
 | `packaging.render_template` | `Q:/A:` | **"贵"消融项**：改它等于改变 embedding 输入，**整个向量索引要重建** |
 | `packaging.role_prefix` | `[assistant]` 等标记 | 一个对里有多条非 user 消息时每条带 role 标记 |
 | `packaging.inject_abs_time` | **`false`** | 见 §9 |
@@ -221,16 +222,15 @@ R1 是团队**主动接受**的一次偏离——开发期用本地 BGE-M3 + qwe
 
 | 配置项 | 提交期 | 开发期 | 说明 |
 | --- | --- | --- | --- |
-| `models.embedder` | `text-embedding-v4` | BGE-M3 | **只能用前者**（§2.3） |
+| `models.embedder` | `text-embedding-v4` | Qwen3-Embedding-8B | **只能用前者**（§2.3） |
 | `models.llm` | `gpt-4o-mini` | qwen3.5-9b | **只能用前者**（§2.3） |
-| `models.reranker` | 自托管，**不限** | 同左 | 整份规则里**唯一不限模型**的组件 |
+| `models.reranker` | **`Qwen3-Reranker-4B`**（2026-09-24 定） | 同左 | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12） |
 | `models.embed_dim` | **由接口提供** | —— | **不能写死** |
 
-**架构必须 embedder-agnostic**（§2.3）：`text-embedding-v4` 不提供 sparse 或 ColBERT 输出，因此**任何依赖 BGE-M3 多向量能力的代码在提交时都是死重**。集合的向量维度**必须由 `§7.4` 的接口提供**，Step 5 换模型时按新维度**重建集合**。
+**架构必须 embedder-agnostic**（§2.3）：开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。集合的向量维度**必须由 `§7.4` 的接口提供**，Step 5 换模型时按新维度**重建集合**。
 
 **为什么 reranker 是唯一能加码的地方**（§11.1）：§2.3 把 embedding 与 LLM 两处都钉死了，**只有 Reranker 不作规定**——所以这是唯一能自己投入算力的环节，也是 §4 认定"排序是最大杠杆"之后唯一还能加码的地方。
 
-**显存是硬约束**（§11.2）：reranker 要与 qwen3.5-9b（128K 上下文，KV cache 很占）和 BGE-M3 **共存于一张 L20（48GB）**。**Step 0 就要把这条跑通**，否则 §1 的"显存预算"前提悬空、R1 的对冲方案要重写。
 
 ---
 

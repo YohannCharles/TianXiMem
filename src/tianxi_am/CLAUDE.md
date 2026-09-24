@@ -38,6 +38,9 @@
 ## 命名与结构约定
 
 - **src 布局**：包根在 `src/tianxi_am/`。
-  > **⚠ 一处待办**：`pyproject.toml` 里 `[tool.uv] package = false` 标着"脚手架期的临时设置，**写出 `__init__.py` 后改成 `true`**"——而 `__init__.py` **已经写出**（`store/` `pairing/` `embed/` `common/`），**该条件已触发，但这个设置尚未改**。改动前先确认 `make sync` / `pytest` 的导入路径不受影响。
+  > ✅ **已办（2026-09-24）**：~~`[tool.uv] package = false` 待改成 `true`~~ —— 已改成 `true`，并补了 `[build-system]`（hatchling）+
+  > `[tool.hatch.build.targets.wheel] packages = ["src/tianxi_am"]`（src 布局必须显式声明，否则 hatchling 找不到包）。
+  > 效果：`uv sync` 以 **editable** 方式装上本仓库，`uvicorn` / `python -m` **不再需要 `PYTHONPATH`**（此前只有 pytest 靠 `pythonpath = ["src", "."]` 绕过）。
+  > ⚠ 注意 `make sync` 走的是 `--all-extras`，会把 `[local]`（torch / transformers 栈，数 GB）一起装上——**提交链路不需要它**。
 - **一个模块一件事**：目录名对应 PRD 的一节或一条链路。**若发现某个模块需要同时满足两节的互斥要求，那是切分错了，先回去改 `docs/architecture.md`。**
 - **不在本包内读环境变量**——统一走 `common/` 的配置加载。

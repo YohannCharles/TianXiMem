@@ -1,6 +1,6 @@
 # 悬而未决清单
 
-> 最后核对：2026-09-23，对应 PRD §17（+ §6.4 要求补入的一条）。**冲突以 PRD 为准。**
+> 最后核对：2026-09-24，对应 PRD §17（+ §6.4 要求补入的一条）。**冲突以 PRD 为准。**
 
 ## 为什么要单列一张表
 
@@ -37,7 +37,7 @@
 | # | 未知 | 由哪个对照回答 | 牵连什么 | 状态 |
 | --- | ---- | -------------- | -------- | ---- |
 | **E1** | content 里加不加时间戳前缀 | **T1** | content 渲染方式；**改了要重建索引** | ⬜ |
-| **E3** | rerank 值不值 | **A3** | 不值的则 L20 算力改投他处 | ⬜ |
+| **E3** | rerank 值不值 | **A3** | 不值的则这份算力改投他处 | ⬜ |
 | **E4** | agent 值不值 | **A4** | 不值的则砍掉核心 claim 之一 | ⬜ |
 | **E5** | 跨 session 失败是"找不到"还是"留不下" | **T2** | 决定附录 A 的实体层做不做 | ⬜ |
 | **E6** | 渲染模板与组内顺序 | **Step 3 定稿** | **改模板 = 重建索引** | ⬜ |
@@ -80,7 +80,8 @@
 | **V3** | **"LLM 记忆注入字段"的键名**：LoCoMo/LME 的 `speaker_1_memories` / `retrieved_context` / `memories` 在数据集里**根本不存在**（命中数都是 0），**只能由检索方运行时注入，但用什么键名注入没有明文** | §11.3 |
 | **V4** | **时间语义的整体假设**（筛选走 `event_time` 列、正文保留原始表述）——**待 T1 验证**，但验证之前按此执行，**它是安全的那一侧** | §11.3 |
 | **V5** | **`content` 是否被原样注入**——AML 侧仅按 `memory_text()` 做字符串拼接，但**检索结果 → `memories` 字段的映射在 AML 那一侧，归档里看不到** | §11.3 |
-| **V7** | **归档 pipeline 是否传 `enable_thinking: False`**——自建网关的 Qwen3.5-9B **需要显式关闭思考**（`extra_body.chat_template_kwargs`），而 `api_config` 只导出 base_url / key / model **三个字段，带不动 `extra_body`**。若网关默认开思考，thinking 会挤占 token 或混进 `generated_answer`，**裁判读到的就是推理过程而不是答案** | 开发网关文档 |
+| **V7** | **归档 pipeline 是否传 `enable_thinking: False`**——自建网关的 Qwen3.5-9B **需要显式关闭思考**（`extra_body.chat_template_kwargs`），而 `api_config` 只导出 base_url / key / model **三个字段，带不动 `extra_body`**。若网关默认开思考，thinking 会挤占 token 或混进 `generated_answer`，**裁判读到的就是推理过程而不是答案**。<br>**✅ 2026-09-24 答掉一半**：归档代码到手后第一项核对已做——**7 个 pipeline 里只有 `pipeline_beam.py:263` 传了**；**LoCoMo-Refined 与 LongMemEval（代理评测真正用的那两份）都没传**（`complete()` 只发 `{model, messages, temperature}`）。⇒ **我们自己的 harness 必须显式关思考**。**剩余未知**：网关默认开不开——默认关则本条彻底清掉 | 归档代码 + 开发网关文档 |
+| **V10** | **网关是否按 `last_token_pool` + L2 normalize 提供 Qwen3-Embedding-8B**——模型卡明确要求这两步（**`last_token_pool` 而非 mean pooling**），而它们是**服务端**的事，我们只看到 `/embeddings` 的返回。做错了**不报错**，只表现为"检索变差"。**本地可先验一条**：返回向量的 L2 范数应 ≈ 1；明显偏离 1 就说明没有归一化 | 模型卡 |
 | **V8** | **自建网关是开发环路的单点**：answer / judge / embed / rerank **四条**都打它，而 harness 会同时驱动 Add/Search（embed + rerank）与答案/裁判生成。**必须有客户端并发上限**，否则排队超时会伪装成"模型变差了" | D12 |
 | **V9** | **各对照实验之间的 Qdrant 集合如何隔离**：集合内容**随 arm 变化**（T1 改渲染 ⇒ 全部重新 embedding；A4 关 agent 时候选集不同），而写入是**按 `id` upsert**——**上一 arm 遗留的、本 arm 不会覆盖的 point 会静默留在集合里**，污染下一 arm 且不报错 | §13 / §6.3 |
 
@@ -88,7 +89,8 @@
 >
 > ⚠ 注意：`user_id` 做 tenant 过滤（`store/CLAUDE.md` §"Qdrant 配置要点"）解决的是**跨用户串数据**，**不解决跨实验串数据**。两者是不同维度，别把它们当成同一层隔离。
 
-> **V7 何时能清**：拿到归档源码后**第一项核对**——它是"读代码就能答"的，但**归档目前不在开发机**（见 `docs/decisions.md` 待决事项 7）。
+> **V7 何时能清**：~~拿到归档源码后第一项核对~~ —— ✅ **已做（2026-09-24）**，结论见上表（只有 BEAM 传 `enable_thinking`）。
+> **剩下的那一半**（网关默认值）要问网关那侧的人，或直接发一个只在 `generated_answer` 里能看出来的探针请求。
 
 ---
 

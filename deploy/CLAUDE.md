@@ -1,6 +1,6 @@
 # deploy/ — 部署与环境
 
-**PRD**：§6.3（Qdrant server 模式）、§7.3（版本钉死）、§11.2（显存）
+**PRD**：§6.3（Qdrant server 模式）、§7.3（版本钉死）
 
 ## 要写什么
 
@@ -49,7 +49,7 @@ compose.yaml    Qdrant server，**镜像 tag 钉死**
 | --- | --- |
 | 集合分片数 / 命名向量 / payload 索引 / payload 内容 / 写入 `wait=true` | [`../src/tianxi_am/store/CLAUDE.md`](../src/tianxi_am/store/CLAUDE.md)（**一处声明**） |
 
-**本目录只管起服务。** 集合是客户端建的——D14 已连带确认"向量库拓扑已经是规格，无需再定"。
+**本目录只管起服务。** 集合是客户端建的——拓扑本身**已经是规格**（单集合 + `user_id` tenant 过滤 + `is_tenant` 索引 + 分片 1 + payload 索引先于写数据），原文见 [`../src/tianxi_am/store/CLAUDE.md`](../src/tianxi_am/store/CLAUDE.md) 的"Qdrant 配置要点"。
 
 ---
 
@@ -60,7 +60,7 @@ compose.yaml    Qdrant server，**镜像 tag 钉死**
 ```text
 1. 停服务（避免写入与重建交错）
 2. 备份 SQLite 文件  ← 真源。Qdrant 可重建，SQLite 不可
-3. 作废 embedding 缓存——本地 BGE-M3 的向量对新模型无意义
+3. 作废 embedding 缓存——开发期模型的向量对新模型无意义
 4. 用新维度建新集合（分片 1、命名向量、**先建 payload 索引**）
 5. 从 SQLite 的正文全量重新 embed 并写入（wait=true）
 6. 起服务，**重跑 T2**（§12.1 R1 对冲 2）
@@ -73,16 +73,6 @@ compose.yaml    Qdrant server，**镜像 tag 钉死**
 > **⚠ 一处 R1 类风险（§6.4）**：本地 qwen3.5-9b 的分词器与 `gpt-4o-mini` 不同，**本地量出的"单请求能装多少对"不能直接搬到线上**——**第 6 步之后必须重新量一次**（[`../docs/open-questions.md`](../docs/open-questions.md) E7）。
 
 ---
-
-## 5. 显存预算 —— ⏸ **有意延后**（D14，不阻塞任何开发步骤）
-
-PRD §1 / §11.2 要求"Step 0 就确认显存预算、产出可核对的预算表"。**本项目延后此项**，理由：**模型部署不在本项目范围内**（三段模型跑在自建网关，**reranker 端点尚未部署**，由部署侧后续进行）。
-
-> **这是一条有意偏离，不是"已经满足"。** [`../docs/roadmap.md`](../docs/roadmap.md) 的 Step 0 仍保留该项、标为 ⏸——**不要在 Step 0 完成度上把它算作已办。**
-
-**残余风险（写在这里，以免它消失）**：若 reranker 与 qwen3.5-9b（128K，KV cache 很占）、BGE-M3 **挤不下同一张卡**，则 **R1 的四条对冲需要重写**——对冲 4（"切换单独占一个阶段"）尤其，因为换模型会同时改变部署形态。**该风险不在本项目可控范围内，故接受。**
-
-**一条由 §11.2 推出的选型自由度**：reranker 是整份规则里**唯一不限模型**的组件，**所以显存不够时第一个该动的是它**（换更小的 cross-encoder），不是去动已经被钉死的 embedding / LLM。
 
 ---
 

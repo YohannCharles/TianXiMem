@@ -17,9 +17,9 @@ run_record.py  每次 run 的配置指纹 + 数据指纹 + 结果
 
 ## ⚠ 三个必须先解决的阻塞项
 
-### 1. `api_config.py` 不存在，而且它在仓库**外面**
+### 1. `api_config.py` —— **处置已定（2026-09-24），实现未写**
 
-五个 pipeline 都做这两件事：
+**7 个 pipeline 都做这两件事**：
 
 ```python
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -29,9 +29,15 @@ from api_config import (ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL,
 
 `__file__` 在 `benchmark_data/` 下，所以 `parents[2]` 解析到 **`/home/buptc/project`**——**不是 `TianXi_AM/`，是它的上一级**。
 
-**该文件当前不存在**（已在 `/home/buptc` 下全盘查找确认），所以**五个 pipeline 今天都 import 失败**。
+**它今天仍然不存在**，所以这 **7 个 pipeline 现在都 import 失败**。
 
-**处置**：Step 0 必须创建 `/home/buptc/project/api_config.py`，导出上述七个名字。它是**仓库外的环境依赖**——这意味着"clone 下来就能跑"不成立，**要在 `docs/roadmap.md` 的 Step 0 清单与 `docs/decisions.md` 都留痕**。它只需是一个读 `.env` 的**7 行适配器**，且**不含 embedding 配置**（归档 pipeline 不向量化）。
+**处置（2026-09-24 更新）**：**不要再在仓库外创建它。** 三条已核实的事实把这件事降成"抄一份 + 注入路径"：
+
+1. **AML 自己就发布了这个文件**——公开仓根目录的 `api_config.py`，**520 字节、无凭据**，内容就是 `os.environ.get(...)` 读那七个名字。它的 README 原话："Credentials and service endpoints must be supplied externally; no secret is bundled with this repository."
+2. **不用放在仓库外**：放**仓库内**，由 harness 在 subprocess 里注入 `PYTHONPATH`——`sys.path.insert(0, <不存在路径>)` 只是塞进一个没有该模块的条目，**import 会继续往后找到 `PYTHONPATH` 里的那份**。归档保持只读、`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。
+3. **不含 embedding 配置**——归档 pipeline 不向量化，Qwen3-Embedding-8B 只属于 `src/tianxi_am`。
+
+**⇒ "clone 下来不能直接跑"不再成立**：仓库内那份 + `.env` 就够。注意两边的名字不一样——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组，**适配器或 harness 要负责接上**。
 
 ### 2. 那些 CLI 参数是死的
 
@@ -39,7 +45,7 @@ from api_config import (ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL,
 
 **所以模型控制只能走 `api_config.py`。** 别在 `Makefile` 或 runner 里传 `--model` 然后困惑于它没生效。
 
-> `JUDGE_VERSION` 被五个 pipeline 全部 import，但**没有任何一处使用它**。
+> `JUDGE_VERSION` 被 **7 个** pipeline 全部 import，但**没有任何一处使用它**。
 
 ### 3. pipeline 不可 import，只能当脚本跑
 
@@ -56,19 +62,21 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 
 ## 契约：字段名以 **pipeline 代码**为准，不要照 readme
 
-**readme 与代码不一致，已核实**：readme 写 `predicted_answer`（LoCoMo）/ `hypothesis`（LME），但**这四个 pipeline 实际读写的是 `generated_answer`**。
+**readme 与代码不一致，已核实**：readme 写 `predicted_answer`（LoCoMo）/ `hypothesis`（LME），但**这些 pipeline 实际读写的是 `generated_answer`**。
 
 | pipeline | answer 步写入 | evaluate 步读取 | question 键 | gold 键 | id 键 |
 |---|---|---|---|---|---|
 | `pipeline_locomo-refined.py` | `generated_answer` | `item["generated_answer"]` | `item["question"]` | 四选一：`gold_answer`/`golden_answer`/`reference_answer`/`correct_answer` | `item["id"]` |
+| `pipeline_longmemeval-s.py` | `generated_answer` | `item["generated_answer"]` | `item["question"]` | 同上（四选一，同一元组） | `item["id"]` |
 | `clb_pipeline.py` | **`model_output`** | `model_output`，**回退** `generated_answer` | `item.get("question")` | n/a（rubric 判分） | `row_id()` 多级回退 |
 | `pipeline_beam.py` | `generated_answer` | `item["generated_answer"]` | —— | —— | `item["id"]` |
 | `pipeline_v2_personamem.py` | `generated_answer` | `row.get("generated_answer")` | —— | `mapping[row["correct_letter"]]` | —— |
+| `pipeline_v1_personamem.py` | `generated_answer` | `generated_answer` → `prediction` | `item["question"]` + `item["all_options"]` | **`item["correct_answer"]`**（⚠ **与 v2 的 `correct_letter` 不同**） | `row_id()` 多级回退 |
 | `pipeline_scriptmem.py` | `generated_answer` | `generated_answer` → `predicted_answer` → `prediction` | —— | `record["answer"]` | —— |
 
 **三条可直接照做的结论：**
 
-1. **stage 之间的规范字段是 `generated_answer`**（五个里四个如此；CL-Bench 写 `model_output`，读时兼容两者）
+1. **stage 之间的规范字段是 `generated_answer`**（七个里六个如此；CL-Bench 写 `model_output`，读时兼容两者）
 2. **`hypothesis` 没有任何 pipeline 读它**——尽管 `lme_readme.md` 明文文档化了它
 3. **`predicted_answer` 从来不是 inter-stage 的键**（只在 CL-Bench 里是个**函数参数名**，在 PersonaMem / ScriptMem 里是 evaluate 步**写出**的字段）
 

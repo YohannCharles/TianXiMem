@@ -137,7 +137,7 @@ test_store.py           §6.1 / §6.3 DDL、连续性与索引
 ## 跑之前
 
 ```bash
-make test      # 目前未实现，见 Makefile
+make test      # uv run pytest
 ```
 
 **契约相关的断言也要能被 `make contract-check` 在**服务**上跑一遍**——单元测试验证函数，[`../eval/smoke/preflight.py`](../eval/smoke/) 验证**真的 HTTP 响应**。两者都要（§13 要求主路径能通过 Smoke 契约校验）。

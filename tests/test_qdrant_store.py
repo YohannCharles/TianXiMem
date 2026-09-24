@@ -138,7 +138,7 @@ def test_payload_indexes_created_before_any_write(
 
 
 def test_sparse_vector_uses_qdrant_bm25_not_an_embedder() -> None:
-    """词法那一路用 Qdrant 原生 `qdrant/bm25`（§7.1）——**不是** BGE-M3 的 sparse。"""
+    """词法那一路用 Qdrant 原生 `qdrant/bm25`（§7.1）——**不是**学出来的稀疏权重。"""
     assert BM25_MODEL == "qdrant/bm25"
     assert SPARSE_VECTOR == "bm25"
     assert DENSE_VECTOR == "dense"

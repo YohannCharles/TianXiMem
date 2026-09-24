@@ -1,6 +1,6 @@
 # 路线图与阶段门
 
-> 最后核对：2026-09-23，对应 PRD §16（+ §1 / §6.4 / §11.2 / §12.1 的阶段要求）。**冲突以 PRD 为准。**
+> 最后核对：2026-09-24，对应 PRD §16（+ §1 / §6.4 / §11.2 / §12.1 的阶段要求）。**冲突以 PRD 为准。**
 
 **状态**：Step 1 的实现**已开工**（`store/` `pairing/` `embed/` `common/render.py` 与 8 个测试文件已存在，见根 `CLAUDE.md`）；下方勾选状态尚未逐项回填，**以根 `CLAUDE.md` 为准**。
 
@@ -10,7 +10,7 @@
 
 | 阶段 | 交付 | 状态 |
 | ---- | ---- | ---- |
-| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval）+ **确认显存预算** | ⬜ |
+| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | ⬜ |
 | Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） | ⬜ |
 | Step 2 | **Neighbor Expansion + 双预算截断** | ⬜ |
 | Step 3 | Rerank + Context Packaging（含 T1 实验） | ⬜ |
@@ -36,15 +36,14 @@
 
 ### 环境阻塞项（不解决则本步无法完成）
 
-- [ ] **`api_config.py` —— 五个 pipeline 今天都 import 失败**
-      它们做 `sys.path.insert(0, Path(__file__).resolve().parents[2])` 再 `from api_config import (...)`，而 `parents[2]` 解析到 **`/home/buptc/project/`（仓库外一层）**。**该文件不存在。**
-      要导出七个名字：`ANSWER_API_BASE` / `ANSWER_API_KEY` / `ANSWER_MODEL` / `JUDGE_API_BASE` / `JUDGE_API_KEY` / `JUDGE_MODEL` / `JUDGE_VERSION`（最后一个是**死引用**，五个 pipeline 全部 import 但无一使用）。
-      ⚠ 它是**环境依赖，不是仓库内容** ⇒ 在 [`decisions.md`](./decisions.md) 记一条，并写进提交包说明（"clone 下来不能直接跑"）。
-- [x] **`docker` 已就位**（2026-09-23 晚）——Docker Desktop 29.8.0 / `desktop-linux` context / WSL2 后端。`qdrant/qdrant:v1.17.0` 的 tag **已在 registry 核实存在**（§7.3 的版本门槛成立）。`nvidia-smi` **已不需要**（模型不在本机）。
+- [ ] **`api_config.py` —— 7 个 pipeline 今天都 import 失败**（**处置已定，2026-09-24 更新**）
+      它们做 `sys.path.insert(0, Path(__file__).resolve().parents[2])` 再 `from api_config import (...)`，而 `parents[2]` 解析到**仓库外一层**。
+      它要导出七个名字：`ANSWER_API_BASE` / `ANSWER_API_KEY` / `ANSWER_MODEL` / `JUDGE_API_BASE` / `JUDGE_API_KEY` / `JUDGE_MODEL` / `JUDGE_VERSION`（最后一个是**死引用**，全部 import 但无一使用）。
+      ✅ **不用从零写**：AML 自己就发布了它——公开仓根目录的 `api_config.py`，520 字节、无凭据，只是 `os.environ.get(...)` 的适配器。
+      ✅ **也不用放在仓库外**：放仓库内，由 harness 在 subprocess 里注入 `PYTHONPATH`（`sys.path.insert` 塞进一个不存在的路径不会中断 import，会继续往后找）。
+      细则与理由见 [`../eval/harness/CLAUDE.md`](../eval/harness/CLAUDE.md) 与 [`.env.example`](../.env.example) 末尾。
+- [x] **`docker` 已就位**（2026-09-23 晚）——Docker Desktop 29.8.0 / `desktop-linux` context / WSL2 后端。`qdrant/qdrant:v1.17.0` 的 tag **已在 registry 核实存在**（§7.3 的版本门槛成立）。
       **拓扑已定**（D12）：harness 与检索服务 + Qdrant 都在**本机**、三段模型经自建网关远程访问、**reranker 端点待部署**。
-- [ ] **确认显存预算**（§1 / §11.2）——⏸ **本项目延后，不阻塞开发**（D14）。
-      qwen3.5-9b（128K）+ BGE-M3 + reranker 需**共存于一张 L20（48GB）**；而**模型部署不在本项目范围内**（三段模型在自建网关，reranker 待部署）。
-      **⚠ 这是有意偏离，不是已满足**：该前提**未被核对**，若挤不下则 R1 的四条对冲需要重写——**风险已接受**（见 [`decisions.md`](./decisions.md) D14）。
 
 ### 数据侧
 
@@ -94,9 +93,9 @@
 
 ## Step 3 — Rerank + Packaging
 
-> **本阶段定稿两件"贵"东西**：渲染模板与 reranker 选型。
+> **本阶段定稿两件"贵"东西**：渲染模板与 reranker（**选型已定：`Qwen3-Reranker-4B`**）。
 
-- [ ] **reranker 选型**（§11.2，2026-09-23 决定：Step 3 前再选）——约束：与另外两个模型共存于一张 L20；数据集以英文为主
+- [ ] **reranker 接入**——**选型已定：`Qwen3-Reranker-4B`（2026-09-24）**。剩下的是端点部署（不在本项目范围）+ `rank/reranker.py` 的调用。**提交时不得更换**（D12）
 - [ ] 顺序与预算配合：按名次依次扩窗（§11.2）
 - [ ] 组内按 `pair_idx` 时间序；组间按种子名次（§11.2）
 - [ ] **渲染模板定稿**——**改模板 = 重建索引**，别拖到 Step 5 之后（§11.3 / E6）

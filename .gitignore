@@ -58,8 +58,12 @@ eval/datasets/*
 !eval/datasets/CLAUDE.md
 
 # ── 其他 ───────────────────────────────────────────────────────────────
-# 归档只读，整目录不入库（§12.3 第 8 条：其中有失败下载的残留文件）。
-# 里面的数据集有 CC BY-NC 等许可约束（§12.5），分发范围未确认前一律不提交。
+# 归档只读，整目录不入库。**理由是分发边界，不是体积**（2026-09-24 核对）：
+#   1. AML 仓【没有 LICENSE】，其 README 的 "Deliberately not included" 一节写明
+#      "Do not submit any of these materials in an issue or pull request."
+#   2. 里面的数据集带 CC BY-NC 等许可约束（§12.5）
+# ⇒ 这是**刻意状态，不要改成提交进去**。字节从公开源各自取：
+#   `make fetch-data`（出处 + sha256 的清单在 tools/fetch_benchmark_data.py）。
 # ⚠ 因此在 benchmark_data/ 里放 README 是不会被提交的——关于归档的说明写在
 #   docs/benchmark-data.md。
 benchmark_data/

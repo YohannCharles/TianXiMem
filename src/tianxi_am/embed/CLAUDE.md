@@ -7,7 +7,8 @@
 ```text
 base.py               Embedder 协议
 text_embedding_v4.py  提交与本地评测用（§2.3 唯一允许的 embedding 模型）
-bge_m3.py             对照实验用（开发期，**不进提交链路**）
+qwen3_embedding.py    开发期对照实验用（**不进提交链路**）
+query_instruction.py  查询侧 instruction 兼容层（**默认关**，见下"两侧的输入"）
 ```
 
 ## 接口（§7.4）
@@ -28,11 +29,11 @@ class Embedder(Protocol):
 
 §2.3 的规定（见根 `CLAUDE.md`）推出一条设计约束：
 
-> **架构必须 embedder-agnostic。** `text-embedding-v4` **不提供 sparse 或 ColBERT 输出**，因此**任何依赖 BGE-M3 多向量能力的代码在提交时都是死重**。
+> **架构必须 embedder-agnostic。** 开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供 sparse 或 ColBERT 输出**，因此**任何依赖多向量能力的代码都是死重**。
 
-开发期用 BGE-M3 只是**控 API 成本的临时手段**（§12.1 R1）。若代码里渗入了它的多向量能力，Step 5 就不是"换一个实现"，而是"删掉一批代码并重写调用方"。
+开发期用 Qwen3-Embedding-8B 只是**控 API 成本的临时手段**（§12.1 R1）。若代码里渗入了多向量能力，Step 5 就不是"换一个实现"，而是"删掉一批代码并重写调用方"。
 
-**同理**：词法那一路**不要用 BGE-M3 的 sparse 输出**——理由与替代方案见 [`../retrieve/CLAUDE.md`](../retrieve/CLAUDE.md)（§7.1）。
+**同理**：词法那一路**不要用任何学出来的稀疏权重**——理由与替代方案见 [`../retrieve/CLAUDE.md`](../retrieve/CLAUDE.md)（§7.1）。
 
 ---
 
@@ -44,6 +45,9 @@ class Embedder(Protocol):
 | 改写 | —— | **不做任何改写**——v1 没有 Query Analyzer，查询改写属 v2 |
 | 调用次数 | 每个对 1 次（缓存后趋近 0） | **每查询恰好 1 次** |
 
+> **⚠ 查询侧另有一层"输入格式"兼容层**（[`query_instruction.py`](./query_instruction.py)）：Qwen3-Embedding-8B 的模型卡推荐的用法是**查询侧加 `Instruct: …\nQuery:…`、文档侧不加**，并称不加会让检索掉约 1%–5%。
+> 默认 `instruction=""` ⇒ **与"原样送"逐字节相同**；要不要开是**待定的规格问题**，不是实现细节。**唯一不可违反的顺序：前缀必须加在缓存之上**（理由见该模块 docstring）。
+>
 > **查询侧"不做改写"是 v1 的规格，不是省略。** §5 明确区分了两件事：图里的"关键词重写"是 **Agent 每轮自己产出的检索关键词**（属于 agent 循环）；而**检索之前那一次独立的 query 改写属 v2，v1 没有**。**v1 两者都没有**（D13）。
 
 **索引侧的渲染必须是 `common/render` 的那一份**（§7.2 / §11.3 要求它与返回给 AML 的 `content` 是同一份渲染）。**`embed/` 不自己拼字符串。**
@@ -62,4 +66,4 @@ class Embedder(Protocol):
 
 **为什么落盘是硬要求**：v1 的 Add 阶段**不调用任何 LLM**，embedding 是**唯一的 Add 侧成本**，且**只与内容有关**——**缓存后即成为一次性成本，与迭代次数无关**。若缓存没落盘，每次改检索逻辑重跑 harness 都要把整个数据集重新 embed 一遍，**成本随迭代次数线性增长**，而迭代是本项目做得最多的事。
 
-**为什么坐标系必须写进缓存文件**：否则 Step 5 切换后**旧缓存会静默命中**，拿 BGE-M3 的向量去查 `text-embedding-v4` 的集合，而**维度不同只会表现为"检索结果很差"，不会报错**。
+**为什么坐标系必须写进缓存文件**：否则 Step 5 切换后**旧缓存会静默命中**，拿开发期模型的向量去查 `text-embedding-v4` 的集合，而**维度不同只会表现为"检索结果很差"，不会报错**。

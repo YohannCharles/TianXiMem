@@ -10,7 +10,7 @@
 | 文件（待建） | 用途 | 模型 |
 | --- | --- | --- |
 | `default.yaml` | 基线值，其余 profile 的父级 | —— |
-| `local.yaml` | **开发期**：代理评测、迭代、消融 | BGE-M3 + qwen3.5-9b |
+| `local.yaml` | **开发期**：代理评测、迭代、消融 | Qwen3-Embedding-8B + qwen3.5-9b |
 | `submit.yaml` | **提交期**：Full 定稿 | `text-embedding-v4` + `gpt-4o-mini` |
 
 `local.yaml` 与 `submit.yaml` **只覆盖模型与由模型派生的量**（向量维度、实测 token 预算、全部标定阈值），其余继承 `default.yaml`。

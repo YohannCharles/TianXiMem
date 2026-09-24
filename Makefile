@@ -1,17 +1,18 @@
 # TianXi_AM — 常用命令入口
 #
-# 脚手架阶段：只有依赖管理这一步真正可跑。
-# 其余目标全部指向尚未存在的模块，先以 echo 占位——**别让它们静默成功**，
-# 否则会误以为某一步已经实现。Step 1 起逐个替换为真命令。
+# 已经能真跑：`sync` / `lock` / `fmt` / `lint` / `test` / `data-check` / `fetch-data`。
+# 其余目标仍指向尚未存在的模块，先以 echo 占位——**别让它们静默成功**，
+# 否则会误以为某一步已经实现。Step 0 / Step 1 起逐个替换为真命令。
 
-.PHONY: help sync check fmt lint test qdrant-up qdrant-down serve contract-check smoke t2 clean
+.PHONY: help sync check fmt lint test qdrant-up qdrant-down serve contract-check smoke t2 clean \
+        fetch-data data-check
 
 help:  ## 列出所有目标
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 # ── 现在就能跑 ─────────────────────────────────────────────────────────
-sync:  ## 安装依赖（[tool.uv] package=false，不构建本仓库）
+sync:  ## 安装依赖（`--all-extras`：会装上 [local] 的本地模型栈，数 GB）
 	uv sync --all-extras
 
 lock:  ## 生成/更新 uv.lock
@@ -23,15 +24,25 @@ fmt:  ## 格式化
 lint:  ## 静态检查
 	uv run ruff check .
 
+data-check:  ## 校验 benchmark_data/ 与出处清单是否逐字节一致
+	python3 tools/fetch_benchmark_data.py --check
+
+fetch-data:  ## 取回 benchmark_data/ 归档（公开源，按 commit / 哈希钉死）
+	python3 tools/fetch_benchmark_data.py --fetch
+
 # ── 以下均未实现，跑起来会明确失败 ──────────────────────────────────────
-check:  ## 环境自检：Qdrant 可达 / 密钥可用 / GPU 可见
-	@echo "TODO(Step 0): 未实现。需检查：Qdrant server 模式可达（§6.3）、"
-	@echo "  docker 存在、nvidia-smi 可见 L20、两个 API key 可用"
+check:  ## 环境自检：Qdrant 可达 / 模型端点可用 / 密钥已填
+	@echo "TODO(Step 0): 未实现。需检查："
+	@echo "  Qdrant server 模式可达（§6.3；Docker Desktop 已就位，见 D12）"
+	@echo "  自建网关的三段模型端点可用（LLM / embed / reranker）"
+	@echo "  .env 里的 key 已填（含 ANSWER_* / JUDGE_* 那一组，见 .env.example 末尾）"
+	@echo "  ⚠ 不检查 nvidia-smi —— 模型不在本机（D14）"
 	@false
 
 qdrant-up:  ## 起 Qdrant server（必须 server 模式；单分片）
 	@echo "TODO(Step 1): 未实现。§6.3 要求 server 模式，版本按 §7.3 钉死 ≥ v1.17.0。"
-	@echo "  本机当前无 docker，需先解决运行环境。"
+	@echo "  docker 已就位（Docker Desktop，2026-09-23；daemon 走 Windows 命名管道）"
+	@echo "  ⚠ 这个 shell 里若没有 docker，去 Windows 侧 Git Bash 跑（见 deploy/CLAUDE.md）"
 	@false
 
 qdrant-down:  ## 停 Qdrant
@@ -44,7 +55,7 @@ serve:  ## 起 Add/Search 服务（FastAPI + uvicorn，单进程）
 	@false
 
 test:  ## 跑单元测试
-	@echo "TODO(Step 1)"; @false
+	uv run pytest
 
 contract-check:  ## §2 契约合规自查（top_k 精确计数 / 200 形状 / 字段齐全）
 	@echo "TODO(Step 1)"

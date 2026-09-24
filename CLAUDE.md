@@ -18,7 +18,7 @@
 
 | 状态 | 模块 |
 | --- | --- |
-| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + BGE-M3 + 落盘缓存）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）——另有 **8 个测试文件**在 [`tests/`](tests/) |
+| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）——另有 **8 个测试文件**在 [`tests/`](tests/) |
 | ⬜ **未实现** | [`service/`](src/tianxi_am/service/) · [`retrieve/`](src/tianxi_am/retrieve/) · [`rank/`](src/tianxi_am/rank/) · [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `common/` 的 `tokens.py` / `config.py` · `embed/` 的 `text_embedding_v4.py` · 整个 [`eval/`](eval/) · `configs/*.yaml` |
 | ⛔ **v1 不做** | [`agent/`](src/tianxi_am/agent/)（D13） |
 
@@ -40,6 +40,8 @@
 | 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（D1–D16 + 待决事项） |
 | 跑对照实验 | [`docs/experiments.md`](docs/experiments.md)（协议）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（怎么跑） |
 | 数据集加载 / harness | [`docs/benchmark-data.md`](docs/benchmark-data.md) + [`eval/datasets/CLAUDE.md`](eval/datasets/CLAUDE.md) |
+| **取回 / 校验 `benchmark_data/`**（新机器、数据缺了、要确认手上的是不是同一份） | [`docs/benchmark-data.md`](docs/benchmark-data.md) 的"出处链" + [`tools/fetch_benchmark_data.py`](tools/fetch_benchmark_data.py)。`make fetch-data` / `make data-check` |
+| 提交周期与截止日 | [`docs/submission.md`](docs/submission.md) §0（**第二期 09-20 已开，材料截止 10-31**） |
 | 发 Smoke / Full | [`docs/submission.md`](docs/submission.md)（配额与版本冻结） |
 | 模块边界 / 谁依赖谁 / 七个评分维度各由谁回应 | [`docs/architecture.md`](docs/architecture.md) |
 | 每个 Step 的交付与进度 | [`docs/roadmap.md`](docs/roadmap.md) |
@@ -93,9 +95,9 @@
 | **LLM 相关组件** | **只能用 `gpt-4o-mini`** |
 | **Reranker** | **不作规定**——整份规则里唯一不限模型的组件 |
 
-由此推出一条设计约束：**架构必须 embedder-agnostic**。`text-embedding-v4` 不提供 sparse 或 ColBERT 输出，因此**任何依赖 BGE-M3 多向量能力的代码在提交时都是死重**。向量维度**由接口提供、不能写死**。
+由此推出一条设计约束：**架构必须 embedder-agnostic**。开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。向量维度**由接口提供、不能写死**。
 
-**开发期用自建网关上的 BGE-M3 + qwen3.5-9b 替代**（§12.1 风险 R1，团队已接受）——代价是**所有阈值、权重、排序策略在切换后都不保证成立**。四条对冲见 D2；与写代码直接相关的两条：**阈值一律配置化**、**切换单独占一个阶段**。
+**开发期用自建网关上的 Qwen3-Embedding-8B + qwen3.5-9b 替代**（§12.1 风险 R1，团队已接受）——代价是**所有阈值、权重、排序策略在切换后都不保证成立**。四条对冲见 D2；与写代码直接相关的两条：**阈值一律配置化**、**切换单独占一个阶段**。
 
 ### 法律约束（§12.5 / §17.3 P2）
 

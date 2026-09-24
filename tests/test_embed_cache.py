@@ -22,9 +22,9 @@ from tianxi_am.embed.base import (
     EmbeddingError,
     OpenAICompatEmbedder,
 )
-from tianxi_am.embed.bge_m3 import DEFAULT_MODEL, BGEM3Embedder
+from tianxi_am.embed.qwen3_embedding import DEFAULT_MODEL, Qwen3EmbeddingEmbedder
 
-COORD = EmbeddingCoordinate(model="BAAI/bge-m3")
+COORD = EmbeddingCoordinate(model="Qwen/Qwen3-Embedding-8B")
 
 
 def _wrap(inner: FakeEmbedder, tmp_path, coord: EmbeddingCoordinate = COORD):
@@ -267,12 +267,15 @@ def test_inner_returning_mixed_dims_fails_loudly(tmp_path) -> None:
 def test_http_request_shape() -> None:
     client = _StubClient(_ok_body(3))
     emb = OpenAICompatEmbedder(
-        base_url="http://gw.example/v1/", api_key="sk-x", model="BAAI/bge-m3", client=client
+        base_url="http://gw.example/v1/",
+        api_key="sk-x",
+        model="Qwen/Qwen3-Embedding-8B",
+        client=client,
     )
     emb.encode(["hello"])
 
     assert client.calls[0]["url"] == "http://gw.example/v1/embeddings"  # 末尾斜杠被规范化
-    assert client.calls[0]["json"] == {"model": "BAAI/bge-m3", "input": ["hello"]}
+    assert client.calls[0]["json"] == {"model": "Qwen/Qwen3-Embedding-8B", "input": ["hello"]}
     assert client.calls[0]["headers"]["Authorization"] == "Bearer sk-x"
 
 
@@ -327,22 +330,24 @@ def test_http_respects_index_order_and_batches() -> None:
     assert len(client.calls) == 2  # 4 条 / 批大小 2 = 两次调用
 
 
-# ── BGE-M3 的构造入口 ──────────────────────────────────────────────────
+# ── Qwen3-Embedding-8B 的构造入口 ──────────────────────────────────────
 
 
-def test_bge_m3_from_env_requires_variables() -> None:
+def test_qwen3_embedding_from_env_requires_variables() -> None:
     with pytest.raises(ValueError, match="缺少环境变量"):
-        BGEM3Embedder.from_env({})
+        Qwen3EmbeddingEmbedder.from_env({})
 
 
-def test_bge_m3_from_env_reads_variables() -> None:
-    emb = BGEM3Embedder.from_env({"AML_EMB_BASE_URL": "http://gw/v1", "AML_EMB_API_KEY": "sk-x"})
-    assert emb.model == DEFAULT_MODEL == "BAAI/bge-m3"
+def test_qwen3_embedding_from_env_reads_variables() -> None:
+    emb = Qwen3EmbeddingEmbedder.from_env(
+        {"AML_EMB_BASE_URL": "http://gw/v1", "AML_EMB_API_KEY": "sk-x"}
+    )
+    assert emb.model == DEFAULT_MODEL == "Qwen/Qwen3-Embedding-8B"
     assert emb._base_url == "http://gw/v1"  # noqa: SLF001 — 只验构造，不验调用
 
 
-def test_bge_m3_model_can_be_overridden_by_env() -> None:
-    emb = BGEM3Embedder.from_env(
+def test_qwen3_embedding_model_can_be_overridden_by_env() -> None:
+    emb = Qwen3EmbeddingEmbedder.from_env(
         {"AML_EMB_BASE_URL": "http://gw/v1", "AML_EMB_API_KEY": "k", "AML_EMB_MODEL": "other"}
     )
     assert emb.model == "other"
