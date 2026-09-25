@@ -70,12 +70,9 @@ class _InstructionStub:
         return [list(v) for v in self.doc_vectors] or [[0.0] * len(self.vector) for _ in texts]
 
 
-def _retriever(store, embedder, **param_overrides):
-    return HybridRetriever(
-        store=store,
-        dense=DenseArm(embedder),
-        params=make_hybrid_params(**param_overrides),
-    )
+def _retriever(store, embedder):
+    """只装编排者本身——**融合参数不在这里**（它们注入 `QdrantStore`）。"""
+    return HybridRetriever(store=store, dense=DenseArm(embedder))
 
 
 # ── 参数所有权：rrf_k 不是旋钮 ──────────────────────────────────────────
@@ -116,8 +113,13 @@ def test_weights_must_be_two_non_negative_not_both_zero() -> None:
         make_hybrid_params(weights=[0.0, 0.0])
 
 
-def test_params_are_forwarded_to_the_store_shape() -> None:
-    """校验通过后交给 `store/` 的仍是它认识的那个类型（**执行代码不搬**）。"""
+def test_make_hybrid_params_returns_the_store_type() -> None:
+    """校验通过后交给 `store/` 的仍是它认识的那个类型（**执行代码不搬**）。
+
+    ⚠ 这条**不验证"转发"**——名字里原先写着 `forwarded`，而它只断言了类型与字段值
+    （2026-09-25 改名）。真正"参数到达 Qdrant"由
+    `test_build_services_forwards_retrieval_params_to_the_store` 守。
+    """
     params = make_hybrid_params(prefetch_limit=50, weights=[0.7, 0.3], rrf_k=61)
     assert isinstance(params, HybridParams)
     assert (params.prefetch_limit, params.weights, params.rrf_k) == (50, (0.7, 0.3), 61)
@@ -288,11 +290,52 @@ def test_search_never_returns_more_than_top_k() -> None:
     assert len(got) <= 4
 
 
-def test_search_passes_the_validated_params_object() -> None:
-    """编排层用自己的参数对象——`store/` 那侧只是执行者。"""
-    store = _StubStore(hits=[])
-    retriever = _retriever(store, FakeEmbedder(dim=4), prefetch_limit=7)
-    assert retriever.params.prefetch_limit == 7
+def test_build_services_forwards_retrieval_params_to_the_store(tmp_path) -> None:
+    """**配置里的检索参数必须真的到达 Qdrant**——`retrieve/CLAUDE.md` 的"参数所有权"。
+
+    ⚠ 这条用例的由来（2026-09-25）：先前这里是
+    `assert retriever.params.prefetch_limit == 7`——它只验证"字段被赋值"，
+    **不验证它到达了执行处**。而 `HybridRetriever.search()` 当时根本没把 `params`
+    传给 `store.hybrid_search()`，`build_services()` 也没给 `QdrantStore` 传 `hybrid=`
+    ⇒ 改 yaml 里的 `prefetch_limit` / `weights` **静默无效**，只因 store 的默认值
+    恰好与 config 默认值相等而看不出来。
+
+    ⇒ 所以断言必须落在**装配产物**上：`build_services(config)` 造出的那个 `QdrantStore`
+    携带的参数，就是 config 给的那些。**故意用非默认值**——用默认值的话，
+    改坏了这条用例也照样绿。
+    """
+    from tianxi_am.common.config import (
+        AppConfig,
+        CacheConfig,
+        EmbedCacheConfig,
+        QdrantConfig,
+        RetrievalConfig,
+        RrfConfig,
+        SqliteConfig,
+        StorageConfig,
+    )
+    from tianxi_am.service import build_services
+
+    config = AppConfig(
+        storage=StorageConfig(
+            sqlite=SqliteConfig(path=str(tmp_path / "tianxi.db")),
+            qdrant=QdrantConfig(url="http://unused"),
+        ),
+        cache=CacheConfig(embed=EmbedCacheConfig(dir=str(tmp_path / "cache"))),
+        embed_base_url="http://unused/v1",
+        embed_api_key="k",
+        retrieval=RetrievalConfig(
+            prefetch_limit=50,
+            rrf=RrfConfig(k=RRF_K, weights=(0.7, 0.3)),
+        ),
+    )
+    services = build_services(config)
+    try:
+        assert services.qdrant.hybrid.prefetch_limit == 50
+        assert services.qdrant.hybrid.weights == (0.7, 0.3)
+        assert services.qdrant.hybrid.rrf_k == RRF_K
+    finally:
+        services.close()
 
 
 # ── §8 判据 ────────────────────────────────────────────────────────────

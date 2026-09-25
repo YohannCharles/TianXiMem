@@ -42,9 +42,39 @@
   它们只作为"我们当时看到了什么"的存档，**引用其结论前必须回原始页面复核**。
   校验脚本遇到它们只报告、不失败。
 
+## ⚠ 本地修订（`local_patch`）—— 归档**不再逐字节等于上游**
+
+2026-09-25 发现：AML 公开的 7 个 pipeline **在 `answer` / `evaluate` 第一步就崩**：
+
+```python
+async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="utf-8") as handle:
+```
+
+`pathlib.Path.open()` 返回的 `TextIOWrapper` **没有异步上下文协议** ⇒ `TypeError`。
+已核：上游钉住的那个 revision 上**逐字节就是这样**（`upstream_sha256` 记着那份的哈希），
+所以不是我们取错了文件——**发布的参考实现本身跑不起来**。
+
+**处置（2026-09-25 团队决定）**：**就地修订 + 记成已声明的偏离**，修法只有两处机械替换：
+
+| 改什么 | 改成 |
+| --- | --- |
+| `..., <path>.open("<mode>", encoding="utf-8") as handle:`
+| → `..., contextlib.nullcontext(<path>.open("<mode>", encoding="utf-8")) as handle:` |
+| （文件顶部） | 补一行 `import contextlib`（缺才补） |
+
+**它不碰任何 prompt、不碰任何判分逻辑**——只把"同步文件句柄当异步上下文用"这处语法问题绕过去。
+⇒ `eval/harness/CLAUDE.md` 那条「契约以 pipeline 代码为准」仍然成立，但**要带着这个星号读**。
+
+两条哈希因此**故意不同名**：
+
+* `upstream_sha256` = **上游原始字节**（`--fetch` 下载后先校这个）
+* `sha256` = **本地归档字节**（打完补丁，`data-check` 校的是这个）
+
+⇒ `--fetch` 落下来就是**打过补丁**的版本；`--patch` 给已到手的文件就地打（网络不通时用）。
+
 ## 与文档的分工
 
-* **本文件**：出处、revision、sha256 —— 机器可查的部分，**哈希只写这一处**。
+* **本文件**：出处、revision、sha256（上游 + 本地两套）—— 机器可查的部分，**哈希只写这一处**。
 * [`docs/benchmark-data.md`](../docs/benchmark-data.md)：人读的部分（哪些文件是真数据、
   许可表、残留鉴定、schema 落差的指路）。**两边不重复同一条事实。**
 """
@@ -54,6 +84,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -102,49 +133,63 @@ MANIFEST: list[dict[str, str]] = [
         "name": "pipeline_locomo-refined.py",
         "tier": "required",
         "url": f"{AML_REPO}/{AML_REV}/data/locomo-refined/pipeline.py",
-        "sha256": "31a49fc09e381bc117b59063c7a4cea543a672b23e1264aedb03290239671c1a",
+        "sha256": "958f051cdfa715ca5be21d01ab3ac7a9078ff45b70629536713e53fe0fdf7aaf",
+        "upstream_sha256": "31a49fc09e381bc117b59063c7a4cea543a672b23e1264aedb03290239671c1a",
+        "local_patch": "async-open",
         "note": "LoCoMo/LME 共用契约的代表；答案与裁判 prompt 都在这里",
     },
     {
         "name": "pipeline_longmemeval-s.py",
         "tier": "required",
         "url": f"{AML_REPO}/{AML_REV}/data/longmemeval-s/pipeline.py",
-        "sha256": "c7f17c363bd0803cfeedd2b793a0cb0a74ab119a70eeced2c7a835b2b2aecb46",
+        "sha256": "79acd09e4dfdef9db50887c2d4baae297ba272e1f513ee2b4654e4185b311e42",
+        "upstream_sha256": "c7f17c363bd0803cfeedd2b793a0cb0a74ab119a70eeced2c7a835b2b2aecb46",
+        "local_patch": "async-open",
         "note": "2026-09-24 补入（原归档缺）。它证实了 `{{speaker_1_memories}}` 注入形状",
     },
     {
         "name": "clb_pipeline.py",
         "tier": "required",
         "url": f"{AML_REPO}/{AML_REV}/data/clbench/pipeline.py",
-        "sha256": "65b9719dc22e055aad808f68d757c145b9f9115cb2275b1ee373610c6a8116c7",
+        "sha256": "9a76336b26fcb372515fd58d085dbf93c60e2a2abf21e18beecea4eee3160893",
+        "upstream_sha256": "65b9719dc22e055aad808f68d757c145b9f9115cb2275b1ee373610c6a8116c7",
+        "local_patch": "async-open",
         "note": "CL-Bench；写 `model_output` 而非 `generated_answer`",
     },
     {
         "name": "pipeline_beam.py",
         "tier": "required",
         "url": f"{AML_REPO}/{AML_REV}/data/beam/pipeline.py",
-        "sha256": "3889e26ae696abc67711daab0ebf24e3082ed50d5f85df9d9f95540a0a9b8763",
+        "sha256": "5ec1c4b675030ba1aeac61e1c262e552b9c99bb42a839b9fd20962c12fd4422a",
+        "upstream_sha256": "3889e26ae696abc67711daab0ebf24e3082ed50d5f85df9d9f95540a0a9b8763",
+        "local_patch": "async-open",
         "note": "**唯一传 `enable_thinking: False` 的一条**（V7 的证据在 pipeline_beam.py:263）",
     },
     {
         "name": "pipeline_scriptmem.py",
         "tier": "required",
         "url": f"{AML_REPO}/{AML_REV}/data/scriptmem/pipeline.py",
-        "sha256": "0f9931999b701f18d34b3bc1a5bb347330fafdaaa1e9133e1411973d9dc0acb1",
+        "sha256": "3df8e63542aad5efccd9d80d87f4987e8b6cc387c36ff1eafba598c4ce0fdc67",
+        "upstream_sha256": "0f9931999b701f18d34b3bc1a5bb347330fafdaaa1e9133e1411973d9dc0acb1",
+        "local_patch": "async-open",
         "note": "",
     },
     {
         "name": "pipeline_v1_personamem.py",
         "tier": "required",
         "url": f"{AML_REPO}/{AML_REV}/data/personamem/pipeline_v1.py",
-        "sha256": "a697a9c80214731037bc9cde6e57833423ff65a90393ead6e19b0b7d3ba90ccd",
+        "sha256": "f2054e3ed0bcba4a3aa92df7222ab0ca5cd87277ada09449e753b58569beebb7",
+        "upstream_sha256": "a697a9c80214731037bc9cde6e57833423ff65a90393ead6e19b0b7d3ba90ccd",
+        "local_patch": "async-open",
         "note": "2026-09-24 补入（原归档只有 v2）",
     },
     {
         "name": "pipeline_v2_personamem.py",
         "tier": "required",
         "url": f"{AML_REPO}/{AML_REV}/data/personamem/pipeline_v2.py",
-        "sha256": "c044b1ad10a87a94cfe0b007ec006a4146f7c191ca66b12cb4089ed70363a296",
+        "sha256": "a890c078a0015fe7788164b5274b40ca16e1feccba7a32f9659849830606dc08",
+        "upstream_sha256": "c044b1ad10a87a94cfe0b007ec006a4146f7c191ca66b12cb4089ed70363a296",
+        "local_patch": "async-open",
         "note": "PersonaMem **不读检索字段**——§12.4 用它解释代理评测为何不能外推",
     },
     # ── LoCoMo-Refined（代理评测的两份之一）────────────────────────────────
@@ -306,6 +351,54 @@ DELETED: list[dict[str, str]] = [
 ]
 
 
+#: 本地修订：`async with A as x, B as y:` 里的 `B` 是**同步**上下文管理器（`Path.open`）。
+#:
+#: 用 `contextlib.nullcontext` 包一层即可——它**同时支持同步与异步**两种协议
+#: （Python 3.10+）。为什么不改成两层嵌套 `with`：那要给整个循环体重新缩进，
+#: 而**逐行改动**才可能在评审时一眼看出"只动了这一行"。
+_ASYNC_OPEN = re.compile(
+    r"async with httpx\.AsyncClient\((?P<client>timeout=[^)]*)\) as client, "
+    r"(?P<open>\w+\.open\(\"(?P<mode>[aw])\", encoding=\"utf-8\"\)) as (?P<var>\w+):"
+)
+
+
+def _patch_async_open(text: str) -> tuple[str, int]:
+    """本地修订 `async-open`：`Path.open(...)` 包一层 `contextlib.nullcontext(...)`。
+
+    返回 `(修订后的文本, 改动处数)`；**幂等**——已经改过的文本再跑得到 `(原文, 0)`。
+    """
+    patched, count = _ASYNC_OPEN.subn(
+        lambda m: (
+            f"async with httpx.AsyncClient({m['client']}) as client, "
+            f"contextlib.nullcontext({m['open']}) as {m['var']}:"
+        ),
+        text,
+    )
+    if count and "import contextlib" not in patched:
+        if "import argparse" in patched:
+            patched = patched.replace("import argparse", "import argparse\nimport contextlib", 1)
+        else:  # pragma: no cover —— 7 个 pipeline 都 import argparse
+            raise RuntimeError("补 contextlib 失败：这些文件都没有 `import argparse` 可挂靠")
+    return patched, count
+
+
+#: 修订 id → 实现。清单里写 `local_patch` 就是这里的键。
+LOCAL_PATCHES = {"async-open": _patch_async_open}
+
+
+def apply_local_patch(entry: dict, path: Path) -> tuple[bool, str]:
+    """按清单里的 `local_patch` 就地修订一个文件。返回 `(是否改过, 说明)`。"""
+    patch_id = entry.get("local_patch")
+    if not patch_id:
+        return False, "无需修订"
+    text = path.read_text(encoding="utf-8")
+    patched, count = LOCAL_PATCHES[patch_id](text)
+    if not count:
+        return False, "已经是修订后的版本"
+    path.write_text(patched, encoding="utf-8")
+    return True, f"修订 {count} 处（{patch_id}）"
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -329,6 +422,11 @@ def main() -> int:
     parser.add_argument("--fetch", action="store_true", help="取回缺失或不符的（默认只校验）")
     parser.add_argument("--check", action="store_true", help="只校验，不下载（默认行为）")
     parser.add_argument(
+        "--patch",
+        action="store_true",
+        help="把 `local_patch` 就地打到已到手的文件上（**不下载**；网络不通时用这个）",
+    )
+    parser.add_argument(
         "--tier",
         choices=["required", "all"],
         default="all",
@@ -351,12 +449,30 @@ def main() -> int:
     for entry in wanted:
         path = root / entry["name"]
         label = f"{entry['name']:<28}"
+        if path.exists() and args.patch and entry.get("local_patch"):
+            changed, what = apply_local_patch(entry, path)
+            print(f"  {'✎' if changed else '·'} {label} {what}")
+            actual = _sha256(path)
+            if actual != entry["sha256"]:
+                print(f"    ✗ 修订后仍与清单不符（{actual[:16]}…）")
+                bad += 1
+            continue
         if path.exists():
             actual = _sha256(path)
             if actual == entry["sha256"]:
-                print(f"  ✓ {label} 一致")
+                marker = "（含本地修订）" if entry.get("local_patch") else ""
+                print(f"  ✓ {label} 一致{marker}")
                 continue
-            print(f"  ✗ {label} **哈希不符**（本地 {actual[:16]}… ≠ 清单 {entry['sha256'][:16]}…）")
+            hint = ""
+            if entry.get("local_patch"):
+                hint = (
+                    f"\n      它是 `local_patch={entry['local_patch']}` 的文件："
+                    f"这份哈希是**打完补丁之后**的——对不上就用 `--patch` 重打（或 `--fetch` 重取）"
+                )
+            print(
+                f"  ✗ {label} **哈希不符**"
+                f"（本地 {actual[:16]}… ≠ 清单 {entry['sha256'][:16]}…）{hint}"
+            )
         elif entry["url"] and args.fetch:
             print(f"  ↓ {label} 取回 {entry['url'].rsplit('/', 1)[0].split('/')[-1]}…")
             try:
@@ -366,10 +482,22 @@ def main() -> int:
                 bad += 1
                 continue
             actual = _sha256(path)
-            if actual == entry["sha256"]:
-                print("    ✓ 取回并校验通过")
+            expected = entry.get("upstream_sha256", entry["sha256"])
+            if actual != expected:
+                print(f"    ✗ 取回的字节与清单不符（{actual[:16]}…）——上游可能被改过，**别用这份**")
+                bad += 1
                 continue
-            print(f"    ✗ 取回的字节与清单不符（{actual[:16]}…）——上游可能被改过，**别用这份**")
+            if entry.get("local_patch"):
+                changed, what = apply_local_patch(entry, path)
+                actual = _sha256(path)
+                if actual != entry["sha256"]:
+                    print(f"    ✗ 修订后哈希不符（{actual[:16]}…）")
+                    bad += 1
+                    continue
+                print(f"    ✓ 取回 + {what}，与清单一致")
+                continue
+            print("    ✓ 取回并校验通过")
+            continue
         elif entry["url"]:
             print(f"  · {label} 缺失（`--fetch` 可取回）")
             bad += 1

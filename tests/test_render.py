@@ -90,3 +90,148 @@ def test_template_separator_is_a_single_constant() -> None:
 
     assert QUESTION_ANSWER_SEP == "\n"
     assert render("q", "a").count(QUESTION_ANSWER_SEP) == 1
+
+
+# ── T1 的渲染变体（§11.3 / §13）────────────────────────────────────────────
+_MAY_8_2023_MS = 1683504000000  # 2023-05-08T00:00:00Z
+
+
+def test_render_date_is_the_switch_and_nothing_else() -> None:
+    """**开关只决定"取不取那个串"，不碰日期口径**（口径只有 `day_granularity` 一处）。
+
+    两臂若连格式也不同，T1 就不是一个单变量对照了。
+    """
+    from tianxi_am.common.render import day_granularity, render_date
+
+    assert render_date(_MAY_8_2023_MS, inject_abs_time=False) == ""
+    assert render_date(_MAY_8_2023_MS, inject_abs_time=True) == "2023-05-08"
+    # 时间缺失时**不是"1970-01-01"**，而是与 created_at 同一条降级路径：空串（§11.3）
+    assert render_date(None, inject_abs_time=True) == ""
+    assert day_granularity(None) == ""
+
+
+def test_date_prefix_goes_in_front_and_stays_trimmed() -> None:
+    """`date` 非空 ⇒ 正文最前面加 `[date] `；首尾仍然无空白（§11.3 自定界）。"""
+    out = render("Q1", "A1", date="2023-05-08")
+    assert out == "[2023-05-08] Q: Q1\nA: A1"
+    assert out == out.strip()
+    assert render("Q1", "A1", date="") == "Q: Q1\nA: A1"  # 默认口径一字不变
+
+
+def test_empty_pair_gets_no_date_prefix() -> None:
+    """**空文本不加前缀**：一个只有日期的 `content` 会让模型读到一条不存在的记忆。"""
+    assert render(None, None, date="2023-05-08") == ""
+
+
+def test_template_version_separates_the_two_arms() -> None:
+    """两臂的**缓存坐标必须不同**——否则"带"臂会静默复用"不带"臂的向量（§7.2）。"""
+    from tianxi_am.common.render import template_version
+
+    assert template_version(inject_abs_time=False) == TEMPLATE_VERSION
+    assert template_version(inject_abs_time=True) != TEMPLATE_VERSION
+
+
+def test_render_pair_takes_the_date_from_the_pair_itself() -> None:
+    """`render_pair` 是**三个调用点唯一的入口**——日期只能来自对自身的 `event_time`。"""
+    from tianxi_am.common.render import render_pair
+
+    class _Pair:
+        question = "Q1"
+        answer = "A1"
+        event_time = _MAY_8_2023_MS
+
+    assert render_pair(_Pair()) == "Q: Q1\nA: A1"
+    assert render_pair(_Pair(), inject_abs_time=True) == "[2023-05-08] Q: Q1\nA: A1"
+
+    class _Undated:
+        question = "Q1"
+        answer = "A1"
+        event_time = None
+
+    assert render_pair(_Undated(), inject_abs_time=True) == "Q: Q1\nA: A1"
+
+
+# ── T1 的开关纯度（§13）：两臂**只该差正文**────────────────────────────────
+def _dress(chain, *, inject_abs_time: bool) -> list[str]:
+    """灌三条**相隔的** `pair_idx`（0/2/4）、每条都带 `event_time`，返回被索引的 id。
+
+    ⚠ 三条不是相邻的：相邻会被扩窗合进同一段，那样"段数没变"这条断言就验不出东西
+    （[`../tests/CLAUDE.md`](../tests/CLAUDE.md) §三 的"一个候选 ≠ 一项"）。
+    ⚠ 用 `insert_pair` 而不是走 Add：这里要的是**确定的** `pair_idx` 与 `event_time`
+    （Add 路径的 `pair_idx` 由配对逻辑给，`event_time` 取消息上的 timestamp）。
+    索引侧仍然走**生产路径的同一个渲染函数**（`index_pairs` 的 `renderer`）。
+    """
+    from functools import partial
+
+    from tianxi_am.common.render import render_pair
+
+    ids: list[str] = []
+    pairs = []
+    for pair_idx in (0, 2, 4):
+        with chain.store.transaction() as conn:
+            pair = chain.store.insert_pair(
+                conn,
+                user_id="u1",
+                session_id="s1",
+                pair_idx=pair_idx,
+                question=f"Q{pair_idx}",
+                answer=f"A{pair_idx}",
+                status="complete",
+                event_time=_MAY_8_2023_MS,
+                request_id="seed",
+            )
+        ids.append(pair.id)
+        pairs.append(pair)
+    chain.qdrant.index_pairs(
+        pairs,
+        chain.embedder,
+        renderer=partial(render_pair, inject_abs_time=inject_abs_time),
+    )
+    return ids
+
+
+def test_t1_switch_only_changes_the_text(wired, wired_dated) -> None:
+    """同一个库、同一次检索、两臂逐项比：**只有 `content` 该变。**
+
+    §13 的纯度规则（[`../tests/CLAUDE.md`](../tests/CLAUDE.md) §五）：开关必须只影响它
+    命名的那一件事。这里被"命名"的是**正文里带不带日期**，所以名次、`id`、`created_at`、
+    `score`、段数**一个都不许动**——动了就说明这个对照同时在测两件事，结论不可归因。
+    """
+    from tianxi_am.common.render import day_granularity
+
+    prefix = f"[{day_granularity(_MAY_8_2023_MS)}] "
+    for chain, inject in ((wired, False), (wired_dated, True)):
+        chain.qdrant.by_user["u1"] = _dress(chain, inject_abs_time=inject)
+
+    plain = wired.search(user_id="u1", query="q", top_k=5)
+    dated = wired_dated.search(user_id="u1", query="q", top_k=5)
+
+    assert len(plain.items) == len(dated.items) > 0
+    assert [item.id for item in dated.items] == [item.id for item in plain.items]
+    assert [item.created_at for item in dated.items] == [item.created_at for item in plain.items]
+    assert [item.score for item in dated.items] == [item.score for item in plain.items]
+
+    assert all(prefix in item.content for item in dated.items)
+    assert not any(prefix in item.content for item in plain.items)
+    # 去掉前缀之后应当**逐字相同**——两臂差的正好只有那一段
+    for item_plain, item_dated in zip(plain.items, dated.items, strict=True):
+        assert item_dated.content.replace(prefix, "") == item_plain.content
+
+
+def test_t1_arm_renders_index_and_content_identically(wired_dated) -> None:
+    """**I1 在 T1 的"带"臂上仍然成立**：被索引的文本 == content 里的那一对文本。
+
+    这是这个开关最危险的地方——正文一改，索引侧与返回侧**必须同时改**。
+    只改一边不会报错，只会让"检索命中的是什么"与"模型读到的是什么"悄悄分叉（§7.2）。
+    """
+    ids = _dress(wired_dated, inject_abs_time=True)
+    wired_dated.qdrant.by_user["u1"] = ids
+
+    response = wired_dated.search(user_id="u1", query="q", top_k=5)
+
+    # 段的 `content` 是逐对渲染后用 `\n` 连起来的 ⇒ 每一对都必须**逐字**出现在某段里
+    haystack = "\n".join(item.content for item in response.items)
+    for memory_id in ids:
+        text = wired_dated.qdrant.points[memory_id]
+        assert text.startswith("[2023-05-08] "), text
+        assert text in haystack, text

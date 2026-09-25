@@ -21,11 +21,13 @@ Hybrid → RRF → 去重 → 【rerank（恰好一次）】 → 扩窗 → 合�
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
 import pytest
 from tests.conftest import Wired
+from tests.conftest import seed_pair_in as _seed
 
 from tianxi_am.common.render import render
 from tianxi_am.rank import RemoteReranker, RerankUnavailable
@@ -70,32 +72,6 @@ class FakeReranker:
         # 分数按 `want` 递减：`want[0]` 拿最高分 ⇒ 排序后它就是第一条
         rank_of = {position: place for place, position in enumerate(order)}
         return [float(len(documents) - rank_of[i]) for i in range(len(documents))]
-
-
-def _seed(
-    store: SqliteStore,
-    pair_idx: int,
-    *,
-    session_id: str = "s1",
-    user_id: str = "u1",
-    question: str | None = None,
-    answer: str | None = None,
-) -> str:
-    """落一个对，返回它的 `memory_id`。**比 conftest 的 `seed_pair` 多一个 session 参数**
-    （本文件要构造"两个 session 各有一条候选"的形状）。"""
-    with store.transaction() as conn:
-        pair = store.insert_pair(
-            conn,
-            user_id=user_id,
-            session_id=session_id,
-            pair_idx=pair_idx,
-            question=question if question is not None else f"q{pair_idx}",
-            answer=answer if answer is not None else f"a{pair_idx}",
-            status="complete",
-            event_time=None,
-            request_id="seed",
-        )
-    return pair.id
 
 
 def _ids(store: SqliteStore, count: int, *, step: int = 2, session_id: str = "s1") -> list[str]:
@@ -457,7 +433,14 @@ def test_build_reranker_is_none_when_explicitly_disabled(tmp_path) -> None:
 
 
 def _app_config(tmp_path, *, reranker: bool, rerank_env: dict | None = None):  # noqa: ANN001, ANN202
-    """造一份 `AppConfig`。`reranker=True` ⇒ 带上完整的 `TIANXI_RERANKER_*`。"""
+    """造一份 `AppConfig`。`reranker=True` ⇒ 带上完整的 `TIANXI_RERANKER_*`。
+
+    ⚠ **`rerank.enabled` 一律强制为 `true`**（2026-09-25）：本组用例测的是 `build_reranker`
+    的三分支表，而出厂默认值已改为 `false`（`configs/default.yaml`——A3 未跑之前不默认付
+    精排的算力）。不强制打开的话，"齐备 ⇒ 有客户端"会静默变成命中"明确关掉"，
+    `test_build_reranker_is_none_without_endpoint` 想验的**缺端点**分支也就走不到了
+    ——那就是一条**永远不会 FAIL 的检查**。
+    """
     from tianxi_am.common.config import load_config
 
     env = {
@@ -476,7 +459,8 @@ def _app_config(tmp_path, *, reranker: bool, rerank_env: dict | None = None):  #
             }
         )
     env.update(rerank_env or {})
-    return load_config(env, config_dir=_CONFIGS)
+    config = load_config(env, config_dir=_CONFIGS)
+    return replace(config, rerank=replace(config.rerank, enabled=True))
 
 
 def test_build_services_wires_the_reranker_into_the_search_pipeline(tmp_path) -> None:

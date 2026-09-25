@@ -67,9 +67,10 @@ canonical AddRequest
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 from tianxi_am.common.config import DEFAULT_EXPANSION_SEED_LIMIT, DEFAULT_RADIUS
-from tianxi_am.common.render import render
+from tianxi_am.common.render import render_pair
 from tianxi_am.common.tokens import TokenCounter
 from tianxi_am.pairing import AddBatch, ApplyBatchResult, apply_batch
 from tianxi_am.pairing.pairing import BatchLimits
@@ -119,12 +120,16 @@ class AddPipeline:
         embedder: object,
         locks: SessionLocks,
         limits: BatchLimits | None = None,
+        inject_abs_time: bool = False,
     ) -> None:
         self._store = store
         self._qdrant = qdrant
         self._embedder = embedder
         self._locks = locks
         self._limits = limits
+        #: T1 的渲染变体（`packaging.inject_abs_time`）——**索引侧也要用它**：
+        #: 正文一变，embedding 输入就变（§7.2 的"同一份渲染"）。
+        self._inject_abs_time = inject_abs_time
 
     def apply(self, batch: AddBatch) -> AddOutcome:
         """应用一批；**持锁直到 Qdrant 写完**。
@@ -140,7 +145,15 @@ class AddPipeline:
         with self._locks.hold(batch.user_id, batch.session_id):
             result = apply_batch(self._store, batch, limits=self._limits)
             pairs, repaired = self._pairs_to_index(batch, result)
-            indexed = self._qdrant.index_pairs(pairs, self._embedder) if pairs else 0
+            indexed = (
+                self._qdrant.index_pairs(
+                    pairs,
+                    self._embedder,
+                    renderer=partial(render_pair, inject_abs_time=self._inject_abs_time),
+                )
+                if pairs
+                else 0
+            )
         return AddOutcome(
             applied=result.applied,
             new_pair_count=result.new_pair_count,
@@ -213,6 +226,7 @@ class SearchPipeline:
         seed_limit: int = DEFAULT_EXPANSION_SEED_LIMIT,
         radius: int = DEFAULT_RADIUS,
         reranker: Reranker | None = None,
+        inject_abs_time: bool = False,
     ) -> None:
         self._store = store
         self._qdrant = qdrant
@@ -223,6 +237,10 @@ class SearchPipeline:
         self._seed_limit = seed_limit
         self._radius = radius
         self._reranker = reranker
+        #: T1 的渲染变体（`packaging.inject_abs_time`）。**搜索链上有两处要用它**：
+        #: 精排的输入文本（`_maybe_rerank`）与最终的 `content`（`merge_segments` 逐对渲染）。
+        #: 漏掉任何一处 ⇒ 与索引侧的渲染分叉，**而分叉不报错**（不变式 I1）。
+        self._inject_abs_time = inject_abs_time
         #: 诊断计数（§14）。**不进响应**——响应的形状是契约，一个字段都不能多。
         self.rerank_calls = 0
         self.rerank_degraded = 0
@@ -264,7 +282,9 @@ class SearchPipeline:
         expansion = expand_neighbors(
             ranked, store=self._store, seed_limit=self._seed_limit, radius=self._radius
         )
-        segments = merge_segments(expansion.selected, counter=self._counter)
+        segments = merge_segments(
+            expansion.selected, counter=self._counter, inject_abs_time=self._inject_abs_time
+        )
 
         # ⑦ 预算 + 打包（段是原子单位；`top_k` 约束的是**段数**）
         return package(
@@ -302,7 +322,9 @@ class SearchPipeline:
         # 取每条候选的**渲染文本**当 rerank 的输入——与索引侧、与最终 content 是同一份渲染
         # （§7.2 / 不变式 I1）。**一次批量读**：短生命周期连接模型下，逐条查询要付 N 次 connect。
         pairs = self._fetch_for_rerank([c.memory_id for c in ranked])
-        documents = [render(p.question, p.answer) for p in pairs if p is not None]
+        documents = [
+            render_pair(p, inject_abs_time=self._inject_abs_time) for p in pairs if p is not None
+        ]
         if len(documents) != len(ranked):
             # 真源缺行 ⇒ 不 rerank（少了几条就没法一一对应）。扩窗那一步会把缺行的记下来。
             # ⚠ 计 `degraded` 而不是 `disabled`：**我们本来是要调的**。

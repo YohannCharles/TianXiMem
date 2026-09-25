@@ -1,0 +1,10 @@
+# A3 臂 `a3-on` 的冻结配置（§13 的配置指纹）——**由 a3_rerank.py --freeze 生成**
+# 冻结时刻：2026-09-25T05:42:54Z（UTC）· 基线 `configs/default.yaml` 的 sha256[:16] = e83bf8738c40cb4c
+# 本臂相对基线**只动一件事**：
+#   rerank.enabled = true（精排开）
+# ⚠ 两臂**共用一套向量**（rerank 只改排名）⇒ 集合不用换；变的是排序与耗时。
+rerank:
+  enabled: true
+storage:
+  qdrant:
+    collection: memories_dev

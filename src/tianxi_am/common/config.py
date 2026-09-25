@@ -73,8 +73,10 @@ __all__ = [
     "ENV_SQLITE_PATH",
     "ENV_WORKERS",
     "DEFAULT_EXPANSION_SEED_LIMIT",
+    "DEFAULT_PREFETCH_LIMIT",
     "DEFAULT_RADIUS",
     "DEFAULT_RERANK_TIMEOUT_S",
+    "DEFAULT_WEIGHTS",
     "RRF_K",
     "AppConfig",
     "ConfigError",
@@ -135,6 +137,18 @@ RRF_K: Final[int] = 61
 #: 任何一项调整都要重算其余三项"。改它们之前要有消融数据（§12.1 R1 对冲 3）。
 DEFAULT_EXPANSION_SEED_LIMIT: Final[int] = 30
 DEFAULT_RADIUS: Final[int] = 1
+
+#: §7.3 的两个检索参数初值：每路进入 RRF 的候选池大小（`N`）与 `[w_bm25, w_dense]` 权重。
+#:
+#: ⚠ **值的家在这里**（而不是 `retrieve/fusion.py`）：理由与上面两个**同一条**——
+#: `common/` 是最底层，而 `retrieve/` 与 `store/` 的 `HybridParams` 都要用到它们。
+#: （2026-09-25 之前，`200` 与 `(0.5, 0.5)` 在全仓**各有 4 份裸字面量且没有一致性测试**；
+#: 现在只剩这一处，`retrieve/` 与 `store/` 都引用它。）
+#:
+#: ⚠ 这两个是 **C 类可调项**（不同于 `RRF_K` 那种正确性常量）：**任何调整都必须有
+#: ablation 数据支撑**——Qdrant 官方明确警告"无评测集时手调权重不太可能稳定优于默认值"（§7.3）。
+DEFAULT_PREFETCH_LIMIT: Final[int] = 200
+DEFAULT_WEIGHTS: Final[tuple[float, float]] = (0.5, 0.5)
 
 #: rerank 调用的超时（秒）。**C 类自设阈值**（`rerank.timeout_seconds`）。
 #:
@@ -210,7 +224,7 @@ class RrfConfig:
     k: int = RRF_K
     #: 顺序与 §7.3 的 `prefetch` 顺序**一一对应**：固定 `(bm25, dense)`。
     #: **任何调整都必须有 ablation 数据支撑**（C 类）。
-    weights: tuple[float, float] = (0.5, 0.5)
+    weights: tuple[float, float] = DEFAULT_WEIGHTS
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,7 +233,7 @@ class RetrievalConfig:
 
     #: 每路进入 RRF 的候选池大小（§7.3 的 `N`）。
     #: ⚠ **不是**种子数（§10 的 20）、**不是** Top-K（§2.2 的 100）——三个不同的量。
-    prefetch_limit: int = 200
+    prefetch_limit: int = DEFAULT_PREFETCH_LIMIT
     #: 查询侧的 instruction 前缀。`""` ⇒ **与"原样送"逐字节相同**（v1 现状）。
     #: 要不要开是**待定的规格问题**，见 `embed/query_instruction.py`。
     query_instruction: str = ""
@@ -255,6 +269,25 @@ class BudgetConfig:
     max_tokens: int = MAX_INPUT_TOKENS
     #: 分词器名。**必须是答案模型自己的那个**（§6.4）——用近似会在 100 个对上放大到几千 token。
     tokenizer: str = DEFAULT_TOKENIZER
+
+
+@dataclass(frozen=True, slots=True)
+class PackagingConfig:
+    """上下文打包的渲染变体（§11.3）。**只有一个键，而且默认值就是 v1 定稿口径。**
+
+    ⚠ 这个键**存在的唯一理由是 T1**（§13 的"时间戳前缀 带 / 不带"）——
+    `config-reference.md` §2 明文要求那个对照项"同样要可配"。它**不是**一个调参项：
+    §11.3 的结论是"不注入绝对时间"（两条互相独立的裁判规则都指向它），
+    打开它只会让分数变差；打开它的目的是**把那条结论在代理评测上验一遍**。
+    """
+
+    #: `false`（**v1 定稿**）⇒ `content` 里没有任何绝对时间戳，时间只走 `event_time` 筛选。
+    #: `true`（**只为 T1 的"带"臂**）⇒ 每对正文前加日粒度日期前缀。
+    #:
+    #: ⚠ 它是**"贵"消融项**：正文一改，embedding 输入就改 ⇒ **向量索引要重建**，
+    #: 而且必须跑在**另一个集合**上（`storage.qdrant.collection`）——两臂混在一个集合里，
+    #: 检索到的是哪一臂的向量**根本看不出来**。
+    inject_abs_time: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +328,7 @@ class AppConfig:
     pairing: PairingConfig = field(default_factory=PairingConfig)
     neighbor: NeighborConfig = field(default_factory=NeighborConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
+    packaging: PackagingConfig = field(default_factory=PackagingConfig)
     rerank: RerankConfig = field(default_factory=RerankConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
 
@@ -322,7 +356,7 @@ class AppConfig:
 #: yaml 顶层允许的段。**env 拥有的键不出现在这里**（见模块 docstring 的分工表）：
 #: 路径 / 端点 / 密钥 / worker 数都只从环境变量来。
 _TOP_LEVEL_KEYS: Final[frozenset[str]] = frozenset(
-    {"storage", "models", "retrieval", "pairing", "neighbor", "budget", "rerank"}
+    {"storage", "models", "retrieval", "pairing", "neighbor", "budget", "packaging", "rerank"}
 )
 
 
@@ -376,7 +410,7 @@ def _float(value: object, /, *, where: str, default: float) -> float:
 
 def _weights(value: object, /, *, where: str) -> tuple[float, float]:
     if value is None:
-        return (0.5, 0.5)
+        return DEFAULT_WEIGHTS
     if not isinstance(value, (list, tuple)) or len(value) != 2:
         raise ConfigError(
             f"`{where}` 必须是两个数（`[bm25, dense]`，顺序见 §7.3 的 prefetch）：{value!r}"
@@ -505,7 +539,11 @@ def _retrieval(raw: object) -> RetrievalConfig:
     g = _group(raw, where="retrieval", allowed={"prefetch_limit", "query_instruction", "rrf"})
     r = _group(g.get("rrf"), where="retrieval.rrf", allowed={"k", "weights"})
     return RetrievalConfig(
-        prefetch_limit=_int(g.get("prefetch_limit"), where="retrieval.prefetch_limit", default=200),
+        prefetch_limit=_int(
+            g.get("prefetch_limit"),
+            where="retrieval.prefetch_limit",
+            default=DEFAULT_PREFETCH_LIMIT,
+        ),
         query_instruction=_str(
             g.get("query_instruction"), where="retrieval.query_instruction", default=""
         ),
@@ -534,6 +572,17 @@ def _budget(raw: object) -> BudgetConfig:
         max_tokens=_int(g.get("max_tokens"), where="budget.max_tokens", default=MAX_INPUT_TOKENS),
         tokenizer=_str(g.get("tokenizer"), where="budget.tokenizer", default=DEFAULT_TOKENIZER),
     )
+
+
+def _packaging(raw: object) -> PackagingConfig:
+    g = _group(raw, where="packaging", allowed={"inject_abs_time"})
+    inject = g.get("inject_abs_time")
+    if inject is not None and not isinstance(inject, bool):
+        raise ConfigError(
+            f"`packaging.inject_abs_time` 必须是布尔值，收到 {inject!r}——"
+            "它是「带 / 不带时间戳前缀」那个对照臂的开关，不是日期格式"
+        )
+    return PackagingConfig(inject_abs_time=False if inject is None else inject)
 
 
 def _rerank(raw: object) -> RerankConfig:
@@ -725,6 +774,7 @@ def load_config(
             pairing=_pairing(data.get("pairing")),
             neighbor=_neighbor(data.get("neighbor")),
             budget=_budget(data.get("budget")),
+            packaging=_packaging(data.get("packaging")),
             rerank=_rerank(data.get("rerank")),
             server=ServerConfig(workers=workers),
             # 密钥与端点不在 yaml 里（见模块 docstring 的两层分工）

@@ -29,7 +29,8 @@ from typing import Any, Final
 
 from qdrant_client import QdrantClient, models
 
-from tianxi_am.common.render import render
+from tianxi_am.common.config import DEFAULT_PREFETCH_LIMIT, DEFAULT_WEIGHTS, RRF_K
+from tianxi_am.common.render import render_pair
 
 __all__ = [
     "BM25_MODEL",
@@ -106,14 +107,18 @@ class HybridParams:
     **已在 v1.17.0 上实测**：`rrf:{k:61}` 给出 `0.032786883 = 2/61`，默认给出 `0.5 = 1/2`。
 
     ⚠ `prefetch_limit` **不是**种子数（§10 的 20）、也**不是** Top-K（§2.2 的 100）——
-    它是"进入 RRF 融合的候选池"大小，**三个不同的量，不要混用**。初值 200。
+    它是"进入 RRF 融合的候选池"大小，**三个不同的量，不要混用**。
     """
 
-    prefetch_limit: int = 200
+    #: ⚠ 三个默认值**都引用 [`../common/config.py`](../common/config.py) 的单一来源**
+    #: （2026-09-25）——本目录**不决定**这些值（见 `store/CLAUDE.md`），这里只是给这个
+    #: dataclass 一个兜底，免得直接构造 `HybridParams()` 时又散出第二份字面量。
+    #: **正常路径上它们由 [`../service/app.py`](../service/app.py) 的装配从配置注入。**
+    prefetch_limit: int = DEFAULT_PREFETCH_LIMIT
     # 顺序与 §7.3 的 prefetch 顺序**一一对应**：先在 `prefetch` 里给 bm25 还是 dense，
     # 权重就得按同一顺序给。这里固定 (bm25, dense)。
-    weights: tuple[float, float] = (0.5, 0.5)
-    rrf_k: int = 61
+    weights: tuple[float, float] = DEFAULT_WEIGHTS
+    rrf_k: int = RRF_K
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +156,9 @@ class QdrantStore:
         collection: str = COLLECTION_DEFAULT,
         hybrid: HybridParams | None = None,
         api_key: str | None = None,
-        timeout: float = 60.0,
+        #: `QdrantClient` 的 `timeout` 只收 `int`（秒）——标成 `float` 会被 mypy 拦下，
+        #: 而"悄悄截断成整数秒"正是本项目要求响亮失败的那一类。
+        timeout: int = 60,
         client: QdrantClient | None = None,
     ) -> None:
         self._collection = collection
@@ -317,7 +324,7 @@ class QdrantStore:
         pairs: Iterable[Any],
         embedder: Any,
         *,
-        renderer: Any = render,
+        renderer: Any = render_pair,
         wait: bool = True,
     ) -> int:
         """**从 SQLite 全量重建**这条路（§6.3：Qdrant 是派生读存储）。
@@ -328,6 +335,13 @@ class QdrantStore:
 
         文本用 `renderer` 生成——**同一个渲染函数**既是 embedding 的输入，
         也是将来返回给 AML 的 `content`（§7.2 的同一份渲染）。
+
+        ⚠ **`renderer` 收的是"一个对"，不是 `(question, answer)` 两个值**（2026-09-25 改）。
+        因为渲染要用的第三个量是 `event_time`（T1 的日期前缀，§11.3 的对照臂）——
+        签名只给两个值的话，调用方**拿不到它**，于是索引侧只能自己拼一个日期口径，
+        而那正是"同一份渲染"被撕成两半的开始。默认值 `render_pair` 就是 v1 定稿口径
+        （不带日期）；要开 T1 的"带"臂由**上层**传
+        `functools.partial(render_pair, inject_abs_time=True)`。
 
         维度从 `embedder.dim` 取（**第一次调用之后才有值**，见 `embed/base.py`）。
         """
@@ -341,7 +355,7 @@ class QdrantStore:
                     session_id=pair.session_id,
                     pair_idx=pair.pair_idx,
                     event_time=pair.event_time,
-                    text=renderer(pair.question, pair.answer),
+                    text=renderer(pair),
                 )
             )
             if len(buffer) >= 64:

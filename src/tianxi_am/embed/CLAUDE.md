@@ -2,14 +2,19 @@
 
 **PRD**：§7.4（接口）、§7.2（缓存与索引/查询两侧）
 
-## 本模块的构成（**实现已存在**）
+## 本模块的构成
 
 ```text
-base.py               Embedder 协议
-text_embedding_v4.py  提交与本地评测用（§2.3 唯一允许的 embedding 模型）
-qwen3_embedding.py    开发期对照实验用（**不进提交链路**）
-query_instruction.py  查询侧 instruction 兼容层（**默认关**，见下"两侧的输入"）
+base.py               ✅ Embedder 协议（含 `OpenAICompatEmbedder` HTTP 基类）
+text_embedding_v4.py  ⬜ **未实现**——提交与本地评测用（§2.3 唯一允许的 embedding 模型）
+qwen3_embedding.py    ✅ 开发期对照实验用（**不进提交链路**）
+query_instruction.py  ✅ 查询侧 instruction 兼容层（**默认关**，见下"两侧的输入"）
 ```
+
+> ⚠ **`text_embedding_v4.py` 是提交链路的唯一 embedder，而它还不存在**（2026-09-25 核实）。
+> 这也正是 `base.py` 把 `OpenAICompatEmbedder` 抽成基类的原因——两个实现只差
+> `base_url` / `api_key` / `model`。**Step 5 切换时要补上它，别以为它已经在跑了**
+> （状态以根 [`CLAUDE.md`](../../../CLAUDE.md) 的模块表为准）。
 
 ## 接口（§7.4）
 

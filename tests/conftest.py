@@ -32,14 +32,13 @@ from tianxi_am.common.config import (
     SqliteConfig,
     StorageConfig,
 )
-from tianxi_am.common.render import render
+from tianxi_am.common.render import render_pair
 from tianxi_am.pairing.pairing import BatchLimits, Message
 from tianxi_am.retrieve import (
     DenseArm,
     EvidenceChecker,
     HybridRetriever,
     InMemoryCheckerInstrument,
-    make_hybrid_params,
 )
 from tianxi_am.service import build_services
 from tianxi_am.service.pipeline import AddPipeline, SearchPipeline
@@ -278,10 +277,10 @@ class FakeQdrantSearch:
         ids = self.by_user.get(user_id, [])
         return [ScoredMemoryId(mid, FUSED_SCORE) for mid in ids[:top_k]]
 
-    def index_pairs(self, pairs, embedder, *, renderer=render, wait=True) -> int:
+    def index_pairs(self, pairs, embedder, *, renderer=render_pair, wait=True) -> int:
         """Add 侧只需要这一件事：渲染 → 嵌入（走假 embedder）→ 记下 point。"""
         records = list(pairs)
-        texts = [renderer(p.question, p.answer) for p in records]
+        texts = [renderer(p) for p in records]
         embedder.encode(texts)
         for pair, text in zip(records, texts, strict=True):
             self.points[pair.id] = text
@@ -318,6 +317,27 @@ def wired(tmp_path) -> Iterator[Wired]:
     `AddPipeline` 用的是**真的** `Qwen3EmbeddingEmbedder`——HTTP 级的 `/add` 用例若走它，
     就会去打远程网关（违反"测试绝不调用远程模型"），而且**在没有网络时会响亮失败**。
     """
+    yield from _wire(tmp_path, inject_abs_time=False)
+
+
+@pytest.fixture
+def wired_dated(tmp_path) -> Iterator[Wired]:
+    """同 `wired`，但**开着 T1 的"带日期"渲染变体**（`packaging.inject_abs_time=True`）。
+
+    它存在是为了让"**T1 的两臂只差正文**"这件事可断言（§13 的开关纯度）——
+    那条断言要同时跑两臂并逐项比，所以两臂都得能就地造出来。
+
+    ⚠ **它用自己的子目录**：两臂若共用 `tmp_path`，它们会写**同一个 `tianxi.db`**，
+    于是第二个 `wired` 落种子时直接撞 `UNIQUE(user_id, session_id, pair_idx)`。
+    真实对照里两臂本来就该各有各的库与集合（见 `configs/CLAUDE.md` 的 `runs/`）。
+    """
+    own = tmp_path / "dated"
+    own.mkdir()
+    yield from _wire(own, inject_abs_time=True)
+
+
+def _wire(tmp_path, *, inject_abs_time: bool) -> Iterator[Wired]:
+    """`wired` / `wired_dated` 的**同一份**装配代码。**不要复制第二份。**"""
     config = AppConfig(
         # 不传 env ⇒ 不碰真实环境；只给必需的那几项，其余走 config.py 的内置默认值
         storage=StorageConfig(
@@ -333,7 +353,7 @@ def wired(tmp_path) -> Iterator[Wired]:
     qdrant = FakeQdrantSearch()
     embedder = FakeEmbedder(dim=8)
     instrument = InMemoryCheckerInstrument()
-    retriever = HybridRetriever(store=qdrant, dense=DenseArm(embedder), params=make_hybrid_params())
+    retriever = HybridRetriever(store=qdrant, dense=DenseArm(embedder))
     counter = FakeCounter()
     #: 预算**刻意给得极大**（字符计数下的 10 万），好让 `wired` 的用例测的是它自己
     #: 命名的那件事（契约形状 / 隔离 / 计数），而不是撞上预算提前停止。
@@ -346,9 +366,14 @@ def wired(tmp_path) -> Iterator[Wired]:
         checker=EvidenceChecker(instrument=instrument),
         counter=counter,
         budget_tokens=budget_tokens,
+        inject_abs_time=inject_abs_time,
     )
     services.add = AddPipeline(
-        store=services.store, qdrant=qdrant, embedder=embedder, locks=services.locks
+        store=services.store,
+        qdrant=qdrant,
+        embedder=embedder,
+        locks=services.locks,
+        inject_abs_time=inject_abs_time,
     )
     try:
         yield Wired(
@@ -365,31 +390,44 @@ def wired(tmp_path) -> Iterator[Wired]:
         services.close()
 
 
+def seed_pair_in(
+    store: SqliteStore,
+    pair_idx: int,
+    question: str | None = None,
+    answer: str | None = None,
+    *,
+    user_id: str = "u1",
+    session_id: str = "s1",
+    event_time: int | None = None,
+) -> str:
+    """落一个对，返回它的 canonical `memory_id`（位置派生，见 ① 的 ID 纪律）。
+
+    **全测试层唯一的一份**（2026-09-25 合并）：此前 `test_neighbor.py` 与
+    `test_reranker.py` 各自又写了一份几乎相同的 `_seed`，差异只在
+    "有没有 `event_time`"与"`question`/`answer` 能不能省"。这里取三者
+    **签名与行为的并集**，那两个文件改成 `from tests.conftest import seed_pair_in as _seed`
+    ⇒ **调用点一处都不用改**。
+
+    * `question` / `answer` 省掉时按 `q{pair_idx}` / `a{pair_idx}` 补
+    * `session_id` 可传——那两个文件要造"两个 session 各有一条候选"的形状
+    * `event_time` 可传——`test_contract.py` 要造"有/无时间戳"两条
+    """
+    with store.transaction() as conn:
+        pair = store.insert_pair(
+            conn,
+            user_id=user_id,
+            session_id=session_id,
+            pair_idx=pair_idx,
+            question=question if question is not None else f"q{pair_idx}",
+            answer=answer if answer is not None else f"a{pair_idx}",
+            status="complete",
+            event_time=event_time,
+            request_id="seed",
+        )
+    return pair.id
+
+
 @pytest.fixture
 def seed_pair() -> Callable[..., str]:
-    """落一个对，返回它的 canonical `memory_id`。"""
-
-    def _seed(
-        store: SqliteStore,
-        pair_idx: int,
-        question: str,
-        answer: str,
-        *,
-        user_id: str = "u1",
-        event_time: int | None = None,
-    ) -> str:
-        with store.transaction() as conn:
-            pair = store.insert_pair(
-                conn,
-                user_id=user_id,
-                session_id="s1",
-                pair_idx=pair_idx,
-                question=question,
-                answer=answer,
-                status="complete",
-                event_time=event_time,
-                request_id="seed",
-            )
-        return pair.id
-
-    return _seed
+    """`seed_pair_in` 的 fixture 形态——**同一份实现**，用它的测试就不必自己 import。"""
+    return seed_pair_in

@@ -32,10 +32,10 @@ ranked（已去重、已 rerank 的名次）
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, cast
 
 from tianxi_am.common.config import DEFAULT_EXPANSION_SEED_LIMIT, DEFAULT_RADIUS
-from tianxi_am.common.render import render, render_segment
+from tianxi_am.common.render import render, render_date, render_segment
 from tianxi_am.common.tokens import TokenCounter
 from tianxi_am.retrieve.fusion import Candidate
 from tianxi_am.store.sqlite_store import QaPair, SqliteStore
@@ -225,6 +225,7 @@ def merge_segments(
     selected: tuple[SelectedMemory, ...] | list[SelectedMemory],
     *,
     counter: TokenCounter,
+    inject_abs_time: bool = False,
 ) -> list[ContextSegment]:
     """把选中的记忆按"连续 `pair_idx`"合并成段，并按 `best_rank` 升序返回。
 
@@ -265,7 +266,13 @@ def merge_segments(
 
         for run in runs:
             segments.append(
-                _build_segment(run, user_id=user_id, session_id=session_id, counter=counter)
+                _build_segment(
+                    run,
+                    user_id=user_id,
+                    session_id=session_id,
+                    counter=counter,
+                    inject_abs_time=inject_abs_time,
+                )
             )
 
     # 段间按 best_rank 升序（= 相关性顺序，§11.2 的组间顺序）
@@ -279,6 +286,7 @@ def _build_segment(
     user_id: str,
     session_id: str,
     counter: TokenCounter,
+    inject_abs_time: bool = False,
 ) -> ContextSegment:
     """把一段连续的成员收成一个 `ContextSegment`（含渲染与计数）。"""
     # 锚点 = 段内**真实名次最好**的那条。邻居（rerank_rank is None）不参与。
@@ -288,10 +296,24 @@ def _build_segment(
     #    但 `radius` 是可配的、`selected` 也可能被别的调用方构造出来，所以这里**不假设**
     #    那个不变量：全是邻居时取会话顺序的第一条当锚点，而不是崩掉。
     ranked_members = [m for m in run if m.rerank_rank is not None]
-    anchor = min(ranked_members, key=lambda m: m.rerank_rank) if ranked_members else run[0]
+    # `cast` 不是装饰：上面的 filter 已经保证这里没有 None，但**类型系统看不出来**
+    # （lambda 的返回类型不会因为外层列表推导而收窄）。所以这行是"把已知的不变式
+    # 告诉 mypy"，不是"忽略一个真实的 None"。
+    anchor = (
+        min(ranked_members, key=lambda m: cast(int, m.rerank_rank)) if ranked_members else run[0]
+    )
     best_rank = anchor.rerank_rank if anchor.rerank_rank is not None else _NO_RANK
 
-    pair_texts = [render(m.pair.question, m.pair.answer) for m in run]
+    # ⚠ 逐对渲染，且**日期口径与索引侧、精排输入侧完全一致**（不变式 I1 / T1）：
+    #    `inject_abs_time` 由 `packaging.inject_abs_time` 传下来，三处读的是同一个值。
+    pair_texts = [
+        render(
+            m.pair.question,
+            m.pair.answer,
+            date=render_date(m.pair.event_time, inject_abs_time=inject_abs_time),
+        )
+        for m in run
+    ]
     content = render_segment(pair_texts)
 
     return ContextSegment(

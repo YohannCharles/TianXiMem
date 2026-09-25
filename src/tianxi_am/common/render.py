@@ -9,13 +9,16 @@
 [`../embed/`](../embed/) 不自己拼字符串，[`../rank/`](../rank/) 的 packaging 也不自己拼。
 
 **本模块不依赖任何业务层**（common/CLAUDE.md 的分层要求）——它只是
-`(question, answer) -> str` 的纯函数，**不认识 SQLite、不认识 Qdrant、不认识任何数据集**。
-调用方自己取 `pair.question` / `pair.answer` 传进来。
+`(question, answer) -> str` 的纯函数（附加一个可选的 `date`，见 §T1），
+**不认识 SQLite、不认识 Qdrant、不认识任何数据集**。
+调用方自己取 `pair.question` / `pair.answer` / `pair.event_time` 传进来。
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Final
 
 # ── 模板版本 ────────────────────────────────────────────────────────────
 # ⚠ 改模板【必须】同时改这个版本号：它会进 embedding 缓存的坐标系
@@ -39,7 +42,63 @@ QUESTION_ANSWER_SEP: str = "\n"
 SEGMENT_SEP: str = "\n"
 
 
-def render(question: str | None, answer: str | None) -> str:
+# ── 时间（T1 在正文前加日期时用的那一套）────────────────────────────────
+#: 日期格式：`YYYY-MM-DD`（§11.3 的示例是 `2026-07-26`）。
+#: ⚠ **不要用裸 Unix 毫秒**——渲染出来是 `- [1753512557000] ...`，对模型无意义。
+#: **`content` 的前缀与响应里的 `created_at` 必须是同一个格式**，否则 T1 测的
+#: 就不是"加不加日期"而是"加哪种日期"（两件事，混在一起就归因不了）。
+_DATE_FORMAT: Final[str] = "%Y-%m-%d"
+
+#: T1 的"带"臂在正文最前面加的那一段。**前缀形状只此一处**。
+DATE_PREFIX: Final[str] = "[{date}] "
+
+
+def day_granularity(event_time: int | None) -> str:
+    """Unix 毫秒 → `YYYY-MM-DD`（**UTC 口径**）；`None` → **空串 `""`**。
+
+    两个消费方：响应里的 `created_at`（[`../rank/packaging.py`](../rank/packaging.py)，
+    **始终**要给）与 T1 的 `content` 前缀（下面的 `render_date`，**默认**不给）。
+    **实现只此一处**——两处若各写一份格式，早晚会分叉。
+
+    * `event_time` 是**该对首条消息**的 timestamp（§6.1），可空
+    * **NULL 时发 `""`**（§11.3）：渲染代码是 `str(item.get("created_at") or "")`，
+      假值会退化成 `- {text}`——那是一条**有定义的降级路径**
+    * ⚠ **绝不拿 Add 的到达时间兜底**：那是"何时写入"而不是"何时发生"，
+      会给模型**错误信息**
+    * **只给到日粒度**：粒度会被模型看见，秒级会诱发它按秒级回答，从而踩中
+      "粒度变细"那条判负规则（§11.3）
+    * **时区固定 UTC、无旋钮**（2026-09-24 定）：契约没规定时区，而它必须与加载层
+      合成 `event_time` 时的口径一致——不一致会让日期整体偏一天，**且不报错**
+    """
+    if event_time is None:
+        return ""
+    return datetime.fromtimestamp(event_time / 1000, tz=UTC).strftime(_DATE_FORMAT)
+
+
+def render_date(event_time: int | None, *, inject_abs_time: bool) -> str:
+    """**T1 的开关落点**（`packaging.inject_abs_time`，config-reference §2）。
+
+    * `inject_abs_time=False`（**v1 定稿，默认**）⇒ `""`：正文里**没有任何绝对时间**
+      （§11.3 的两条独立机制）
+    * `True` ⇒ 日粒度日期串，`render()` 把它作为前缀加在正文前
+
+    ⚠ **它只是个"取不取那个串"的开关，不改变日期口径**——口径只有 `day_granularity`
+    一处。把开关做成"换一种日期格式"会让 T1 的两臂同时在两个维度上不同。
+    """
+    return day_granularity(event_time) if inject_abs_time else ""
+
+
+def template_version(*, inject_abs_time: bool) -> str:
+    """缓存坐标里的模板标识（`embed/base.EmbeddingCoordinate.render_template`）。
+
+    **改模板必须换版本号**（见 `TEMPLATE_VERSION` 的注释）。T1 的"带"臂改的正是正文
+    ⇒ 它的坐标必须与"不带"臂**不同**，否则两臂的向量会互相静默复用——
+    而"缓存命中了另一臂的向量"在结果里看不出来（§7.2 / §12.1 R1）。
+    """
+    return f"{TEMPLATE_VERSION}+abs_time" if inject_abs_time else TEMPLATE_VERSION
+
+
+def render(question: str | None, answer: str | None, *, date: str = "") -> str:
     """把一个 QA 对渲染成最终文本。**这是唯一一处拼装。**
 
     规则（rank/CLAUDE.md §4 = 渲染规则的唯一出处）：
@@ -53,16 +112,44 @@ def render(question: str | None, answer: str | None) -> str:
     返回值**首尾无空白**：AML 只做 `"\\n".join(...)` 拼接、不插分隔符，
     任何一项首尾留白都会让拼接处粘连（§11.3"content 必须自定界"）。
 
-    ⚠ **不注入任何时间戳**。§11.3 有两条**互相独立**的机制都指向"不要注入绝对时间"，
-    而答案 prompt 第 7 条**却要求**转换相对时间——所以加绝对时间戳可能反而有害。
-    时间信息由 `event_time` 列负责筛选，正文只保留原始表述。
+    ⚠ **默认不注入任何时间戳**（`date=""`，v1 定稿）。§11.3 有两条**互相独立**的机制
+    都指向"不要注入绝对时间"，而答案 prompt 第 7 条**却要求**转换相对时间——
+    所以加绝对时间戳可能反而有害。时间信息由 `event_time` 列负责筛选，正文只保留原始表述。
+
+    `date` 非空时在**正文最前面**加 `[date] `（T1 的"带"臂）。它由 `render_date()`
+    决定取不取，**三个调用点用同一个口径**（索引侧 / 精排输入侧 / content 侧）——
+    这正是不变式 I1：三处渲染不同，就会变成"命中的是另一个版本"，而**这种漂移不报错**。
+
+    ⚠ 空文本**不加前缀**：一个只有日期的 `content` 会让模型读到一条不存在的记忆。
     """
     lines: list[str] = []
     if question:
         lines.append(f"{QUESTION_PREFIX}{question}")
     if answer:
         lines.append(f"{ANSWER_PREFIX}{answer}")
-    return QUESTION_ANSWER_SEP.join(lines).strip()
+    text = QUESTION_ANSWER_SEP.join(lines).strip()
+    if not text or not date:
+        return text
+    return DATE_PREFIX.format(date=date) + text
+
+
+def render_pair(pair: object, *, inject_abs_time: bool = False) -> str:
+    """**一个 QA 对（鸭子类型）→ 它的渲染文本**——索引侧与 Search 侧的**唯一入口**。
+
+    它存在的理由是那三个调用点（索引 / 精排输入 / content）必须**一字不差地**用同一条
+    渲染路径：分散成三处 `render(p.question, p.answer, date=...)` 之后，日期口径只要
+    有一处取错（比如拿 Add 的到达时间兜底），"命中的是什么"与"模型读到的是什么"
+    就分叉了——**而分叉不报错**（不变式 I1）。
+
+    只要求对象有 `question` / `answer` / `event_time` 三个属性
+    （[`../store/qdrant_store.py`](../store/qdrant_store.py) 的 `index_pairs` 本来就是这个立场：
+    "像 QA 对一样可读"，不要求是哪一类对象）。
+    """
+    return render(
+        getattr(pair, "question", None),
+        getattr(pair, "answer", None),
+        date=render_date(getattr(pair, "event_time", None), inject_abs_time=inject_abs_time),
+    )
 
 
 def render_segment(pair_texts: Sequence[str]) -> str:
@@ -81,10 +168,15 @@ def render_segment(pair_texts: Sequence[str]) -> str:
 
 __all__ = [
     "ANSWER_PREFIX",
+    "DATE_PREFIX",
     "QUESTION_ANSWER_SEP",
     "QUESTION_PREFIX",
     "SEGMENT_SEP",
     "TEMPLATE_VERSION",
+    "day_granularity",
     "render",
+    "render_date",
+    "render_pair",
     "render_segment",
+    "template_version",
 ]

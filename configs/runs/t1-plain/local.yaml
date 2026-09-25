@@ -1,0 +1,11 @@
+# T1 臂 `t1-plain` 的冻结配置（§13 的配置指纹）——**由 t1_timestamp.py --freeze 生成**
+# 冻结时刻：2026-09-25T02:36:30Z（UTC）· 基线 `configs/default.yaml` 的 sha256[:16] = 876cc05f76c374db
+# 本臂相对基线**只动两件事**：
+#   packaging.inject_abs_time = false   （正文不带日期前缀）
+#   storage.qdrant.collection = memories_t1_plain   （两臂的向量不同，必须分集合）
+# ⚠ 冻结之后 `configs/*.yaml` 再改**不影响本臂**——这正是 §13 要的可追溯性。
+packaging:
+  inject_abs_time: false
+storage:
+  qdrant:
+    collection: memories_t1_plain

@@ -313,7 +313,10 @@ def plan_batch(
             open_draft.parts.append(message)
 
     resume: ResumeActions | None = None
-    if db_draft is not None:
+    # ⚠ `open_pair_id is not None` 与 `db_draft is not None` **恒等价**——`db_draft` 正是由
+    #   它构造出来的（见上）。写出来不是多一层判断，而是把"有既有对 ⇒ 有它的 id"
+    #   这条不变式放到类型层可见的地方。
+    if db_draft is not None and open_pair_id is not None:
         # 既有对被 3b 关闭时，最后一带是本批新建的对，状态已经归它了；
         # 没被关闭（纯接续批，或只续写了它的 question）时，最后一带就是它自己，由 3d 定状态。
         resume = ResumeActions(

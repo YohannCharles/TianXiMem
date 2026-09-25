@@ -45,9 +45,8 @@ from typing import Final
 
 from tianxi_am.common.config import ConfigError, load_config
 from tianxi_am.common.render import render
-from tianxi_am.pairing.pairing import Message  # noqa: F401  （占位说明见下）
 from tianxi_am.rank import RemoteReranker, RerankUnavailable
-from tianxi_am.retrieve import DenseArm, EvidenceChecker, HybridRetriever, make_hybrid_params
+from tianxi_am.retrieve import DenseArm, EvidenceChecker, HybridRetriever
 from tianxi_am.service.app import build_reranker
 from tianxi_am.service.pipeline import SearchPipeline
 from tianxi_am.store.qdrant_store import ScoredMemoryId
@@ -160,7 +159,6 @@ def _build_pipeline(
         retriever=HybridRetriever(
             store=qdrant,  # type: ignore[arg-type]
             dense=DenseArm(_StubEmbedder()),
-            params=make_hybrid_params(),
         ),
         checker=EvidenceChecker(),
         counter=_CharCounter(),

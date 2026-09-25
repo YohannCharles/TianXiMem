@@ -216,7 +216,15 @@ ORDER BY pair_idx;
 
 **本目录不自己拼字符串**，调 [`../common/`](../common/)。
 
-### 渲染模板（v1 初值，Step 3 定稿）—— **本节是模板的唯一声明处**
+### 渲染模板（**v1 定稿**，2026-09-25）—— **本节是模板的唯一声明处**
+
+> ✅ **定稿决定**：模板就是下面这两行，**正文里不含任何绝对时间戳**（§11.3 的两条独立机制）。
+> 实现是 [`../common/render.py`](../common/render.py) 的 `render()`；三个调用点
+> （索引侧 / 精排输入 / `content`）都走 **`render_pair()`**——它是"一个对 → 它的文本"的唯一入口，
+> 免得三处各拼一次日期口径（那正是不变式 I1 被撕开的开始）。
+> **T1 的"带日期"臂**由 `packaging.inject_abs_time` 开（默认 `false`，见
+> [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §2），
+> 两臂**必须分集合**跑。
 
 ```text
 Q: {question}

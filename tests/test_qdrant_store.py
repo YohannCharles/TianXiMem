@@ -13,7 +13,7 @@ import uuid
 import pytest
 from tests.conftest import FakeEmbedder, rd, unit_vector
 
-from tianxi_am.common.render import render
+from tianxi_am.common.render import render_pair
 from tianxi_am.store.qdrant_store import (
     BM25_MODEL,
     COLLECTION_DEFAULT,
@@ -463,13 +463,13 @@ def test_rebuild_from_sqlite_reproduces_search(store, make_store, emb: FakeEmbed
     assert len(pairs) == 2, "① 落库的对数不是预期的 2"
 
     # 预设两条渲染文本的 dense 向量：一条与查询完全一致、另一条正交 ⇒ 两路都不并列
-    texts = [render(p.question, p.answer) for p in pairs]
+    texts = [render_pair(p) for p in pairs]
     emb.preset(texts[0], unit_vector(DIM, 0))
     emb.preset(texts[1], ORTHOGONAL)
 
     qstore = make_store(hybrid=HybridParams(prefetch_limit=10, weights=(1.0, 1.0), rrf_k=61))
 
-    first = qstore.index_pairs(pairs, emb, renderer=render)
+    first = qstore.index_pairs(pairs, emb)
     assert first == len(pairs)
     before = {h.memory_id: h.score for h in _search(qstore, "u1", "alpha beta 0")}
     assert before, "重建前就查不到东西"
@@ -477,7 +477,7 @@ def test_rebuild_from_sqlite_reproduces_search(store, make_store, emb: FakeEmbed
     # 全量重建
     qstore.drop_collection()
     assert not qstore.exists()
-    again = qstore.index_pairs(pairs, emb, renderer=render)
+    again = qstore.index_pairs(pairs, emb)
 
     after = {h.memory_id: h.score for h in _search(qstore, "u1", "alpha beta 0")}
     assert again == first
@@ -527,10 +527,10 @@ def test_index_pairs_renders_through_common_render(store, make_store, emb: FakeE
     )
     qstore = make_store()
     pairs = rd(store, store.iter_pairs, user_id="u1")
-    qstore.index_pairs(pairs, emb, renderer=render)
+    qstore.index_pairs(pairs, emb)
 
     assert emb.encoded_texts() == ["Q: 问题\nA: [assistant] 回答"]
-    assert emb.encoded_texts() == [render(pairs[0].question, pairs[0].answer)]
+    assert emb.encoded_texts() == [render_pair(pairs[0])]
 
 
 class _LazyClient:

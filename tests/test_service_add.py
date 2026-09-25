@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 import pytest
 from tests.conftest import FakeEmbedder, rd, run_parallel
 
-from tianxi_am.common.render import render
+from tianxi_am.common.render import render_pair
 from tianxi_am.pairing import AddBatch
 from tianxi_am.pairing.pairing import Message
 from tianxi_am.service.locks import SessionLocks, SessionLockTimeout
@@ -48,12 +48,14 @@ class _FakeQdrant:
     overlap: _Overlap | None = None
     hold_s: float = 0.0
 
-    def index_pairs(self, pairs: Iterable[object], embedder: object, *, renderer=render, wait=True):
+    def index_pairs(
+        self, pairs: Iterable[object], embedder: object, *, renderer=render_pair, wait=True
+    ):
         index = list(pairs)
         if self.fail_next > 0:
             self.fail_next -= 1
             raise RuntimeError("模拟 Qdrant/embedding 失败")
-        texts = [renderer(p.question, p.answer) for p in index]  # type: ignore[attr-defined]
+        texts = [renderer(p) for p in index]
         embedder.encode(texts)  # type: ignore[attr-defined]
         if self.overlap is not None:
             with self.overlap.enter():
@@ -149,7 +151,7 @@ def test_add_writes_both_sqlite_and_qdrant(
 
     pairs = _pairs(store)
     assert len(pairs) == 1
-    assert qdrant.points == {pairs[0].id: render(pairs[0].question, pairs[0].answer)}
+    assert qdrant.points == {pairs[0].id: render_pair(pairs[0])}
 
 
 def test_add_indexes_only_what_the_batch_touched(
@@ -309,10 +311,10 @@ def test_different_sessions_do_not_block_each_other(
     barrier = threading.Barrier(2, timeout=5)
     original = qdrant.index_pairs
 
-    def index_pairs(pairs, emb, *, renderer=render, wait=True):  # noqa: ANN001, ANN202
+    def index_pairs(pairs, emb, *, renderer=render_pair, wait=True):  # noqa: ANN001, ANN202
         with overlap.enter():
             barrier.wait()
-            return original(pairs, emb, renderer=render, wait=wait)
+            return original(pairs, emb, renderer=renderer, wait=wait)
 
     qdrant.index_pairs = index_pairs  # type: ignore[method-assign]
     pipeline = AddPipeline(store=store, qdrant=qdrant, embedder=embedder, locks=locks)
@@ -335,9 +337,9 @@ def test_different_users_do_not_block_each_other(
     barrier = threading.Barrier(2, timeout=5)
     original = qdrant.index_pairs
 
-    def index_pairs(pairs, emb, *, renderer=render, wait=True):  # noqa: ANN001, ANN202
+    def index_pairs(pairs, emb, *, renderer=render_pair, wait=True):  # noqa: ANN001, ANN202
         barrier.wait()
-        return original(pairs, emb, renderer=render, wait=wait)
+        return original(pairs, emb, renderer=renderer, wait=wait)
 
     qdrant.index_pairs = index_pairs  # type: ignore[method-assign]
     pipeline = AddPipeline(store=store, qdrant=qdrant, embedder=embedder, locks=locks)

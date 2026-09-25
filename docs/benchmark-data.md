@@ -94,7 +94,32 @@ pipeline_v2_personamem.py      PersonaMem v2
 >
 > **处置（D12 后已简化）**：**不要在仓库外创建它**。把它放在仓库内、由 harness 在 subprocess 里注入 `PYTHONPATH`——
 > `sys.path.insert(0, <不存在路径>)` 只是塞进一个没有该模块的条目，import 会继续往后找到 `PYTHONPATH` 里的那份。
-> 好处：归档保持只读、`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。细则见 [`../eval/harness/CLAUDE.md`](../eval/harness/CLAUDE.md)。
+> 好处：`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。细则见 [`../eval/harness/CLAUDE.md`](../eval/harness/CLAUDE.md)。
+
+### ⚠ 本地修订：这 7 份**不再逐字节等于上游**（2026-09-25）
+
+**已核实**：上游钉住的那个 revision 上，7 个 pipeline 的 `answer` / `evaluate` 第一步就崩——
+
+```python
+async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="utf-8") as handle:
+```
+
+`pathlib.Path.open()` 给的 `TextIOWrapper` **没有异步上下文协议** ⇒ `TypeError`，
+**7 个文件、12 处**，全都跑不起来。拉上游原始字节比对过：**不是我们取错了文件**。
+
+**处置（团队决定）**：**就地修订 + 记成已声明的偏离**。修法只有一处机械替换——
+`contextlib.nullcontext(...)` 包住那个 `open(...)`（该函数同时支持同步与异步协议），
+外加补一行 `import contextlib`。**不碰任何 prompt、不碰任何判分逻辑。**
+
+| 事实 | 记在哪 |
+| --- | --- |
+| 修了哪 7 个文件、各几处、上游哈希是多少 | [`../tools/fetch_benchmark_data.py`](../tools/fetch_benchmark_data.py) 清单的 `local_patch` / `upstream_sha256` |
+| 补丁**恰好只做那一处替换**（排除了"顺手改了别的"） | [`../tests/test_benchmark_archive.py`](../tests/test_benchmark_archive.py) |
+| 重取时自动重打补丁 | `make fetch-data`（下载 → 校上游哈希 → 打补丁 → 校本地哈希）；网络不通时 `--patch` 就地打 |
+| 校验 | `make data-check`（校的是**打完补丁**的本地哈希） |
+
+⇒ **「契约以 pipeline 代码为准」这条仍然成立，但以后要带着这个星号读**：prompt 与判分逻辑与上游逐字相同，
+差的是文件句柄那处语法。
 
 ---
 

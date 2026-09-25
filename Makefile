@@ -1,7 +1,8 @@
 # TianXi_AM — 常用命令入口
 #
-# 已经能真跑：`sync` / `lock` / `fmt` / `lint` / `test` / `check` / `serve` /
-#            `contract-check` / `qdrant-up` / `qdrant-down` / `data-check` / `fetch-data`。
+# 已经能真跑：`sync` / `lock` / `fmt` / `lint` / `typecheck` / `test` / `check` / `serve` /
+#            `contract-check` / `probe-reranker` / `eval` / `t1` / `t2` / `t2-dump` /
+#            `qdrant-up` / `qdrant-down` / `data-check` / `fetch-data`。
 # 其余目标仍指向尚未存在的模块，先以 echo 占位——**别让它们静默成功**，
 # 否则会误以为某一步已经实现。Step 0 / Step 1 起逐个替换为真命令。
 #
@@ -17,9 +18,12 @@
 #   显式带 `--env-file`——它也刻意**不依赖配置层**（配置层坏了它还得能跑）。
 ENV_FILE ?= .env
 
-.PHONY: help sync check fmt lint test qdrant-up qdrant-down serve contract-check probe-reranker \
-        smoke t2 clean \
-        fetch-data data-check
+# 跑评测时的数据集（`make eval`）。**只有两个计分数据集有加载器**（§12.4）。
+DATASET ?= locomo-refined
+
+.PHONY: help sync check fmt lint typecheck test qdrant-up qdrant-down serve contract-check probe-reranker \
+        eval t1 t2 t2-dump smoke clean \
+        fetch-data data-check data-patch
 
 help:  ## 列出所有目标
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -35,11 +39,25 @@ lock:  ## 生成/更新 uv.lock
 fmt:  ## 格式化
 	uv run ruff format .
 
-lint:  ## 静态检查
+lint: typecheck  ## 静态检查（ruff 全仓 + mypy 只查 src/）
 	uv run ruff check .
 
-data-check:  ## 校验 benchmark_data/ 与出处清单是否逐字节一致
+# ⚠ **只查 `src/`，不查 `eval/` `tests/` `tools/`**（2026-09-25 定）：后三者现在有
+#   19 处存量报错（`conftest.py` 的 sys.path 形状、测试里的 float timeout 等），
+#   一起纳入等于新门禁一上来就是红的，而"永远是红的门禁"与"没有门禁"是同一个东西。
+#   ⇒ 先钉住**唯一进提交链路**的 `src/`；要扩到其余目录时，先清完那 19 处再改这一行。
+typecheck:  ## 类型检查（mypy）
+	uv run mypy src
+
+data-check:  ## 校验 benchmark_data/ 与出处清单是否逐字节一致（**含本地修订后的哈希**）
 	python3 tools/fetch_benchmark_data.py --check
+# ⚠ 清单里记两套哈希：`upstream_sha256`（上游原始字节）与 `sha256`（本地归档，打完补丁）。
+#    7 个 pipeline 有一处**已声明的本地修订**（上游那份跑不起来），见 docs/benchmark-data.md。
+
+data-patch:  ## 把已声明的本地修订就地打到归档上（**不下载**，网络不通时用这个）
+	python3 tools/fetch_benchmark_data.py --patch
+# ⚠ 它只做清单里声明的那一处替换（`contextlib.nullcontext` 包住 `Path.open`），
+#    且**幂等**——已经打过的再跑是零处改动。tests/test_benchmark_archive.py 钉住了这条。
 
 fetch-data:  ## 取回 benchmark_data/ 归档（公开源，按 commit / 哈希钉死）
 	python3 tools/fetch_benchmark_data.py --fetch
@@ -91,10 +109,30 @@ probe-reranker:  ## 精排探针：打真网关，验连通性 + 它在链上真
 # ⚠ **顺序有没有变不影响退出码**——那是信息，不是判据（一个诚实但保守的 reranker
 #    完全可能给出与 RRF 相同的顺序）。
 
-t2:  ## §13 的 T2 实验：跨 session 失败归因（半天工作量）
-	@echo "TODO(Step 1): 133 道 multi-session 题（含 12 道拒答题单列）"
-	@echo "  → 人工分三类：没召回 / 召回但被截断 / 在里面但排序靠后"
-	@false
+eval:  ## 跑一轮代理评测（§13）：DATASET / ARGS 可覆盖
+	uv run --env-file $(ENV_FILE) python -m eval.experiments.run --dataset $(DATASET) $(ARGS)
+# ⚠ **需要服务在跑**（`make serve`）——runner 打 HTTP、不 import `src/`（eval/CLAUDE.md 的边界）。
+#   连不上服务时退出码 2，并提示去起服务（不是"跑失败"）。
+# ⚠ `--env-file` **不是多余的**：裁判那一步起的是 subprocess，它只继承环境变量，而
+#   `.env` 是 `common/config.py` 自己读的。少了它 → Add/Search 全跑完、**裁判才炸**。
+#   缺哪个名字会在跑之前直说（退出码 2）。
+# ⚠ 缺 `--embedder` 时 run record 的模型指纹会写"未声明"——**R1 要求记下换没换模型**，
+#   所以想留下可比记录就设 `TIANXI_EMBED_MODEL`（或 `ARGS='--embedder ...'`）。
+# ⚠ 冒烟用 `ARGS='--limit 3'`；**截断跑会在数据指纹的 note 里留警示**，别拿它跟全量比。
+
+t1:  ## §13 的 T1 实验：时间戳前缀 带/不带（**改渲染 = 重建索引**）
+	uv run --env-file $(ENV_FILE) python -m eval.experiments.t1_timestamp
+# 两个臂各需**独立集合**（渲染不同 ⇒ 向量不同），见该脚本顶部。
+
+t2:  ## §13 的 T2 实验：跨 session 失败归因（汇总人工标注，机器半边见 t2-dump）
+	uv run python -m eval.experiments.t2_cross_session
+# 产出的是**待填的标注表**的汇总——三类由人填，脚本拒绝代填（半张表的分布更危险）。
+
+t2-dump:  ## T2 的机器半边：133 道 multi-session 题的纯 BM25 名次 → 待填表
+	uv run python tools/t2_retrieval_dump.py
+# ⚠ 它**直查 Qdrant**（纯 BM25 单路），不走服务：D15 之后服务只有混合检索一种形态，
+#    给服务加单路查询是 roadmap 里登记过但未实现的切片（本实验不需要它）。
+# ⚠ 前提：语料已经喂进去了（`make eval` 跑过同一批题）。
 
 smoke:  ## S1 判别实验（§17.1）——Smoke 跑通后第一件事
 	@echo "TODO(Step 6): 加一条只有它能回答的记忆，看分数是否变化"

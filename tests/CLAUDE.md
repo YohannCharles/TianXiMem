@@ -12,13 +12,19 @@ test_contract.py        §2.1 / §2.2 契约形状与计数（含真 HTTP 往返
 test_contract_preflight.py  `eval/smoke/preflight.py` 的静态一致性与**检查是否真会失败**
 test_isolation.py       §2.2 user_id 隔离
 test_render.py          §7.2 / §11.3 同一份渲染
-test_switch_purity.py   §13 开关只影响它命名的那一件事
 test_store.py           §6.1 / §6.3 DDL、连续性与索引、**连接生命周期与并发**
 test_config.py          §15 配置唯一入口（**AST 静态断言** + 校验 + `.env` 读取）
 test_neighbor.py        §10 / §11.2 扩窗 + 段合并（**24 条清单的主体**）
 test_packaging.py       §11.3 段级打包 + 双预算（段进来之后的事）
 test_reranker.py        §11.2 远端精排：线格式、降级、两个计数器、装配（**不发真请求**）
 ```
+
+> ⚠ **§13 的开关纯度没有独立文件**（2026-09-25 核实）。断言住在**各自开关所在的模块**里：
+> `test_reranker.py` 的 `test_candidate_set_is_unchanged_by_rerank`（关掉精排后 **id 集合一个不多一个不少**）
+> 与 `test_rerank_does_not_touch_the_token_budget`，
+> `test_neighbor.py` 的 `test_neighbors_do_not_change_segment_priority`（`radius=0` 与 `=1` 对比，段的 `best_rank` 与锚点一字不变）。
+> **要另立一个横跨各模块的纯度文件，先解决"`neighbor.enabled` 还没接线"**——断言只能写在
+> **真能关的开关**上（清单见本文件 §五末）。断言的规矩见 §五。
 
 ---
 

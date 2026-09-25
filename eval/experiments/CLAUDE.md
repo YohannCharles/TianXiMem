@@ -5,11 +5,19 @@
 ## 要写什么
 
 ```text
-run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告
-a3_rerank.py          A3 Rerank 开/关
-a4_agent.py           A4a 门控 / A4b always-on
-t1_timestamp.py       T1 时间戳前缀 带/不带
-t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）
+run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告      ✅ 2026-09-25
+t1_timestamp.py       T1 时间戳前缀 带/不带（两臂冻结快照）        ✅ 2026-09-25（**两臂未跑**）
+t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）  🟡 汇总半边已就位；标注待人工
+a3_rerank.py          A3 Rerank 开/关                            ⬜
+a4_agent.py           A4a 门控 / A4b always-on                    ⬜（v1 没有 agent，见 D13）
+```
+
+**跑一轮**（runner 打 HTTP，服务得先起着）：
+
+```bash
+make serve                    # 另一个终端；TIANXI_PROFILE=local 时用 memories_dev 集合
+make eval                     # = DATASET=locomo-refined；ARGS='--limit 3 --skip-ingest' 可冒烟
+make eval DATASET=longmemeval-s
 ```
 
 > **纯 BM25 检索是本目录的 T2 手段**（见下），**不是一条被评分的 arm**——检索只有混合一种形态，参照点由**混合主路径自身**承担（§13）。

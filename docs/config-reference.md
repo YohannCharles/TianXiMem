@@ -101,6 +101,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `neighbor` | 不扩窗 | —— | **种子集合不变** | §10 | ⬜（只能关 `radius`） |
 | `rerank` | 直接用融合名次 | —— | **候选数量不变**（只是顺序变了） | §11.2 | ✅ `rerank.enabled` |
 | `packaging` | 不做打包策略 | —— | —— | §11.3 |
+| **T1** | 正文**不带**日期前缀（= v1 定稿口径） | —— | **名次 / 段数 / `created_at` / `score` 全不变**（只有 `content` 多一段 `[YYYY-MM-DD] `） | §11.3 | ✅ `packaging.inject_abs_time` |
 | `agent` | 一律不走 Agentic Search | `checker`（门控时） | **打包顺序不变**（只是候选少了 agent 补的那部分） | §9 |
 
 > **最后一列是 §13 的纯度规则**：**开关必须只影响它命名的那一件事。** 否则对照不成立——**而结果看起来完全正常，只是结论错了**。
@@ -234,14 +235,14 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
-| `rerank.enabled` | `true` | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`） |
+| `rerank.enabled` | **`false`**（2026-09-25 起） | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。⚠ **默认关掉是团队决定**：100 篇/题 5–12s 且抖动大，而本地跑题是串行的 ⇒ 直接影响迭代速度。**它值不值是 A3 要回答的**（两臂快照 `configs/runs/a3-{on,off}/`），**别拿默认值当结论** |
 | `rerank.timeout_seconds` | **30.0** | **C 类**。实测 100 篇 ≈ 2.2s、200 篇 ≈ 5.3s ⇒ 约 10 倍余量。**太紧 ⇒ 伪降级**（网关排队被报成"reranker 坏了"）；**太松 ⇒ Search 被拖住** |
 | `TIANXI_RERANKER_BASE_URL` | `https://memory.021130.xyz/v1` | **env**。主网关（**不是 memory2**，D18） |
 | `TIANXI_RERANKER_API_KEY` | —— | **env**。与 `AML_EMB_*` 是同 host、不同 key |
 | `TIANXI_RERANKER_MODEL` | `Qwen3-Reranker-4B` | **env**。⚠ 端点是**忽略**它的（实测），它只进 run record 的指纹。**提交时不得更换**（D12） |
 | `packaging.render_template` | `Q:/A:` | **"贵"消融项**：改它等于改变 embedding 输入，**整个向量索引要重建**。唯一实现是 `common/render.py` |
 | `packaging.role_prefix` | `[assistant]` 等标记 | 一个对里有多条非 user 消息时每条带 role 标记 |
-| `packaging.inject_abs_time` | **`false`** | 见 §9 |
+| `packaging.inject_abs_time` | **`false`** | ✅ **已接线（2026-09-25）**：它是 §2 表里 **T1** 的开关。`true` ⇒ 每对正文前加 `[YYYY-MM-DD] `（与 `created_at` 同一个格式、同一个 `event_time`）。⚠ **"贵"消融项**：正文改了 embedding 输入也改 ⇒ **两臂必须跑在两个集合上**。见 §9 |
 | `packaging.created_at_granularity` | `day` | **只给到日粒度**，且**固定 UTC、无旋钮** |
 | `packaging.score_mode` | `reciprocal_rank` | `1/(rank+1)`，**按输出位置**、**不是**原始 RRF 分数 |
 | `budget.max_tokens` | **117,760** | ⛔ **A 类**（AML 定的答案窗口余量）。**已落地**（2026-09-24） |

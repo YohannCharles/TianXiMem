@@ -30,10 +30,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Final
 
-from tianxi_am.common.render import SEGMENT_SEP
+from tianxi_am.common.render import SEGMENT_SEP, day_granularity
 from tianxi_am.common.tokens import TokenCounter
 from tianxi_am.rank.neighbor import ContextSegment
 
@@ -58,27 +57,12 @@ __all__ = [
 #:
 #: ⚠ **刻意不做成配置项**：一个"可以随手改的 `created_at_tz`"会与加载层脱钩——
 #: 改了它，日期整体偏一天，而**没有任何东西会报错**。
+#:
+#: ⚠ 它的执行值是 [`common/render.py`](../common/render.py) 的 `day_granularity`
+#: （2026-09-25 从本文件搬过去）：**T1 的 `content` 前缀要用同一个格式**，
+#: 而两处各写一份格式早晚会分叉（那时 T1 测的就不是"加不加日期"了）。
+#: 本文件只**转出**这个名字，`packaging.day_granularity` 这个路径保持可用。
 UTC_ONLY: Final[str] = "UTC"
-
-#: 日期格式：`YYYY-MM-DD`（§11.3 的示例是 `2026-07-26`）。
-#: ⚠ **不要用裸 Unix 毫秒**——渲染出来是 `- [1753512557000] ...`，对模型无意义。
-_DATE_FORMAT: Final[str] = "%Y-%m-%d"
-
-
-def day_granularity(event_time: int | None) -> str:
-    """Unix 毫秒 → `YYYY-MM-DD`（**UTC 口径**）；`None` → **空串 `""`**。
-
-    * `event_time` 是**该对首条消息**的 timestamp（§6.1），可空
-    * **NULL 时发 `""`**（§11.3）：渲染代码是 `str(item.get("created_at") or "")`，
-      假值会退化成 `- {text}`——那是一条**有定义的降级路径**
-    * ⚠ **绝不拿 Add 的到达时间兜底**：那是"何时写入"而不是"何时发生"，
-      会给模型**错误信息**
-    * **只给到日粒度**：粒度会被模型看见，秒级会诱发它按秒级回答，从而踩中
-      "粒度变细"那条判负规则（§11.3）
-    """
-    if event_time is None:
-        return ""
-    return datetime.fromtimestamp(event_time / 1000, tz=UTC).strftime(_DATE_FORMAT)
 
 
 def placeholder_score(rank: int) -> float:

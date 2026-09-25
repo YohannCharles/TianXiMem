@@ -43,7 +43,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 import httpx
 import numpy as np
@@ -61,6 +61,17 @@ __all__ = [
     "OpenAICompatEmbedder",
     "to_float32",
 ]
+
+#: 缓存库连接上的 `busy_timeout`（毫秒，见 `DiskVectorCache._connect`）。
+#:
+#: ⚠ **与真源那条分开**（`storage.sqlite.busy_timeout_ms`）：两个**不同的库文件**、
+#: 两条独立的争用路径，绑成一个值只会在调其中一个时意外改到另一个。
+#: 取值与真源同档是因为面对的争用形状相同（WAL + 单写者）。
+#:
+#: ⚠ **它没有配置项，是有意的**（2026-09-25 从裸字面量提出来）：`config-reference.md`
+#: 的纪律是"收入配置的键必须有消费方"，而眼下没有任何调用方需要调它——
+#: **收一个没有消费方的键等于预留字段**。真要调时：加配置键 + 从这里改成注入。
+_CACHE_BUSY_TIMEOUT_MS: Final[int] = 5000
 
 
 class EmbeddingError(RuntimeError):
@@ -171,7 +182,7 @@ class DiskVectorCache:
         # 所以用 NORMAL（WAL 下不会损坏，最坏丢最后几个已提交条目）而不是 FULL——
         # 索引侧会成批写，每条都 fsync 的代价落在最热的路径上，不划算。
         conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute(f"PRAGMA busy_timeout = {_CACHE_BUSY_TIMEOUT_MS}")
         return conn
 
     def _init_schema(self) -> None:
@@ -352,10 +363,10 @@ class CachingEmbedder:
 
         out: list[list[float]] = []
         for text in texts:
-            vec = found.get(text)
-            if vec is None:  # pragma: no cover — 上面已保证填满
+            vector = found.get(text)
+            if vector is None:  # pragma: no cover — 上面已保证填满
                 raise EmbeddingError(f"内部错误：文本未取到向量（{text[:40]!r}…）")
-            out.append(vec)
+            out.append(vector)
         return out
 
 

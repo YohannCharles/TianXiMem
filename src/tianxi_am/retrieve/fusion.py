@@ -26,7 +26,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
+from tianxi_am.common.config import DEFAULT_PREFETCH_LIMIT, DEFAULT_WEIGHTS
 from tianxi_am.retrieve.bm25 import lexical_query
+from tianxi_am.retrieve.dense import DenseArm
 from tianxi_am.store.qdrant_store import HybridParams, QdrantStore
 
 __all__ = [
@@ -39,16 +41,18 @@ __all__ = [
     "make_hybrid_params",
 ]
 
-#: 每路进入 RRF 融合的候选池大小（§7.3 的 `N`）。
-#: ⚠ **不是**种子数（§10 的 20）、**不是** Top-K（§2.2 的 100）——三个不同的量。
-DEFAULT_PREFETCH_LIMIT: Final[int] = 200
-
-#: 权重初值（§7.3 的 `[w_bm25, w_dense]`，顺序与 `prefetch` 顺序一一对应）。
-#: **任何调整都必须有 ablation 数据支撑**——Qdrant 官方明确警告"无评测集时手调权重
-#: 不太可能稳定优于默认值"。
-DEFAULT_WEIGHTS: Final[tuple[float, float]] = (0.5, 0.5)
+#: ⚠ **`DEFAULT_PREFETCH_LIMIT` / `DEFAULT_WEIGHTS` 的初值住在
+#: [`../common/config.py`](../common/config.py)**（理由与 `DEFAULT_EXPANSION_SEED_LIMIT`
+#: 同一条：`retrieve/` 与 `store/` 都要用，而 `common/` 是最底层）。本模块**只 import**，
+#: 不再各写一份字面量——2026-09-25 前 `200` 与 `(0.5, 0.5)` 在全仓各有 4 份。
+#: §7.3 的两条注意事项（`prefetch_limit` **不是**种子数/Top-K；权重调整需 ablation 数据）
+#: 也写在那里，**不在这里重复**——重复描述就是漂移的开始。
 
 #: **正确性常量，不是可调项**（D5）。
+#:
+#: ⚠ 与 `common/config.py` 的 `RRF_K` **各有一份**，这是**有意的**：那边是配置层的拒绝依据，
+#: 这里是**策略层对直接调用方的防御**——不能只靠"配置层已经查过"。两处相等由
+#: `tests/test_config.py::test_rrf_k_is_the_same_constant_in_both_places` 钉住。
 RRF_K: Final[int] = 61
 
 
@@ -139,13 +143,26 @@ def dedup_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
 class HybridRetriever:
     """两路 `prefetch` → Weighted RRF 的**编排**。
 
-    它只做三件事：把查询交给 dense 那一路算一次向量、把参数交给 `store/` 执行、
-    把结果编上 0-based 名次。**不重排、不扩窗、不打包**——那些在 `rank/`。
+    它只做两件事：把查询交给 dense 那一路算一次向量、把结果编上 0-based 名次。
+    **不重排、不扩窗、不打包**——那些在 `rank/`。
+
+    ⚠ **融合参数（`prefetch_limit` / `weights` / `rrf_k`）不在本类里**（2026-09-25 修）：
+    它们由 [`make_hybrid_params`](#make_hybrid_params) 校验后，**在装配处注入 `QdrantStore`**
+    ——因为**执行**它们的是 `store/qdrant_store.hybrid_search()`。
+
+    这一段曾经是本类的一个 `params` 字段，但 `search()` **从没把它传给 store**，
+    而装配处也没给 `QdrantStore` 传 `hybrid=` ⇒ 改 yaml 里的 `retrieval.prefetch_limit` /
+    `rrf.weights` **静默无效**，只因 store 的默认值与 config 的默认值恰好相等而看不出来。
+    **别把那个字段加回来**——参数需要一个能被执行处读到的地方，而不是编排者手里。
+    回归用例：`tests/test_retrieve.py::test_build_services_forwards_retrieval_params_to_the_store`。
     """
 
     store: QdrantStore
-    dense: object  # 见 dense.py 的 DenseArm；用鸭子类型避免循环导入
-    params: HybridParams
+    #: ⚠ 这里**不需要**鸭子类型：[`dense.py`](./dense.py) 不 import 本模块（`Candidate`
+    #: 定义在本模块，依赖是单向的 `fusion → dense`），所以直接标注具体类型。
+    #: 曾经的 `dense: object` 让 `.encode_query()` 变成"`object` 上没有的属性"——
+    #: 接口断了也只在运行时才炸，而 mypy 连报都报不出来。
+    dense: DenseArm
 
     def search(self, *, user_id: str, query: str, top_k: int) -> list[Candidate]:
         """按 `top_k` 取候选。

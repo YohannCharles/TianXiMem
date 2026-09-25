@@ -44,6 +44,7 @@ from tianxi_am.common.config import (
     assert_single_process,
     load_config,
 )
+from tianxi_am.common.render import template_version
 from tianxi_am.common.tokens import load_counter
 from tianxi_am.embed.base import CachingEmbedder, DiskVectorCache, EmbeddingCoordinate
 from tianxi_am.embed.query_instruction import QueryInstructionEmbedder
@@ -107,9 +108,20 @@ def build_services(config: AppConfig) -> Services:
         config.storage.sqlite.path,
         busy_timeout_ms=config.storage.sqlite.busy_timeout_ms,
     )
+    # ⚠ 检索参数在**装配处注入 store**（2026-09-25 修）：`retrieve/` 负责校验与初值
+    #   （`make_hybrid_params`），`store/` 负责把它们翻成 Qdrant 语法并**执行**。
+    #   此前 `HybridRetriever` 自持一份 `params` 却从不传给 `store.hybrid_search()`，
+    #   这里也没传 `hybrid=` ⇒ yaml 里的 `retrieval.prefetch_limit` / `rrf.weights`
+    #   **静默无效**，只因 store 的默认值与 config 默认值恰好相等而看不出来。
+    #   回归用例见 `tests/test_retrieve.py` 里那条"参数必须到达 Qdrant"的用例。
     qdrant = QdrantStore(
         url=config.storage.qdrant.url,
         collection=config.storage.qdrant.collection,
+        hybrid=make_hybrid_params(
+            prefetch_limit=config.retrieval.prefetch_limit,
+            weights=config.retrieval.rrf.weights,
+            rrf_k=config.retrieval.rrf.k,
+        ),
     )
 
     inner = Qwen3EmbeddingEmbedder(
@@ -117,8 +129,16 @@ def build_services(config: AppConfig) -> Services:
         api_key=config.embed_api_key,
         model=config.models.embedder,
     )
-    # ⚠ 坐标系取【解析后】的模型名（见模块 docstring 第 2 条）
-    cache = DiskVectorCache(config.cache.embed.dir, EmbeddingCoordinate(model=inner.model))
+    # ⚠ 坐标系取【解析后】的模型名（见模块 docstring 第 2 条），**外加模板变体**：
+    #   T1 的"带日期"臂改了正文 ⇒ 它的坐标必须与"不带"臂不同，否则两臂的向量会
+    #   互相静默复用（`common/render.py` 的 `template_version`）。
+    cache = DiskVectorCache(
+        config.cache.embed.dir,
+        EmbeddingCoordinate(
+            model=inner.model,
+            render_template=template_version(inject_abs_time=config.packaging.inject_abs_time),
+        ),
+    )
     # ⚠ 顺序不能反：前缀层在缓存**之上**（模块 docstring 第 3 条）
     embedder = QueryInstructionEmbedder(
         CachingEmbedder(inner, cache),
@@ -142,19 +162,23 @@ def build_services(config: AppConfig) -> Services:
                 max_messages=config.pairing.batch_max_messages,
                 max_words=config.pairing.batch_max_words,
             ),
+            inject_abs_time=config.packaging.inject_abs_time,
         ),
         search=SearchPipeline(
             store=store,
             qdrant=qdrant,
-            retriever=HybridRetriever(
-                store=qdrant,
-                dense=dense,
-                params=make_hybrid_params(
-                    prefetch_limit=config.retrieval.prefetch_limit,
-                    weights=config.retrieval.rrf.weights,
-                    rrf_k=config.retrieval.rrf.k,
-                ),
-            ),
+            retriever=HybridRetriever(store=qdrant, dense=dense),
+            # ⚠ `EvidenceChecker()` **不带 instrument** ⇒ 落到 `NullCheckerInstrument`，
+            #   即**每轮判定被丢弃**。`AddPipeline` 那侧的 `PendingInstrument` 同理
+            #   （`continuation.py` 的默认值是 `NullPendingInstrument`）。
+            #
+            #   **这是刻意的，不是漏接**（2026-09-25 核实），两条理由：
+            #   · 真正的聚合口是 `observability/`，而它**尚未实现**（见根 `CLAUDE.md`）；
+            #   · 换成 `InMemory*` 会**无界增长**——Full run 要连跑 0.5–2 天（§2.2），
+            #     而且那串记录**没有任何读取方**，等于把内存当日志用。
+            #
+            #   ⇒ D13 的"**每轮判定必须记录**"（否则无法用数据回答 A4「agent 值不值」）
+            #   落在 `observability/` 落地的时候。**在那之前别把它当成已满足。**
             checker=EvidenceChecker(),
             # ⚠ 分词器**在这里就加载**（不是第一次请求时才加载）：它要联网取 BPE 文件
             #   （`common/tokens.py`），把失败暴露在**启动时**而不是某个用户的请求里。
@@ -163,6 +187,7 @@ def build_services(config: AppConfig) -> Services:
             seed_limit=config.neighbor.expansion_seed_limit,
             radius=config.neighbor.radius,
             reranker=build_reranker(config),
+            inject_abs_time=config.packaging.inject_abs_time,
         ),
     )
 

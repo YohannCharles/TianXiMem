@@ -35,6 +35,17 @@ uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000   # 打�
 `memories_preflight`，跑完 drop 掉。否则预检写进去的记忆会**永久留在 `memories_dev` 里**，
 污染之后的每一次检索——而那正是 `open-questions.md` **V9** 的形状。
 
+**4. 它不共用 [`../harness/driver.py`](../harness/driver.py) 的 `ServiceClient`。**
+两者都打 `/add` 与 `/search`，请求形状也确实长得一样——但**失败模型不同，不能硬合并**：
+`ServiceClient` 遇到契约违规**直接抛**（它服务一次 run，早失败早好）；本文件则把每条
+断言**收集成一份报告**、逐条 FAIL（它服务的是"把契约清单一次跑完、好知道**哪几条**坏了"）。
+合并后总有一方要拿到错的那半。
+
+> 这处重复**是可检测的**，不是静默风险：两边对线上形状的认知分别由
+> [`../../tests/test_harness.py`](../../tests/test_harness.py) 与
+> [`../../tests/test_contract_preflight.py`](../../tests/test_contract_preflight.py) 钉住，
+> 且任何一处漂了、真打服务时都会立刻红。
+
 ## 前置条件（不满足 ⇒ exit 2，不是"跳过"）
 
 | 条件 | 为什么必须 |

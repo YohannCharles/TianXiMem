@@ -10,10 +10,10 @@
 
 | 阶段 | 交付 | 状态 |
 | ---- | ---- | ---- |
-| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | 🟡 主体已建（加载层 + harness + 契约预检），**T2 未跑** |
-| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） | 🟡 `src/` 已落（存储 + 配对 + 检索 + 服务），**T2 未跑** |
+| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | 🟡 **runner 已就位（2026-09-25）**：加载层 + harness + 契约预检 + `experiments/run.py`；**还没真跑过一轮** |
+| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） | 🟡 `src/` 已落（存储 + 配对 + 检索 + 服务）；**T2 脚手架就位、人工标注未做** |
 | Step 2 | **Neighbor Expansion + 双预算截断** | ✅ **已完成（2026-09-24）** |
-| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 **rerank 已接 + 打包已落地**；**渲染模板定稿与 T1 未做** |
+| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 rerank 已接 + 打包已落地 + **渲染模板定稿（2026-09-25）**；**T1 脚手架就位、两臂未跑** |
 | Step 4 | Conditional Agentic Search | ⬜ |
 | **Step 5** | **切换到提交模型**，重标定全部阈值，重跑 T2 | ⬜ |
 | Step 6 | 对照实验（§13）+ Smoke 验证 + Full 定稿 | ⬜ |
@@ -88,7 +88,9 @@
 
 ### 数据侧
 
-- [ ] **数据加载层 + schema 落差预处理**（§12.3 第 9 条）——**不是"读个 JSON 就能跑"**。已核实的落差：
+- [x] **数据加载层 + schema 落差预处理**（§12.3 第 9 条）——✅ **已实现**（[`../eval/datasets/`](../eval/datasets/)，2026-09-24）：
+      `locomo.py` / `longmemeval.py` / `preprocess.py` / `registry.py` 四个模块 + `tests/test_datasets.py`。
+      落定的落差（**不是「读个 JSON 就能跑」**）：
       - **喂给 Add 的对话全文取 `data/public/conversations.jsonl`**（D16）——它本身即 JSONL、**每条 message 自带 `role`**，天然满足 content 首尾无空白的要求（用 `locomo_refined.json` 会引入 209 条契约违规）
       - **`questions.jsonl` 只有 `evidence_messages`（证据轮，不是整段对话）**，但含 1,382 题与 gold ⇒ **与上一条按 `qa_id` 逐题对齐使用**（仅 6 处答案 int/str 差异）
       - **`questions.jsonl` 的键与 pipeline 读的键对不上**（有 `qa_id` 无 `id`；有 `answer` 无 `gold_answer`）⇒ **直接喂会 `KeyError` + `ValueError`**
@@ -121,7 +123,9 @@
 - [x] **落盘的向量缓存**，键 = 渲染文本哈希（§7.2）
 - [x] **`common/config.py`：配置的唯一入口**（③-d，2026-09-24）——`service/` 等**五个目录都不再读 `os.environ`**（静态测试钉住）；`configs/default.yaml` + `local.yaml` 已建；`rrf_k != 61` 与 `workers != 1` 都**拒绝启动**
 - [x] `Search` 路径：混合检索，**精确 ≤ `top_k`**（§2.2）
-- [ ] Weighted RRF：**`k=61` 显式设**、`prefetch` 每路带 `using`、根级 `limit` 取请求 `top_k`（§7.3）
+- [x] Weighted RRF：**`k=61` 显式设**、`prefetch` 每路带 `using`、根级 `limit` 取请求 `top_k`（§7.3）
+      ✅ **已实现**：[`../src/tianxi_am/retrieve/fusion.py`](../src/tianxi_am/retrieve/fusion.py) + [`../src/tianxi_am/store/qdrant_store.py`](../src/tianxi_am/store/qdrant_store.py)（2026-09-24）。
+      2026-09-25 又修掉一处：`retrieval.prefetch_limit` / `rrf.weights` **此前没被送到 Qdrant**（只因 store 默认值与配置默认值相等而看不出来）
 - [x] **主路径必须能通过 Smoke 契约校验**（200 响应、`data` 数组、不超 `top_k`）——**它是所有对照的参照点**（§13）
       **✅ 本地自动化已就位（③-e，2026-09-24）**：`make contract-check` → [`../eval/smoke/preflight.py`](../eval/smoke/preflight.py)，
       **14 条检查全过**（打真 HTTP、真 embedding、真 Qdrant；自启隔离实例，跑完 drop 集合）。
@@ -129,6 +133,8 @@
       （**token 预算**随 `common/tokens.py` 落地、**窗口边界**随 Step 2 的扩窗落地），
       **只剩"相邻项拼接"仍要 harness**（AML 侧怎么拼 `content`，本地看不到）。
 - [ ] **跑 T2 实验**（§13，半天工作量）：133 道 multi-session 题（12 道拒答题单列）人工分三类
+      🟡 **脚手架已就位（2026-09-25）**：`make t2-dump` 出待填表（纯 BM25 直查 Qdrant），**人填 `label`**，`make t2` 汇总分布与判读。
+      **这一项没做完就等于没做**——表填不完，结论不许出（半张表的分布看起来像个结果）
 - [ ] 三个 `pending` 计数器埋点（§6.5）——**发射已在 `pairing/instrument.py`**，聚合在 `observability/`（未接）
 
 ### 独立后续切片：Checker 的两路分离查询（**已登记，未实现；不阻塞 Step 1**）
@@ -169,8 +175,12 @@
       ⚠ 端点**部署**仍不在本项目范围内（D12）；端点挂了 ⇒ 降级回 RRF 顺序并记 `rerank_degraded`。
 - [x] ~~顺序与预算配合：按名次依次扩窗（§11.2）~~ —— 已在 Step 2 落地
 - [x] ~~组内按 `pair_idx` 时间序；组间按种子名次（§11.2）~~ —— 已在 Step 2 落地（`best_rank`/锚点）
-- [ ] **渲染模板定稿**——**改模板 = 重建索引**，别拖到 Step 5 之后（§11.3 / E6）
+- [x] **渲染模板定稿**（2026-09-25）——**定稿为 `v1`**：`Q: {q}` / `A: {a}`，**正文不含任何绝对时间戳**（§11.3）。
+      声明处是 [`../src/tianxi_am/rank/CLAUDE.md`](../src/tianxi_am/rank/CLAUDE.md) §4；实现是 [`../src/tianxi_am/common/render.py`](../src/tianxi_am/common/render.py)。
+      ⚠ **「定稿」不等于「不可推翻」**：推翻它要付「重建索引」的钱，而 T1 就是那笔钱的用途（见下）
 - [ ] **跑 T1 实验**（§13），与 `created_at` 粒度那条同批测（§11.3）
+      🟡 **脚手架已就位（2026-09-25）**：开关 `packaging.inject_abs_time`（默认 `false`）+ 两臂冻结快照 `configs/runs/t1-{plain,dated}/`。
+      **两臂必须跑在两个集合上**（正文变了 ⇒ 向量也变）。`make t1`：不加参数只打印计划，`--freeze` 冻结快照、`--execute` 两臂开跑、`--compare` 比结果
 - [x] ~~`created_at` 只给日粒度；`event_time` 为 NULL 时发 `""`（§11.3）~~ —— 已落地（固定 UTC，无旋钮）
       ⚠ **粒度变细/相对↔绝对那两条规则仍属 T1 的待验证项**，落地的只是"发日期、不发秒"
 

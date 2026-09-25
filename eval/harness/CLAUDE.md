@@ -65,6 +65,13 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 
 ## 契约：字段名以 **pipeline 代码**为准，不要照 readme
 
+> ⚠ **2026-09-25 起带一个星号**：归档的 7 个 pipeline 有一处**已声明的本地修订**
+> （`Path.open` 当异步上下文用的语法问题，`contextlib.nullcontext` 包一层）——
+> **prompt 与判分逻辑与上游逐字相同**，差的是文件句柄那一处。理由、范围与复现方式见
+> [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md) 的"本地修订"一节，
+> 机器可查的部分在 [`../../tools/fetch_benchmark_data.py`](../../tools/fetch_benchmark_data.py) 的 `local_patch`。
+> **除此之外，"以 pipeline 代码为准"照旧。**
+
 **readme 与代码不一致，已核实**：readme 写 `predicted_answer`（LoCoMo）/ `hypothesis`（LME），但**这些 pipeline 实际读写的是 `generated_answer`**。
 
 | pipeline | answer 步写入 | evaluate 步读取 | question 键 | gold 键 | id 键 |

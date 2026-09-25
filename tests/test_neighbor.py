@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import pytest
 from tests.conftest import FakeCounter, Wired
+from tests.conftest import seed_pair_in as _seed
 
 from tianxi_am.common.render import render, render_segment
 from tianxi_am.rank import expand_neighbors, merge_segments
@@ -29,32 +30,6 @@ from tianxi_am.retrieve import Candidate
 from tianxi_am.store.sqlite_store import SqliteStore, make_pair_id
 
 # ── 脚手架 ──────────────────────────────────────────────────────────────
-
-
-def _seed(
-    store: SqliteStore,
-    pair_idx: int,
-    *,
-    question: str | None = None,
-    answer: str | None = None,
-    user_id: str = "u1",
-    session_id: str = "s1",
-    event_time: int | None = None,
-) -> str:
-    """落一个对，返回它的 canonical `memory_id`（位置派生，见 ① 的 ID 纪律）。"""
-    with store.transaction() as conn:
-        pair = store.insert_pair(
-            conn,
-            user_id=user_id,
-            session_id=session_id,
-            pair_idx=pair_idx,
-            question=question if question is not None else f"q{pair_idx}",
-            answer=answer if answer is not None else f"a{pair_idx}",
-            status="complete",
-            event_time=event_time,
-            request_id="seed",
-        )
-    return pair.id
 
 
 def _line(

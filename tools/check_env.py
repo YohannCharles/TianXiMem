@@ -123,15 +123,22 @@ def check_reranker(base: str, key: str) -> Check:
     if not base or not key:
         return Check("Reranker 端点", False, "base_url 或 key 未填")
     try:
+        # ⚠ 请求形状要**跟着 `RemoteReranker` 走**（见 `rank/reranker.py` 的 `_post`）：
+        #   那边**刻意不传 `top_n`**——传了会静默截断，返回的就不再是全部候选，
+        #   于是"集合有没有被改动"就验不出来了（那是 §11.2 的一条不变量）。
+        #   探针若传了它，测的就不是我们真正会发的那个请求。
         response = httpx.post(
             f"{base.rstrip('/')}/rerank",
             headers={"Authorization": f"Bearer {key}"},
-            json={"query": "q", "documents": ["a", "b"], "top_n": 2},
+            json={"query": "q", "documents": ["a", "b"]},
             timeout=TIMEOUT,
         )
         response.raise_for_status()
         results = response.json()["results"]
-        return Check("Reranker 端点", True, f"返回 {len(results)} 条，已降序")
+        # ⚠ **不声称"已降序"**：`RemoteReranker` 明确**不依赖**响应的顺序——
+        #   它按 `index` 折回输入位置（见 rank/CLAUDE.md 的三条坑）。
+        #   探针只报"回了几条"；"顺序与 `index` 对不对得上"由 `make probe-reranker` 验。
+        return Check("Reranker 端点", True, f"返回 {len(results)} 条")
     except Exception as exc:  # noqa: BLE001
         return Check("Reranker 端点", False, f"{base} 不可达：{type(exc).__name__}: {exc}")
 

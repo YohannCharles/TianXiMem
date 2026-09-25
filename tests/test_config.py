@@ -156,6 +156,117 @@ def test_every_env_name_is_declared_in_the_env_example() -> None:
     )
 
 
+# ── 配置键的**唯一声明处**：`docs/config-reference.md` ────────────────
+
+_CONFIG_REFERENCE = _REPO / "docs" / "config-reference.md"
+
+#: 文档里被反引号包着、又**不是配置键**的点分串（文件名那类）。
+_NOT_A_CONFIG_KEY_SUFFIX = (".yaml", ".yml", ".md", ".py", ".json", ".sql", ".toml")
+
+
+def _code_yaml_keys() -> set[str]:
+    """AST 扫 `config.py` 的 `_group(..., where=..., allowed={...})`，还原它接受的**点分键**。
+
+    `where` 就是前缀——**这不是猜的，是那条调用约定本身**（`where="storage.sqlite"`
+    配 `allowed={"busy_timeout_ms"}` ⇒ `storage.sqlite.busy_timeout_ms`）。
+
+    只保留**叶子**：`storage.sqlite` 这类中间段不是键，是 `storage.sqlite.*` 的前缀。
+    """
+    tree = ast.parse(_CONFIG_MODULE.read_text(encoding="utf-8"))
+    keys: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_group"):
+            continue
+        where: str | None = None
+        allowed: set[str] | None = None
+        for kw in node.keywords:
+            if kw.arg == "where" and isinstance(kw.value, ast.Constant):
+                where = kw.value.value
+            elif kw.arg == "allowed" and isinstance(kw.value, ast.Set):
+                allowed = {e.value for e in kw.value.elts if isinstance(e, ast.Constant)}
+        if where and allowed:
+            keys |= {f"{where}.{name}" for name in allowed}
+    return {k for k in keys if not any(other != k and other.startswith(k + ".") for other in keys)}
+
+
+def _documented_dotted_keys() -> set[str]:
+    """文档里所有反引号包着的点分键（滤掉 `.yaml` / `.md` 这类文件名）。"""
+    text = _CONFIG_REFERENCE.read_text(encoding="utf-8")
+    return {
+        key
+        for key in re.findall(r"`([a-z][a-z_]*(?:\.[a-z][a-z_]*)+)`", text)
+        if not key.endswith(_NOT_A_CONFIG_KEY_SUFFIX)
+    }
+
+
+def _switch_table_wired_keys() -> list[tuple[str, str]]:
+    """§2 开关表里标 ✅ 的行 → `(开关名, 它声称接线的键)`。
+
+    表格**最后一格**是"接线"列：`✅ \\`rerank.enabled\\`` 表示那个开关真的能关。
+    """
+    lines = _CONFIG_REFERENCE.read_text(encoding="utf-8").splitlines()
+    starts = [i for i, line in enumerate(lines) if line.startswith("## 2. 消融开关")]
+    assert starts, "没找到 §2「消融开关」一节 —— 文档结构改了？"
+    start = starts[0]
+    ends = [i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")]
+    end = ends[0] if ends else len(lines)
+
+    wired: list[tuple[str, str]] = []
+    for line in lines[start:end]:
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        # 表头与分隔行：首格不是反引号包着的开关名
+        if len(cells) < 6 or not cells[0].startswith("`"):
+            continue
+        last = cells[-1]
+        if not last.startswith("✅"):
+            continue
+        wired += [(cells[0].strip("`"), key) for key in re.findall(r"`([a-z][a-z_.]*)`", last)]
+    return wired
+
+
+def test_every_yaml_key_the_code_accepts_is_declared_in_config_reference() -> None:
+    """**代码接受的每个 yaml 键都必须在 `docs/config-reference.md` 里出现。**
+
+    那份文档是配置键的**唯一声明处**（`configs/CLAUDE.md`）。新增一个键却不写文档，
+    下一个人就只能在代码里考古——而 §13 的每条对照都要回答"这次跑的是哪套值"。
+
+    ⚠ 这与上面 `.env.example` 那条是**同一种漂移**，只是对象换成 yaml。
+
+    ⚠ **反向不检查**：文档里有、代码里没有的键**大量存在且合法**——它们是 ⬜ 待接线的
+    落点（`checker.*` / `agent.*` / `neighbor.enabled` …）。而"文档声称已接线、代码却不认"
+    那一条由下面 `test_switch_table_...` 单独钉。
+    """
+    code = _code_yaml_keys()
+    assert code, "一个 yaml 键都没解析出来 —— 这条用例是空过的"
+
+    missing = sorted(code - _documented_dotted_keys())
+    assert missing == [], (
+        "这些 yaml 键代码接受、而 `docs/config-reference.md` 里没写"
+        "（那份文档是唯一声明处，新增键要同时写进去）：\n  " + "\n  ".join(missing)
+    )
+
+
+def test_switch_table_only_claims_wired_keys_that_the_code_accepts() -> None:
+    """**§2 开关表里标 ✅ 的键，代码必须真的接受。**
+
+    那张表的"接线"列是**唯一一处声明"哪个消融开关真的能关"**的地方，而且是机器可读的
+    （`✅ \\`rerank.enabled\\``）。标了 ✅ 而代码不认，就等于**承诺了一个做不到的消融**——
+    它的表现是"照文档改了配置、行为一点没变"，**不报错**。
+
+    ⚠ 只覆盖 §2：文档其余部分在 heading 上标 ✅/⬜，粒度更粗也更易变，**没有自动化**。
+    """
+    wired = _switch_table_wired_keys()
+    assert wired, "§2 表里一个 ✅ 都没解析出来 —— 这条用例是空过的"
+
+    code = _code_yaml_keys()
+    offenders = [f"{switch} 声称接了 {key}" for switch, key in wired if key not in code]
+    assert offenders == [], (
+        "§2 的开关表标了 ✅、但 `common/config.py` 不接受这些键：\n  " + "\n  ".join(offenders)
+    )
+
+
 # ── 2. 默认配置可加载 ──────────────────────────────────────────────────
 
 
@@ -173,6 +284,26 @@ def test_default_profile_loads_the_repo_yaml(config_dir: Path) -> None:
     assert cfg.pairing.batch_max_messages == 20
     assert cfg.pairing.batch_max_words == 2000
     assert cfg.server.workers == 1
+    # T1 的对照开关：**默认必须是关的**（§11.3 的结论是"不注入绝对时间"）
+    assert cfg.packaging.inject_abs_time is False
+
+
+def test_packaging_switch_rejects_a_non_bool(config_dir: Path) -> None:
+    """`packaging.inject_abs_time` 只有开/关两种取值——写成日期格式串必须**响亮失败**。
+
+    它是一个**对照臂的开关**，不是"用哪种日期"的选择器：口径只有 `day_granularity` 一处
+    （`common/render.py`）。放一个宽松的值进来，T1 的两臂就会同时在两个维度上不同，
+    于是那个对照再也归因不了——而**分数看起来完全正常**。
+    """
+    from tianxi_am.common.config import ConfigError, load_config
+
+    other = config_dir / "bad_switch"
+    other.mkdir()
+    (other / "default.yaml").write_text(
+        "packaging:\n  inject_abs_time: '2026-07-26'\n", encoding="utf-8"
+    )
+    with pytest.raises(ConfigError, match="packaging.inject_abs_time"):
+        load_config({"TIANXI_SQLITE_PATH": "x.db", "AML_EMB_API_KEY": "k"}, config_dir=other)
 
 
 def test_config_dir_env_redirects_where_yaml_is_read(config_dir: Path) -> None:

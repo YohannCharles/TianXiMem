@@ -1,8 +1,10 @@
 # configs/ — 运行时配置
 
-> **状态（2026-09-24，③-d）**：`default.yaml` 与 `local.yaml` **已建**，由
+> **状态（2026-09-25）**：`default.yaml` 与 `local.yaml` **已建**，由
 > [`../src/tianxi_am/common/config.py`](../src/tianxi_am/common/config.py) 加载。
-> `submit.yaml` 与 `runs/` **待建**（Step 5 产出）。
+> **`runs/` 已建**：`configs/runs/t1-{plain,dated}/` 是 T1 两臂的冻结快照（由
+> [`../eval/experiments/t1_timestamp.py`](../eval/experiments/t1_timestamp.py) 的 `--freeze` 生成）。
+> `submit.yaml` **待建**（Step 5 产出）。
 > **完整配置项清单见 [`../docs/config-reference.md`](../docs/config-reference.md)**（每个配置项、默认值、出处 §）。本文件只说**为什么这么组织**。
 
 ---
@@ -33,6 +35,7 @@
 | `default.yaml` | 基线值，其余 profile 的父级 | Qwen3-Embedding-8B（开发期唯一有活端点的） | ✅ |
 | `local.yaml` | **开发期**：代理评测、迭代、消融 | 同上 | ✅ |
 | `submit.yaml` | **提交期**：Full 定稿 | `text-embedding-v4` + `gpt-4o-mini` | ⬜ Step 5 |
+| `runs/<arm>/` | **对照臂**的冻结快照（不是 profile，是快照） | 随臂 | ✅ T1 两臂 |
 
 `local.yaml` 与 `submit.yaml` **只覆盖模型与由模型派生的量**（向量维度、实测 token 预算、全部标定阈值），其余继承 `default.yaml`。
 
@@ -63,7 +66,7 @@ configs/
 ├── default.yaml     # 基线：今天全部有消费方的阈值与模型名（§15 的七个消融项接完后才齐）
 ├── local.yaml       # 开发期覆盖（**只写与基线不同的键**）
 ├── submit.yaml      # 提交期覆盖（⬜ Step 5 产出）
-└── runs/            # 每次对照实验的配置快照（哪个实验、什么时候、哪套模型）⬜
+└── runs/            # 每次对照实验的配置快照（哪个实验、什么时候、哪套模型）✅ T1 两臂已建
 ```
 
 `runs/` 的用途：`docs/experiments.md` 要求记录**配置指纹**。让每个实验留下**冻结的配置副本**，而不是"当时的 local.yaml 大概是这样"——**后者在 Step 5 之后就无法重建了**。

@@ -108,10 +108,10 @@
 
 | 阶段 | 交付 | 状态 |
 | ---- | ---- | ---- |
-| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | ⬜ |
-| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF） | ⬜ |
-| Step 2 | Neighbor Expansion + 双预算截断 | ⬜ |
-| Step 3 | Rerank + Context Packaging（含 T1 实验） | ⬜ |
+| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | 🟡 主体已建，**T2 未跑** |
+| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF） | 🟡 `src/` 已落，**T2 未跑** |
+| Step 2 | Neighbor Expansion + 双预算截断 | ✅ 已完成（2026-09-24） |
+| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 rerank 已接 + 打包已落地；**渲染模板定稿与 T1 未做** |
 | Step 4 | Conditional Agentic Search | ⬜ |
 | **Step 5** | **切换到提交模型**，重标定全部阈值，重跑 T2 | ⬜ |
 | Step 6 | 对照实验（§13）+ Smoke 验证 + Full 定稿 | ⬜ |
@@ -119,7 +119,8 @@
 **Step 0 不可跳过**——没有它，后面每一步都是盲调，**而 Full 只有 2 次**。
 **Step 5 不可与任何设计改动合并**——否则分数变化无法归因（§12.1 R1）。
 
-完整清单见 [`docs/roadmap.md`](./docs/roadmap.md)。
+> ⚠ **上表是摘要，状态以 [`docs/roadmap.md`](./docs/roadmap.md) 为准**（完整清单与每步的交付定义都在那里）。
+> 这张表 2026-09-25 之前整表过期了四步——**改状态时先改 roadmap.md，再回来同步这里**。
 
 ---
 

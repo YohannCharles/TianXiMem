@@ -36,7 +36,7 @@ query → BM25 ┐
                                                           ↓
                                           （候选**合并**，不是替换）
                                                           ↓
-                                              Rerank（本地 cross-encoder）
+                                              Rerank（远端 cross-encoder）
                                                           ↓
                                               Neighbor Expansion（按名次扩窗）
                                                           ↓
