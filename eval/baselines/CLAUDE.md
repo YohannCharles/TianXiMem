@@ -35,11 +35,37 @@ invmem-candidate/     InvMem 的**候选映射**（无 LICENSE，**只研读**�
 | 论文 | arXiv:2608.12888 |
 | 代码 | `github.com/imlrz/ReFind` |
 
-### ⚠ 工作量未计入任何 Step（§13）
+### ✅ 工作量**已估**（2026-09-26）：**不需要"包一层服务"**，因为它本身就是兼容服务
 
-> **B1 不是"克隆下来跑一下"。** ReFind 是一个**方法实现**，要让它进我们的 harness，得**给它包一层 Add/Search 服务**（或把它的检索器接到我们的 harness 接口上）。**这部分工作量目前没计入任何 Step——真要跑 B1 之前先估一下，别把它当零成本。**
+> [决策记录](../../../docs/decisions.md) 待决事项 #5 原先的假设是"ReFind 是方法实现，要给它包
+> 一层 Add/Search 服务"——**核过代码后发现不成立**：[`refind/app/main.py`](./refind/app/main.py)
+> 已经是一个 **AML 兼容的 Add/Search 服务**（`/add` `/search` 短别名 + `/v1/memories/*`，
+> `description="Agent Memory Leaderboard-compatible Add/Search service."`），
+> 请求/响应形状与我们的 driver **逐字段对得上** ⇒ **包装量 ≈ 0**。怎么跑：
 
-**先估，再动手。** 估完把结论写进 [`../../../docs/decisions.md`](../../docs/decisions.md) 待决事项 #5。
+```bash
+# 1) 独立 venv（钉死它声明的版本；**放在 vendor 目录之外**，vendor 保持原样）
+uv venv /tmp/refind-venv --python 3.12
+uv pip install --python /tmp/refind-venv/bin/python -r eval/baselines/refind/requirements.txt
+
+# 2) 起它（LLM 用我们网关的同一个模型——同期同模型才算对照）
+cd eval/baselines/refind
+LLM_API_KEY=$AML_API_KEY LLM_BASE_URL=$AML_BASE_URL LLM_MODEL=$AML_MODEL \
+RETRIEVAL_MODE=agent DATABASE_PATH=/tmp/refind.sqlite3 \
+/tmp/refind-venv/bin/python -m uvicorn app.main:app --port 8001
+
+# 3) 我们的 harness 直接打它（**不 import 它的代码**，隔离边界不变）
+uv run --env-file .env python -m eval.experiments.run --dataset locomo-refined --limit 3 \
+  --base-url http://127.0.0.1:8001 --run-id refind-3conv \
+  --configs-dir configs/runs/refind --profile local
+```
+
+> **成本在别处**：它是 **agentic**（`AGENT_MAX_ITERATIONS=4`、`SEARCH_TOP_K=5`，都未改），
+> 实测**每 query ≈ 6 秒**（本地网关）⇒ 346 题 ≈ **35 分钟检索 + 约 35 分钟判分**。
+> 它的 `Add` 按 `request_id + payload` **精确幂等**（重复投喂返回 200 no-op），重跑安全。
+>
+> ⚠ **模型口径**：用我们网关的模型（与主系统同期同模型）；它自报的 58.2 / 93.2
+> **是它自己 harness 的数，不作对照**（§13）。数字落 [`../reports/ledger.md`](../reports/ledger.md)。
 
 ### ⚠ 必须在我们自己的 harness 里重跑（§13）
 

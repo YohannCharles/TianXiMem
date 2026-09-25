@@ -1,0 +1,19 @@
+# B1（ReFind 原版）的**冻结配置** —— 2026-09-26
+#
+# ⚠ 与其它 arm 快照不同：这一份描述的是**另一个服务**（vendor 在 eval/baselines/refind/，
+#   许可 MIT，**未改动**），所以它记的不是我们的 yaml，而是**启动它时用的环境变量**。
+#
+# vendor 版本：a80175c（见 docs/reference-implementations.md）
+# 启动方式（隔离 venv 在仓库外，vendor 目录保持原样）：
+#   LLM_API_KEY/$AML_API_KEY LLM_BASE_URL/$AML_BASE_URL LLM_MODEL/$AML_MODEL \
+#   RETRIEVAL_MODE=agent DATABASE_PATH=/tmp/refind.sqlite3 \
+#   /tmp/refind-venv/bin/python -m uvicorn app.main:app --port 8001
+baseline:
+  name: refind
+  vendor_commit: "a80175c"
+  llm_model: "Qwen/Qwen3.5-9B"   # = AML_MODEL，与主系统同期同模型才算对照
+  retrieval_mode: agent           # 论文形态：agentic search
+  agent_max_iterations: 4         # 它的默认值，未改
+  search_top_k: 5                 # 它的默认值，未改
+  context_window: 2               # 它的默认值，未改
+  session_rrf: true

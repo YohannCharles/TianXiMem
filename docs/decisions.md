@@ -665,6 +665,31 @@ embedding 缓存整体失效；**以后每次改渲染模板都要再付一次�
 | # | 事项 | 何时必须定 |
 | --- | --- | --- |
 | 4 | **S1 的判别实验设计** | Smoke 第一次跑通后**立刻**（§17.1） |
-| 5 | **B1 包装 ReFind 的工作量估算** | **真要跑 B1 之前**（§13）——目前**未计入任何 Step** |
+| 5 | ~~**B1 包装 ReFind 的工作量估算**~~ → **已估完，见下** | —— |
+
+> ### 事项 5 · 已估（2026-09-26）：**不需要"包一层服务"，因为它本身就是兼容服务**
+>
+> [`eval/baselines/CLAUDE.md`](../eval/baselines/CLAUDE.md) 原先的假设是
+> "ReFind 是方法实现，要给它包一层 Add/Search 服务"——**核过代码后发现不成立**：
+> [`refind/app/main.py`](../eval/baselines/refind/app/main.py) 已经是一个
+> **AML 兼容的 Add/Search 服务**（`/add` `/search` 短别名 + `/v1/memories/*`，
+> `description="Agent Memory Leaderboard-compatible Add/Search service."`），
+> 请求/响应形状与我们的 driver **逐字段对得上**（`AddRequest{request_id,messages[{role,content,timestamp}],
+> user_id,session_id}`、`SearchResponse{data:[{id,content,score,created_at}]}`）。
+>
+> ⇒ **包装工作量 ≈ 0**：起它的服务、把 harness 的 `--base-url` 指过去即可
+> （`--limit` 控制规模）。依赖很轻（fastapi / httpx / pydantic / uvicorn），
+> 用独立 venv 装它钉死的版本。
+>
+> ⚠ **剩下的成本在别处**，跑之前要知道：它是 **agentic**（`RETRIEVAL_MODE=agent`，
+> `AGENT_MAX_ITERATIONS=4`、`SEARCH_TOP_K=5`），ReFind 论文实测**每 query 约 5 次 LLM 调用**
+> ⇒ 346 题 ≈ **1700 次调用**，是**小时级**的一轮；且它跑在**同一个网关**上。
+> ⇒ 先跑 1 段（138 题）量速率，再决定要不要铺到 3 段。
+>
+> ⚠ **隔离边界照旧**：`refind/` 只被 `eval/harness/` 当"另一个服务"调，
+> **`src/` 一行都不 import 它**，而且**不改 vendor 代码**（改了就不再是 B1）。
+>
+> ⚠ **模型口径**：用我们网关的 `Qwen/Qwen3.5-9B`（与主系统同期同模型才算对照）；
+> 它自报的 58.2 / 93.2 是**它自己的 harness**跑出来的，**不能拿来当基线**（§13）。
 
 > **事项 8（`SqliteStore` 的连接与线程模型）已决 ⇒ 升格为 [D17](#d17--sqlitestore-的连接模型短生命周期连接--交给-sqlite-自己串行化2026-09-24)。**

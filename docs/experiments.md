@@ -14,7 +14,7 @@
 
 | # | 对照 | 回答的问题 | 决定什么 | 状态 | 结论 |
 | --- | --- | --- | --- | --- | --- |
-| **B1** | ReFind 原版（MIT，不修改代码） | 我们赢了吗 | 是否需要继续投入 | ⬜ 未开始 | —— |
+| **B1** | ReFind 原版（MIT，不修改代码） | 我们赢了吗 | 是否需要继续投入 | ✅ 已跑（agent 模式，3 段 346 题） | **我们领先 +29.5pt**（0.7948 vs 0.5000）——两条保留见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md) |
 | **A3** | Rerank 开 / 关 | 排序值不值（§11 主线的验证） | 若没用，把这份算力挪去别处 | 🟡 conv-26 上跑过一轮两臂 | 见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md) 的 A3 一节（**单段对话，未定论**） |
 | **A4** | Agent 开 / 关 | Agentic Search 值不值 | 若没用，砍掉核心 claim 之一 | ⬜ 未开始 | —— |
 | **T1** | 时间戳前缀 带 / 不带 | §11.3 那条约束对不对 | content 的渲染方式 | 🟡 脚手架就位，**两臂未跑** | —— |
@@ -27,8 +27,10 @@
 ### B1 — ReFind 原版
 
 - **必须在我们自己的 harness 里重跑。** ReFind 公开的 58.2 / 93.2 是**它自己的 harness、可能不同的问题子集和 prompt** 下得到的，直接抄来当基线等于**拿它的 harness 和我们的比**（§13）。
-- **⚠ 工作量未计入任何 Step**（§13）：B1 不是"克隆下来跑一下"。ReFind 是一个**方法实现**，要让它进我们的 harness，得**给它包一层 Add/Search 服务**（或把它的检索器接到我们的 harness 接口上）。**真要跑 B1 之前先估一下，别把它当零成本。**
-- 许可 MIT，是三者中唯一有论文且 MIT 许可的（§1）。
+- **✅ 工作量已估（2026-09-26）：不需要包装。** ReFind 的 `app/main.py` **本身就是 AML 兼容的
+  Add/Search 服务**（`/add` `/search`），请求/响应与我们 driver 逐字段对得上 ⇒ 起它的服务、
+  把 harness 的 `--base-url` 指过去即可。**怎么跑见** [`../eval/baselines/CLAUDE.md`](../eval/baselines/CLAUDE.md)；
+  **数字见** [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。
 
 ### A3 — Rerank
 
