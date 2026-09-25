@@ -5,7 +5,7 @@
 
 ## 为什么 LLM 那一项额外看"思考泄漏"
 
-§17.3 的 **V7** 剩下的一半是"**网关默认开不开思考**"。归档的 7 个 pipeline 里
+§17.3 的 **V7** 问的是"**网关默认开不开思考**"。归档的 7 个 pipeline 里
 只有 `pipeline_beam.py` 传了 `enable_thinking: False`，而 **LoCoMo-Refined 与
 LongMemEval 都没传**——若网关默认开着，thinking 会混进 `generated_answer`，
 **裁判读到的就是推理过程而不是答案**（且不报错）。

@@ -35,11 +35,9 @@ s3_probe.py     S3 探针（created_at 是否被消费）
 | **`created_at` 始终存在** | 日粒度或 `""`，**不能缺字段** |
 | **`score` 单调递减** | 且**不是**原始 RRF 分数 |
 
-`make contract-check` 已接通（2026-09-24）：`uv run python eval/smoke/preflight.py`。
+`make contract-check` → `uv run python eval/smoke/preflight.py`。
 **默认行为是自己拉起一个隔离实例**（临时库 + 临时缓存 + 独立的 `memories_preflight` 集合，跑完关掉并 drop），**不需要先有服务在跑**。
-打**已经在跑**的那个服务（2026-09-24 修正：本行原先写的是 `-m eval.smoke.preflight --base-url $SERVICE_URL`，
-那是另一套写法留下的，与 Makefile 的默认行为相反）：
-`uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000`。
+打**已经在跑**的那个服务：`uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000`。
 **⚠ 后者会往那个服务写一小份数据**（`user_id` 带随机后缀，不与别的 run 冲突）——别拿正式 run 的实例当靶子。
 
 ---

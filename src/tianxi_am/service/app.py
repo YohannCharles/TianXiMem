@@ -13,7 +13,7 @@
    否则 Step 5 切模型时**旧缓存会静默命中**。
 3. **查询侧的前缀层必须在缓存之上**：
    `QueryInstructionEmbedder(CachingEmbedder(...))`。反过来会出现"同一个键对应两个
-   不同的值" ⇒ 检索结果依赖缓存状态（`embed/query_instruction.py` 的 docstring）。
+   不同的值" ⇒ 检索结果依赖缓存状态（见 `embed/query_instruction.py`）。
 
 ## 启动方式（`uvicorn --factory`，**不要**在模块级建 app）
 
@@ -22,10 +22,10 @@ uvicorn tianxi_am.service.app:create_app_from_env --factory --workers 1
 ```
 
 **必须 `--workers 1`**（§15）：Add 的串行化用的是**进程内**锁，多 worker 会**静默失效**。
-`assert_single_process()` 会拦下配置与命令行两条路上的违规——见 `common/config.py`。
+`assert_single_process()` 拦下配置与命令行两条路上的违规（`common/config.py`）。
 
-刻意**没有**模块级 `app = ...`：那会让"导入本模块"就要求环境变量齐备，
-测试没法只导入工厂函数。`--factory` 正好用来表达"入口是一个函数"。
+刻意**没有**模块级 `app = ...`：那会让"导入本模块"就要求环境变量齐备，测试没法只导入
+工厂函数——`--factory` 正好用来表达"入口是一个函数"。
 """
 
 from __future__ import annotations
@@ -108,12 +108,11 @@ def build_services(config: AppConfig) -> Services:
         config.storage.sqlite.path,
         busy_timeout_ms=config.storage.sqlite.busy_timeout_ms,
     )
-    # ⚠ 检索参数在**装配处注入 store**（2026-09-25 修）：`retrieve/` 负责校验与初值
-    #   （`make_hybrid_params`），`store/` 负责把它们翻成 Qdrant 语法并**执行**。
-    #   此前 `HybridRetriever` 自持一份 `params` 却从不传给 `store.hybrid_search()`，
-    #   这里也没传 `hybrid=` ⇒ yaml 里的 `retrieval.prefetch_limit` / `rrf.weights`
-    #   **静默无效**，只因 store 的默认值与 config 默认值恰好相等而看不出来。
-    #   回归用例见 `tests/test_retrieve.py` 里那条"参数必须到达 Qdrant"的用例。
+    # ⚠ 检索参数在**装配处注入 store**：`retrieve/` 负责校验与初值（`make_hybrid_params`），
+    #   `store/` 负责把它们翻成 Qdrant 语法并**执行**。漏掉这层注入（编排者自持 params、
+    #   这里也不传 `hybrid=`）⇒ yaml 里的 `retrieval.prefetch_limit` / `rrf.weights`
+    #   **静默无效**，两边默认值恰好相等时尤其看不出来。回归用例：
+    #   `tests/test_retrieve.py::test_build_services_forwards_retrieval_params_to_the_store`。
     qdrant = QdrantStore(
         url=config.storage.qdrant.url,
         collection=config.storage.qdrant.collection,
@@ -169,16 +168,11 @@ def build_services(config: AppConfig) -> Services:
             qdrant=qdrant,
             retriever=HybridRetriever(store=qdrant, dense=dense),
             # ⚠ `EvidenceChecker()` **不带 instrument** ⇒ 落到 `NullCheckerInstrument`，
-            #   即**每轮判定被丢弃**。`AddPipeline` 那侧的 `PendingInstrument` 同理
-            #   （`continuation.py` 的默认值是 `NullPendingInstrument`）。
-            #
-            #   **这是刻意的，不是漏接**（2026-09-25 核实），两条理由：
-            #   · 真正的聚合口是 `observability/`，而它**尚未实现**（见根 `CLAUDE.md`）；
-            #   · 换成 `InMemory*` 会**无界增长**——Full run 要连跑 0.5–2 天（§2.2），
-            #     而且那串记录**没有任何读取方**，等于把内存当日志用。
-            #
-            #   ⇒ D13 的"**每轮判定必须记录**"（否则无法用数据回答 A4「agent 值不值」）
-            #   落在 `observability/` 落地的时候。**在那之前别把它当成已满足。**
+            #   即**每轮判定被丢弃**（`AddPipeline` 那侧的 `PendingInstrument` 同理）。
+            #   **这是刻意的，不是漏接**：真正的聚合口 `observability/` 尚未实现，而换成
+            #   `InMemory*` 会**无界增长**（Full run 连跑 0.5–2 天，§2.2）且那串记录没有
+            #   任何读取方。⇒ D13 的"**每轮判定必须记录**"落在 `observability/` 落地的时候，
+            #   **在那之前别把它当成已满足。**
             checker=EvidenceChecker(),
             # ⚠ 分词器**在这里就加载**（不是第一次请求时才加载）：它要联网取 BPE 文件
             #   （`common/tokens.py`），把失败暴露在**启动时**而不是某个用户的请求里。
@@ -195,21 +189,19 @@ def build_services(config: AppConfig) -> Services:
 def build_reranker(config: AppConfig) -> RemoteReranker | None:
     """按配置构造 reranker；**该没有的时候就是 `None`**（D12 的降级形态）。
 
-    三种结果，**每种的判据都是一句话能说清的**：
-
     | 条件 | 结果 | 记什么 |
     | --- | --- | --- |
     | `rerank.enabled = false` | `None` | `rerank_disabled`——**刻意的消融**，不告警 |
     | 端点或密钥为空 | `None` | `rerank_disabled` + **WARNING**——多半是漏配了 |
     | 齐备 | `RemoteReranker` | 正常调用；失败走 `rerank_degraded` |
 
-    ⚠ **"没配"不报错是刻意的**：reranker 是唯一不被规则保证可用的组件（D12），
-    缺了它服务必须照常起——这与 `embed_base_url` 那种"缺了就拒绝启动"正相反。
-    但**"想用却没配全"与"明确关掉"是两件事**，所以前者要留下一条 WARNING：
-    否则它会表现为"每次检索都静默不精排"，而那正是本项目最怕的那类失败。
+    ⚠ **"没配"不报错是刻意的**：reranker 是唯一不被规则保证可用的组件（D12），缺了它
+    服务必须照常起——这与 `embed_base_url` 那种"缺了就拒绝启动"正相反。但**"想用却没配全"
+    与"明确关掉"是两件事**，所以前者要留下一条 WARNING：否则它会表现为"每次检索都静默
+    不精排"（键与初值见 config-reference §7）。
 
-    ⚠ 构造**不打网络**（不探活、不查 `/models`）：探活会把启动变成一次远程依赖，
-    而 reranker 不可用本来就有一条**已实现且已测**的降级路径。
+    ⚠ 构造**不打网络**：探活会把启动变成一次远程依赖，而 reranker 不可用本来就有一条
+    **已实现且已测**的降级路径。
     """
     if not config.rerank.enabled:
         logger.info("rerank.enabled = false ⇒ 不构造 reranker，Search 直接用融合名次")

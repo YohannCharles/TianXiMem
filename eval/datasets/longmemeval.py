@@ -2,8 +2,8 @@
 
 > ⚠ **只用 `lme_s_cleaned.json`，不要用 `lme_test.json`。** 后者多出 **1,230 个
 > 0-turn session**，而空 session 会污染按"20 条消息"切批的埋点逻辑（§6.5）。
-> 那份文件**已于 2026-09-24 从归档删除**（它就是等着被误用的坑）。
-> 要复核这条结论得先从上游取回它，线索在 `tools/fetch_benchmark_data.py` 的 `DELETED` 段。
+> 那份文件**不在归档里**（它就是等着被误用的坑）；要复核这条结论得先从上游取回它，
+> 线索在 `tools/fetch_benchmark_data.py` 的 `DELETED` 段。
 
 ## 基数与 LoCoMo **正好相反**：一题一个 haystack
 

@@ -1,6 +1,6 @@
 # agent/ — Conditional Agentic Search
 
-> ## ⛔ v1 本目录不实现（2026-09-23 → [`../../../docs/decisions.md`](../../../docs/decisions.md) D13）
+> ## ⛔ v1 本目录不实现（[`../../../docs/decisions.md`](../../../docs/decisions.md) D13）
 >
 > **v1 默认"证据充足"，没有 Agentic Search、没有证据补充、没有关键词重写。** 下文的循环、工具集、参数、监控**整块归 v2**。
 >
@@ -69,9 +69,7 @@ tools.py    search_chatrecord / take_note / finish_search
 
 > 工具名沿用了 ReFind 论文的 `search_chatrecord`。**我们的实现是自有的，改名无妨，但保持与论文同形有利于对照实验时的归因**（§9）。
 
-**⚠ 一条边界**：`eval/baselines/refind/` 会把 ReFind **原版**（MIT）作为 B1 基线 Vendor 进来。那部分是**不改动的外部代码**，与"本项目从零搭建、不复用任何既有代码"（§1）并不冲突——**冲突只会在有人把那份代码 import 进 `src/` 时发生**。
-
-**保持同形是为了命名层面的可对照，不是为了代码层面的复用。** `src/tianxi_am/agent/` 里的任何一行都必须是我们自己写的。
+**⚠ 一条边界**：`eval/baselines/refind/` 会把 ReFind **原版**（MIT）作为 B1 基线 Vendor 进来，那是**不改动的外部代码**，与"本项目从零搭建、不复用任何既有代码"（§1）**不冲突**——**冲突只会在有人把那份代码 import 进 `src/` 时发生**。**`src/tianxi_am/agent/` 里的任何一行都必须是我们自己写的。**
 
 ---
 

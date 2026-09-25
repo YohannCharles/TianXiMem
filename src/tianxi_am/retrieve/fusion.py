@@ -1,23 +1,17 @@
 """混合检索的**策略与参数所有权**（§7.3）。
 
-## 本模块与 `store/` 的分界（2026-09-24 定）
-
-| 谁 | 内容 |
-| --- | --- |
-| **本模块（策略与参数）** | `prefetch_limit` / `weights` / `k` / `top_k` 的取值、**校验**、标定 |
-| **`store/qdrant_store.py`（执行）** | 翻成 `prefetch` + `rrf` 的 Qdrant 调用 |
-
-⇒ **本模块说"用什么参数"，`store/` 说"怎么发给 Qdrant"。** 一份实现不许两边都写。
+**本模块说"用什么参数"（取值 / 校验 / 标定），`store/qdrant_store.py` 说"怎么发给
+Qdrant"**（翻成 `prefetch` + `rrf`）。**一份实现不许两边都写**——分工表见
+[`CLAUDE.md`](./CLAUDE.md)。
 
 ## 参数里有一个不是旋钮
 
-`rrf_k` 是**正确性常量**：Qdrant 的默认 `k` 是 **2**（官方文档逐字："k is a constant
-(set to 2 by default)"），而 RRF 文献是 1-based 的 `1/(60 + rank)`。Qdrant 的秩是
-0-based、公式 `1/(rank + k)`，所以**只有 `k = 61`** 才等价于文献的 60
-（`1/(0+61) = 1/(1+60)`）。**填错不会报错**——两种写法产出的名次都"看起来正常"，
-只有分数差一个数量级（已在 v1.17.0 上实测：`2/61 = 0.032786883` vs 默认 `2/2 = 0.5`）。
+`rrf_k` 是**正确性常量**：Qdrant 的默认 `k` 是 **2**，而 RRF 文献是 1-based 的
+`1/(60 + rank)`；Qdrant 的秩是 0-based、公式 `1/(rank + k)`，所以**只有 `k = 61`**
+才等价于文献的 60（`1/(0+61) = 1/(1+60)`）。**填错不会报错**——两种写法产出的名次都
+"看起来正常"，只有分数差一个数量级。
 
-因此本模块**拒绝**任何 `k != 61` 的配置，而不是"警告后照用"。见 D5。
+因此本模块**拒绝**任何 `k != 61` 的配置，而不是"警告后照用"（D5；值见 config-reference §3）。
 """
 
 from __future__ import annotations
@@ -44,9 +38,8 @@ __all__ = [
 #: ⚠ **`DEFAULT_PREFETCH_LIMIT` / `DEFAULT_WEIGHTS` 的初值住在
 #: [`../common/config.py`](../common/config.py)**（理由与 `DEFAULT_EXPANSION_SEED_LIMIT`
 #: 同一条：`retrieve/` 与 `store/` 都要用，而 `common/` 是最底层）。本模块**只 import**，
-#: 不再各写一份字面量——2026-09-25 前 `200` 与 `(0.5, 0.5)` 在全仓各有 4 份。
-#: §7.3 的两条注意事项（`prefetch_limit` **不是**种子数/Top-K；权重调整需 ablation 数据）
-#: 也写在那里，**不在这里重复**——重复描述就是漂移的开始。
+#: 不再各写一份字面量。§7.3 的两条注意事项（`prefetch_limit` **不是**种子数/Top-K；
+#: 权重调整需 ablation 数据）也写在那里，**不在这里重复**——重复描述就是漂移的开始。
 
 #: **正确性常量，不是可调项**（D5）。
 #:
@@ -118,9 +111,8 @@ def make_hybrid_params(
 def dedup_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
     """按 `memory_id` **稳定去重**，并把名次**重新编成连续的 0-based**。
 
-    **"稳定"的含义**：同一个 `memory_id` 出现多次时，**保留名次最好的那一次**
-    （第一次出现），而不是最后一次——融合结果里不可能有两条完全相同的记忆，
-    真出现时只有"最早的那条"能与 RRF 的名次语义对上。
+    **"稳定"= 保留名次最好的那一次**（第一次出现）：只有"最早的那条"能与 RRF 的
+    名次语义对上。
 
     ⚠ **必须重新编号**，不能只删元素：下游有"**只对前 N 条**做扩窗"这类判据
     （§10 的种子数），而它读的是名次。留着空洞会让"前 30 条"实际只剩 27 条，
@@ -146,22 +138,22 @@ class HybridRetriever:
     它只做两件事：把查询交给 dense 那一路算一次向量、把结果编上 0-based 名次。
     **不重排、不扩窗、不打包**——那些在 `rank/`。
 
-    ⚠ **融合参数（`prefetch_limit` / `weights` / `rrf_k`）不在本类里**（2026-09-25 修）：
-    它们由 [`make_hybrid_params`](#make_hybrid_params) 校验后，**在装配处注入 `QdrantStore`**
+    ⚠ **融合参数（`prefetch_limit` / `weights` / `rrf_k`）不在本类里**：它们由
+    [`make_hybrid_params`](#make_hybrid_params) 校验后，**在装配处注入 `QdrantStore`**
     ——因为**执行**它们的是 `store/qdrant_store.hybrid_search()`。
 
-    这一段曾经是本类的一个 `params` 字段，但 `search()` **从没把它传给 store**，
-    而装配处也没给 `QdrantStore` 传 `hybrid=` ⇒ 改 yaml 里的 `retrieval.prefetch_limit` /
-    `rrf.weights` **静默无效**，只因 store 的默认值与 config 的默认值恰好相等而看不出来。
-    **别把那个字段加回来**——参数需要一个能被执行处读到的地方，而不是编排者手里。
-    回归用例：`tests/test_retrieve.py::test_build_services_forwards_retrieval_params_to_the_store`。
+    ⚠ **别把 `params` 字段加回本类**：参数需要一个能被执行处读到的地方，而不是编排者
+    手里——留着它却从不传给 store（装配处也不传 `hybrid=`），改 yaml 里的
+    `retrieval.prefetch_limit` / `rrf.weights` 就会**静默无效**（两边默认值恰好相等时
+    尤其看不出来）。回归用例：
+    `tests/test_retrieve.py::test_build_services_forwards_retrieval_params_to_the_store`。
     """
 
     store: QdrantStore
-    #: ⚠ 这里**不需要**鸭子类型：[`dense.py`](./dense.py) 不 import 本模块（`Candidate`
-    #: 定义在本模块，依赖是单向的 `fusion → dense`），所以直接标注具体类型。
-    #: 曾经的 `dense: object` 让 `.encode_query()` 变成"`object` 上没有的属性"——
-    #: 接口断了也只在运行时才炸，而 mypy 连报都报不出来。
+    #: ⚠ **不要退回 `dense: object`**：[`dense.py`](./dense.py) 不 import 本模块
+    #: （`Candidate` 定义在本模块，依赖单向 `fusion → dense`），所以这里标注具体类型。
+    #: 标成 `object` 会让 `.encode_query()` 变成"`object` 上没有的属性"——接口断了
+    #: 也只在运行时才炸，而 mypy 连报都报不出来。
     dense: DenseArm
 
     def search(self, *, user_id: str, query: str, top_k: int) -> list[Candidate]:

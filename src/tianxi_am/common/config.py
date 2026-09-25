@@ -8,17 +8,12 @@
 
 ## 两层来源，**每个键只有一个家**
 
-| 层 | 拥有哪些键 | 为什么 |
-| --- | --- | --- |
-| **环境变量**（`.env`） | 密钥、端点、**路径**、进程形态（worker 数） | **不进 git**，随机器而异 |
-| **`configs/<profile>.yaml`** | 阈值、权重、模型名、集合名 | 要能 **diff、评审、归档** |
-
-**没有重叠**：一个键要么在 env、要么在 yaml，**不允许两边都能设**。这条是刻意的——
-两处都能设的值，最终会变成"跑出来的结果和 yaml 里写的不一样，而没人知道为什么"。
-
-> ⚠ **为什么阈值不能藏进环境变量**：那会让 Step 5 的模型切换变成"改 shell 变量"——
-> **改了什么无法 diff**，而归因恰恰是那一步唯一的目的（§12.1 R1 对冲 4）。
-> 一处声明在 [`../../../configs/CLAUDE.md`](../../../configs/CLAUDE.md)。
+env（`.env`）拥有密钥 / 端点 / **路径** / 进程形态；`configs/<profile>.yaml` 拥有
+阈值 / 权重 / 模型名 / 集合名。**不允许一个键两边都能设**——两处都能设的值，最终会变成
+"跑出来的结果和 yaml 里写的不一样，而没人知道为什么"；而**阈值尤其不能藏进环境变量**：
+那会让 Step 5 的模型切换变成"改 shell 变量"、**改了什么无法 diff**，而归因恰恰是那一步
+唯一的目的（§12.1 R1 对冲 4）。分工的一处声明在
+[`../../../configs/CLAUDE.md`](../../../configs/CLAUDE.md)。
 
 ## 加载顺序
 
@@ -31,10 +26,8 @@
   → 校验                                  （不合法的值在这里响亮失败）
 ```
 
-**`.env` 由本模块读取**（2026-09-24 补）。它**不是**一条独立来源，而是"这台机器的环境"的
-本地副本——所以它排在真实环境变量**之下**，且在 CI / `export` 过的场景下自动让位。
-**这样 `.env` 才真的生效**：在此之前它只是被文档声明成"密钥的家"，而没有任何东西读它
-（`uv run` 不加载 `.env`，Makefile 也不 include 它）⇒ `make serve` 会在启动时缺密钥。
+**`.env` 由本模块读取**：它是"这台机器的环境"的本地副本，不是一条独立来源 ⇒ 排在真实
+环境变量**之下**（`uv run` 与 `Makefile` 都不加载 `.env`，不读它的话 `make serve` 启动时缺密钥）。
 
 > ⚠ **只有 `env=None`（生产路径）才读 `.env`。** 测试传一个 `env` dict 时**绝不碰磁盘**——
 > 否则"测试不依赖真实环境变量"这条纪律就破了。换 `.env` 的位置用 `TIANXI_ENV_FILE`。
@@ -42,7 +35,7 @@
 **选了一个不存在的 profile 同样报错**（不静默忽略）——静默回退会让"我明明选了 submit"
 变成一个查不出来的问题。
 
-配置项与类别的完整清单（A 外部契约常量 / B 正确性常量 / C 自设阈值）在
+配置项与类别（A 外部契约常量 / B 正确性常量 / C 自设阈值）的完整清单在
 [`../../../docs/config-reference.md`](../../../docs/config-reference.md)——**本模块不另列一份**。
 """
 
@@ -101,13 +94,12 @@ ENV_EMBED_API_KEY: Final[str] = "AML_EMB_API_KEY"
 ENV_EMBED_CACHE_DIR: Final[str] = "TIANXI_EMBED_CACHE_DIR"
 ENV_WORKERS: Final[str] = "TIANXI_WORKERS"
 
-#: reranker 的三个变量（2026-09-24 接线）。**名字沿用 `.env.example` 里早就声明的那三个**，
-#: 没有另起一套——`.env.example` 是它们的家，本表只是代码侧的引用点，两处由
-#: `tests/test_config.py` 的静态断言钉住。
+#: reranker 的三个变量。**名字沿用 `.env.example` 里那三个**（`.env.example` 是它们的家，
+#: 本表只是代码侧的引用点，两处由 `tests/test_config.py` 的静态断言钉住）。
 #:
 #: ⚠ **主网关**（`memory.021130.xyz`），不是 memory2——两个网关 host 与 key 都不同（D18）。
-#: ⚠ 它对服务**不是必需**的：它是唯一不被规则保证可用的组件（D12），
-#: 所以缺了它服务照常启动、走 `rerank_disabled` 路径——**这与 embedding 的三个变量正相反**。
+#: ⚠ 它对服务**不是必需**的（D12）：缺了照常启动、走 `rerank_disabled` 路径
+#: ——**这与 embedding 的三个变量正相反**。
 ENV_RERANKER_BASE_URL: Final[str] = "TIANXI_RERANKER_BASE_URL"
 ENV_RERANKER_API_KEY: Final[str] = "TIANXI_RERANKER_API_KEY"
 ENV_RERANKER_MODEL: Final[str] = "TIANXI_RERANKER_MODEL"
@@ -127,30 +119,26 @@ DEFAULT_ENV_FILE: Final[str] = ".env"
 #: `tests/test_config.py::test_rrf_k_is_the_same_constant_in_both_places` 钉住。
 RRF_K: Final[int] = 61
 
-#: Neighbor Expansion 的 v1 初值（§10）。
-#:
-#: ⚠ **值的家在这里**（而不是 `rank/neighbor.py`）：`common/` 是**最底层**、被所有层依赖，
-#: 而反过来（`common/` import `rank/`）是分层错误。所以默认值只能住在这里，
-#: 由 `rank/neighbor.py` **引用**——这样也就不存在"代码默认值 vs 配置默认值"两处漂移。
+#: Neighbor Expansion 的 v1 初值（§10）。**值的家在这里**（不是 `rank/neighbor.py`）：
+#: `common/` 是**最底层**、被所有层依赖，反过来（`common/` import `rank/`）是分层错误；
+#: 由消费方**引用**，也就不存在"代码默认值 vs 配置默认值"两处漂移。
 #:
 #: ⚠ 这两个量**不是调参项**：§10 明确"种子数、窗口大小、Top-K、token 预算**是同一道题**，
-#: 任何一项调整都要重算其余三项"。改它们之前要有消融数据（§12.1 R1 对冲 3）。
+#: 任何一项调整都要重算其余三项"⇒ 改它们之前要有消融数据（§12.1 R1 对冲 3；config-reference §6）。
 DEFAULT_EXPANSION_SEED_LIMIT: Final[int] = 30
 DEFAULT_RADIUS: Final[int] = 1
 
 #: §7.3 的两个检索参数初值：每路进入 RRF 的候选池大小（`N`）与 `[w_bm25, w_dense]` 权重。
 #:
 #: ⚠ **值的家在这里**（而不是 `retrieve/fusion.py`）：理由与上面两个**同一条**——
-#: `common/` 是最底层，而 `retrieve/` 与 `store/` 的 `HybridParams` 都要用到它们。
-#: （2026-09-25 之前，`200` 与 `(0.5, 0.5)` 在全仓**各有 4 份裸字面量且没有一致性测试**；
-#: 现在只剩这一处，`retrieve/` 与 `store/` 都引用它。）
+#: `retrieve/` 与 `store/` 的 `HybridParams` 都要用到它们。
 #:
 #: ⚠ 这两个是 **C 类可调项**（不同于 `RRF_K` 那种正确性常量）：**任何调整都必须有
 #: ablation 数据支撑**——Qdrant 官方明确警告"无评测集时手调权重不太可能稳定优于默认值"（§7.3）。
 DEFAULT_PREFETCH_LIMIT: Final[int] = 200
 DEFAULT_WEIGHTS: Final[tuple[float, float]] = (0.5, 0.5)
 
-#: rerank 调用的超时（秒）。**C 类自设阈值**（`rerank.timeout_seconds`）。
+#: rerank 调用的超时（秒）。**C 类自设阈值**（`rerank.timeout_seconds`，config-reference §7）。
 #:
 #: ⚠ 定这个值的两条约束**方向相反**，别只看着一边调：
 #:
@@ -158,8 +146,8 @@ DEFAULT_WEIGHTS: Final[tuple[float, float]] = (0.5, 0.5)
 #:   排队时延会抬高——那时超时会把"排队"报成"reranker 坏了"，而两者在计数器上长得一样。
 #: * **太松 ⇒ Search 被拖住**。单请求上限 30 分钟（§2.2），而 rerank 在关键路径上。
 #:
-#: 实测（2026-09-24，开发机，主网关）：**100 篇 ≈ 2.2s、200 篇 ≈ 5.3s**。
-#: 默认取 30s ⇒ 约 10 倍余量。**这是观测值，不是规格**；换模型或换网关后要重新量。
+#: 实测（开发机、主网关）：**100 篇 ≈ 2.2s、200 篇 ≈ 5.3s** ⇒ 默认 30s 约 10 倍余量。
+#: **这是观测值，不是规格**；换模型或换网关后要重新量。
 DEFAULT_RERANK_TIMEOUT_S: Final[float] = 30.0
 
 
@@ -212,7 +200,8 @@ class ModelsConfig:
     """模型名（§2.3）。"""
 
     #: ⚠ **这里是模型名的家**，不是 `.env`：它是 profile 之间**唯一真正该变**的东西，
-    #: 而 `local.yaml` / `submit.yaml` 存在的理由就是让"哪些量随模型变"能被看见。
+    #: 而 `local.yaml` / `submit.yaml` 存在的理由就是让"哪些量随模型变"能被看见
+    #: （config-reference §9）。
     embedder: str = "Qwen/Qwen3-Embedding-8B"
 
 
@@ -253,9 +242,7 @@ class NeighborConfig:
     """Neighbor Expansion（§10）。"""
 
     #: 主动扩窗的种子数——**只对 rerank 后的前 N 条扩窗**，其余候选仍保留、只是不扩展。
-    #:
-    #: ⚠ v1 初值。§10 明确"种子数、窗口大小、Top-K、token 预算**是同一道题**，
-    #: 任何一项调整都要重算其余三项" ⇒ **改它之前要有消融数据**（§12.1 R1 对冲 3）。
+    #: ⚠ 为什么值的家在这里、为什么它不是调参项：见模块顶部的 `DEFAULT_EXPANSION_SEED_LIMIT`。
     expansion_seed_limit: int = DEFAULT_EXPANSION_SEED_LIMIT
     #: 扩窗半径，**单位是 QA 对**：±1 拿回前后各**一整对**（最多 4 条消息）。
     radius: int = DEFAULT_RADIUS
@@ -275,10 +262,9 @@ class BudgetConfig:
 class PackagingConfig:
     """上下文打包的渲染变体（§11.3）。**只有一个键，而且默认值就是 v1 定稿口径。**
 
-    ⚠ 这个键**存在的唯一理由是 T1**（§13 的"时间戳前缀 带 / 不带"）——
-    `config-reference.md` §2 明文要求那个对照项"同样要可配"。它**不是**一个调参项：
-    §11.3 的结论是"不注入绝对时间"（两条互相独立的裁判规则都指向它），
-    打开它只会让分数变差；打开它的目的是**把那条结论在代理评测上验一遍**。
+    ⚠ 这个键**存在的唯一理由是 T1**（§13 的"时间戳前缀 带 / 不带"，config-reference §2）。
+    它**不是**调参项——§11.3 的结论是"不注入绝对时间"，打开它只会让分数变差；
+    打开它的目的是**把那条结论在代理评测上验一遍**。
     """
 
     #: `false`（**v1 定稿**）⇒ `content` 里没有任何绝对时间戳，时间只走 `event_time` 筛选。
@@ -294,9 +280,9 @@ class PackagingConfig:
 class RerankConfig:
     """远程 reranker（§11.2 / D12）。**只放阈值与开关；端点与密钥在 env。**
 
-    ⚠ **本段刻意只有两个键**（2026-09-24 接线时定的）。理由：一个键要有消费者才收
-    （§6.1 对 DDL 的同一条纪律）——而 rerank 的真实旋钮只有"开不开"与"等多久"。
-    想调模型就换 `.env` 的 `TIANXI_RERANKER_MODEL`（那是端点身份，不是阈值）。
+    ⚠ **本段刻意只有两个键**：一个键要有消费者才收（§6.1 对 DDL 的同一条纪律）——
+    而 rerank 的真实旋钮只有"开不开"与"等多久"。想调模型就换 `.env` 的
+    `TIANXI_RERANKER_MODEL`（那是端点身份，不是阈值）。
     """
 
     #: §15 的消融开关之一。`false` ⇒ **不构造 reranker**，Search 直接用融合名次。
@@ -345,7 +331,7 @@ class AppConfig:
     reranker_api_key: str = ""
     #: 请求里声明的模型名（进 run record 的配置指纹；D12 要求提交时不得更换）。
     #:
-    #: ⚠ 实测（2026-09-24）：**网关会忽略这个字段**，响应里 `model` 回的是服务端路径
+    #: ⚠ 实测：**网关会忽略这个字段**，响应里 `model` 回的是服务端路径
     #: （`/data/…/Qwen3-Reranker-4B`）。保留它是因为①请求该带上自己声明的模型、
     #: ②它是 run record 里"这次用的哪个 reranker"的唯一来源。**不要拿它做路由或校验。**
     reranker_model: str = ""
@@ -685,16 +671,15 @@ def validate(cfg: AppConfig) -> AppConfig:
 def assert_single_process() -> None:
     """确认当前进程**不是**被多进程 supervisor 派生出来的 worker。
 
-    `validate()` 只能管住"配置里写的 worker 数"。而 `--workers 4` 是**命令行**给的，
-    配置层看不见它——所以这里补一道**运行期**的守卫，否则那条约束仍然只是文档。
+    `validate()` 只能管住"配置里写的 worker 数"，而 `--workers 4` 是**命令行**给的 ⇒
+    这里补一道**运行期**的守卫，否则那条约束仍然只是文档。
 
     **判据**：uvicorn 的 `--workers N`（N>1）与 `--reload` 都会用 `multiprocessing`
     派生一个子进程来跑 app，于是子进程里 `multiprocessing.parent_process()` **不是 None**；
     而单进程启动时它是 `None`。
 
-    ⚠ **无法与 `--reload` 区分**（两者在子进程里形状完全相同——父进程的 pid 与名字是唯一
-    可见的信息）。因此 `--reload` 也会被拦下。**这是可接受的**：开发期请用 `make serve`
-    （无 `--reload`、`--workers 1`），或手工去掉 `--reload`。
+    ⚠ **无法与 `--reload` 区分**（两者在子进程里形状完全相同），所以 `--reload` 也会被拦下
+    ——**这是可接受的**：开发期请用 `make serve`（无 `--reload`、`--workers 1`）。
 
     ⚠ 前提假设：**v1 的服务入口只有 uvicorn**。若将来有别的进程宿主（例如 harness 用
     `multiprocessing` 跑服务），这条会误伤——**届时必须重审**，而不是加个开关绕过去。

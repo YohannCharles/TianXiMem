@@ -1,6 +1,6 @@
 # benchmark_data/ — 归档说明
 
-> 最后核对：2026-09-24，对应 PRD §12.2 / §12.3 / §12.5 与附录 B。**冲突以 PRD 为准。**
+> 最后核对：2026-09-25，对应 PRD §12.2 / §12.3 / §12.5 与附录 B。**冲突以 PRD 为准。**
 
 ## 这个目录是什么
 
@@ -15,10 +15,10 @@
 
 ---
 
-## 出处链：字节从哪来（2026-09-24 核对）
+## 出处链：字节从哪来
 
 **除了 `rh.md` / `rh2.md` / `rh3.md` 三份，每一份都有确定的出处，且都能按 commit / revision 钉死。**
-（2026-09-24 全部逐字节核对通过：**24 份里 21 份有出处，3 份取不回来**。）机器可查的清单（出处 + sha256）在
+（逐字节核对通过：**24 份里 21 份有出处，3 份取不回来**。）机器可查的清单（出处 + sha256）在
 [`../tools/fetch_benchmark_data.py`](../tools/fetch_benchmark_data.py)——**哈希只写那一处，本文不重复**。
 取回 `make fetch-data`，校验 `make data-check`。
 
@@ -28,7 +28,7 @@
 | 7 个 `pipeline_*.py` / `clb_pipeline.py`、`aml_readme.md` | [github.com/AML-memory/agent-memory-leaderboard](https://github.com/AML-memory/agent-memory-leaderboard) 的 `data/*/pipeline.py` + 根 `README.md` | 按 commit 钉死 |
 | `locomo_refined.json`、`questions.jsonl`、`locomo_refined_readme.md` | [github.com/mem-eval-suite/LoCoMo_refined](https://github.com/mem-eval-suite/LoCoMo_refined) | 按 commit 钉死 |
 | `scriptmem_q.jsonl`、`scriptmem_readme.md` | [github.com/memorax-ai/ScriptMem](https://github.com/memorax-ai/ScriptMem) | 按 commit 钉死 |
-| `lme_s_cleaned.json` | HF [`xiaowu0162/longmemeval-cleaned`](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned) 的 `longmemeval_s_cleaned.json` | 按 revision 钉死。**sha256 = HF 的 LFS oid**（2026-09-24 实测相等） |
+| `lme_s_cleaned.json` | HF [`xiaowu0162/longmemeval-cleaned`](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned) 的 `longmemeval_s_cleaned.json` | 按 revision 钉死。**sha256 = HF 的 LFS oid**（实测相等） |
 | `clbench.jsonl` | HF [`tencent/CL-bench`](https://huggingface.co/datasets/tencent/CL-bench) 的 `CL-bench.jsonl` | 按 revision 钉死。sha256 = LFS oid |
 | `locomo10.json` | [github.com/snap-research/locomo](https://github.com/snap-research/locomo) 的 `data/locomo10.json` | 按 commit 钉死 |
 | `pm_32k.csv`、`pm_questions_128k.csv`、`pm_questions_1M.csv` | HF [`bowen-upenn/PersonaMem-v1`](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v1) 的 `questions_{32k,128k,1M}.csv` | 按 revision 钉死。⚠ **不是 v2 仓**——v2 仓里只有 `benchmark/*.csv`，本地文件名是被改过的 |
@@ -56,15 +56,15 @@
 | 文件 | 是不是数据 |
 | --- | --- |
 | `lme_s_cleaned.json` | ✅ **用这个**（LongMemEval） |
-| `lme_test.json` | 🗑 **已于 2026-09-24 删除**（266MB）——它是"用得上但**明令别用**"的陷阱：多出 1,230 个空 session + 15 个干扰 session，**会污染按 20 条切批的埋点**（§6.5）。要复核那 1,230 这个数字时，从上游 LongMemEval 取回（**出处未核**，见 `tools/fetch_benchmark_data.py` 的 `DELETED`） |
+| `lme_test.json` | 🗑 **已删除**（266MB）——它是"用得上但**明令别用**"的陷阱：多出 1,230 个空 session + 15 个干扰 session，**会污染按 20 条切批的埋点**（§6.5）。要复核那 1,230 这个数字时，从上游 LongMemEval 取回（**出处未核**，见 `tools/fetch_benchmark_data.py` 的 `DELETED`） |
 | `questions.jsonl` | ✅ LoCoMo-Refined 题目（1,382 题），**含 `evidence_messages`（只有证据轮）** |
 | `locomo_refined.json` | ✅ LoCoMo-Refined 全文（10 个 conversation），**含 `conversation` 整段对话** |
 | `locomo10.json` | 原始 LoCoMo |
 | `clbench.jsonl` | ✅ CL-Bench（真 JSONL） |
-| `pm_32k.csv` / `pm_questions_128k.csv` / `pm_questions_1M.csv` | PersonaMem 三个 split 的问题表。**来源是 v1 仓的 `questions_{32k,128k,1M}.csv`**（2026-09-24 逐字节核对）——⚠ 原先记作"v2 三个 split"，**v2 仓里没有这三份** |
+| `pm_32k.csv` / `pm_questions_128k.csv` / `pm_questions_1M.csv` | PersonaMem 三个 split 的问题表。**来源是 v1 仓的 `questions_{32k,128k,1M}.csv`**——⚠ **来源是 v1 仓**：v2 仓里没有这三份 |
 | `scriptmem_q.jsonl` | ScriptMem **题目**（457 道 MCQ：Single Choice / Multi-Select / Ordering，4 个 script / 6 种题型）。**对话原文因版权未发布** |
-| `beam.json` / `beam_rows.json` | 🗑 **已于 2026-09-24 删除**——**失败下载的残留**（15 字节 `Entry not found` / 29 字节 `{"error":"Unexpected error."}`）。留着只会让下一个人重排一遍 |
-| `beam_100k.json` | 🗑 **已于 2026-09-24 删除**——**不是数据集**，是 HuggingFace datasets-server 的**分页响应**（顶层键 `features`/`rows`/`num_rows_total`，且 `num_rows_total=20`、**实际只取到 1 行**） |
+| `beam.json` / `beam_rows.json` | 🗑 **已删除**——**失败下载的残留**（15 字节 `Entry not found` / 29 字节 `{"error":"Unexpected error."}`）。留着只会让下一个人重排一遍 |
+| `beam_100k.json` | 🗑 **已删除**——**不是数据集**，是 HuggingFace datasets-server 的**分页响应**（顶层键 `features`/`rows`/`num_rows_total`，且 `num_rows_total=20`、**实际只取到 1 行**） |
 | `rh.md` | ❌ **不是数据**——14 字节的桩文件，全文只有 `404: Not Found`（失败下载的占位） |
 | `rh2.md` / `rh3.md` | ⚠️ **不是 AML 材料**——它们是第三方系统 **MemoryHub** 自己的说明与**跑分结果**（R@k / P@k / MRR / NDCG / latency 与各次 run 的清单）。**与 AML 的数据集 schema 无关，不要当成数据集的读取格式依据** |
 
@@ -76,11 +76,11 @@
 
 ```text
 pipeline_locomo-refined.py     LoCoMo-Refined / LongMemEval 共用契约的代表
-pipeline_longmemeval-s.py      LongMemEval（**2026-09-24 补入**，原归档缺这一份）
+pipeline_longmemeval-s.py      LongMemEval
 clb_pipeline.py                CL-Bench
 pipeline_beam.py               BEAM
 pipeline_scriptmem.py          ScriptMem
-pipeline_v1_personamem.py      PersonaMem v1（**2026-09-24 补入**，原归档只有 v2）
+pipeline_v1_personamem.py      PersonaMem v1
 pipeline_v2_personamem.py      PersonaMem v2
 ```
 
@@ -96,7 +96,7 @@ pipeline_v2_personamem.py      PersonaMem v2
 > `sys.path.insert(0, <不存在路径>)` 只是塞进一个没有该模块的条目，import 会继续往后找到 `PYTHONPATH` 里的那份。
 > 好处：`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。细则见 [`../eval/harness/CLAUDE.md`](../eval/harness/CLAUDE.md)。
 
-### ⚠ 本地修订：这 7 份**不再逐字节等于上游**（2026-09-25）
+### ⚠ 本地修订：这 7 份**不再逐字节等于上游**
 
 **已核实**：上游钉住的那个 revision 上，7 个 pipeline 的 `answer` / `evaluate` 第一步就崩——
 
@@ -123,14 +123,14 @@ async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="
 
 ---
 
-## 许可证（2026-09-22 核对，2026-09-23 回原文验证）
+## 许可证（已回原文验证）
 
 | 数据集 | 许可 | 归档内的原文依据 |
 | ---- | ---- | ---- |
 | LoCoMo-Refined | **CC BY-NC 4.0** | `locomo_refined_readme.md:9` 徽章 + `:296` 正文："LoCoMo-Refined is released under **CC BY-NC 4.0**. This benchmark modifies the original LoCoMo benchmark; see `NOTICE` for attribution and modification details." |
 | ScriptMem | **CC BY-NC 4.0** | `scriptmem_readme.md:9` + `:183` |
 | PersonaMem v2 | **CC BY 4.0** | `pmv2.md:2` 的 YAML frontmatter：`license: cc-by-4.0` |
-| LongMemEval | **MIT** | ⚠ 归档内**仍**无依据（`lme_readme.md` 无 License 章节，`grep -ni licen` 零命中）。**2026-09-24 从上游取到**：HF `xiaowu0162/longmemeval-cleaned` 数据集卡 `license: mit`，且 `github.com/xiaowu0162/LongMemEval-V2` 仓内有 `LICENSE` 文件——**两条独立出处，但都不在归档里** |
+| LongMemEval | **MIT** | ⚠ 归档内**仍**无依据（`lme_readme.md` 无 License 章节，`grep -ni licen` 零命中）。**从上游取到出处**：HF `xiaowu0162/longmemeval-cleaned` 数据集卡 `license: mit`，且 `github.com/xiaowu0162/LongMemEval-V2` 仓内有 `LICENSE` 文件——**两条独立出处，但都不在归档里** |
 | BEAM / CL-Bench | **归档内无许可证文本** | ❌ |
 
 ### 两条必须记住的推论
@@ -147,10 +147,10 @@ async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="
 
 | 断言 | 状态 |
 | --- | --- |
-| LongMemEval 的 MIT 许可 | ✅ **2026-09-24 取到出处**（上游 HF 数据集卡 + LongMemEval-V2 仓 `LICENSE`），但**归档内仍无** |
-| AML 数据条款原文（禁止训练） | ❌ **归档内无依据**——**2026-09-24 复核过 AML 仓 README（= `aml_readme.md`，逐字节一致）：全文无 "train" 措辞**，只有"remain subject to their respective upstream licenses and usage terms" |
+| LongMemEval 的 MIT 许可 | ✅ **已取到出处**（上游 HF 数据集卡 + LongMemEval-V2 仓 `LICENSE`），但**归档内仍无** |
+| AML 数据条款原文（禁止训练） | ❌ **归档内无依据**——**复核过 AML 仓 README（= `aml_readme.md`，逐字节一致）：全文无 "train" 措辞**，只有"remain subject to their respective upstream licenses and usage terms" |
 | CLBench 许可证文本 | 归档内无 |
 | **"`speaker_1_memories` 等字段的使用方式"** | ✅ 有依据，且**现在有两份**：`pipeline_locomo-refined.py` 与 `pipeline_longmemeval-s.py` 的渲染函数（后者确认了 `{{speaker_1_memories}}` / `{{speaker_2_memories}}` 的 `<memories>` 块形状） |
 | **检索结果 → `memories` 字段的映射** | ❌ **在 AML 那一侧，归档里看不到**（§11.3）——这正是 S1 只能靠 Smoke 消除的原因 |
 
-**另外**：LongMemEval 的 pipeline 文件**原归档缺失，2026-09-24 已从上游补入**（`pipeline_longmemeval-s.py`）——PRD 里"LoCoMo-Refined / LongMemEval 契约相同"这条断言，**因此不再只靠 LoCoMo 那一份文件作证**。
+**另外**：LongMemEval 的 pipeline 文件**原归档缺失，已从上游补入**（`pipeline_longmemeval-s.py`）——PRD 里"LoCoMo-Refined / LongMemEval 契约相同"这条断言，**因此不再只靠 LoCoMo 那一份文件作证**。

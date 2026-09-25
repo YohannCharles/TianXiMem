@@ -61,14 +61,14 @@ registry.py       数据指纹（版本 + 切批口径）——§13 的记录要
 
 | 用途 | 取哪个文件 |
 | --- | --- |
-| **喂给 Add 的对话全文** | **`data/public/conversations.jsonl`**（D16） |
+| **喂给 Add 的对话全文** | `data/public/conversations.jsonl`（开发 clone 才有）**优先**；归档退回 `locomo_refined.json` 的 `conversation`（D16） |
 | 判断/评分用的题目与 gold | `questions.jsonl`（或 `locomo_refined.json` 的 `qa`） |
 
 **二者逐题对齐**（仅 6 处答案 int/str 差异）——所以两边都要加载、按 `qa_id` 对齐。**别假设用一个就够。**
 
 > **两条语义后果：**
 >
-> 1. **`conversations.jsonl` 的 text 恰为 `locomo_refined.json` 的去首尾空白版**（5,882 条中 209 条仅首尾空白不同、0 条内容不同，全部同向）。**这不只是格式方便**：[`../../tests/CLAUDE.md`](../../tests/CLAUDE.md) 要求 content **首尾无空白**（AML 只做 `"\n".join(...)`、不插分隔符），**用 `locomo_refined.json` 作源会直接引入 209 条契约违规**（实测记录见 D16）。
+> 1. **Add 源的两种布局（`conversations.jsonl` 优先 / 归档退回 `locomo_refined.json`）与 `strip()` 口径见 D16。** [`../../tests/CLAUDE.md`](../../tests/CLAUDE.md) 要求 content **首尾无空白**（AML 只做 `"\n".join(...)`、不插分隔符）——归一化层对两条路径都保证这一点。
 > 2. **LoCoMo 是两个真人在对话**，此处的 `user`/`assistant` 是**数据集给 `speaker_a`/`speaker_b` 的约定标签，不是"用户 vs 助手"**。在 LoCoMo 上配对规则实际是"speaker_a 的一轮 + 对方回应，直到 speaker_a 的下一轮"。**LongMemEval 的 `role: user` 才是真 user**——两边语义不同，**别混**。
 
 ### CL-Bench
@@ -94,7 +94,7 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 
 > **LoCoMo 侧不用"归化出 role"**（`conversations.jsonl` 自带）——**但归一化层仍要写**，因为 LongMemEval 走的是 `role`+`content` 那条路，而**两边的输出必须先统一，`pairing/` 才只依赖一个字段**。
 >
-> ⚠ **两个数据集都没有 per-turn 时间戳** ⇒ `event_time` 在 session 内**必然没有区分度**（不是"可能"）。**这正是 `pair_idx` 必须连续的原因**——它是唯一能保证 ±1 邻域稳定的东西。
+> ⚠ **两个数据集都没有 per-turn 时间戳** ⇒ `event_time` 在 session 内**必然没有区分度**（不是"可能"）。
 
 **`locomo_refined.json` 的 `conversation` 结构**：一个 dict，键是 `speaker_a` / `speaker_b`，然后成对出现 `session_N_date_time` / `session_N`；每个 `session_N` 是 turn 的列表。**对话全文在这里**（不在 `questions.jsonl`）。
 
@@ -107,7 +107,7 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 **两个直接后果：**
 
 1. **harness 必须为每条消息合成 `timestamp`**——否则 §2.1 的可选字段为空，§6.1 的 `event_time` 全为 NULL，`created_at` 只能发 `""`（§11.3 的有定义降级路径）。
-2. **同一个 session 内所有消息拿到同一个日期** ⇒ `event_time` 在 session 内没有区分度 ⇒ **`pair_idx` 不是可选的保险，是唯一能保证邻域稳定的东西**（§6.1）。
+2. **同一个 session 内所有消息拿到同一个日期** ⇒ `event_time` 在 session 内没有区分度 ⇒ **`pair_idx` 是唯一能保证邻域稳定的东西**（§6.1）。
 
 ---
 
@@ -131,8 +131,8 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 
 #### `lme_s_cleaned.json` vs `lme_test.json` —— 已复算
 
-> **⚠ 2026-09-24 更新**：下表**是当时算的，结论仍成立**；但 **`lme_test.json` 已从归档删除**（它是个等着被误用的坑，见 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md)）。
-> **⇒ 那些数字现在无法在本地复算**——要复核"1,230"，得先从上游 LongMemEval 取回那一份（线索见 [`../../tools/fetch_benchmark_data.py`](../../tools/fetch_benchmark_data.py) 的 `DELETED` 段）。
+> **⚠ `lme_test.json` 已不在归档里**（它是个等着被误用的坑，见 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md)）。
+> **⇒ 下表那些数字无法在本地复算**——要复核"1,230"，得先从上游 LongMemEval 取回那一份（线索见 [`../../tools/fetch_benchmark_data.py`](../../tools/fetch_benchmark_data.py) 的 `DELETED` 段）。
 
 | 断言 | 核实结果 |
 | --- | --- |
@@ -177,7 +177,7 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 | --- | --- |
 | **2** | **ScriptMem 做不了代理评测**——对话原文因版权原因未发布 |
 | **3** | **不要用 MemoryAgentBench 当代理**——它不在 AML 的数据集清单里，在其上调优未必迁移 |
-| **8** | **BEAM 的数据实际上不在归档里**。`beam.json` / `beam_rows.json` 是失败下载的残留（`Entry not found` / `{"error":"Unexpected error."}`）；`beam_100k.json` 是 HuggingFace datasets-server 的**分页响应**（顶层键 `features`/`rows`/`num_rows_total`，且 `num_rows_total=20`、实际只取到 1 行），**不是数据集**。（这三份**已于 2026-09-24 删除**，所以现在归档里连"疑似数据"都没有了。）真要覆盖 BEAM，**须先把数据取回来** |
+| **8** | **BEAM 的数据实际上不在归档里**。`beam.json` / `beam_rows.json` 是失败下载的残留（`Entry not found` / `{"error":"Unexpected error."}`）；`beam_100k.json` 是 HuggingFace datasets-server 的**分页响应**（顶层键 `features`/`rows`/`num_rows_total`，且 `num_rows_total=20`、实际只取到 1 行），**不是数据集**。（这三份已从归档删除——**归档里连"疑似数据"都没有了**。）真要覆盖 BEAM，**须先把数据取回来** |
 
 **第 7 条（PersonaMem）**：三个 split 的 schema 不统一——`question_type` 的词表在 32k / 128k / 1M 之间互不相同；`correct_answer` 在 32k 里是 `(c)` 这类选项字母、在 128k/1M 里是整段选项文本。**"MCQ 精确文本匹配"必须先做归一化**，harness **不要硬编码单一词表或单一答案格式**。
 

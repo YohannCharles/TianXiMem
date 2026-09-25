@@ -5,11 +5,11 @@
 * 文件末尾三个用例走**真的 HTTP**（`TestClient`）：覆盖路由、状态码、
   以及"边界校验在真 HTTP 上是 422"。
 
-> **曾经的一个跨层缺口（2026-09-24 已修）**：`SqliteStore` 曾持有单个
-> `sqlite3.Connection`，而 FastAPI 的 `def` 路由跑在**线程池**里 ⇒
+> **跨层：连接生命周期与线程**（见 `store/sqlite_store.py` 的连接模型一节 + D17）：
+> FastAPI 的 `def` 路由跑在**线程池**里，而 `sqlite3.Connection` 只能在**创建它的线程**里用
+> ⇒ 必须**短生命周期连接**；长期持有一个连接会让**任何 HTTP 往返**都抛
 > `sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in
-> that same thread.`，**任何 HTTP 往返都跑不了**。修法是**短生命周期连接**
-> （见 `store/sqlite_store.py` 的连接模型一节 + D17）。
+> that same thread.`
 
 ⚠ 用假 Qdrant（鸭子类型）而**不是**真容器：本文件要精确控制"返回哪些 id、分数是多少"。
 真 Qdrant 的行为由 `tests/test_qdrant_store.py` 覆盖。

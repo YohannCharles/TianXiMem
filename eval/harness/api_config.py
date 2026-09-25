@@ -10,10 +10,10 @@ from api_config import (ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL,
                         JUDGE_API_BASE, JUDGE_API_KEY, JUDGE_MODEL, JUDGE_VERSION)
 ```
 
-`__file__` 在 `benchmark_data/` 下 ⇒ `parents[2]` 解析到**仓库外一层**，所以那份
-`api_config` 今天不存在、7 个 pipeline 全部 import 失败。
+`__file__` 在 `benchmark_data/` 下 ⇒ `parents[2]` 解析到**仓库外一层**——那份 `api_config`
+不存在，7 个 pipeline 全部 import 失败。
 
-**处置（D12 之后已简化，见 [`CLAUDE.md`](./CLAUDE.md)）**：**不在仓库外创建它**。
+**处置（D12，见 [`CLAUDE.md`](./CLAUDE.md)）**：**不在仓库外创建它**。
 本文件就是那一份，放在仓库内；由 harness 在 subprocess 里注入
 `PYTHONPATH=<本目录>`。`sys.path.insert(0, <不存在的路径>)` 只是塞进一个没有该模块的
 条目，**import 会继续往后找到 `PYTHONPATH` 里的这份**——归档保持只读，

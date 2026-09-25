@@ -11,10 +11,9 @@
 
 ## 关于 `query_instruction.py`（默认关）
 
-Qwen3-Embedding-8B 的模型卡推荐**查询侧**加 `Instruct: …\\nQuery:…`、文档侧不加，
-并称不加会让检索掉约 1%–5%。那层适配器在
-[`../embed/query_instruction.py`](../embed/query_instruction.py)，
-对**查询侧**生效、对文档侧逐字节不动。**它不是"改写"**——是输入格式适配。
+Qwen3-Embedding-8B 的模型卡推荐**查询侧**加 `Instruct: …\\nQuery:…`、文档侧不加。
+那层适配器在 [`../embed/query_instruction.py`](../embed/query_instruction.py)，**它不是"改写"**
+——是输入格式适配（是否开启见 config-reference §3）。
 
 本模块用**鸭子类型**认它：持有对象若有 `encode_query()` 就用它，否则退回 `encode()`。
 这样 `DenseArm` 不必知道有没有开前缀，而**唯一不可违反的顺序**（前缀必须加在缓存之上）

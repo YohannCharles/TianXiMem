@@ -30,17 +30,14 @@
 ## 三条先读再动手的边界
 
 1. **`store/` 是唯一接触 SQLite 与 Qdrant 的目录。** 上层拿到领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`。
-2. **`common/render` 是渲染的唯一实现**（§7.2 / §11.3 要求 embedding 的输入与返回给 AML 的 `content` 是同一份渲染——不一致会导致"检索命中的是什么"与"模型读到的是什么"漂移，**而这种漂移不会报错**）。`embed/` 与 `rank/` 都不自己拼字符串。
+2. **`common/render` 是渲染的唯一实现**（§7.2 / §11.3）：embedding 的输入与返回给 AML 的 `content` 必须是同一份渲染，不一致会让"检索命中的"与"模型读到的"**静默漂移**。`embed/` 与 `rank/` 都不自己拼字符串。
 3. **`Search` 路径不调用任何生成式 LLM**，除非走了 `agent/`。**`Add` 路径完全不调用 LLM**（§7.2）——embedding 是唯一的 Add 侧成本。
 
 ---
 
 ## 命名与结构约定
 
-- **src 布局**：包根在 `src/tianxi_am/`。
-  > ✅ **已办（2026-09-24）**：~~`[tool.uv] package = false` 待改成 `true`~~ —— 已改成 `true`，并补了 `[build-system]`（hatchling）+
-  > `[tool.hatch.build.targets.wheel] packages = ["src/tianxi_am"]`（src 布局必须显式声明，否则 hatchling 找不到包）。
-  > 效果：`uv sync` 以 **editable** 方式装上本仓库，`uvicorn` / `python -m` **不再需要 `PYTHONPATH`**（此前只有 pytest 靠 `pythonpath = ["src", "."]` 绕过）。
-  > ⚠ 注意 `make sync` 走的是 `--all-extras`，会把 `[local]`（torch / transformers 栈，数 GB）一起装上——**提交链路不需要它**。
+- **src 布局**：包根在 `src/tianxi_am/`——`[tool.uv] package = true` + `[build-system]`（hatchling）+ `[tool.hatch.build.targets.wheel] packages = ["src/tianxi_am"]`（**必须显式声明**，否则 hatchling 找不到包）让 `uv sync` 以 editable 方式装上本仓库，`uvicorn` / `python -m` 不需要 `PYTHONPATH`。
+  > ⚠ `make sync` 走的是 `--all-extras`，会把 `[local]`（torch / transformers 栈，数 GB）一起装上——**提交链路不需要它**。
 - **一个模块一件事**：目录名对应 PRD 的一节或一条链路。**若发现某个模块需要同时满足两节的互斥要求，那是切分错了，先回去改 `docs/architecture.md`。**
 - **不在本包内读环境变量**——统一走 `common/` 的配置加载。

@@ -1,6 +1,6 @@
 # AML 参赛契约与合规自查
 
-> 最后核对：2026-09-24，对应 PRD §2 / §11.3 / §17。**冲突以 PRD 为准。**
+> 最后核对：2026-09-25，对应 PRD §2 / §11.3 / §17。**冲突以 PRD 为准。**
 > §7 是**外部来源补充**（非 PRD），出处与可信度逐条标注——**它不覆盖本节 1–6。**
 > 本节每条都是**不可协商**的（§2 开头逐字："这一节的每一条都不可协商"）。
 
@@ -134,9 +134,9 @@
 
 ---
 
-## 7. 外部规范补充（**非 PRD 来源**，2026-09-24 收录）
+## 7. 外部规范补充（**非 PRD 来源**）
 
-**出处**：<https://github.com/dlxeva/flowgrid-aml-retriever/blob/main/docs/API_CONTRACT.md>（团队指认，2026-09-24）。
+**出处**：<https://github.com/dlxeva/flowgrid-aml-retriever/blob/main/docs/API_CONTRACT.md>（团队指认）。
 它自称核对过三个**一手**来源（`agentmemories.ai/api-guide` 的 `05 ADD / SEARCH CONTRACT` 与
 `06 ERROR HANDLING`、官方评测仓 `AML-memory/agent-memory-leaderboard` 的 README
 「Disclosed production parameters」、官方赛事页），并自述"上游要求会变，跑新一轮评测前应比对当前官方文档"。
@@ -147,12 +147,12 @@
 
 ### 7.1 切批口径（**S2 只清掉一半**）
 
-**一手来源**（[官方 api-guide](https://agentmemoryleaderboard.ai/api-guide)，2026-09-24 抓取）
+**一手来源**（[官方 api-guide](https://agentmemoryleaderboard.ai/api-guide)）
 给的规则只有一句：
 
 > "Ordinary Textual splits deterministically at either 20 messages or 2,000 Adapter-counted words."
 
-⚠ 本节原先记的"原文"（"在最近的**完整消息或句子边界**分段"）**在一手来源里复现不出来**——
+⚠ **不要引用"在最近的完整消息或句子边界分段"这个"原文"——它在一手来源里复现不出来**：
 `sentence boundary` 与 `complete message` 两个短语**整页都不存在**。那个说法出自**二手转述**，
 而它引用的三个一手来源都不在本仓归档里。
 
@@ -164,7 +164,7 @@
 | **「词」怎么数** | ⚠ **没有定义**——只写"按冻结 Adapter 计数"（§6.5 的表述是"Adapter 计的词"）⇒ **S2 只清掉一半** |
 | **单条消息超过 2,000 词怎么办** | ⚠ **整份文档没有任何规定**，官方口径是当作 open question、**去问主办方** ⇒ 登记为 §17.1 的 **S5** |
 
-**已量的影响面**（2026-09-24，全量两份数据，词数用空白切分近似）：
+**已量的影响面**（全量两份数据，词数用空白切分近似）：
 LoCoMo 单条消息**最长 87 词** ⇒ 从不触到词数上限，**两条路径在它上面完全重合**；
 LongMemEval 中位 75 / **最长 11,661 词**，**60 条超 2,000 词**（**全部是 `user` 且全部在
 session 第 0 位**，影响 **57/500 = 11.4% 的题**），**40%（9,528/23,867）的 session 首批被
@@ -175,7 +175,7 @@ session 第 0 位**，影响 **57/500 = 11.4% 的题**），**40%（9,528/23,867
 > "连续 user 消息并入同一个 `question`"，于是**即使 S5 的答案是"会切开"，配对也是对的**。
 > 该决定**不依赖** S5 的结论，也不依赖 S2 的词数口径。
 
-### 7.2 ⚠ **`GET /health` —— 平台会探，我们已实现**（2026-09-24 起）
+### 7.2 ⚠ **`GET /health` —— 平台会探，我们已实现**
 
 **原文**："Health：**无需鉴权的 GET**，返回任意 2xx 即视为正常。未单独配置 Health 地址时，
 正式任务检查与 Add **同源的 `/health`**。"
@@ -183,7 +183,7 @@ session 第 0 位**，影响 **57/500 = 11.4% 的题**），**40%（9,528/23,867
 **当时的冲突**：PRD §2.1 与根 `CLAUDE.md` 都写着本系统"**只提供 Add / Search 两个端点**"，
 而 `service/routes.py` 也只有 `/add` 与 `/search` ⇒ **`GET /health` 会 404**。
 
-**处置（2026-09-24 按团队决定，S4 的对冲）**：[`service/routes.py`](../src/tianxi_am/service/routes.py)
+**处置（团队决定，S4 的对冲）**：[`service/routes.py`](../src/tianxi_am/service/routes.py)
 的 `build_router()` 里加了 `GET /health` —— **只回 `{"status": "ok"}`，不探任何下游**
 （SQLite / Qdrant / 网关一个都不碰）：探活一旦做成深检查，任何一个抖动都会让平台判我们不健康，
 而本端点的**唯一作用**就是让平台看得见我们。回归用例：

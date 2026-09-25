@@ -116,8 +116,7 @@ def test_weights_must_be_two_non_negative_not_both_zero() -> None:
 def test_make_hybrid_params_returns_the_store_type() -> None:
     """校验通过后交给 `store/` 的仍是它认识的那个类型（**执行代码不搬**）。
 
-    ⚠ 这条**不验证"转发"**——名字里原先写着 `forwarded`，而它只断言了类型与字段值
-    （2026-09-25 改名）。真正"参数到达 Qdrant"由
+    ⚠ 这条**不验证"转发"**——它只断言类型与字段值；真正"参数到达 Qdrant"由
     `test_build_services_forwards_retrieval_params_to_the_store` 守。
     """
     params = make_hybrid_params(prefetch_limit=50, weights=[0.7, 0.3], rrf_k=61)
@@ -293,15 +292,13 @@ def test_search_never_returns_more_than_top_k() -> None:
 def test_build_services_forwards_retrieval_params_to_the_store(tmp_path) -> None:
     """**配置里的检索参数必须真的到达 Qdrant**——`retrieve/CLAUDE.md` 的"参数所有权"。
 
-    ⚠ 这条用例的由来（2026-09-25）：先前这里是
-    `assert retriever.params.prefetch_limit == 7`——它只验证"字段被赋值"，
-    **不验证它到达了执行处**。而 `HybridRetriever.search()` 当时根本没把 `params`
-    传给 `store.hybrid_search()`，`build_services()` 也没给 `QdrantStore` 传 `hybrid=`
-    ⇒ 改 yaml 里的 `prefetch_limit` / `weights` **静默无效**，只因 store 的默认值
+    ⚠ 只断言"字段被赋值"是**空过的**：`HybridRetriever.search()` 若没把 `params` 传给
+    `store.hybrid_search()`、或 `build_services()` 没给 `QdrantStore` 传 `hybrid=`，
+    改 yaml 里的 `prefetch_limit` / `weights` 就**静默无效**——只因 store 的默认值
     恰好与 config 默认值相等而看不出来。
 
-    ⇒ 所以断言必须落在**装配产物**上：`build_services(config)` 造出的那个 `QdrantStore`
-    携带的参数，就是 config 给的那些。**故意用非默认值**——用默认值的话，
+    ⇒ 断言落在**装配产物**上：`build_services(config)` 造出的那个 `QdrantStore`
+    携带的参数就是 config 给的那些。**故意用非默认值**——用默认值的话，
     改坏了这条用例也照样绿。
     """
     from tianxi_am.common.config import (

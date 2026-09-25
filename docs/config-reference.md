@@ -1,6 +1,6 @@
 # 配置项参考
 
-> 最后核对：2026-09-24，对应 PRD §6–§11、§15。**冲突以 PRD 为准。**
+> 对应 PRD §6–§11、§15。**冲突以 PRD 为准。**
 
 ## 为什么这份清单存在
 
@@ -17,17 +17,17 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | 文件 | 用途 | 模型 | 状态 |
 | --- | --- | --- | --- |
 | `configs/default.yaml` | 基线值，所有 profile 的父级 | Qwen3-Embedding-8B（**开发期唯一有活端点的**） | ✅ |
-| `configs/local.yaml` | **开发期**：代理评测、迭代、消融 | 同上 | ✅（**今天只改集合名**） |
+| `configs/local.yaml` | **开发期**：代理评测、迭代、消融 | 同上 | ✅（**只覆盖集合名**） |
 | `configs/submit.yaml` | **提交期**：Full 定稿 | `text-embedding-v4` + `gpt-4o-mini` | ⬜ Step 5 |
 
 `local.yaml` 与 `submit.yaml` 只覆盖**模型与由模型派生的量**（向量维度、token 预算实测量、全部标定阈值），其余继承 `default.yaml`。
 
-> ⚠ **`local.yaml` 今天只有一项**：`storage.qdrant.collection: memories_dev`——开发期的集合与提交期分开，
+> ⚠ **`local.yaml` 只有一项**：`storage.qdrant.collection: memories_dev`——开发期的集合与提交期分开，
 > 避免 §6.3 的 upsert 把上一套实验的 point **静默留给下一套**（`open-questions.md` 的 **V9**）。
-> **基线今天放的是开发期模型**（唯一有活端点的那个）；Step 5 建 `submit.yaml` 时再覆盖它。
+> **基线放的是开发期模型**（唯一有活端点的那个）；Step 5 建 `submit.yaml` 时再覆盖它。
 > **profile 之间真正的差异要等到那时才出现**——现在硬凑一份"两套完整配置"只会让差异看不出来。
 
-**选 profile 用 `TIANXI_PROFILE`**（默认 `default`）；**指向另一份配置目录用 `TIANXI_CONFIG_DIR`**（替代集合的 arm 快照就靠它，见 `configs/CLAUDE.md` 的 `runs/`）。
+**选 profile 用 `TIANXI_PROFILE`**（默认 `default`）；**指向另一份配置目录用 `TIANXI_CONFIG_DIR`**（arm 快照就靠它，见 `configs/CLAUDE.md` 的 `runs/`）。
 
 > **切换 profile 不是一次配置改动，是一个独立阶段**（§12.1 R1 对冲 4 / §16 Step 5）：**不可与任何设计改动同时进行**，否则分数变化无法归因。
 
@@ -35,7 +35,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ## 1.2 每个键**住在哪**：`.env` 还是 `configs/*.yaml`
 
-> 加载器是 [`../src/tianxi_am/common/config.py`](../src/tianxi_am/common/config.py)——**全包唯一读环境变量的地方**（2026-09-24，③-d）。
+> 加载器是 [`../src/tianxi_am/common/config.py`](../src/tianxi_am/common/config.py)——**全包唯一读环境变量的地方**（③-d）。
 
 | 层 | 拥有哪些键 | 例子 |
 | --- | --- | --- |
@@ -48,22 +48,11 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 **为什么阈值不能藏在环境变量里**（§12.1 R1 对冲 4）：那会让 Step 5 的模型切换变成"改 shell 变量"——
 **改了什么无法 diff、无法评审**，而归因恰恰是那一步唯一的目的。
 
-**下面各节的标题会标出本节是否已落地**：
-**✅ 已落地**（键已进 `configs/*.yaml` 或 `.env`，有代码消费方）· **⬜ 待接线**（落点已定，消费方未接）。
+**各节标题标出是否已落地**：**✅ 已落地**（键已进 `configs/*.yaml` 或 `.env`，有代码消费方）· **⬜ 待接线**（落点已定，消费方未接）。
 
-> ⚠ **③-d 只落地了"今天有代码消费方"的键。** 本文件里 `checker.*` / `agent.*` /
-> 消融开关的**落点已经在这里声明**，但它们**还没有进 `configs/*.yaml`**——
-> 消费方未接线时收进配置等于预留字段（§6.1 对 DDL 的同一条纪律）。
->
-> ✅ **2026-09-24 更新（两次）**：
->
-> * `neighbor.*` 与 `budget.*` **已接线**（扩窗 + 段合并 + token 预算落地），
->   它们已经住进 `configs/default.yaml`。本文件里那两节的**键名与值已按实现订正**——
->   订正前它们写的是 PRD §10 的示例口径（`seed_count = 20` / `window = ±1`），
->   而实现用的是 `expansion_seed_limit = 30` / `radius = 1`。**两份不同的名字是真会咬人的**。
-> * **`rerank.*` 也接线了**（§7）：`rerank.enabled` 现在**真的**能关掉精排。
->   ⇒ 本行原先那句"别以为现在改 yaml 就能开关 `rerank`"**已经不成立**，已删除。
->   仍然**待接线**的是 `checker.*` 与 `agent.*`。
+> ⚠ **只收"有代码消费方"的键。** 本文件里 `checker.*` / `agent.*` 与部分消融开关的**落点已经声明**，
+> 但它们**还没有进 `configs/*.yaml`**——消费方未接线时收进配置等于预留字段（§6.1 对 DDL 的同一条纪律）。
+> 仍然**待接线**的是 `checker.*` 与 `agent.*`。
 
 ---
 
@@ -85,11 +74,11 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 **C 类可以调，但要留痕**：§7.3 明确"**权重的任何调整都必须有 ablation 数据支撑**"。
 
-> **推论**：`docs/config-reference.md` 里每个配置项都应当标出它属于 A / B / C 哪一类。**新增配置项时一并标。**
+> **推论**：本文件里每个配置项都应当标出它属于 A / B / C 哪一类。**新增配置项时一并标。**
 
 ---
 
-## 2. 消融开关（§15）—— ⬜ **待接线**（已接 `rerank`）
+## 2. 消融开关（§15）—— ⬜ **待接线**
 
 **这是开关的唯一声明处**——其它文档提到开关时一律指回这里，不要各自列一份。
 
@@ -107,14 +96,14 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > **最后一列是 §13 的纯度规则**：**开关必须只影响它命名的那一件事。** 否则对照不成立——**而结果看起来完全正常，只是结论错了**。
 > 对应测试见 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) §5——**那组测试很便宜，而它保护的是整个 §13 实验计划。**
 
-### ⚠ 两条**已作废**的依赖边（D15，2026-09-23）
+**`checker.enabled` 必须可配**（§15 的开关清单里漏了它）——§13 的 A4 要关它做对照。
 
-上面那张表的"依赖谁"一列原先是 `dense → checker` 与 `dense → rrf`。**两条都已删除**，理由是 D15：
+**两个不在 §15 清单里、但同样要可配的对照项**：T1 的时间戳前缀渲染变体（§11.3，已接线）与 A0 的 recency-only（§13）。
 
-**混合检索是既定的检索形态**（BM25 + Dense 两路无条件跑），**没有裸 BM25 模式**。
-于是 `dense: false` 不再有下游 ⇒ **`checker` 与 `rrf` 都不再依赖它**。
+### ⚠ 两条**已作废**的依赖边（D15）——连带的三项**不要再实现**
 
-连带消失的三项（**不要再实现**）：
+混合检索是既定的检索形态（BM25 + Dense 两路无条件跑），**没有裸 BM25 模式**，
+所以 `dense: false` 不再有下游 ⇒ **`checker` 与 `rrf` 都不依赖它**。连带消失的三项：
 
 | 消失的 | 它曾是什么 |
 | --- | --- |
@@ -122,12 +111,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | §13 的 **A1 / A2** 两个对照 | 参照点改由**混合主路径自身**承担 |
 | [`open-questions.md`](./open-questions.md) 的 **E2** 与"待决事项 2" | 同上 |
 
-**`dense` 开关仍然保留**（§15 要求所有消融项可配），但**它今天没有下游依赖**——
-关掉它只改变"检索走了几路"这一件事。
-
-**`checker.enabled` 必须可配**（§15 的开关清单里原本漏了它）——§13 的 A4 要关它做对照。
-
-**两个不在 §15 清单里、但同样要可配的对照项**：T1 的时间戳前缀渲染变体（§11.3）与 A0 的 recency-only（§13）。
+**`dense` 开关仍然保留**（§15 要求所有消融项可配），但**它没有下游依赖**——关掉它只改变"检索走了几路"这一件事。
 
 **为什么不用融合分数做判据**（§8）：RRF 融合后的分数**不是校准量**。Qdrant 官方明确警告不要把单路阈值用到根级 `score_threshold`——"照搬 dense-only 的阈值会静默截断结果"。因此判据只能用**名次**。
 
@@ -174,8 +158,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 阈值**需在代理评测上标定**，初值如上。
 
 **副产品**：这两次分离查询的结果**就是判据本身所需的数据**，不额外花成本。
-**⚠ 但它不为任何实验留档**（§8）——早先写的"正是 §13 中 hybrid-vs-BM25-only 对照所需的数据"
-**已随 D15 作废**（那个对照已删除）。
+**⚠ 但它不为任何实验留档**（§8）——"它是 §13 中 hybrid-vs-BM25-only 对照所需的数据"这个说法**已随 D15 作废**（那个对照已删除）。
 
 ---
 
@@ -200,22 +183,19 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 6. Neighbor Expansion + 段合并（§10 / §11.2）—— ✅ **已落地**（2026-09-24）
+## 6. Neighbor Expansion + 段合并（§10 / §11.2）—— ✅ **已落地**
 
 | 配置项 | 初值 | 类 | 说明 |
 | --- | --- | --- | --- |
 | `neighbor.expansion_seed_limit` | **30** | C | 只对 rerank 后的**前 N 条**主动扩窗；其余候选**仍保留，只是不扩展** |
 | `neighbor.radius` | **1** | C | 扩窗半径，**单位是 QA 对**——`±1` 拿回前后各**一整对**（最多 4 条消息），不是各一条消息 |
 
-> ⚠ **键名在 2026-09-24 订正过**：本节原先写的是 PRD §10 的**示例口径**
-> （`seed_count = 20` / `window = ±1` / `order`），而实现用的是
-> `expansion_seed_limit` / `radius`。**已实现的名字才是唯一声明**——旧名字已删除，
-> 因为它们会让人在 yaml 里改一个**根本不存在**的键，而服务照常启动、行为一点不变。
->
 > ⚠ **PRD §10 的"20 种子 / 60 槽位"是一道示例算术**（用来演示预算怎么算），
-> v1 的实际取值是 **30**。两者不是一回事，别互相替换。
+> v1 的实际取值是 **30**。两者不是一回事，**别互相替换**。
+> （已实现的名字才是唯一声明：`expansion_seed_limit` / `radius`。在 yaml 里写一个不存在的键
+> ——比如 PRD 的示例口径——服务照常启动、行为一点不变。）
 
-**`top_k` 约束的是段数，不是 raw memory 数**（2026-09-24 定）：100 个候选 + 40 个邻居
+**`top_k` 约束的是段数，不是 raw memory 数**：100 个候选 + 40 个邻居
 = 140 条 raw，连续 `pair_idx` 合并之后可能只剩 60 段。⇒ **`top_k` 只能在合并之后生效**。
 
 **预算怎么算**：**真正先撞上的限制是 token 而不是段数**（§6.4）——一对的文本量约为单条消息的两倍，117,760 token 的答案窗口可能比 100 个段更早用尽。
@@ -231,30 +211,31 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 7. Rerank 与打包（§11）—— ✅ **已落地**（rerank + 打包，2026-09-24）
+## 7. Rerank 与打包（§11）—— ✅ **已落地**
 
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
-| `rerank.enabled` | **`false`**（2026-09-25 起） | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。⚠ **默认关掉是团队决定**：100 篇/题 5–12s 且抖动大，而本地跑题是串行的 ⇒ 直接影响迭代速度。**它值不值是 A3 要回答的**（两臂快照 `configs/runs/a3-{on,off}/`），**别拿默认值当结论** |
+| `rerank.enabled` | **`false`** | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。⚠ **默认关掉是团队决定**：100 篇/题 5–12s 且抖动大，而本地跑题是串行的 ⇒ 直接影响迭代速度。**它值不值是 A3 要回答的**（两臂快照 `configs/runs/a3-{on,off}/`），**别拿默认值当结论** |
 | `rerank.timeout_seconds` | **30.0** | **C 类**。实测 100 篇 ≈ 2.2s、200 篇 ≈ 5.3s ⇒ 约 10 倍余量。**太紧 ⇒ 伪降级**（网关排队被报成"reranker 坏了"）；**太松 ⇒ Search 被拖住** |
+| `packaging.inject_abs_time` | **`false`** | ✅ §2 表里 **T1** 的开关。`true` ⇒ 每对正文前加 `[YYYY-MM-DD] `（与 `created_at` 同一个格式、同一个 `event_time`）。⚠ **"贵"消融项**：正文改了 embedding 输入也改 ⇒ **两臂必须跑在两个集合上** |
+| `budget.max_tokens` | **117,760** | ⛔ **A 类**（AML 定的答案窗口余量）。答案窗口 128k 扣掉输出与安全余量 |
+| `budget.tokenizer` | **`o200k_base`** | ⛔ **A 类**。必须是**答案模型自己的**分词器 |
+| `budget.max_slots` | 请求里的 `top_k` | —— |
+| `packaging.created_at_granularity` | `day` | **只给到日粒度**，且**固定 UTC、无旋钮** |
+| `packaging.score_mode` | `reciprocal_rank` | `1/(rank+1)`，**按输出位置**、**不是**原始 RRF 分数 |
+| `packaging.render_template` | `Q:/A:` | **"贵"消融项**：改它等于改变 embedding 输入，**整个向量索引要重建**。唯一实现是 `common/render.py` |
+| `packaging.role_prefix` | `[assistant]` 等标记 | 一个对里有多条非 user 消息时每条带 role 标记 |
 | `TIANXI_RERANKER_BASE_URL` | `https://memory.021130.xyz/v1` | **env**。主网关（**不是 memory2**，D18） |
 | `TIANXI_RERANKER_API_KEY` | —— | **env**。与 `AML_EMB_*` 是同 host、不同 key |
 | `TIANXI_RERANKER_MODEL` | `Qwen3-Reranker-4B` | **env**。⚠ 端点是**忽略**它的（实测），它只进 run record 的指纹。**提交时不得更换**（D12） |
-| `packaging.render_template` | `Q:/A:` | **"贵"消融项**：改它等于改变 embedding 输入，**整个向量索引要重建**。唯一实现是 `common/render.py` |
-| `packaging.role_prefix` | `[assistant]` 等标记 | 一个对里有多条非 user 消息时每条带 role 标记 |
-| `packaging.inject_abs_time` | **`false`** | ✅ **已接线（2026-09-25）**：它是 §2 表里 **T1** 的开关。`true` ⇒ 每对正文前加 `[YYYY-MM-DD] `（与 `created_at` 同一个格式、同一个 `event_time`）。⚠ **"贵"消融项**：正文改了 embedding 输入也改 ⇒ **两臂必须跑在两个集合上**。见 §9 |
-| `packaging.created_at_granularity` | `day` | **只给到日粒度**，且**固定 UTC、无旋钮** |
-| `packaging.score_mode` | `reciprocal_rank` | `1/(rank+1)`，**按输出位置**、**不是**原始 RRF 分数 |
-| `budget.max_tokens` | **117,760** | ⛔ **A 类**（AML 定的答案窗口余量）。**已落地**（2026-09-24） |
-| `budget.tokenizer` | **`o200k_base`** | ⛔ **A 类**。必须是**答案模型自己的**分词器 |
 
-> ⚠ **`rerank.model` 这个键不存在**（2026-09-24 订正）：模型名是**端点身份**、不是阈值，
-> 所以它住在 `.env` 的 `TIANXI_RERANKER_MODEL`（②层分工），本表原先把它写成 yaml 键是错的。
+> ⚠ **`rerank.model` 这个键不存在**：模型名是**端点身份**、不是阈值，所以它住在 `.env` 的
+> `TIANXI_RERANKER_MODEL`（§1.2 的两层分工）。
 > **那三个变量是缺了就降级的**（D12），与 `embed.*` 那种"缺了就拒绝启动"正相反——
 > 所以 `validate()` **不**校验它们，改由 `service/app.py` 的 `build_reranker()` 决定接不接。
 > ⚠ **"想用却没配全"会打一条 WARNING**：否则它会表现成"每次检索都静默不精排"。
 
-> **`packaging.group_inner_order` / `packaging.group_outer_order` 不再是"配置项"**（2026-09-24）：
+> **`packaging.group_inner_order` / `packaging.group_outer_order` 不是配置项**：
 > 它们是 §11.2 的**规格**（段内 `pair_idx` 升序、段间 `best_rank` 升序），
 > 住在 `rank/neighbor.merge_segments` 里，**不是可以各写各的初值**。
 > §11.2 说它们是"可消融项"——真要消融时**改那一个函数**，别先立一个没人读的键。
@@ -268,14 +249,6 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 **`inject_abs_time = false` 的原因**（§11.3）：把时间做得越清晰，会**同时踩中裁判 TIME 块的两条独立规则**——粒度变细（与 gold 是否相对无关）与相对→绝对互转。两条独立机制指向同一个动作。
 
 **适用范围必须限定**（§11.3）：这条来自 LoCoMo-Refined / LongMemEval 共用的那套契约，**不是全赛道的规则**——BEAM 的裁判正好相反（明文允许等价形式），CL-Bench 由 AML 侧主动注入时间戳。**代理评测按"不加"执行；但不要把这个结论推及全赛道。**
-
-### token 预算
-
-| 配置项 | 初值 | 说明 |
-| --- | --- | --- |
-| `budget.max_tokens` | **117,760** | 答案窗口 128k 扣掉输出与安全余量 |
-| `budget.tokenizer` | `o200k_base` | **用答案模型自己的分词器** |
-| `budget.max_slots` | 请求里的 `top_k` | —— |
 
 > **⚠ R1 类风险（§6.4）**：本地 qwen3.5-9b 的分词器与 `gpt-4o-mini` **不同**，**本地量出的"能装多少对"不能直接搬到线上**。已补入对冲清单：**Step 5 切换后必须重新量一次单请求实际返回的对数**。
 
@@ -292,7 +265,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `storage.qdrant.payload_indexes` | `user_id`(**keyword** + `is_tenant`) / `session_id`(keyword) / `event_time`(integer) | **必须在写入数据前建**，否则 HNSW 需要重建才有过滤感知 |
 | `storage.qdrant.payload_fields` | `user_id` / `session_id` / `pair_idx` / `event_time` | **不含正文** |
 | `storage.qdrant.wait` | **`true`** | 契约要求"响应前立即可搜"；默认异步不保证 |
-| `storage.sqlite.path` | `var/tianxi.db`（`.env`） | 真源，文件随 run 归档。⚠ 是 `var/` 不是 `data/`——后者与只读归档 `benchmark_data/` 容易混（见 `var/README.md`） |
+| `storage.sqlite.path` | `var/tianxi.db`（`.env`） | 真源，文件随 run 归档。⚠ 是 `var/` 不是 `data/`——后者与只读归档 `benchmark_data/` 容易混（见 [`../var/CLAUDE.md`](../var/CLAUDE.md)） |
 | `cache.embed.dir` | `var/embed_cache`（`.env`） | **必须落盘** |
 | `cache.embed.key` | **渲染文本哈希** | **不能用 `id`** |
 
@@ -308,7 +281,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | --- | --- | --- | --- | --- |
 | `models.embedder` | `text-embedding-v4` | Qwen3-Embedding-8B | **yaml** | **只能用前者**（§2.3） |
 | `models.llm` | `gpt-4o-mini` | qwen3.5-9b | **env**（`AML_MODEL`） | **只能用前者**（§2.3） |
-| `TIANXI_RERANKER_MODEL` | **`Qwen3-Reranker-4B`**（2026-09-24 定） | 同左 | **env** | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12）。⚠ 端点忽略它，见 §7 |
+| `TIANXI_RERANKER_MODEL` | **`Qwen3-Reranker-4B`** | 同左 | **env** | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12）。⚠ 端点忽略它，见 §7 |
 | `models.embed_dim` | **由接口提供** | —— | —— | **不能写死** |
 
 > ⚠ **embedding 走 yaml、另两个走 env，这不是笔误**：`models.embedder` 是 profile 之间
@@ -316,10 +289,9 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > 能被 diff 出来）；而 LLM 与 reranker 的模型名在开发期与提交期**是同一套网关地址上的
 > 不同部署**，属于"端点身份"，所以跟 base_url / key 一起住在 `.env`。
 
-**架构必须 embedder-agnostic**（§2.3）：开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。集合的向量维度**必须由 `§7.4` 的接口提供**，Step 5 换模型时按新维度**重建集合**。
+**架构必须 embedder-agnostic**（§2.3）：开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。集合的向量维度**必须由 §7.4 的接口提供**，Step 5 换模型时按新维度**重建集合**。
 
 **为什么 reranker 是唯一能加码的地方**（§11.1）：§2.3 把 embedding 与 LLM 两处都钉死了，**只有 Reranker 不作规定**——所以这是唯一能自己投入算力的环节，也是 §4 认定"排序是最大杠杆"之后唯一还能加码的地方。
-
 
 ---
 

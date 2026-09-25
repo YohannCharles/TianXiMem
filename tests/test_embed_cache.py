@@ -334,11 +334,6 @@ def test_http_respects_index_order_and_batches() -> None:
 
 
 # ── Qwen3-Embedding-8B 的构造入口 ──────────────────────────────────────
-#
-# ⚠ 原先这里有三个 `Qwen3EmbeddingEmbedder.from_env()` 的用例。那个方法**已删除**
-# （2026-09-24，③-d）：环境变量现在是 `common/config.py` 的**独占**职责，
-# 「缺变量要响亮失败」「环境变量能覆盖模型名」这两件事的覆盖**整体搬到了
-# `tests/test_config.py`**——在那里测的是唯一入口，而不是每个模块各有一个小入口。
 
 
 def test_qwen3_embedding_model_default_is_not_hardcoded_away() -> None:

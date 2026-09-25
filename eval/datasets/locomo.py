@@ -15,7 +15,7 @@
 `tools/fetch_benchmark_data.py` 明写它"本清单不收录——它属 `eval/datasets/` 的 clone"。
 但归档的 `locomo_refined.json` **含同一份对话全文**，两个来源的差别**只有首尾空白**：
 
-> **已核实（2026-09-24，全量 5,882 turn）**：`locomo_refined.json` 的每条 `text`
+> **已核实（全量 5,882 turn）**：`locomo_refined.json` 的每条 `text`
 > 经 `strip()` 后与 `conversations.jsonl` **逐字等价**——209 条仅首尾空白不同、
 > **0 条内容不同**、speaker 与 role 的映射零冲突。
 

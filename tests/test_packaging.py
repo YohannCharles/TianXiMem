@@ -4,9 +4,8 @@
 在 [`test_neighbor.py`](./test_neighbor.py)——本文件**直接构造 `ContextSegment`**，
 好把 `top_k`、`score`、`created_at`、预算这几件事**孤立**出来测。
 
-> **两个阶段的分界**（`src/tianxi_am/rank/CLAUDE.md`）：`packaging.py` 原先只是
-> "Step 1 的最小切片"，那时它自己也去真源取正文。现在正文由段带进来，
-> **它一个数据库查询都不做**——`_segment()` 这个 helper 就是那个边界的体现。
+> **与"取正文"那一层的分界**（`src/tianxi_am/rank/CLAUDE.md`）：正文由段带进来，
+> `packaging.py` **一个数据库查询都不做**——`_segment()` 这个 helper 就是那个边界的体现。
 """
 
 from __future__ import annotations
@@ -163,7 +162,7 @@ def test_created_at_is_utc_regardless_of_the_machine_timezone(counter: TokenCoun
     **与机器无关**：用本地时区会让同一份数据在不同机器上差一天，而本项目最怕的就是
     不可复现。
 
-    ⚠ **刻意不做成配置项**（2026-09-24），见 `packaging.py` 的 `UTC_ONLY` 注释：
+    ⚠ **刻意不做成配置项**，见 `packaging.py` 的 `UTC_ONLY` 注释：
     一个"可以随手改的 `created_at_tz`"会与**加载层**（合成 `event_time` 的地方）脱钩——
     改了它日期整体偏一天，而**没有任何东西会报错**。
     要改口径就两边一起改，那是一次需要重新验证的决定，不是一次配置调整。

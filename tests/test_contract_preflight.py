@@ -169,9 +169,7 @@ def test_preconditions_fail_loudly_when_the_service_cannot_start(tmp_path: Path)
     result = subprocess.run(
         [sys.executable, str(_PREFLIGHT_PATH)],
         capture_output=True,
-        # ⚠ 必须显式给 UTF-8：`preflight` 会把自己的 stdio 切到 UTF-8（见
-        # `_force_utf8_stdio`），而 `text=True` 单独用会按**本机 locale**（这里 GBK）解码
-        # ⇒ 读线程抛 UnicodeDecodeError 死掉，`result.stdout` 直接变成 None。
+        # ⚠ 同上：必须显式给 UTF-8，否则读线程按**本机 locale**（这里 GBK）解码而死。
         encoding="utf-8",
         errors="replace",
         timeout=180,

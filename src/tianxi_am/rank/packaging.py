@@ -6,10 +6,8 @@ ContextSegment[]（已按 best_rank 升序）
   → data[]（id = 锚点，content = 整段，created_at = 锚点的日粒度，score = 1/(final_rank+1)）
 ```
 
-> ⚠⚠ **阶段说明**：本文件原先只是"Step 1 的最小切片"，现在接上了 Neighbor Expansion
-> 与双预算里的 **token 那一半**。**分组顺序（组内 `pair_idx` / 组间 `best_rank`）在
-> [`neighbor.py`](./neighbor.py) 定**，这里只按给定的顺序消费。
-> 两个阶段都写在 [`CLAUDE.md`](./CLAUDE.md)，**不要把这个文件当成整条 Search 链**。
+> **分组顺序（组内 `pair_idx` / 组间 `best_rank`）在 [`neighbor.py`](./neighbor.py) 定**，
+> 这里只按给定的顺序消费。**不要把这个文件当成整条 Search 链**（[`CLAUDE.md`](./CLAUDE.md)）。
 
 ## 三条本文件独有、且**必须**守住的东西
 
@@ -44,24 +42,20 @@ __all__ = [
     "placeholder_score",
 ]
 
-#: `created_at` 的时区口径：**固定 UTC，没有旋钮**（2026-09-24 定）。
-#:
-#: 契约**没规定时区**（`docs/contract.md` §3 只说"只给到日粒度"）。固定 UTC 的理由：
-#: **它是与机器无关的**——用本地时区会让同一份数据在不同机器上差一天，
+#: `created_at` 的时区口径：**固定 UTC，没有旋钮**（`docs/contract.md` §3 只规定"只给到日粒度"）。
+#: 固定 UTC 的理由：它**与机器无关**——用本地时区会让同一份数据在不同机器上差一天，
 #: 而本项目最怕的就是不可复现。
 #:
-#: ⚠ **它与加载层必须一致**：`event_time` 由 harness 合成，**合成时用哪个口径、
-#: 这里就得用哪个口径**，否则日期会整体偏一天（且不报错）。⇒ **加载层的口径也是
-#: UTC**：benchmark 里"没有时区"的时间按 **floating calendar time** 处理，
-#: 由 Adapter 按 UTC 编码成 Unix 毫秒写进 `event_time`。
+#: ⚠ **它与加载层必须一致**：`event_time` 由 harness 合成，**合成时用哪个口径、这里就得用
+#: 哪个口径**，否则日期会整体偏一天（且不报错）。⇒ 加载层也按 UTC 编码：benchmark 里
+#: "没有时区"的时间按 **floating calendar time** 处理，编成 Unix 毫秒写进 `event_time`。
 #:
-#: ⚠ **刻意不做成配置项**：一个"可以随手改的 `created_at_tz`"会与加载层脱钩——
-#: 改了它，日期整体偏一天，而**没有任何东西会报错**。
+#: ⚠ **刻意不做成配置项**：一个"可以随手改的 `created_at_tz`"会与加载层脱钩——改了它，
+#: 日期整体偏一天，而**没有任何东西会报错**。
 #:
-#: ⚠ 它的执行值是 [`common/render.py`](../common/render.py) 的 `day_granularity`
-#: （2026-09-25 从本文件搬过去）：**T1 的 `content` 前缀要用同一个格式**，
-#: 而两处各写一份格式早晚会分叉（那时 T1 测的就不是"加不加日期"了）。
-#: 本文件只**转出**这个名字，`packaging.day_granularity` 这个路径保持可用。
+#: 执行值是 [`common/render.py`](../common/render.py) 的 `day_granularity`（T1 的 `content`
+#: 前缀要用同一个格式，两处各写一份早晚会分叉）。本文件只**转出**这个名字，
+#: `packaging.day_granularity` 这个路径保持可用（值见 config-reference §7）。
 UTC_ONLY: Final[str] = "UTC"
 
 
@@ -129,12 +123,8 @@ def _fit_by_budget(
 
     ### 决策用的是"上界"，报告的是"真值"
 
-    预算的**决策**必须便宜（每个段一次比较，不能每加一个段就把整段文本重新数一遍，
-    那是 O(S²) 的字符量）。所以这里用：
-
-    ```text
-    已用 = Σ 各段的 token + (段数 - 1) × 连接符的 token
-    ```
+    决策必须便宜（不能每加一个段就把整段文本重新数一遍，那是 O(S²) 的字符量），
+    所以这里用 `已用 = Σ 各段的 token + (段数 - 1) × 连接符的 token`。
 
     ⚠ **它是一个上界，不是恒等式**：BPE 的合并可以跨越拼接边界，所以
     `count(a) + count(sep) + count(b) ≥ count(a + sep + b)`。用上界做预算**只会少装、

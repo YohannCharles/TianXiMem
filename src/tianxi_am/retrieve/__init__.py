@@ -5,12 +5,9 @@
 
 ## 与 `store/` 的分界
 
-**参数归本目录，执行归 `store/qdrant_store.py`**：
-
-* `prefetch_limit` / `weights` / `k` / `top_k` 的取值、**校验**、标定 → 本目录
-* 把它们翻成 `prefetch` + `rrf` 的 Qdrant 调用 → `store/`
-
-⇒ 一句话：**本目录说"用什么参数"，`store/` 说"怎么发给 Qdrant"。**
+**参数归本目录，执行归 `store/qdrant_store.py`**：`prefetch_limit` / `weights` / `k` /
+`top_k` 的取值、**校验**、标定在这里，翻成 `prefetch` + `rrf` 的 Qdrant 调用在那里。
+⇒ 一句话：**本目录说"用什么参数"，`store/` 说"怎么发给 Qdrant"**（[`CLAUDE.md`](./CLAUDE.md)）。
 """
 
 from tianxi_am.retrieve.bm25 import BM25_MODEL, SPARSE_VECTOR, lexical_query

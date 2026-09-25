@@ -1,6 +1,6 @@
 # 悬而未决清单
 
-> 最后核对：2026-09-24，对应 PRD §17（+ §6.4 要求补入的一条）。**冲突以 PRD 为准。**
+> 最后核对：2026-09-25，对应 PRD §17（+ §6.4 要求补入的一条）。**冲突以 PRD 为准。**
 > **S4 来自一份二手外部规范**（出处见 [`contract.md`](./contract.md) §7），不是 PRD。
 
 ## 为什么要单列一张表
@@ -82,7 +82,7 @@ Adapter 计数的词时确定性分段」。出处：[`contract.md`](./contract.
 | **E3** | rerank 值不值 | **A3** | 不值的则这份算力改投他处 | ⬜ |
 | **E4** | agent 值不值 | **A4** | 不值的则砍掉核心 claim 之一 | ⬜ |
 | **E5** | 跨 session 失败是"找不到"还是"留不下" | **T2** | 决定附录 A 的实体层做不做 | ⬜ |
-| **E6** | 渲染模板与组内顺序 | **Step 3 定稿** | **改模板 = 重建索引** | 🟡 **模板已定稿 v1（2026-09-25）**：无绝对时间戳；T1 的证伪臂（`packaging.inject_abs_time`）已就位，**未跑** |
+| **E6** | 渲染模板与组内顺序 | **Step 3 定稿** | **改模板 = 重建索引** | 🟡 **模板已定稿 v1**：无绝对时间戳；T1 的证伪臂（`packaging.inject_abs_time`）已就位，**未跑** |
 
 **一条时间约束：**
 
@@ -120,27 +120,25 @@ Adapter 计数的词时确定性分段」。出处：[`contract.md`](./contract.
 | **V1** | **Qdrant `qdrant/bm25` 的分词行为**——要实测一次（拿一两个多语言长文档的 case 对照），**别默认它等价于 Lucene Analyzer** | §7.1 |
 | **V2** | **`created_at` 的日粒度**是否真的更安全（秒级会诱发"粒度变细"判负）——**与 T1 同批测** | §11.3 |
 | **V3** | **"LLM 记忆注入字段"的键名** | §11.3 |
-| ✅ **V3 答掉一半（2026-09-24）** | **键名是有明文的**——不在数据集里，在**归档 pipeline 的源码**里：`benchmark_data/pipeline_locomo-refined.py:107-120`。主字段 = **`speaker_1_memories`**（回退链 `speaker_1_memories → retrieved_context → memories`）；**`speaker_2_memories` 没有回退，缺即空串**（这条不对称就是 `eval/CLAUDE.md` 那张表的出处）。<br>**剩下未知的是「怎么分」而不是「用哪个键」**：真实 AML 侧按什么把我们的返回列表切成两个 speaker 块，**归档里看不到**。代理评测按"全部塞进 `speaker_1_memories`、`speaker_2_memories` 留空"执行（[`../eval/harness/judge.py`](../eval/harness/judge.py)）——**那是显式的代理假设，不是已验证的契约**。 | 归档代码 |
+| ✅ **V3 答掉一半** | **键名是有明文的**——不在数据集里，在**归档 pipeline 的源码**里：`benchmark_data/pipeline_locomo-refined.py:107-120`。主字段 = **`speaker_1_memories`**（回退链 `speaker_1_memories → retrieved_context → memories`）；**`speaker_2_memories` 没有回退，缺即空串**（这条不对称就是 `eval/CLAUDE.md` 那张表的出处）。<br>**剩下未知的是「怎么分」而不是「用哪个键」**：真实 AML 侧按什么把我们的返回列表切成两个 speaker 块，**归档里看不到**。代理评测按"全部塞进 `speaker_1_memories`、`speaker_2_memories` 留空"执行（[`../eval/harness/judge.py`](../eval/harness/judge.py)）——**那是显式的代理假设，不是已验证的契约**。 | 归档代码 |
 | **V4** | **时间语义的整体假设**（筛选走 `event_time` 列、正文保留原始表述）——**待 T1 验证**，但验证之前按此执行，**它是安全的那一侧** | §11.3 |
 | **V5** | **`content` 是否被原样注入**——AML 侧仅按 `memory_text()` 做字符串拼接，但**检索结果 → `memories` 字段的映射在 AML 那一侧，归档里看不到** | §11.3 |
-| **V7** | **归档 pipeline 是否传 `enable_thinking: False`**——自建网关的 Qwen3.5-9B **需要显式关闭思考**（`extra_body.chat_template_kwargs`），而 `api_config` 只导出 base_url / key / model **三个字段，带不动 `extra_body`**。若网关默认开思考，thinking 会挤占 token 或混进 `generated_answer`，**裁判读到的就是推理过程而不是答案**。<br>**✅ 2026-09-24 答掉一半**：归档代码到手后第一项核对已做——**7 个 pipeline 里只有 `pipeline_beam.py:263` 传了**；**LoCoMo-Refined 与 LongMemEval（代理评测真正用的那两份）都没传**（`complete()` 只发 `{model, messages, temperature}`）。⇒ **我们自己的 harness 必须显式关思考**。**剩余未知**：网关默认开不开——默认关则本条彻底清掉 | 归档代码 + 开发网关文档 |
-| ✅ **V10 已清（2026-09-24）** | **网关的归一化是对的**——实测 `POST /embeddings` 返回 `dim=1024`、**L2 范数 = 1.000000**（两条输入都是）。⇒ "本地可先验一条"那条通过。<br>**⚠ 仍未验的是池化方式**：L2 范数 ≈ 1 只证明"归一化了"，**证不了用的是 `last_token_pool` 而不是 mean pooling**（后者归一化后范数同样是 1）。要区分只能拿服务端源码或做对照检索。**这条降级为"低风险残留"**，不是清空。<br>**复现**：`make check` 的 Embedding 那一项每次都会重新量这个范数。 | 模型卡 + 2026-09-24 实测 |
+| **V7** | **归档 pipeline 是否传 `enable_thinking: False`**——自建网关的 Qwen3.5-9B **需要显式关闭思考**（`extra_body.chat_template_kwargs`），而 `api_config` 只导出 base_url / key / model **三个字段，带不动 `extra_body`**。若网关默认开思考，thinking 会挤占 token 或混进 `generated_answer`，**裁判读到的就是推理过程而不是答案**。<br>**✅ 答掉一半**：归档代码到手后第一项核对已做——**7 个 pipeline 里只有 `pipeline_beam.py:263` 传了**；**LoCoMo-Refined 与 LongMemEval（代理评测真正用的那两份）都没传**（`complete()` 只发 `{model, messages, temperature}`）。⇒ **我们自己的 harness 必须显式关思考**。**剩余未知**：网关默认开不开——默认关则本条彻底清掉 | 归档代码 + 开发网关文档 |
+| ✅ **V10 已清** | **网关的归一化是对的**——实测 `POST /embeddings` 返回 `dim=1024`、**L2 范数 = 1.000000**（两条输入都是）。⇒ "本地可先验一条"那条通过。<br>**⚠ 仍未验的是池化方式**：L2 范数 ≈ 1 只证明"归一化了"，**证不了用的是 `last_token_pool` 而不是 mean pooling**（后者归一化后范数同样是 1）。要区分只能拿服务端源码或做对照检索。**这条降级为"低风险残留"**，不是清空。<br>**复现**：`make check` 的 Embedding 那一项每次都会重新量这个范数。 | 模型卡 + 实测 |
 | **V8** | **自建网关是开发环路的单点**：answer / judge / embed / rerank **四条**都打它，而 harness 会同时驱动 Add/Search（embed + rerank）与答案/裁判生成。**必须有客户端并发上限**，否则排队超时会伪装成"模型变差了" | D12 |
 | **V11** | **"每数据集 48 记录硬上限"指什么**——官方 README 披露的 Add 运行参数里有这一条，但**"记录"的口径不明**。若指"每个数据集投喂的记录数"，LongMemEval 的 500 题会远超它；若指"并发/批次"，则与题意无关。**在核实前不要据此改架构** | [`contract.md`](./contract.md) §7.3 f（**二手来源**） |
 | **V9** | **各对照实验之间的 Qdrant 集合如何隔离**：集合内容**随 arm 变化**（T1 改渲染 ⇒ 全部重新 embedding；A4 关 agent 时候选集不同），而写入是**按 `id` upsert**——**上一 arm 遗留的、本 arm 不会覆盖的 point 会静默留在集合里**，污染下一 arm 且不报错 | §13 / §6.3 |
-| **V12** | **"精排到底有没有在跑"没有任何门禁看得见**（2026-09-24 登记）。精排接上之后，`rerank_calls` / `rerank_degraded` 只活在 `SearchPipeline` 对象上——**响应里没有它们**（那里的形状是契约，一个字段都不能多），而 `contract-check` 的 14 条**全部照样通过**：降级后的响应与"精排成功"的响应**逐字同样合法**。<br>⇒ **端点长期挂掉不会让任何东西变红。** 本切片用手工核对兜住了（`build_reranker(load_config())` 返回真客户端 + `make probe-reranker` 打真网关），但那**是人在跑，不是门禁**。<br>**处置方向**：服务把这两个计数 + reranker 的 `name` 从 §14 的指标出口吐出来（`observability/` 落地时一并做），或让 `preflight` 多一条"这一次精排真的被调用了"的检查（**要动 14 这个数，属 ③-e 的改动，本切片没做**）| D12 / §14 |
+| **V12** | **"精排到底有没有在跑"没有任何门禁看得见**。精排接上之后，`rerank_calls` / `rerank_degraded` 只活在 `SearchPipeline` 对象上——**响应里没有它们**（那里的形状是契约，一个字段都不能多），而 `contract-check` 的 14 条**全部照样通过**：降级后的响应与"精排成功"的响应**逐字同样合法**。<br>⇒ **端点长期挂掉不会让任何东西变红。** 目前靠手工核对兜住（`build_reranker(load_config())` 返回真客户端 + `make probe-reranker` 打真网关），但那**是人在跑，不是门禁**。<br>**处置方向**：服务把这两个计数 + reranker 的 `name` 从 §14 的指标出口吐出来（`observability/` 落地时一并做），或让 `preflight` 多一条"这一次精排真的被调用了"的检查（**要动 14 这个数，属 ③-e 的改动，还没有做**）| D12 / §14 |
 
 > **V9 的处置建议**：**集合名与配置指纹绑定**（[`experiments.md`](./experiments.md) 记录格式里的"配置指纹"字段正好可复用），而不是所有实验共用一个 `memories`。**磁盘比一次跑错的实验便宜。** 若坚持单集合，则**每次 run 前必须清空并重建**——重建的 embedding 成本靠 §7.2 的内容哈希缓存摊薄。
 >
-> ⚠ 注意：`user_id` 做 tenant 过滤（`store/CLAUDE.md` §"Qdrant 配置要点"）解决的是**跨用户串数据**，**不解决跨实验串数据**。两者是不同维度，别把它们当成同一层隔离。
+> ⚠ 注意：`user_id` 做 tenant 过滤（[`config-reference.md`](./config-reference.md) §8）解决的是**跨用户串数据**，**不解决跨实验串数据**。两者是不同维度，别把它们当成同一层隔离。
 
-> **V7 何时能清**：~~拿到归档源码后第一项核对~~ —— ✅ **已做（2026-09-24）**，结论见上表（只有 BEAM 传 `enable_thinking`）。
-> **✅ 2026-09-24 全清**：网关**默认已关思考**（管理员改过）——实测探针回 `'OK'`、2 token。
-> 探针已固化进 `make check`，**回退成"默认开"不会静默**。完整结论见本文件末的「V7 的结论」一节。
+> **V7 的结论**见本文件末那一节：网关**默认已关思考**，且探针已固化进 `make check`——**回退成"默认开"不会静默**。
 
 ---
 
-### V7 的结论（**2026-09-24 全清**）
+### V7 的结论（**已清**）
 
 网关**默认不开思考**——实测探针（只让它回 `OK`）：
 

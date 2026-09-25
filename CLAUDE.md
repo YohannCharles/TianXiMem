@@ -14,19 +14,15 @@
 
 **权威规格**：[`AML Agentic Memory 增强框架 PRD.md`](./AML%20Agentic%20Memory%20增强框架%20PRD.md)。本文件与各模块 `CLAUDE.md` 只做导航与速查；**冲突时一律以 PRD 为准**。
 
-**当前状态（2026-09-25）**：**实现已开工，不是空脚手架。**
+**当前状态**：**实现已开工，不是空脚手架。** 本表是模块级状态的**唯一权威**（别处一律指回这里）。
 
 | 状态 | 模块 |
 | --- | --- |
-| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）、**`config.py`**（**全包唯一读环境变量的地方**，③-d）与 **`tokens.py`**（`o200k_base` 计数，§6.4）· [`retrieve/`](src/tianxi_am/retrieve/)（**策略与参数所有权** + §8 判据 + `dedup_candidates`）· [`rank/`](src/tianxi_am/rank/) 的 **`reranker.py`**（**远端精排接入**，2026-09-24）、**`neighbor.py`**（**扩窗 + 段合并**，§10/§11.2）与 **`packaging.py`**（**段级打包 + 双预算**）· [`service/`](src/tianxi_am/service/)（HTTP 层 + **Add/Search 端到端编排**，③-c + **`GET /health` 探活**，S4）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）· [`eval/datasets/`](eval/datasets/)（**加载层 + schema 落差预处理**）· [`eval/harness/`](eval/harness/)（**HTTP 驱动 / 切批 / 裁判包装 / run record + `api_config.py`**）· [`eval/reports/schema.py`](eval/reports/schema.py)（**run record 的形状**）· [`tools/check_env.py`](tools/check_env.py)（**环境自检，含 V7 探针**）、[`tools/probe_reranker.py`](tools/probe_reranker.py)（**精排探针**）与 [`tools/t2_retrieval_dump.py`](tools/t2_retrieval_dump.py)（**T2 的纯 BM25 转储**，2026-09-25）· [`eval/experiments/`](eval/experiments/)（**通用 runner `run.py` + T1/T2 脚手架**，2026-09-25）· [`eval/reports/ledger.md`](eval/reports/ledger.md)（**结果台账**，空表）· [`configs/runs/`](configs/runs/)（**T1 两臂的冻结配置**）——测试在 [`tests/`](tests/) |
-| ⬜ **未实现** | [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `embed/` 的 `text_embedding_v4.py` · `configs/submit.yaml` · **`eval/` 还没写的**：`datasets/contracts.py`、`experiments/` 的 **A3/A4/A0 三个 arm**（run.py 与 T1/T2 已就位）、`baselines/`（**含 B1 包装 ReFind**）、`smoke/` 的 S1/S2/S3 探针与 `quota.py` · 尚未接线的消融开关（**逐项状态以 [`docs/config-reference.md`](docs/config-reference.md) §2 的表为准**——`checker.*` / `agent.*` / `rrf` 未接，`neighbor` 只有 `radius` 可关） |
+| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）、**`config.py`**（**全包唯一读环境变量的地方**，③-d）与 **`tokens.py`**（`o200k_base` 计数，§6.4）· [`retrieve/`](src/tianxi_am/retrieve/)（**策略与参数所有权** + §8 判据 + `dedup_candidates`）· [`rank/`](src/tianxi_am/rank/) 的 **`reranker.py`**（**远端精排接入**）、**`neighbor.py`**（**扩窗 + 段合并**，§10/§11.2）与 **`packaging.py`**（**段级打包 + 双预算**）· [`service/`](src/tianxi_am/service/)（HTTP 层 + **Add/Search 端到端编排**，③-c + **`GET /health` 探活**，S4）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）· [`eval/datasets/`](eval/datasets/)（**加载层 + schema 落差预处理**）· [`eval/harness/`](eval/harness/)（**HTTP 驱动 / 切批 / 裁判包装 / run record + `api_config.py`**）· [`eval/reports/schema.py`](eval/reports/schema.py)（**run record 的形状**）· [`tools/check_env.py`](tools/check_env.py)（**环境自检，含 V7 探针**）、[`tools/probe_reranker.py`](tools/probe_reranker.py)（**精排探针**）与 [`tools/t2_retrieval_dump.py`](tools/t2_retrieval_dump.py)（**T2 的纯 BM25 转储**）· [`eval/experiments/`](eval/experiments/)（**通用 runner `run.py` + T1/T2/A3 三个 arm**）· [`eval/reports/ledger.md`](eval/reports/ledger.md)（**结果台账**）· [`configs/runs/`](configs/runs/)（**各 arm 的冻结配置**）——测试在 [`tests/`](tests/) |
+| ⬜ **未实现** | [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `embed/` 的 `text_embedding_v4.py` · `configs/submit.yaml` · **`eval/` 还没写的**：`datasets/contracts.py`、`experiments/` 的 **A4/A0 两个 arm**、`baselines/`（**含 B1 包装 ReFind**）、`smoke/` 的 S1/S2/S3 探针与 `quota.py` · 尚未接线的消融开关（**逐项状态以 [`docs/config-reference.md`](docs/config-reference.md) §2 的表为准**——`checker.*` / `agent.*` / `rrf` 未接，`neighbor` 只有 `radius` 可关） |
 | ⛔ **v1 不做** | [`agent/`](src/tianxi_am/agent/)（D13） |
 
-**已实现的部分**：对照 `docs/roadmap.md`，`src/` 落在 **Step 1、Step 2 与 Step 3 内**
-（存储层 + 配对 + 检索 + **扩窗 / 段合并 / token 预算** + **远端精排接入** + 服务）；
-**`eval/` 是 Step 0 的主体，已开工**——但 **Step 0 还没走完**（见 `docs/roadmap.md` 的勾选状态）。
-
-> **⚠ 状态描述是本仓最易过期的东西**：改动状态时，**连同搜一遍所有声称"未实现 / 未开始"的地方**——`docs/` 里散着好几处。
+> **⚠ 状态描述是本仓最易过期的东西**：改动状态时，**连同搜一遍所有声称"未实现 / 未开始"的地方**——本表是唯一权威，别处只应指回这里。
 
 **目标**：AML 榜分优于 ReFind 的 44.97。核心判断是**检索不是瓶颈（召回已 96–99%）、选择与排序才是**，所以主线是 Rerank + Context Packaging（§4 / §11）。
 
@@ -143,8 +139,8 @@ make sync                 # uv sync --all-extras
 make help                 # 看全部目标
 ```
 
-> `Makefile` 里服务与评测的目标**目前都指向尚未存在的模块，会明确失败**——这是有意的，**避免误以为某一步已经实现**。
+> `Makefile` 里**尚未实现**的模块对应的目标会**明确失败**——这是有意的，**避免误以为某一步已经实现**。
 >
-> ⚠ **本机 `uv run pytest` 会报 111 个 `PermissionError`**（2026-09-24 起）：`%TEMP%\pytest-of-r0304`
-> 的 ACL 损坏，与代码无关。绕法见 [`docs/roadmap.md`](docs/roadmap.md) Step 0 的环境项
+> ⚠ **Windows 那台机器上 `uv run pytest` 会报 111 个 `PermissionError`**：`%TEMP%\pytest-of-r0304`
+> 的 ACL 损坏，**与代码无关**。绕法见 [`docs/roadmap.md`](docs/roadmap.md) Step 0 的环境项
 > （`PYTEST_DEBUG_TEMPROOT=<一个新建目录>`）。

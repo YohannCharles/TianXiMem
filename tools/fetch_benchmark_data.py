@@ -44,7 +44,7 @@
 
 ## ⚠ 本地修订（`local_patch`）—— 归档**不再逐字节等于上游**
 
-2026-09-25 发现：AML 公开的 7 个 pipeline **在 `answer` / `evaluate` 第一步就崩**：
+AML 公开的 7 个 pipeline **在 `answer` / `evaluate` 第一步就崩**：
 
 ```python
 async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="utf-8") as handle:
@@ -54,7 +54,7 @@ async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="
 已核：上游钉住的那个 revision 上**逐字节就是这样**（`upstream_sha256` 记着那份的哈希），
 所以不是我们取错了文件——**发布的参考实现本身跑不起来**。
 
-**处置（2026-09-25 团队决定）**：**就地修订 + 记成已声明的偏离**，修法只有两处机械替换：
+**处置（团队决定）**：**就地修订 + 记成已声明的偏离**，修法只有两处机械替换：
 
 | 改什么 | 改成 |
 | --- | --- |
@@ -105,7 +105,7 @@ SCRIPTMEM_REV = "22ac7e7e70124280d8af6100262ee7f88fff3436"
 LME_DS = "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve"
 LME_REV = "98d7416c24c778c2fee6e6f3006e7a073259d48f"
 
-# ── 2026-09-24 补齐：原先标"出处未核"的几份，现已全部逐字节对上 ──────────
+# ── 出处：全部逐字节对上（含原先标"出处未核"的那几份）────────────────────
 CLBENCH_DS = "https://huggingface.co/datasets/tencent/CL-bench/resolve"
 CLBENCH_REV = "b28a5832a09b0d96c0cf4c22e90d7c60ede25b80"
 PM_V1_DS = "https://huggingface.co/datasets/bowen-upenn/PersonaMem-v1/resolve"
@@ -145,7 +145,7 @@ MANIFEST: list[dict[str, str]] = [
         "sha256": "79acd09e4dfdef9db50887c2d4baae297ba272e1f513ee2b4654e4185b311e42",
         "upstream_sha256": "c7f17c363bd0803cfeedd2b793a0cb0a74ab119a70eeced2c7a835b2b2aecb46",
         "local_patch": "async-open",
-        "note": "2026-09-24 补入（原归档缺）。它证实了 `{{speaker_1_memories}}` 注入形状",
+        "note": "补入（原归档缺）。它证实了 `{{speaker_1_memories}}` 注入形状",
     },
     {
         "name": "clb_pipeline.py",
@@ -181,7 +181,7 @@ MANIFEST: list[dict[str, str]] = [
         "sha256": "f2054e3ed0bcba4a3aa92df7222ab0ca5cd87277ada09449e753b58569beebb7",
         "upstream_sha256": "a697a9c80214731037bc9cde6e57833423ff65a90393ead6e19b0b7d3ba90ccd",
         "local_patch": "async-open",
-        "note": "2026-09-24 补入（原归档只有 v2）",
+        "note": "补入（原归档只有 v2）",
     },
     {
         "name": "pipeline_v2_personamem.py",
@@ -232,7 +232,7 @@ MANIFEST: list[dict[str, str]] = [
         "sha256": "5d9625c59f60473f5a70183a83531bc90a9273ad869fea794cdde79924b3d0f3",
         "note": "只有题目。**对话原文确实未发布**——上游 data/public/conversations.jsonl "
         "存在但只有 1,683 字节，内容是 `Synthetic example utterance showing the dialogue schema.` "
-        "（2026-09-24 核对）",
+        "（已核对）",
     },
     {
         "name": "scriptmem_readme.md",
@@ -246,7 +246,7 @@ MANIFEST: list[dict[str, str]] = [
         "tier": "optional",
         "url": f"{CLBENCH_DS}/{CLBENCH_REV}/CL-bench.jsonl",
         "sha256": "d5fc88d4b2eea75c61dd40862021b6ae2fba26bd21b58e8c5e18377a763943be",
-        "note": "**2026-09-24 核到出处**：HF `tencent/CL-bench`（sha256 = LFS oid，实测相等）。"
+        "note": "**出处已核**：HF `tencent/CL-bench`（sha256 = LFS oid，实测相等）。"
         "⚠ 它与 AML 的 `clb_pipeline.py` **不是一回事**——后者 docstring 明写自己跟随的是"
         " repository task 给的实现，**不是** `Tencent-Hunyuan/CL-bench` 的 `infer.py`",
     },
@@ -255,7 +255,7 @@ MANIFEST: list[dict[str, str]] = [
         "tier": "optional",
         "url": f"{LOCOMO_ORIG_REPO}/{LOCOMO_ORIG_REV}/data/locomo10.json",
         "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4",
-        "note": "**2026-09-24 核到出处**：github.com/snap-research/locomo 的"
+        "note": "**出处已核**：github.com/snap-research/locomo 的"
         " `data/locomo10.json`（blob 逐字节一致）。**原始 LoCoMo**——代理评测用 refined 那份",
     },
     {
@@ -263,7 +263,7 @@ MANIFEST: list[dict[str, str]] = [
         "tier": "optional",
         "url": f"{PM_V1_DS}/{PM_V1_REV}/questions_32k.csv",
         "sha256": "cccd34cf53e0bc4d9536c04cff5ca045156d9a4e227e83327112482840bbc93c",
-        "note": "**2026-09-24 核到出处**：HF `bowen-upenn/**PersonaMem-v1**` 的"
+        "note": "**出处已核**：HF `bowen-upenn/**PersonaMem-v1**` 的"
         " `questions_32k.csv`（blob 逐字节一致）。⚠ **不是 v2 仓**（v2 仓只有"
         " `benchmark/*.csv`）——本地文件名是被改过的",
     },
@@ -286,7 +286,7 @@ MANIFEST: list[dict[str, str]] = [
         "tier": "optional",
         "url": f"{PM_V2_DS}/{PM_V2_REV}/README.md",
         "sha256": "18b068b91e3bfc5615806ebf5c74b143b79cbce22d41e7e26df50bbf5cc7b98a",
-        "note": "**2026-09-24 核到出处**：HF `bowen-upenn/PersonaMem-**v2**` 的"
+        "note": "**出处已核**：HF `bowen-upenn/PersonaMem-**v2**` 的"
         " `README.md`（blob 逐字节一致）。`license: cc-by-4.0` 的出处（pmv2.md:2）",
     },
     {
@@ -294,8 +294,7 @@ MANIFEST: list[dict[str, str]] = [
         "tier": "optional",
         "url": f"{LME_README_REPO}/{LME_README_REV}/README.md",
         "sha256": "c4ff45676683d9e2f7cf7d9099d26426f14635ec110dbb1da818d1019a142573",
-        "note": "**2026-09-24 核到出处**：github.com/xiaowu0162/LongMemEval 的"
-        " `README.md`（blob 逐字节一致）",
+        "note": "**出处已核**：github.com/xiaowu0162/LongMemEval 的 `README.md`（blob 逐字节一致）",
     },
     {
         "name": "rh.md",
@@ -321,7 +320,7 @@ MANIFEST: list[dict[str, str]] = [
     },
 ]
 
-# ── 已删除（2026-09-24）────────────────────────────────────────────────────
+# ── 已删除 ────────────────────────────────────────────────────
 # 留档是为了让"这个文件去哪了"有答案，而不是让下一个人重新从 /tmp 里翻出来。
 # 哈希记下来，万一将来要复核某个已写进文档的数字（例如 lme_test.json 的 1,230 个
 # 空 session），至少知道该找哪一份、以及它长什么样。
@@ -520,7 +519,7 @@ def main() -> int:
     else:
         print(f"✓ {len(wanted)} 项全部与清单一致")
     if DELETED:
-        print(f"\n（另有 {len(DELETED)} 份已于 2026-09-24 删除，理由与哈希见本文件 DELETED）")
+        print(f"\n（另有 {len(DELETED)} 份已删除，理由与哈希见本文件 DELETED）")
     return 1 if bad else 0
 
 

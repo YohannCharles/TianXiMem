@@ -22,7 +22,7 @@ compose.yaml    Qdrant server，**镜像 tag 钉死**
 
 **所以 local 模式不是"性能差一点"的替代品，是"过滤静默失效"。** 没有降级方案。
 
-> ✅ **docker 已就位（2026-09-23，D12 同日补充）**：Docker Desktop 29.8.0（WSL2 后端，`desktop-linux` context）。**daemon 走 Windows 命名管道，`docker` 命令直接从 Git Bash 可用**；发布端口转发到主机 ⇒ **`localhost:6333` 直接可用**，`.env` 默认值不用改。
+> ✅ **docker 已就位**：Docker Desktop 29.8.0（WSL2 后端，`desktop-linux` context）。**daemon 走 Windows 命名管道，`docker` 命令直接从 Git Bash 可用**；发布端口转发到主机 ⇒ **`localhost:6333` 直接可用**，`.env` 默认值不用改。
 
 ---
 
@@ -37,7 +37,7 @@ compose.yaml    Qdrant server，**镜像 tag 钉死**
 
 ⇒ **要求 ≥ v1.17.0**，且**部署时钉死**。
 
-**这与 §2.2 的可复现性同源**：融合行为的任何变化都会改变排名，而 **Full 只有 2 次、一旦接受即版本冻结**。一个浮动的镜像 tag 会让"这个分数是哪个版本跑出来的"变成不可回答的问题。
+**与 §2.2 的可复现性同源**：**Full 只有 2 次、一旦接受即版本冻结**，而融合行为的任何变化都会改变排名 ⇒ 标签浮动会让"这个分数是哪个版本跑出来的"变成不可回答的问题。
 
 **`compose.yaml` 里的 tag 就是这条要求的落地点**——它必须是完整版本号（`qdrant/qdrant:v1.17.0`），**不能用 `latest`、不能用大版本号浮标**。
 
@@ -49,7 +49,7 @@ compose.yaml    Qdrant server，**镜像 tag 钉死**
 | --- | --- |
 | 集合分片数 / 命名向量 / payload 索引 / payload 内容 / 写入 `wait=true` | [`../src/tianxi_am/store/CLAUDE.md`](../src/tianxi_am/store/CLAUDE.md)（**一处声明**） |
 
-**本目录只管起服务。** 集合是客户端建的——拓扑本身**已经是规格**（单集合 + `user_id` tenant 过滤 + `is_tenant` 索引 + 分片 1 + payload 索引先于写数据），原文见 [`../src/tianxi_am/store/CLAUDE.md`](../src/tianxi_am/store/CLAUDE.md) 的"Qdrant 配置要点"。
+**本目录只管起服务。** 集合是客户端建的——拓扑本身**已经是规格**（单集合 + `user_id` tenant 过滤 + `is_tenant` 索引 + 分片 1 + payload 索引先于写数据），原文见 [`../docs/config-reference.md`](../docs/config-reference.md) §8。
 
 ---
 
@@ -68,15 +68,13 @@ compose.yaml    Qdrant server，**镜像 tag 钉死**
 
 **第 2 步不能省**：Qdrant 是**派生读存储**，可从 SQLite 全文重建；**SQLite 是真源，丢了就没了**。
 
-**第 3 步不能省**：缓存键不含模型标识——若不主动作废，旧向量会**静默命中**。而维度不同的表现只是"检索结果很差"，**不会报错**。可重建性对照表见 [`../var/CLAUDE.md`](../var/CLAUDE.md)。
+**第 3 步不能省**：缓存键不含模型标识 ⇒ 不主动作废就会**静默命中**旧向量（症状只是"检索结果很差"，**不报错**）。原因与可重建性对照表见 [`../var/CLAUDE.md`](../var/CLAUDE.md)。
 
 > **⚠ 一处 R1 类风险（§6.4）**：本地 qwen3.5-9b 的分词器与 `gpt-4o-mini` 不同，**本地量出的"单请求能装多少对"不能直接搬到线上**——**第 6 步之后必须重新量一次**（[`../docs/open-questions.md`](../docs/open-questions.md) E7）。
 
 ---
 
----
-
-## 6. 24×7 运行就绪
+## 5. 24×7 运行就绪
 
 单进程 HTTP 服务，**必须能 24×7 连续运行**——**Full run 持续 0.5–2 天**。
 
@@ -91,7 +89,7 @@ compose.yaml    Qdrant server，**镜像 tag 钉死**
 
 ---
 
-## 7. 一条不能做的事
+## 6. 一条不能做的事
 
 **不要为了让 Qdrant 好部署而退回 local 模式**，也**不要**把 `user_id` / `session_id` / `event_time` 的过滤改到客户端做——后者等价于"检索全部、再在内存里筛"，会**破坏隔离字段的语义**（§2.2），而且随数据量增长不可控。
 

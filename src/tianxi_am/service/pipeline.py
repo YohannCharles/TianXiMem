@@ -1,11 +1,11 @@
 """`Add` 与 `Search` 的**编排**——把各层的调用串成真能跑的两条路径。
 
-> **为什么编排在本目录**：`service/CLAUDE.md` 说这一层"不做检索、不做配对、不碰存储"——
-> 那是指它**不重新实现**那些逻辑（全部往下调用）。而"**按什么顺序调**"必须有人拥有：
-> Search 的链条横跨 `retrieve/` 与 `rank/`，Add 的链条横跨 `pairing/`、`store/`、`embed/`，
-> **没有任何单个下层模块能拥有整条链**。所以顺序在这里，逻辑在下面。
+> **为什么编排在本目录**：本层"不做检索、不做配对、不碰存储"指的是**不重新实现**那些
+> 逻辑（全部往下调用）；而"**按什么顺序调**"必须有人拥有——Search 的链条横跨 `retrieve/`
+> 与 `rank/`，Add 的链条横跨 `pairing/`、`store/`、`embed/`，**没有任何单个下层模块能拥有
+> 整条链**。所以顺序在这里，逻辑在下面。
 
-## Search 链（2026-09-24：接上扩窗、合并与 token 预算）
+## Search 链
 
 ```text
 User Query → DenseArm（每 query 恰好 1 次）
@@ -19,10 +19,8 @@ User Query → DenseArm（每 query 恰好 1 次）
            → ≤ top_k 个**段**
 ```
 
-**唯一还没实现的一环曾经是 rerank 的远端调用**——**2026-09-24 已接**（`RemoteReranker`
-打主网关的 `/rerank`，线格式实测过）。端点不可用时按 D12 降级回 RRF 顺序并记
-`rerank_degraded`；没配/关掉时记 `rerank_disabled`。理由与降级契约写在
-[`../rank/reranker.py`](../rank/reranker.py)。
+端点不可用时按 D12 降级回 RRF 顺序并记 `rerank_degraded`；没配/关掉时记
+`rerank_disabled`。理由与降级契约写在 [`../rank/reranker.py`](../rank/reranker.py)。
 
 ## `Add` 的链，以及那个**必须专门处理**的失败窗口
 
@@ -36,32 +34,27 @@ canonical AddRequest
 ```
 
 **失败窗口**：SQLite 事务**已提交** → Qdrant 的 embedding/upsert **失败** → 客户端重试
-**同一个 `request_id`**。
+**同一个 `request_id`**。此时 `applied_batches` 里**已经有这一批**，幂等守卫会命中 ⇒
+`apply_batch` 直接返回、**不写任何东西**。若这里跟着返回 200，就会留下
+**SQLite 有真源、Qdrant 永久缺索引** ⇒ 那些记忆**永远检索不到，且没有任何报错**。
 
-此时 `applied_batches` 里**已经有这一批**，幂等守卫会命中 ⇒ `apply_batch` 直接返回、
-**不写任何东西**。若这里跟着返回 200，就会留下：**SQLite 有真源、Qdrant 永久缺索引**
-⇒ 那些记忆**永远检索不到，且没有任何报错**。
+### 修复路径：按 session 幂等重建（不动 `pairing/`）
 
-### 现有 API 的一个缺口，以及不碰 ① 的修法
-
-`ApplyBatchResult.plan` 在**守卫命中时是 `None`**（① 的 `apply_batch` 里那行早返回）——
-所以重放时**拿不到"本批触碰了哪些 pair"**。
-
-**但修复不需要那个列表**：`user_id` / `session_id` 就在请求里，而
-`SqliteStore.fetch_pairs_by_idx_range(conn, user_id, session_id, 0, MAX)` 能拿到**该 session
-的全部对**。于是修复路径是**按 session 做幂等重建**：
+`ApplyBatchResult.plan` 在**守卫命中时是 `None`**（`pairing/` 的 `apply_batch` 里那行早返回），
+所以重放时拿不到"本批触碰了哪些 pair"。**但修复不需要那个列表**：`user_id` / `session_id`
+就在请求里，`fetch_pairs_by_idx_range(conn, user_id, session_id, 0, MAX)` 能拿到该 session
+的全部对，于是：
 
 * `point_id` 是位置派生的纯函数 ⇒ 同一对永远是同一个 point
 * `upsert` 幂等 ⇒ 已经写对的会被原样覆盖
-* embedding 缓存按内容哈希 ⇒ 之前成功索引过的对**必然已在缓存里**，
-  重放几乎不产生远程调用
+* embedding 缓存按内容哈希 ⇒ 之前成功索引过的对**必然已在缓存里**，重放几乎不产生远程调用
 
 ⇒ **净效果**：不变量"该 session 的每个 SQLite 行都在 Qdrant 里"被恢复，
 且**没有让 SQLite 去迁就 Qdrant**（真源不变，派生索引被修复）。
 
 > **代价**：重放要 upsert 该 session 的全部对，而不是只有本批那几条。这是**刻意的**——
-> 换取了"不改 ① 的 DDL"。若日后要精确到批，需要给 `applied_batches` 加一列记录
-> 触碰的 `pair_id`s（那是 ① 的改动，**本切片没有做**）。
+> 换取了"不改 `applied_batches` 的表结构"。要精确到批就得加一列记触碰的 `pair_id`s
+> （那要改 `pairing/` 里的 DDL，**本模块没有做**）。
 """
 
 from __future__ import annotations
@@ -250,8 +243,8 @@ class SearchPipeline:
     def reranker(self) -> Reranker | None:
         """当前接的 reranker（`None` = 没配 / 显式关掉）。
 
-        只读暴露是给两处用的：**测试**（断言装配真的接上了，不是又传了 `None`）
-        与**诊断**（§14 的 run record 要记"这次用的哪个 reranker"，D12）。
+        只读暴露给**测试**（断言装配真的接上了，不是又传了 `None`）与**诊断**
+        （§14 的 run record 要记"这次用的哪个 reranker"，D12）。
         """
         return self._reranker
 
@@ -311,9 +304,9 @@ class SearchPipeline:
         | 真源缺行 ⇒ 拼不出文档 | `degraded` | **打算调了**，是这一步没能兑现 |
         | 端点不可用 / 返回形状不符 | `degraded` | 同上 |
 
-        ⚠ **降级不是吞异常**（D12 明确要求）：reranker 是唯一位于关键路径上、
-        又不被规则保证可用的组件。它挂了必须**照样产出合法响应**，而不是 5xx——
-        但**降级这件事必须留下痕迹**，不能像什么都没发生。
+        ⚠ **降级不是吞异常**（D12 明确要求）：reranker 是唯一位于关键路径上、又不被规则
+        保证可用的组件。它挂了必须**照样产出合法响应**，而不是 5xx——但**降级这件事
+        必须留下痕迹**，不能像什么都没发生。
         """
         if self._reranker is None or not ranked:
             self.rerank_disabled += 1

@@ -159,7 +159,7 @@ def expect(condition: bool, message: str) -> None:
 def _force_utf8_stdio() -> None:
     """把 stdout/stderr 切到 UTF-8 + `errors="replace"`。
 
-    ⚠ **这不是洁癖，是一个实测到的崩溃**（2026-09-24，本机）：本文件**通篇是中文**，
+    ⚠ **这不是洁癖，是一个实测到的崩溃**：本文件**通篇是中文**，
     而 Windows 的默认控制台是 GBK（cp936），`sys.stdout` 的默认 error handler 是 **`strict`**。
     于是"缺密钥"那条中文报错在**准备打印的时候**抛 `UnicodeEncodeError`，
     预检以 **exit 1** 退出——**正好在它要报告问题的时刻崩掉**，是最坏的一种失败。
@@ -311,8 +311,8 @@ def _launch_service(*, timeout: float, verbose: bool) -> ServiceHandle:
     last: str = "还没收到任何响应"
     while time.monotonic() < deadline:
         if proc.poll() is not None:
-            # ⚠ **先取日志再 stop()**：stop() 会把整个临时目录删掉，而日志就在里面。
-            #   这个顺序 bug 一度被"临时目录反正删不掉"掩盖着——把泄漏修好之后才露出来。
+            # ⚠ **先取日志再 stop()**：stop() 会把整个临时目录删掉，而日志就在里面
+            #   ——顺序反了就永远读不到那句最有用的话。
             tail = _tail()
             handle.stop()
             raise PreconditionError(

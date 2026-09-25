@@ -24,9 +24,8 @@ ranked（已去重、已 rerank 的名次）
 
 ## 为什么扩窗要读 SQLite 而不是 Qdrant
 
-§6.3 的分工：**正文不进 Qdrant**。邻域是"按 `(user_id, session_id, pair_idx)` 取一段连续的行"，
-而这**正好命中** `UNIQUE(user_id, session_id, pair_idx)` 建出的索引（不变式 4）——
-一次 `BETWEEN`，不扫全表。所以扩窗是**真源查询**，不是向量查询。
+§6.3 的分工：**正文不进 Qdrant**。邻域查询正好命中
+`UNIQUE(user_id, session_id, pair_idx)` 的索引（不变式 4）——一次 `BETWEEN`、不扫全表。
 """
 
 from __future__ import annotations
@@ -52,12 +51,12 @@ __all__ = [
 
 #: 主动扩窗的种子数与半径（§10）——**从 `common/config.py` 再导出**。
 #:
-#: ⚠ **值的家不在这里**：`common/` 不得 import 本层（分层要求），所以默认值住在配置层，
-#: 由这里引用。这样就不会出现"代码默认值 30 / 配置里写了 20"这种没人会发现的漂移——
-#: 那种漂移只会表现为"扩窗比预期少了几条"，**不报错**。
+#: ⚠ **值的家不在这里**：`common/` 不得 import 本层（分层要求），所以默认值住在配置层。
+#: 各写一份会出现"代码默认值 30 / 配置里写了 20"这种没人会发现的漂移——它只会表现为
+#: "扩窗比预期少了几条"，**不报错**。
 #:
-#: ⚠ 扩窗半径的单位是 **QA 对**：`±1` 拿回前后各**一整对**（最多 4 条消息），
-#: 不是前后各一条消息——**扩窗比 message 粒度时更贵**。
+#: ⚠ 半径的单位是 **QA 对**：`±1` 拿回前后各**一整对**（最多 4 条消息），
+#: 不是各一条消息——**扩窗比 message 粒度时更贵**（值见 config-reference §6）。
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,9 +108,8 @@ def expand_neighbors(
 ) -> ExpansionResult:
     """把 `ranked` 全部保留，并对**前 `seed_limit` 条**扩窗 `± radius`。
 
-    **一次 `store.read()` 里做完所有查询**——短生命周期连接模型下，
-    每次开连接都要付一次 `connect`（D17）；这里要打 1 次批量取正文 + 至多 `seed_limit` 次
-    邻域查询，**共用一个只读连接**。
+    **一次 `store.read()` 里做完所有查询**：短生命周期连接模型下每次开连接都要付一次
+    `connect`（D17），而这里有 1 次批量取正文 + 至多 `seed_limit` 次邻域查询。
 
     ⚠ 读操作**不拿写锁**（D17：不要为读拿 `BEGIN IMMEDIATE`）。
     """
@@ -229,14 +227,8 @@ def merge_segments(
 ) -> list[ContextSegment]:
     """把选中的记忆按"连续 `pair_idx`"合并成段，并按 `best_rank` 升序返回。
 
-    **算法是一次线性扫描**（不是两两比较、也不是区间合并的数据结构）：
-
-    ```text
-    按 (user_id, session_id) 分组 → 组内按 pair_idx 升序
-    遍历，维护"当前段"：
-        pair_idx == 当前段.end + 1  →  append（**直接延长，不新建**）
-        否则                          →  收尾当前段，新建一段
-    ```
+    **算法是一次线性扫描**：按 `(user_id, session_id)` 分组 → 组内按 `pair_idx` 升序 →
+    遍历维护"当前段"，`pair_idx == end + 1` 就**直接延长**，否则收尾当前段、新建一段。
 
     ⚠ **不同 session 永远不能合并**：分组键里就带着 `session_id`，所以
     跨 session 合并**在结构上做不到**，而不是靠一句判断。
@@ -291,14 +283,13 @@ def _build_segment(
     """把一段连续的成员收成一个 `ContextSegment`（含渲染与计数）。"""
     # 锚点 = 段内**真实名次最好**的那条。邻居（rerank_rank is None）不参与。
     #
-    # ⚠ `key` 里的 `m.rerank_rank is None` 不是装饰：扩窗窗口是 `[k-r, k+r]` 的**整段**
-    #    行，所以种子一定与它扩出来的邻居落在同一个连续段里 ⇒ 段里至少有一条真实候选。
-    #    但 `radius` 是可配的、`selected` 也可能被别的调用方构造出来，所以这里**不假设**
-    #    那个不变量：全是邻居时取会话顺序的第一条当锚点，而不是崩掉。
+    # ⚠ 扩窗窗口是 `[k-r, k+r]` 的**整段**行，所以种子必与它扩出来的邻居同段 ⇒ 段里
+    #    至少有一条真实候选。但 `radius` 可配、`selected` 也可能被别的调用方构造出来，
+    #    所以这里**不假设**那个不变量：全是邻居时取会话顺序的第一条当锚点，而不是崩掉。
     ranked_members = [m for m in run if m.rerank_rank is not None]
-    # `cast` 不是装饰：上面的 filter 已经保证这里没有 None，但**类型系统看不出来**
-    # （lambda 的返回类型不会因为外层列表推导而收窄）。所以这行是"把已知的不变式
-    # 告诉 mypy"，不是"忽略一个真实的 None"。
+    # `cast` 不是装饰：上面的 filter 已保证这里没有 None，但**类型系统看不出来**
+    # （lambda 的返回类型不会因外层列表推导而收窄）⇒ 这行是"把已知的不变式告诉
+    # mypy"，不是忽略一个真实的 None。
     anchor = (
         min(ranked_members, key=lambda m: cast(int, m.rerank_rank)) if ranked_members else run[0]
     )

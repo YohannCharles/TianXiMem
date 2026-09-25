@@ -5,10 +5,10 @@
 ## 要写什么
 
 ```text
-run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告      ✅ 2026-09-25
-t1_timestamp.py       T1 时间戳前缀 带/不带（两臂冻结快照）        ✅ 2026-09-25（**两臂未跑**）
+run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告      ✅
+t1_timestamp.py       T1 时间戳前缀 带/不带（两臂冻结快照）        ✅（**两臂未跑**）
 t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）  🟡 汇总半边已就位；标注待人工
-a3_rerank.py          A3 Rerank 开/关                            ⬜
+a3_rerank.py          A3 Rerank 开/关                            ✅（首组对照见 ../reports/ledger.md）
 a4_agent.py           A4a 门控 / A4b always-on                    ⬜（v1 没有 agent，见 D13）
 ```
 

@@ -402,11 +402,8 @@ def seed_pair_in(
 ) -> str:
     """落一个对，返回它的 canonical `memory_id`（位置派生，见 ① 的 ID 纪律）。
 
-    **全测试层唯一的一份**（2026-09-25 合并）：此前 `test_neighbor.py` 与
-    `test_reranker.py` 各自又写了一份几乎相同的 `_seed`，差异只在
-    "有没有 `event_time`"与"`question`/`answer` 能不能省"。这里取三者
-    **签名与行为的并集**，那两个文件改成 `from tests.conftest import seed_pair_in as _seed`
-    ⇒ **调用点一处都不用改**。
+    **全测试层唯一的一份**——`test_neighbor.py` / `test_reranker.py` 都从
+    `tests.conftest import seed_pair_in as _seed` 取它，**别再各写一份**。
 
     * `question` / `answer` 省掉时按 `q{pair_idx}` / `a{pair_idx}` 补
     * `session_id` 可传——那两个文件要造"两个 session 各有一条候选"的形状

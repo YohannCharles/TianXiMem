@@ -13,17 +13,13 @@ locks.py      按 (user_id, session_id) 的串行化
 errors.py     异常 → 保持"可重试"的边界处理
 ```
 
-> **配置不在本目录**（2026-09-24 改，③-d）：原先的 `settings.py` 已删除。
-> 配置由 [`../common/config.py`](../common/config.py) 统一提供，**注入** `build_services()`。
+> **配置不在本目录**：由 [`../common/config.py`](../common/config.py) 统一提供，**注入** `build_services()`。
 > **`service/` 自己不读 `os.environ`**——这一条有静态测试钉住
 > （`tests/test_config.py::test_only_config_reads_the_environment`）。
 >
 > ⇒ 本目录拿到的是一个 [`AppConfig`](../common/config.py) 对象；**它不知道那些值从哪来**。
 
-> **为什么有 `pipeline.py`**：本层"不做检索、不做配对、不碰存储"指的是**不重新实现**
-> 那些逻辑（全部往下调用）。而 Search 的链横跨 `retrieve/` 与 `rank/`、Add 的链横跨
-> `pairing/`、`store/`、`embed/`——**没有任何单个下层模块能拥有整条链**，
-> 所以"顺序"必须有人拥有，就在这里。路由仍然是薄的（`routes.py` 只有形状映射）。
+> **为什么有 `pipeline.py`**：本层"不做检索、不做配对、不碰存储"指的是**不重新实现**那些逻辑（全部往下调用）。而 Search 的链横跨 `retrieve/` 与 `rank/`、Add 的链横跨 `pairing/`、`store/`、`embed/`——**没有任何单个下层模块能拥有整条链**，所以"顺序"必须有人拥有，就在这里（路由仍然是薄的，`routes.py` 只有形状映射）。
 
 ## 这一层只做三件事
 
@@ -56,7 +52,7 @@ errors.py     异常 → 保持"可重试"的边界处理
 
 第 4 条用的是**进程内锁**。多 worker 会**静默失效**——每个 worker 各有各的锁，两个批次照旧并发。
 
-**这一条有两条防线，都不是文档警告**（2026-09-24 加，③-d）：
+**这一条有两条防线，都不是文档警告**（③-d）：
 
 | 防线 | 在哪 | 拦住什么 |
 | --- | --- | --- |
@@ -91,4 +87,4 @@ errors.py     异常 → 保持"可重试"的边界处理
 
 跑 Smoke 之前逐条过 [`../../../docs/contract.md`](../../../docs/contract.md) §4 的清单。**Smoke 次数有限（每轨道 ≤30 次），不要拿它当调试器。**
 
-`make contract-check` 已接通（2026-09-24，指 [`../../eval/smoke/preflight.py`](../../../eval/smoke/preflight.py)）——**尤其是"No.1 精确计数"和"No.3 created_at 始终存在"这两条**，它们最容易在加了邻域扩展之后悄悄破掉。
+`make contract-check` 指 [`../../eval/smoke/preflight.py`](../../../eval/smoke/preflight.py)——**尤其是"No.1 精确计数"和"No.3 created_at 始终存在"这两条**，它们最容易在加了邻域扩展之后悄悄破掉。

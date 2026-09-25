@@ -44,7 +44,7 @@ def config_fingerprint(
 ) -> dict[str, Any]:
     """配置指纹（§13）：profile + 开关状态 + **配置快照 hash**。
 
-    ## 开关的家在 `configs/<profile>.yaml`（2026-09-24 起，③-d 已落地）
+    ## 开关的家在 `configs/<profile>.yaml`（③-d）
 
     本模块**不解析**那些 yaml——解析会与 `common/config.py` 抢同一份知识，
     而 harness 的边界是"打 HTTP、**不 import `src/`**"。⇒ 这里只**逐字节哈希**
@@ -163,10 +163,9 @@ def build_record(
 
 
 def _unavailable_counters() -> dict[str, Any]:
-    """§6.5 的三个计数器**今天的真正状态**。
-
-    发射端在 `pairing/instrument.py` 已有，但**聚合端 `observability/` 未实现**
-    ⇒ 这里没有任何数字可填。**不填 0**：`0` 会被读成"没有 pending"，而事实是"没读"。
+    """§6.5 的三个计数器的**当前状态**：发射端在 `pairing/instrument.py` 已有，
+    但**聚合端 `observability/` 未实现** ⇒ 这里没有任何数字可填。
+    **不填 0**：`0` 会被读成"没有 pending"，而事实是"没读"。
     """
     return {
         "pending_created": None,

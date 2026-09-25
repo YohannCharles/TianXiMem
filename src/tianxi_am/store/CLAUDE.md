@@ -12,17 +12,11 @@ qdrant_store.py   collection 建/写/查、payload 过滤、**按传入参数执
 
 **这是唯一接触 SQLite 与 Qdrant 的目录。** 上层拿到的是领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`——§6.3 的分工表只有在读写收口到一处时才守得住。
 
-> ### ⚠ 检索的**参数所有权**不在本目录（2026-09-24 定）
+> ### ⚠ 检索的**参数所有权**不在本目录
 >
-> `prefetch_limit` / `weights` / `k` / `top_k` 的**取值、校验与标定**归 [`../retrieve/`](../retrieve/)。
-> 本目录只做 **Qdrant 的请求构造与执行**——把传进来的参数翻成 `prefetch` + `rrf` 的调用，
-> 并把结果还原成领域对象。**两条边界**：
+> `prefetch_limit` / `weights` / `k` / `top_k` 的**取值、校验与标定**归 [`../retrieve/`](../retrieve/)；本目录只做 **Qdrant 的请求构造与执行**——把传进来的参数翻成 `prefetch` + `rrf` 的调用，并把结果还原成领域对象。**两条边界**：本目录**不决定**用哪个 `k`（`k=61` 是正确性常量，由 `retrieve/` 校验，见 D5）、**不决定** `top_k`（它来自请求，由 `retrieve/` 传入；**写死 100 是契约错误**）。
 >
-> * 本目录**不决定**用哪个 `k`（`k=61` 是正确性常量，由 `retrieve/` 校验，见 D5）
-> * 本目录**不决定** `top_k`（它来自请求，由 `retrieve/` 传入；**写死 100 是契约错误**）
->
-> ⇒ **分工是一句话：`retrieve/` 说"用什么参数"，`store/` 说"怎么发给 Qdrant"。**
-> §7.3 那张表的**数值**属于 `retrieve/`，**写法**（`prefetch` 每路带 `using`、根级 `limit`）属于本目录。
+> ⇒ **一句话：`retrieve/` 说"用什么参数"，`store/` 说"怎么发给 Qdrant"。** §7.3 那张表的**数值**属于 `retrieve/`，**写法**（`prefetch` 每路带 `using`、根级 `limit`）属于本目录。
 
 > **向量缓存不在这里**——它在 [`../embed/`](../embed/)，因为缓存键是"渲染后文本的哈希"，属渲染 + embedding 的关注点（§7.2）。**§6.3 把这层定义为恰好两样东西**（SQLite 真源 + Qdrant 派生索引，且明确"不可互换"），塞进第三个存储会削弱那条规则。
 
@@ -40,9 +34,7 @@ qdrant_store.py   collection 建/写/查、payload 过滤、**按传入参数执
 | 不能做的事 | 向量检索 | 跨 point 事务、关系查询 |
 | 坏了怎么办 | —— | **可从 SQLite 全文重建** |
 
-**为什么两边都不能省**：能力不重叠。补全一个 `pending` 对是"读-改-写"，**需要事务**；而检索**需要向量**。
-
-**为什么正文不复制进 Qdrant payload**：会有两份正文，一旦不一致**就无法判断该信哪一份**。而按主键批量取正文是**微秒级操作**，没有性能理由去复制。
+**两边都不能省**：补全一个 `pending` 对是"读-改-写"，**需要事务**；而检索**需要向量**。**正文不复制进 Qdrant payload**：会有两份正文，一旦不一致**就无法判断该信哪一份**；而按主键批量取正文是**微秒级操作**，没有性能理由去复制。（两条完整论证见 D3）
 
 **时序**：Qdrant 出 `id` → 回 SQLite 按 `id` 批量取正文 → 渲染 → 打包。"取正文"这一步**没有缓存层，也不应该**：正文的可信来源只有一处。
 
@@ -78,7 +70,7 @@ applied_batches(
 
 > 能被 `question` / `answer` 重建的东西，一律不进真源。
 
-**不预留 v2 字段。** 早期版本留过 `kind` / `parent_id`（Fact 抽取用）与无定义键的 `meta`——**三者已一并删除**，理由相同：预留字段既不入索引也不进 `ORDER BY`，**正属于"不该是列"的一类。真要做时再加**（§6.1）。
+**不预留 v2 字段**（§6.1 / D3）：`kind` / `parent_id`（Fact 抽取用）与无定义键的 `meta` **已删、也不要再加**——预留字段既不入索引也不进 `ORDER BY`，**正属于"不该是列"的一类**。真要做时再加。
 
 ---
 
@@ -114,7 +106,7 @@ applied_batches(
 
 **并发由 SQLite 自己串行化**（WAL + `busy_timeout`）：抢不到写锁的一方**等待**，不抛 `SQLITE_BUSY`。**不新增应用层写锁**——真出现高尾延迟时它是**优化**，不是正确性基础。
 
-> **但这一切的前提是 `BEGIN IMMEDIATE`**（已实测，2026-09-24）：换成默认的 `BEGIN`，两条并发压力用例双双报 `database is locked`——**连"各写各的 session"那条也失败**，因为**升级写锁时 `busy_timeout` 不生效**（SQLite 宁可立刻报错也不冒死锁的险）。**不要把它当成"只是个位置分配优化"。**
+> **但这一切的前提是 `BEGIN IMMEDIATE`**（已实测）：默认的 `BEGIN` 会让两条并发压力用例双双报 `database is locked`——**连"各写各的 session"那条也失败**，因为**升级写锁时 `busy_timeout` 不生效**（SQLite 宁可立刻报错也不冒死锁的险）。**不要把它当成"只是个位置分配优化"。**
 
 > **按 session 的业务顺序不在这里**，属 `service/` 的 `SessionLocks`（§15）。两者管的是两件不同的事——职责对照表见 D17，**不要在这里重述**。
 
@@ -122,21 +114,13 @@ applied_batches(
 
 ---
 
-## Qdrant 配置要点（§6.3）—— **本表是唯一声明处**
+## Qdrant 配置要点（§6.3）—— 配置项见 [`../../docs/config-reference.md`](../../../docs/config-reference.md) §8
 
-| 项 | 值 | 理由 |
-| -- | -- | ---- |
-| 模式 | **server（Docker）** | local 模式**静默丢弃 payload 索引**——`create_payload_index` 只打一行警告就返回，且数据格式与 server 不兼容 |
-| 版本 | **钉死 ≥ v1.17.0** | §7.3：`weights` 需 ≥ v1.17.0。落地在 [`../../deploy/`](../../../deploy/) |
-| 集合分片数 | **1** | 根级融合跨分片合并，**分片数变化会改变排名**——为可复现必须单分片（官方文档亦指出分片数改变排名且**无报错**） |
-| 命名向量 | `dense` + `bm25` | 稀疏向量的距离固定为 **Dot** |
-| payload 索引 | `user_id`（**keyword** + `is_tenant`）/ `session_id`（keyword）/ `event_time`（integer） | **必须在写入数据前建**，否则 HNSW 需要重建才有过滤感知 |
-| payload 内容 | `user_id` / `session_id` / `pair_idx` / `event_time` | **不含正文** |
-| 写入 | **`wait=true`** | 契约要求"响应前立即可搜"；默认异步不保证 |
+（七项配置 —— 模式 / 版本 / 分片数 / 命名向量 / payload 索引 / payload 内容 / 写入方式 —— 的**值与理由都在那份文档**，本文件不复制。下面是本层特有的三条。）
 
 > **`is_tenant` 只支持 keyword / uuid 两种类型**——别把 `user_id` 建成 integer。
 
-> ✅ **已在钉死版本上实测通过（2026-09-23，Qdrant v1.17.0 容器）**：`is_tenant` 建索引返回 `acknowledged` 且读回 config 已生效；`dense` + `bm25`（modifier `idf`）+ `shard_number:1` 的集合可建；`prefetch` 两路 + 根级 `rrf{weights, k:61}` + `user_id` 过滤的查询可用，**且过滤确实只返回目标 tenant 的点**。
+> ✅ **已在钉死的 Qdrant v1.17.0 容器上实测通过**：`is_tenant` 建索引返回 `acknowledged` 且读回 config 已生效；`dense` + `bm25`（modifier `idf`）+ `shard_number:1` 的集合可建；`prefetch` 两路 + 根级 `rrf{weights, k:61}` + `user_id` 过滤的查询可用，**且过滤确实只返回目标 tenant 的点**。
 
 **融合写法**：`prefetch` + `rrf{weights, k}`，**`k` 必须显式设 `61`**，每个 `prefetch` 都要带 `using`（命名向量场景下不写 `using`，Qdrant 无法确定用哪一路），根级还要给 `limit`（取自请求的 `top_k`，**不要写死 100**）。完整写法见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §3；`k=61` 的由来见 D5。
 

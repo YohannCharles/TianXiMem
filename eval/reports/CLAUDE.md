@@ -46,7 +46,7 @@ runs/              每次 run 的原始产出（**gitignored**，见下）
 6. Rules and process execution
 7. **Epistemic safety and privacy**
 
-> **第 4、7 两维**在早期设计里**完全未被覆盖**，是 §3.2 要求**在设计里显式回应**的（映射见 [`../../../docs/architecture.md`](../../docs/architecture.md)）。**报告里这两维为空的 run，等于没测。**
+> **第 4、7 两维要显式回应**（§3.2，映射见 [`../../../docs/architecture.md`](../../docs/architecture.md)）——**报告里这两维为空的 run，等于没测。**
 
 ### ⚠ `pending_orphaned` 要拆成两个字段
 

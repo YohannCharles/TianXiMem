@@ -15,9 +15,9 @@ run_record.py  每次 run 的配置指纹 + 数据指纹 + 结果
 
 ---
 
-## ⚠ 三个必须先解决的阻塞项
+## ⚠ 与归档 pipeline 有关的三件事
 
-### 1. `api_config.py` —— ✅ **已实现（2026-09-24）**，见 [`api_config.py`](./api_config.py)
+### 1. `api_config.py` —— ✅ 已实现，见 [`api_config.py`](./api_config.py)
 
 **7 个 pipeline 都做这两件事**：
 
@@ -29,17 +29,10 @@ from api_config import (ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL,
 
 `__file__` 在 `benchmark_data/` 下，所以 `parents[2]` 解析到 **`/home/buptc/project`**——**不是 `TianXi_AM/`，是它的上一级**。
 
-**它今天仍然不存在**，所以这 **7 个 pipeline 现在都 import 失败**。
+**⚠ 不要在仓库外创建它。** 那份就是本目录里的 [`api_config.py`](./api_config.py)（AML 公开的那份是 520 字节、无凭据），由 `judge.run_judge()` 起 subprocess 时把**本目录**放进 `PYTHONPATH` 找到（`judge._subprocess_env`）——`sys.path.insert(0, <不存在路径>)` 只是塞进一个没有该模块的条目，**import 会继续往后找到 `PYTHONPATH` 里的那份**，于是归档保持只读、`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。
 
-**处置（2026-09-24 更新）**：**不要再在仓库外创建它。** 三条已核实的事实把这件事降成"抄一份 + 注入路径"：
+**两边的名字不一样**——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组：**适配器负责接上**（`JUDGE_*` 留空即回落 `ANSWER_*`——网关只有一个对话模型）。**那七个名字里不含 embedding**：归档 pipeline 不向量化，Qwen3-Embedding-8B 只属于 `src/tianxi_am`。
 
-1. **AML 自己就发布了这个文件**——公开仓根目录的 `api_config.py`，**520 字节、无凭据**，内容就是 `os.environ.get(...)` 读那七个名字。它的 README 原话："Credentials and service endpoints must be supplied externally; no secret is bundled with this repository."
-2. **不用放在仓库外**：放**仓库内**，由 harness 在 subprocess 里注入 `PYTHONPATH`——`sys.path.insert(0, <不存在路径>)` 只是塞进一个没有该模块的条目，**import 会继续往后找到 `PYTHONPATH` 里的那份**。归档保持只读、`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。
-3. **不含 embedding 配置**——归档 pipeline 不向量化，Qwen3-Embedding-8B 只属于 `src/tianxi_am`。
-
-**⇒ "clone 下来不能直接跑"不再成立**：仓库内那份 + `.env` 就够。注意两边的名字不一样——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组：**适配器负责接上，已写在 [`api_config.py`](./api_config.py) 里**（`JUDGE_*` 留空即回落 `ANSWER_*`——网关只有一个对话模型）。
-
-> **它是怎么被找到的**：`judge.run_judge()` 起 subprocess 时把 **本目录**放进 `PYTHONPATH`（见 `judge._subprocess_env`）。
 > **回归用例**：`tests/test_harness.py` 里那个桩 pipeline **真的 `import api_config`**——这条路径断了会立刻红。
 
 ### 2. 那些 CLI 参数是死的
@@ -65,12 +58,11 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 
 ## 契约：字段名以 **pipeline 代码**为准，不要照 readme
 
-> ⚠ **2026-09-25 起带一个星号**：归档的 7 个 pipeline 有一处**已声明的本地修订**
-> （`Path.open` 当异步上下文用的语法问题，`contextlib.nullcontext` 包一层）——
-> **prompt 与判分逻辑与上游逐字相同**，差的是文件句柄那一处。理由、范围与复现方式见
-> [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md) 的"本地修订"一节，
+> ⚠ 归档的 7 个 pipeline 有一处**已声明的本地修订**（`Path.open` 当异步上下文用的语法问题，
+> `contextlib.nullcontext` 包一层）——**prompt 与判分逻辑与上游逐字相同**，差的是文件句柄那一处。
+> 理由、范围与复现方式见 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md) 的"本地修订"一节，
 > 机器可查的部分在 [`../../tools/fetch_benchmark_data.py`](../../tools/fetch_benchmark_data.py) 的 `local_patch`。
-> **除此之外，"以 pipeline 代码为准"照旧。**
+> **"以 pipeline 代码为准"照旧。**
 
 **readme 与代码不一致，已核实**：readme 写 `predicted_answer`（LoCoMo）/ `hypothesis`（LME），但**这些 pipeline 实际读写的是 `generated_answer`**。
 

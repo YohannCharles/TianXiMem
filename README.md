@@ -6,7 +6,7 @@
 > **约束速查见 [`CLAUDE.md`](./CLAUDE.md)**——它是写给 Claude Code 的、每次会话自动加载的那一份，内容与 PRD 同步维护。
 > **任何冲突以 PRD 为准。**
 
-本仓库**实现已开工**（2026-09-23 起）——存储层与配对已落地，见下方「当前状态」。
+本仓库**实现已开工**——存储层、配对、检索、打包与服务都已落地，见下方「当前状态」。
 
 ---
 
@@ -110,8 +110,8 @@
 | ---- | ---- | ---- |
 | **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | 🟡 主体已建，**T2 未跑** |
 | Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF） | 🟡 `src/` 已落，**T2 未跑** |
-| Step 2 | Neighbor Expansion + 双预算截断 | ✅ 已完成（2026-09-24） |
-| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 rerank 已接 + 打包已落地；**渲染模板定稿与 T1 未做** |
+| Step 2 | Neighbor Expansion + 双预算截断 | ✅ 已完成 |
+| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 rerank 已接 + 打包已落地 + 渲染模板定稿；**T1 两臂未跑** |
 | Step 4 | Conditional Agentic Search | ⬜ |
 | **Step 5** | **切换到提交模型**，重标定全部阈值，重跑 T2 | ⬜ |
 | Step 6 | 对照实验（§13）+ Smoke 验证 + Full 定稿 | ⬜ |
@@ -120,7 +120,7 @@
 **Step 5 不可与任何设计改动合并**——否则分数变化无法归因（§12.1 R1）。
 
 > ⚠ **上表是摘要，状态以 [`docs/roadmap.md`](./docs/roadmap.md) 为准**（完整清单与每步的交付定义都在那里）。
-> 这张表 2026-09-25 之前整表过期了四步——**改状态时先改 roadmap.md，再回来同步这里**。
+> **改状态时先改 roadmap.md，再回来同步这里。**
 
 ---
 
@@ -142,26 +142,17 @@
 
 ## 当前状态
 
-**实现已开工（2026-09-23），不是空脚手架。**
-
-| 状态 | 模块 |
-| --- | --- |
-| ✅ **已实现** | `store/`（SQLite 真源 + Qdrant + schema）· `pairing/`（配对 / 续接三步 / 计数器）· `embed/`（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存）· `common/render.py`（渲染唯一实现）——另有 **8 个测试文件**在 `tests/` |
-| ⬜ **未实现** | `rank/` 的 `reranker.py` / `neighbor.py` · `llm/` · `observability/` · `common/` 的 `tokens.py` / `config.py` · `embed/` 的 `text_embedding_v4.py` · `configs/*.yaml` · `eval/` 的 `datasets/contracts.py` / `smoke/{quota,s1_discriminator,s2_probe,s3_probe}.py` / `reports/ledger.md` / `experiments/` / `baselines/`<br>（**状态表的唯一权威在根 `CLAUDE.md`**，这里只是镜像） |
-| ⛔ **v1 不做** | `agent/`（D13） |
-
-已实现的部分对应 `docs/roadmap.md` 的 **Step 1**。**每个目录下的 `CLAUDE.md` 说明了该目录要写什么、受哪条约束、对应哪一节。**
-
-> **⚠ 一处已知漂移**：`docs/` 里仍有若干处状态描述停留在"脚手架阶段"（例如 `docs/roadmap.md` 的勾选状态）。以本节与代码为准。
+**实现已开工，不是空脚手架。** 模块级的**状态表唯一权威在根 [`CLAUDE.md`](./CLAUDE.md)**（本文件不再镜像一份——镜像必然掉队）；分步交付与剩余项在 [`docs/roadmap.md`](./docs/roadmap.md)。
 
 ### Step 0 阻塞项
 
-**运行形态已定**（2026-09-23，见 [`docs/decisions.md`](./docs/decisions.md) D12）：**模型（LLM / embedding / reranker）全部经自建网关远程访问；检索服务与 Qdrant 跑在本机**——本机不需要 GPU，docker 已就位。
+**运行形态已定**（见 [`docs/decisions.md`](./docs/decisions.md) D12）：**模型（LLM / embedding / reranker）全部经自建网关远程访问；检索服务与 Qdrant 跑在本机**——本机不需要 GPU，docker 已就位。
 
 | # | 阻塞项 | 状态 |
 | --- | --- | --- |
-| 1 | **`api_config.py`** | ✅ **不再是环境依赖**（2026-09-24）：**AML 公开仓自己就发布了这个文件**（520 字节、无凭据、只读 `os.environ`），放**仓库内** + 由 harness 在 subprocess 里注入 `PYTHONPATH` 即可——**"clone 下来不能直接跑"不再成立**。实现未写。详见 [`eval/harness/CLAUDE.md`](./eval/harness/CLAUDE.md) |
-| 2 | **归档 `benchmark_data/`** | ✅ **已解决**（2026-09-24）：已在本机（635MB→**370MB**，删掉了明令不用的 `lme_test.json` 与失败下载残留）；**且不需要任何共享副本**——每一份都能按 commit / revision 从公开源取回，**出处 + sha256 进版本库**：`make fetch-data` 取回、`make data-check` 校验，清单在 [`tools/fetch_benchmark_data.py`](./tools/fetch_benchmark_data.py)。见 [`docs/decisions.md`](./docs/decisions.md) 待决 6 / 7 的清除记录 |
+| 1 | **`api_config.py`** | ✅ **不是环境依赖**：**AML 公开仓自己就发布了这个文件**（520 字节、无凭据、只读 `os.environ`），放**仓库内** + 由 harness 在 subprocess 里注入 `PYTHONPATH` 即可——**"clone 下来不能直接跑"不成立**。实现见 [`eval/harness/api_config.py`](./eval/harness/api_config.py) |
+| 2 | **归档 `benchmark_data/`** | ✅ **已解决**：已在本机（635MB→**370MB**，删掉了明令不用的 `lme_test.json` 与失败下载残留）；**且不需要任何共享副本**——每一份都能按 commit / revision 从公开源取回，**出处 + sha256 进版本库**：`make fetch-data` 取回、`make data-check` 校验，清单在 [`tools/fetch_benchmark_data.py`](./tools/fetch_benchmark_data.py)。见 [`docs/benchmark-data.md`](./docs/benchmark-data.md) |
+| 3 | **Windows 那台机器的 `tmp_path` 故障** | ⬜ **仍开着，且与代码无关**（是机器状态）。绕法见 [`docs/roadmap.md`](./docs/roadmap.md) 的 Step 0 |
 
 **reranker 点尚未部署**（部署不在本项目范围内，后续进行）。它是 Step 3 及之后的**基础设施前置项**，不是代码任务——而 v1 不做 agentic 之后，**唯一的新增价值就是 Rerank + Context Packaging**，所以这条前置项直接压在主线上。
 
@@ -177,4 +168,4 @@ make sync                 # uv sync --all-extras
 make help                 # 看全部目标
 ```
 
-服务与评测的目标**目前都指向尚未存在的模块，会明确失败**——这是有意的，**避免误以为某一步已经实现**。
+`Makefile` 里服务与评测的目标**指向尚未实现的模块时会明确失败**——这是有意的，**避免误以为某一步已经实现**。

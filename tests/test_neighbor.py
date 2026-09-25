@@ -6,11 +6,11 @@ ranked（已去重、已 rerank）
   → merge_segments  ：连续 pair_idx 合成段，段内会话序、段间 best_rank 序
 ```
 
-> **本切片（2026-09-24）新落地的一环**。此前 `Search` 链上只有
-> "hybrid → checker → 最小打包"，段的三个概念（锚点、`best_rank`、连续性）
-> 都还不存在——见 [`../src/tianxi_am/rank/CLAUDE.md`](../src/tianxi_am/rank/CLAUDE.md)。
+> **段模型是 `Search` 链上的一环**——排在 `hybrid → checker` 之后。段的三个概念
+> （锚点、`best_rank`、连续性）**只由它定义**，链上别处不存在第二处——见
+> [`../src/tianxi_am/rank/CLAUDE.md`](../src/tianxi_am/rank/CLAUDE.md)。
 
-⚠ 这里**不测** rerank（端点还没部署，`rank/reranker.py` 只留了缝），
+⚠ 这里**不测** rerank（在 [`test_reranker.py`](./test_reranker.py)），
 也不测打包的 `score` / 预算（在 [`test_packaging.py`](./test_packaging.py)）。
 
 ⚠ 真源一律是**真的 `SqliteStore`**（按行、按 `pair_idx`、按 `(user_id, session_id)` 取数），

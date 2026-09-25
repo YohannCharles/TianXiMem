@@ -229,7 +229,7 @@ def _switch_table_wired_keys() -> list[tuple[str, str]]:
 def test_every_yaml_key_the_code_accepts_is_declared_in_config_reference() -> None:
     """**代码接受的每个 yaml 键都必须在 `docs/config-reference.md` 里出现。**
 
-    那份文档是配置键的**唯一声明处**（`configs/CLAUDE.md`）。新增一个键却不写文档，
+    那份文档是配置键的**唯一声明处**。新增一个键却不写文档，
     下一个人就只能在代码里考古——而 §13 的每条对照都要回答"这次跑的是哪套值"。
 
     ⚠ 这与上面 `.env.example` 那条是**同一种漂移**，只是对象换成 yaml。
@@ -675,8 +675,8 @@ def test_run_parallel_in_this_session_is_not_a_child() -> None:
 def test_dotenv_is_read_on_the_production_path(config_dir: Path, tmp_path: Path) -> None:
     """**`env=None` 时会读 `.env`**——否则 `make serve` 会在启动时"缺密钥"。
 
-    这条补上一个真缺口：`.env` 一直被文档声明成"密钥的家"，但在 ③-e 之前
-    **没有任何东西读它**（`uv run` 不加载 `.env`，Makefile 也不 include 它）。
+    ⚠ 守的是一个真缺口：`.env` 被文档声明成"密钥的家"，而 `uv run` 不加载 `.env`、
+    Makefile 也不 include 它——少了这一步就没有任何东西读它。
     """
     env_file = tmp_path / ".env"
     env_file.write_text(

@@ -15,9 +15,9 @@
 | `dense` | **外部 Embedder** 算好传进来 | 只认 canonical 的 `list[float]`，不关心哪家模型 |
 | `bm25` | **Qdrant 服务端**从文本现算 | **真 BM25**，不用学出来的稀疏权重 |
 
-⚠ 用 `qdrant/bm25` 的理由不是"BM25 天然更强"，而是"**配正经分词器的** BM25 更强"——
-**BM25 的分数对分词器高度敏感**，而它用哪个分词器是我们没有文档的一条。
-⇒ **它的分词行为要实测一次**，别默认等价于 Lucene Analyzer（`open-questions.md` V1）。
+⚠ 用 `qdrant/bm25` 是因为**配正经分词器的** BM25 更强，而不是"BM25 天然更强"：它的分数
+对分词器高度敏感，而用哪个分词器是我们没有文档的一条 ⇒ **它的分词行为要实测一次**，
+别默认等价于 Lucene Analyzer（§7.1，`open-questions.md` V1）。
 """
 
 from __future__ import annotations
@@ -72,8 +72,7 @@ def point_id_for(memory_id: str) -> str:
     """SQLite 的 `memory_id`（64 位十六进制）→ Qdrant 接受的 **UUID 字符串**。
 
     ⚠ **Qdrant 的 point id 只接受 uint64 或 UUID**，而 §6.1 的 `id` 是
-    `hash(user_id, session_id, pair_idx)` 的十六进制串——两者形状不同，
-    所以需要这一层映射（文档没写，见本切片的报告 C5）。
+    `hash(user_id, session_id, pair_idx)` 的十六进制串——两者形状不同，所以需要这一层映射。
 
     取哈希的**前 128 位**当 UUID：128 位对十万级的点而言碰撞概率可忽略，
     且映射是**纯函数**——同一个 `memory_id` 永远得到同一个 point id，
@@ -111,8 +110,8 @@ class HybridParams:
     """
 
     #: ⚠ 三个默认值**都引用 [`../common/config.py`](../common/config.py) 的单一来源**
-    #: （2026-09-25）——本目录**不决定**这些值（见 `store/CLAUDE.md`），这里只是给这个
-    #: dataclass 一个兜底，免得直接构造 `HybridParams()` 时又散出第二份字面量。
+    #: ——本目录**不决定**这些值（见 `store/CLAUDE.md`），这里只是给这个 dataclass 一个兜底，
+    #: 免得直接构造 `HybridParams()` 时又散出第二份字面量。
     #: **正常路径上它们由 [`../service/app.py`](../service/app.py) 的装配从配置注入。**
     prefetch_limit: int = DEFAULT_PREFETCH_LIMIT
     # 顺序与 §7.3 的 prefetch 顺序**一一对应**：先在 `prefetch` 里给 bm25 还是 dense，
@@ -202,7 +201,7 @@ class QdrantStore:
         """确保集合存在且**维度正确**。返回 True 表示这次真的建了。
 
         幂等：已存在则只做校验。**维度不一致直接抛错**——两个不同维度的向量混进
-        同一个集合只会表现为"检索结果很差"，**不会报错**（embed/README 的原话）。
+        同一个集合只会表现为"检索结果很差"，**不会报错**（`embed/CLAUDE.md`）。
 
         ⚠ payload 索引**必须在写入数据之前**建（§6.3）：否则 HNSW 需要重建才有过滤感知。
         这里在建集合的同一个方法里紧接着建索引，就是不让调用方有机会漏掉。
@@ -336,11 +335,10 @@ class QdrantStore:
         文本用 `renderer` 生成——**同一个渲染函数**既是 embedding 的输入，
         也是将来返回给 AML 的 `content`（§7.2 的同一份渲染）。
 
-        ⚠ **`renderer` 收的是"一个对"，不是 `(question, answer)` 两个值**（2026-09-25 改）。
-        因为渲染要用的第三个量是 `event_time`（T1 的日期前缀，§11.3 的对照臂）——
-        签名只给两个值的话，调用方**拿不到它**，于是索引侧只能自己拼一个日期口径，
-        而那正是"同一份渲染"被撕成两半的开始。默认值 `render_pair` 就是 v1 定稿口径
-        （不带日期）；要开 T1 的"带"臂由**上层**传
+        ⚠ **`renderer` 收的是"一个对"，不是 `(question, answer)` 两个值**：渲染要用的第三个
+        量是 `event_time`（T1 的日期前缀，§11.3 的对照臂），签名只给两个值的话调用方**拿不到
+        它**，于是索引侧只能自己拼一个日期口径——那正是"同一份渲染"被撕成两半的开始。
+        默认值 `render_pair` 就是 v1 定稿口径（不带日期）；要开 T1 的"带"臂由**上层**传
         `functools.partial(render_pair, inject_abs_time=True)`。
 
         维度从 `embedder.dim` 取（**第一次调用之后才有值**，见 `embed/base.py`）。

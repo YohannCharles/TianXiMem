@@ -46,11 +46,9 @@ dev = [
     "types-pyyaml>=6.0.12.20260906",
 ]
 
-# ── 打包设置（2026-09-24 起：本仓库可打包）────────────────────────────────
-# 触发条件已满足——`src/tianxi_am/__init__.py` 与各子包都已存在，所以按原计划
-# 把 package 改成 true：`uv sync` 会以 **editable** 方式装上本仓库，
-# 于是 `uvicorn tianxi_am.service.app:app`、`python -m ...`、以及任何入口
-# **都不需要再设 PYTHONPATH**。（此前只有 pytest 靠 `pythonpath = ["src", "."]` 混过去。）
+# ── 打包设置：本仓库可打包 ────────────────────────────────────────────────
+# `uv sync` 以 **editable** 方式装上本仓库 ⇒ `uvicorn tianxi_am.service.app:app`、
+# `python -m ...` 以及任何入口**都不需要再设 PYTHONPATH**。
 #
 # ⚠ src 布局必须显式声明包位置，否则 hatchling 找不到 `tianxi_am`。
 [build-system]

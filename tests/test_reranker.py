@@ -435,8 +435,8 @@ def test_build_reranker_is_none_when_explicitly_disabled(tmp_path) -> None:
 def _app_config(tmp_path, *, reranker: bool, rerank_env: dict | None = None):  # noqa: ANN001, ANN202
     """造一份 `AppConfig`。`reranker=True` ⇒ 带上完整的 `TIANXI_RERANKER_*`。
 
-    ⚠ **`rerank.enabled` 一律强制为 `true`**（2026-09-25）：本组用例测的是 `build_reranker`
-    的三分支表，而出厂默认值已改为 `false`（`configs/default.yaml`——A3 未跑之前不默认付
+    ⚠ **`rerank.enabled` 一律强制为 `true`**：本组用例测的是 `build_reranker`
+    的三分支表，而出厂默认值是 `false`（`configs/default.yaml`——A3 未跑之前不默认付
     精排的算力）。不强制打开的话，"齐备 ⇒ 有客户端"会静默变成命中"明确关掉"，
     `test_build_reranker_is_none_without_endpoint` 想验的**缺端点**分支也就走不到了
     ——那就是一条**永远不会 FAIL 的检查**。
@@ -466,8 +466,8 @@ def _app_config(tmp_path, *, reranker: bool, rerank_env: dict | None = None):  #
 def test_build_services_wires_the_reranker_into_the_search_pipeline(tmp_path) -> None:
     """项 1：**装配点真的接上了**——`services.search.reranker` 是那个客户端。
 
-    ⚠ 这条用例的价值在于它测的是 `build_services`：上一版这里传的是硬编码的 `None`，
-    而**没有任何用例会发现**（Search 照常工作，只是名次没被精排）。
+    ⚠ 这条用例的价值在于它测的是 `build_services`：装配点若传硬编码的 `None`，
+    **没有任何别处会发现**（Search 照常工作，只是名次没被精排）。
     """
     from tianxi_am.service.app import build_services
 
@@ -725,8 +725,7 @@ def test_degraded_and_disabled_are_counted_separately_across_searches(wired: Wir
 def test_missing_source_row_degrades_rather_than_disables(wired: Wired, monkeypatch) -> None:  # noqa: ANN001
     """真源缺行 ⇒ **`degraded`**：我们**本来是要调的**，只是这一步没能兑现。
 
-    ⚠ 这条区分很容易写反（早先的实现就记成了 `disabled`）。判据是
-    **"有没有打算调用"**，不是"有没有调用成功"。
+    ⚠ 这条区分很容易写反：判据是**"有没有打算调用"**，不是"有没有调用成功"。
     """
     ids = _ids(wired.store, 2)
     ghost = "f" * 64  # Qdrant 里有、真源里没有

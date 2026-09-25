@@ -5,10 +5,9 @@
 `pair_idx` 的分配是**读-改-写**：第 2 步读 `MAX(pair_idx)`、第 4 步写位置。
 两个并发的同 session 批次会**读到同一个 `next_idx`**，于是生产出**重复的位置**。
 
-> ⚠ **SQLite 的写事务不足以单独解决它**（§15 / `pairing/CLAUDE.md`）：
-> 两次事务读到的 `MAX(pair_idx)` **会相同**——`BEGIN IMMEDIATE` 只保证事务内串行，
-> 而"A 的读-改-写"与"B 的读-改-写"仍然可以交错成 A读 B读 A写 B写。
-> **锁必须在这之上**（按 session，而不是按库）。
+> ⚠ **SQLite 的写事务不足以单独解决它**（§15 / `pairing/CLAUDE.md`）：两次事务读到的
+> `MAX(pair_idx)` **会相同**——`BEGIN IMMEDIATE` 只保证事务内串行，而"A 的读-改-写"与
+> "B 的读-改-写"仍可交错成 A读 B读 A写 B写。**锁必须在这之上**（按 session，不按库）。
 
 ## 三条边界
 

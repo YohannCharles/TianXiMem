@@ -17,19 +17,13 @@
 这也是 [`../retrieve/CLAUDE.md`](./CLAUDE.md) 说"唯一需要交接的信息是那两次分离查询的
 原始排名"的原因。
 
-## ⚠ 一条**刻意的未完成**（③-a / ③-b 的边界，不是遗漏）
+## ⚠ 一条**刻意的未完成**（不是遗漏）
 
-`decide()` 接受**可选**的 `arm_rankings`。**v1 的调用方不传**（省掉两次额外的 Qdrant
-查询），于是 `criterion_would_say` 记成 `None`。
-
-**要真的攒到 A4 需要的那份分布，必须有人传这两路排名**——而那需要
-`store/qdrant_store.py` 暴露一个**单路查询**（现有的 `hybrid_search` 只做融合查询）。
-
-⇒ **已登记为独立后续切片**，链条与理由见 [`docs/roadmap.md`](../../../docs/roadmap.md)
-的 Step 1 末尾（`Qdrant arm_search → service 两路排名 → Checker 记录 A4 分布`）。
-它**不阻塞** Step 1 通过 Smoke——Smoke 只看响应形状。
-
-⇒ **判据本身在这里写全并测到了**（"判据与接入点要在 v1 就写对"），缺的只是喂给它数据的那一步。
+`decide()` 接受**可选**的 `arm_rankings`，而 **v1 的调用方不传**（省掉两次额外的 Qdrant
+查询）⇒ `criterion_would_say` 记成 `None`。**判据本身在这里写全并测到了**（"判据与接入点
+要在 v1 就写对"），缺的只是喂给它数据的那一步：**要真的攒到 A4 需要的那份分布，必须有人
+传这两路排名**，而那需要 `store/qdrant_store.py` 暴露一个**单路查询**（现有的
+`hybrid_search` 只做融合查询）。链条见 [`docs/roadmap.md`](../../../docs/roadmap.md) Step 1 末尾。
 """
 
 from __future__ import annotations
@@ -51,10 +45,9 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class CheckerThresholds:
-    """§8 判据里的三个初值。**需在代理评测上标定**，所以是配置项（§15）。
+    """§8 判据里的三个初值：**自设阈值，可调，但调整要有 ablation 数据支撑**（§15）。
 
-    **不是可调旋钮**是相对的：它们与 `rrf_k` 不同类——`rrf_k` 是换算结果（错了就静默出错），
-    这三个是**自设阈值**，可以调，但**调整要有 ablation 数据支撑**。
+    它们与 `rrf_k` 不同类——`rrf_k` 是换算结果，错了就**静默出错**（值见 config-reference §4）。
     """
 
     #: 两路 top-1 相同 ⇒ 足够

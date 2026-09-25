@@ -36,7 +36,7 @@ def test_both_empty_is_empty_string() -> None:
 
 def test_multiline_answer_kept_verbatim() -> None:
     """多条非 user 消息的 role 标记**已经在 `answer` 里**（① 的决定 A1），
-    渲染只负责加 `A:` 前缀，不再重新拼装、也不加任何额外标记。"""
+    渲染只负责加 `A:` 前缀——不重新拼装、也不加任何额外标记。"""
     answer = '[assistant] 我查一下。\n[system] {"tool": "x"}\n[assistant] 09:42。'
     assert render("火车几点开？", answer) == f"Q: 火车几点开？\nA: {answer}"
     assert render("火车几点开？", answer).count("\n") == 3

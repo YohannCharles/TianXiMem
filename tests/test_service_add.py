@@ -3,15 +3,14 @@
 ⚠ 用**假 Qdrant**（鸭子类型）而不是真容器：本文件要精确控制"第几次 upsert 失败"。
 真 Qdrant 的行为已经由 `tests/test_qdrant_store.py` 的 20+ 集成用例覆盖。
 
-## ✅ 一个已修的跨层缺口（2026-09-24）
+## 连接生命周期与跨线程（D17）
 
-`SqliteStore` 曾持有**单个** `sqlite3.Connection`，而 FastAPI 的 `def` 路由跑在**线程池**里
+FastAPI 的 `def` 路由跑在**线程池**里，而 `sqlite3.Connection` 只能在**创建它的线程**里用
 ⇒ `sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that
 same thread.`（**线上每个请求都会失败**，不只是测试问题）。
 
-**修法 = 短生命周期连接**：连接在"一次逻辑操作 / 一个事务"内建立并关闭，**从不跨线程复用**
-（见 `store/sqlite_store.py` 的连接模型一节 + D17）。本文件的三个并发用例原先用
-`xfail(strict=True)` 记着这个缺口，**现已摘掉标记**——它们是这个 bug 的回归用例。
+**短生命周期连接**：连接在"一次逻辑操作 / 一个事务"内建立并关闭，**从不跨线程复用**
+（见 `store/sqlite_store.py` 的连接模型一节）。本文件那三个并发用例就是这条的回归用例。
 """
 
 from __future__ import annotations

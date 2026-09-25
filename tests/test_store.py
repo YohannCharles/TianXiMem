@@ -2,9 +2,9 @@
 
 对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 六、存储。
 
-文件末尾另有一组**连接生命周期与跨线程**的用例——它们是 2026-09-24 那个跨层缺口
-（`SqliteStore` 曾长期持有一个连接 × FastAPI 的 `def` 路由跑在线程池）的回归用例，
-详见 `store/sqlite_store.py` 的连接模型一节 + D17。
+文件末尾另有一组**连接生命周期与跨线程**的用例——它们是 D17 那条跨层缺口的回归用例
+（长期持有连接 × FastAPI 的 `def` 路由跑在线程池里），
+见 `store/sqlite_store.py` 的连接模型一节。
 """
 
 from __future__ import annotations
@@ -211,11 +211,10 @@ def test_append_answer_ignores_empty_text(store: SqliteStore) -> None:
 
 
 def test_append_question_fills_then_appends(store: SqliteStore) -> None:
-    """`question` 现在是 **填空 + 追加**（append-only）——与 `answer` 同一个写模式。
+    """`question` 是 **填空 + 追加**（append-only）——与 `answer` 同一个写模式。
 
-    旧版是 `fill_question_if_null`（只在 NULL 时写入），那条规则的前提是
-    "一个 `question` 恰好来自一条 user 消息"。**这个前提被 D20 修正了**：
-    连续 user 消息（AML 拆超长 message 的产物）并进**同一个** `question`，
+    ⚠ 不能只在 NULL 时写入："一个 `question` 恰好来自一条 user 消息"这个前提被 D20 修正了
+    ——连续 user 消息（AML 拆超长 message 的产物）并进**同一个** `question`，
     而它们可能落在不同批次里 ⇒ 必须允许追加。
     """
     _seed(store, [(0, None, None)])  # 无问的对
@@ -357,7 +356,7 @@ def test_isolation_by_user_id(store: SqliteStore) -> None:
     assert [p.question for p in rd(store, store.assert_isolation, "u2")] == ["u2-Q"]
 
 
-# ── 连接生命周期与跨线程（2026-09-24 修的跨层缺口的回归用例）────────────
+# ── 连接生命周期与跨线程（D17 的回归用例）──────────────────────────────
 
 
 def test_each_operation_gets_its_own_connection(store: SqliteStore) -> None:
@@ -372,7 +371,7 @@ def test_each_operation_gets_its_own_connection(store: SqliteStore) -> None:
 def test_store_is_usable_from_another_thread(store: SqliteStore) -> None:
     """**连接不跨线程复用**——在另一个线程里读、写都必须正常。
 
-    ⚠ 这是那个跨层缺口的**直接回归用例**：旧模型下连接在构造它的线程里建、之后长期复用，
+    ⚠ 这是那个跨层缺口的**直接回归用例**：若连接在构造它的线程里建、之后长期复用，
     这里会抛 `sqlite3.ProgrammingError: SQLite objects created in a thread can only be
     used in that same thread.`——而 FastAPI 的 `def` 路由**就跑在线程池里**。
     """

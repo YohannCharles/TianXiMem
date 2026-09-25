@@ -5,28 +5,24 @@
 
 ### ⚠ 一个必须说清的局限：`pending_orphaned` 有两种来源，本层**无法区分**
 
-pairing/CLAUDE.md 要求把两种来源分开，否则会把 bug 当成 AML 的切分行为：
-
 | 来源 | 说明 |
 | --- | --- |
 | **(i) 真·残缺** | session 就此结束，对里确实少了一半。**非零是正常的** |
 | **(ii) 误判残留** | 本批恰好命中上限、最后一对**其实已完整**。**非零说明续接漏了 3b——是 bug** |
 
-**但单批处理拿不到区分它们所需的信息**：
-
-* 服务端**不知道 AML 为什么在这里切断**（是一个上限命中，还是 session 真的结束了）
-  ——它只能从本批大小推断（S2，"Adapter 计数的词"官方从未定义）。
-* (ii) 的判据是"本应被 3b 关掉却没关"——可 3b 一旦正确执行，那一对就走
-  `pending_completed` 而不是 `pending_orphaned`，**根本不进这个计数器**。
+pairing/CLAUDE.md 要求把两者分开，否则会把 bug 当成 AML 的切分行为。**但单批处理拿不到
+区分它们所需的信息**：服务端不知道 AML 为什么在这里切断（S2，"Adapter 计数的词"官方
+从未定义）；而 (ii) 的判据是"本应被 3b 关掉却没关"——3b 一旦正确执行，那一对就走
+`pending_completed` 而不是 `pending_orphaned`，**根本不进这个计数器**。
 
 **因此本层给 `pending_orphaned` 的定义是保守的、可实现的**：
 
 > **session 结束判定时**（本批两限都未命中）那个**仍然处于 `pending` 的既有对**
 > ——它在被 3d 标 `complete` 之前计入。
 
-这个判据是可从单批信息算出的，且**非零确实说明"有一个 pending 活到了 session 末"**。
-但它**不区分 (i) 与 (ii)**。要区分，需要在 `docs/open-questions.md` 里单列一条
-（本切片未解决，见 `docs/decisions.md` D16 之后的记录）。
+这个判据可从单批信息算出，**非零确实说明"有一个 pending 活到了 session 末"**，
+但它**不区分 (i) 与 (ii)**；要区分需要在 `docs/open-questions.md` 里单列一条
+（见 `docs/decisions.md` D16 之后的记录）。
 """
 
 from __future__ import annotations

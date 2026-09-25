@@ -87,13 +87,10 @@ def encode_answer(messages: Sequence[Message]) -> str:
 def join_question(messages: Sequence[Message]) -> str:
     """把一段**连续 user 消息**拼成一个 `question`。
 
-    **与 `encode_answer` 相反：这里不加 role 标记。** 三条理由：
-
-    * 这段文本是**用户自己的发言**，role 是均一的；`[user]` 标记是在正文里注入源文本没有的
-      token，而标记会**一并进 embedding**（§7.2 要求同一份渲染）⇒ 直接改变检索输入。
-    * 拼接的首要用途是**把被物理切开的一条原消息拼回去**（AML 可能按句边界拆超长 message）。
-      只有不加标记，拼出来的文本才与原消息**逐字接近**。
-    * 渲染模板 `Q: {question}` 本身已经标明这是用户侧内容，不需要逐段重复。
+    **与 `encode_answer` 相反：这里不加 role 标记。** 两条理由：这段文本是用户自己的
+    发言、role 均一；而拼接的首要用途是**把被物理切开的一条原消息拼回去**（AML 可能按句
+    边界拆超长 message），只有不加标记才与原消息**逐字接近**。标记还会**一并进 embedding**
+    （§7.2 要求同一份渲染）⇒ 直接改变检索输入。
 
     §11.3 要求"每条带 role 标记"的是 `answer` 那一侧（一个对里可能混着 `assistant` /
     `system` / 工具输出，不标就分不清哪句是谁说的）——`question` 侧没有这个问题。
@@ -103,12 +100,11 @@ def join_question(messages: Sequence[Message]) -> str:
 
 @dataclass(frozen=True, slots=True)
 class BatchLimits:
-    """批次切分上限（§6.5）。
+    """批次切分上限（§6.5）——**必须来自配置，不得硬编码**（§15 / D2 对冲 ③）。
 
-    ⚠ **必须来自配置，不得硬编码**（§15 / D2 对冲 ③）。默认值只是可用的初值。
-
-    ⚠ "2,000 个 **Adapter 计数的词**"官方**从未定义**（S2），所以词数计数函数
-    由调用方注入（见 `plan_batch` 的 `word_counter`），**本地复现不了线上那一路**。
+    ⚠ "2,000 个 **Adapter 计数的词**"官方**从未定义**（S2），所以词数计数函数由调用方
+    注入（见 `plan_batch` 的 `word_counter`）——**本地复现不了线上那一路**
+    （值见 config-reference §10）。
     """
 
     max_messages: int = 20
@@ -132,16 +128,15 @@ class ResumeActions:
 
     ⚠ `open_pair_id` **不一定是 `status = 'pending'` 的那一对**：只要它的 `answer` 为空，
     它就还没写完（判据见 `_Draft.question_is_open`）。名称刻意不叫 `pending_id`——
-    那会让人以为续写的对象总是 `pending` 状态，而"不一定是"正是本轮修正的地方。
+    那会让人以为续写的对象总是 `pending` 状态。
     """
 
     open_pair_id: str
     append_question: str | None
-    """把本批开头的 user 消息**并入它的 `question`**（append-only）。
+    """3a′：把本批开头的 user 消息**并入它的 `question`**（append-only）。
 
-    None 表示本批开头没有"续写中的" user 消息。**这是本轮新增的第四个动作**：
-    3a 原来只覆盖 `answer` 一侧，而一条被物理切开的 user 消息跨批次时，
-    续写的落点是 `question`。
+    None 表示本批开头没有"续写中的" user 消息——一条被物理切开的 user 消息跨批次时，
+    续写的落点是 `question` 而不是 `answer`。
     """
 
     append_answer: str | None
@@ -194,15 +189,13 @@ class _Draft:
 
     @property
     def question_is_open(self) -> bool:
-        """这个对的 `question` 还在写吗？——**本轮配对规则新增的唯一判据**。
+        """这个对的 `question` 还在写吗？——**配对规则落到可判定形式的那个判据**。
 
         > **一个对的 `question` = 一段连续 user 消息，直到第一条非 user 消息到达为止。**
 
-        换成可判定的形式就是"**还没有任何非 user 消息进入它**"：
-
-        * 本批新建的对：`parts` 为空 ⇒ 还在写 ⇒ 后续 user 并入 `question`
-        * 库里既有、本批要续写的对：它的 `answer` 为空 ⇒ 还在写；
-          已有 `answer`（§6.5 的 pending 对，答话跨了批次）⇒ 已定稿 ⇒ 下一条 user 关闭它
+        换成可判定的形式就是"**还没有任何非 user 消息进入它**"：本批新建的对看 `parts`
+        是否为空；库里既有、本批要续写的对看它的 `answer` 是否为空（§6.5 的 pending 对
+        答话跨了批次 ⇒ 已定稿 ⇒ 下一条 user 关闭它）。
 
         ⚠ 用 `parts`（本批攒下的非 user 消息）而不是只看库里的 `answer`：
         本批若先追加了一条 assistant 消息，这个对的 `answer` 就已经开始了，
@@ -228,7 +221,7 @@ def plan_batch(
 
     * **3a** 本批开头、首个 user 消息之前的消息 → 追加到那个既有对的 `answer`；
       不存在既有对时**建一个 `question` 为空的对**（§6.2 承认这种"无问的对"）。
-    * **3a′**（**本轮新增**）本批开头的 user 消息，**若那个既有对的 `answer` 还空着** ⇒
+    * **3a′** 本批开头的 user 消息，**若那个既有对的 `answer` 还空着** ⇒
       并入它的 `question`，而**不是**关掉它。跨批时由 `append_question` 落库。
     * **3b** 本批出现首个 user 消息**且前一个对已有 `answer`** → 把它标 `complete`。
     * **3c** 其余消息按下面的配对规则配对，`pair_idx` 从 `next_idx` 起连续赋值。
@@ -239,9 +232,8 @@ def plan_batch(
 
     > **一个对的 `question` = 一段连续 user 消息，直到第一条非 user 消息到达为止。**
 
-    它**只在出现连续 user 消息时**与"一条 user 关闭前一个对"不同——此时这段 user 并进
-    **同一个** `question`，而不是各自开新对。理由是 **AML 可能按句边界物理切开一条超长
-    user 消息**，于是 `q1 q2 q3 a` 这种形状会出现，而它逻辑上仍是一问一答。
+    连续 user 消息**并进同一个 `question`**，而不是各自开新对——理由是 **AML 可能按句边界
+    物理切开一条超长 user 消息**，于是 `q1 q2 q3 a` 这种形状会出现，而它逻辑上仍是一问一答。
     完整论证、代价与"该风险尚未证实"的说明见 D20
     （[`docs/decisions.md`](../../../docs/decisions.md)）。
 
@@ -289,7 +281,7 @@ def plan_batch(
         if is_user(message):
             if open_draft is not None and open_draft.question_is_open:
                 # 3a′：这个对的 question 还没写完 ⇒ 这条 user 是它的**续写**。
-                # 关对、开新对都**不做**——那正是旧规则"一条 user 关闭前一个对"的行为。
+                # **关对、开新对都不做**。
                 open_draft.question_parts.append(message)
             else:
                 if open_draft is not None:

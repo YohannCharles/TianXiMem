@@ -85,7 +85,7 @@ def _now_ms() -> int:
 class SqliteStore:
     """`qa_pairs` + `applied_batches` 的读写与事务。
 
-    ## 连接模型：**短生命周期**（2026-09-24 改）
+    ## 连接模型：**短生命周期**（D17）
 
     本类**只保存 `db_path` 与存储逻辑**，**不长期持有** `sqlite3.Connection`。
     连接的生命周期恰好是**一次逻辑操作**：
@@ -97,9 +97,9 @@ class SqliteStore:
 
     **为什么必须这样**：FastAPI 的 `def` 路由跑在**线程池**里，而 `sqlite3` 的连接
     **只能被创建它的线程使用**。任何"启动时建一个连接、之后长期复用"的写法，
-    到线上就是**每个请求都抛** `sqlite3.ProgrammingError`（2026-09-24 实测）。
-    短生命周期把这个问题**从根上消掉**——连接永远在同一次调用的同一个线程里建与关，
-    于是"连接与线程的约束"**不需要泄漏到任何上层**。
+    到线上就是**每个请求都抛** `sqlite3.ProgrammingError`。短生命周期把这个问题
+    **从根上消掉**——连接永远在同一次调用的同一个线程里建与关，
+    于是"连接与线程的约束"**不需要泄漏到任何上层**（完整论证见 D17）。
 
     代价是每次操作多一次 `connect`（约几十微秒）。用 WAL + `busy_timeout` 让
     **SQLite 自己**负责多连接之间的 writer 串行化，**不另加应用层写锁**。
@@ -129,11 +129,9 @@ class SqliteStore:
     def open(cls, db_path: str | Path, *, busy_timeout_ms: int = 5000) -> SqliteStore:
         """建表（幂等），并**把数据库级设置落一次**。
 
-        ⚠ **`journal_mode = WAL` 只在这里执行一次**，不在每个短生命周期连接上重复：
-        它写进数据库文件、对后续所有连接持续生效（`PRAGMA journal_mode` 返回的是
-        设置**之后**的模式，所以重复执行只是白跑一次 IO）。
-        与之相对，`busy_timeout` / `synchronous` / `foreign_keys` / `row_factory`
-        是**每连接**的，必须每次新连接都设——见 `_connect()`。
+        ⚠ **`journal_mode = WAL` 只在这里执行一次**（见 `_init_journal_mode` 的理由），
+        不在每个短生命周期连接上重复。与之相对，`busy_timeout` / `synchronous` /
+        `foreign_keys` / `row_factory` 是**每连接**的，必须每次新连接都设——见 `_connect()`。
         """
         store = cls(db_path, busy_timeout_ms=busy_timeout_ms)
         store.init_schema()
@@ -223,12 +221,12 @@ class SqliteStore:
           写锁；若对方正持写锁，SQLite **立刻**返回 `SQLITE_BUSY`（"database is locked"）
           ——它宁可立刻报错也不冒死锁的险，**不应用 `busy_timeout`**。
 
-        2026-09-24 实测：把这一行换成 `BEGIN`，`tests/test_store.py` 的两条并发压力用例
+        实测：把这一行换成 `BEGIN`，`tests/test_store.py` 的两条并发压力用例
         **双双失败**，报 `OperationalError('database is locked')` ×5——**而且跨 session
         那条也失败**（不同 `(user_id, session_id)` 一样撞），所以这不只是"位置撞车"的防护。
 
         IMMEDIATE 在事务开头就拿写锁，把整个读-改-写串行化，也让并发写事务退化成
-        "排队"而不是"互锁"。
+        "排队"而不是"互锁"（完整论证见 D17）。
 
         ⚠ 这只解决**单库内**的并发。§15 还要求 Add 按 `(user_id, session_id)` 串行化
         （进程内按 session 的锁），那一层属 `service/`，不在本模块。
@@ -324,8 +322,8 @@ class SqliteStore:
         至多一个，且**必在末尾**，所以取 `ORDER BY pair_idx DESC LIMIT 1`：
         在配对规则下，一个 `answer IS NULL` 的对会吃掉后续的 user（并入 `question`）
         与非 user（并入 `answer`），所以它只能是最后一对。
-        （⚠ 这条不变式是**本轮规则**带来的：旧规则下 `q1 q2 a` 会产出非末尾的 `(q1, NULL)`，
-        所以按旧规则写过的库不满足它——跨 arm 必须用干净的库，见 V9。）
+        （⚠ 这条不变式**只在当前配对规则下成立**：按旧规则写过的库不满足它
+        ——跨 arm 必须用干净的库，见 V9。）
         """
         row = conn.execute(
             f"SELECT {_COLUMNS} FROM qa_pairs"
@@ -380,11 +378,8 @@ class SqliteStore:
         消息**的拼接，而这段消息**可以跨批次**——续接批次带来的 user 消息是它的续写，
         必须并进去而不是丢掉（配对规则见 `../pairing/pairing.py`）。
 
-        ⚠ 旧版的 `fill_question_if_null`（"只在原值为 NULL 时写入"）**已删除**：
-        那条规则的前提是"一个 `question` 恰好来自一条 user 消息"，而这个前提**正是本轮
-        修正的东西**（AML 可能把一条超长 user 消息按句边界切成多条同 role 消息）。
-        `question` 与 `answer` 现在是同一个写模式，所以共用同一种写法——
-        包括把空串当作空值处理，让"填空"与"追加"的边界与 `append_answer` 逐字一致。
+        ⚠ `question` 与 `answer` 现在是**同一个写模式**（填空 + 追加），所以共用同一种写法
+        ——包括把空串当作空值处理，让"填空"与"追加"的边界与 `append_answer` 逐字一致。
 
         追加的安全性由**批次级守卫**保证（同一批至多被应用一次），
         所以这里**不需要**额外判重——与 `append_answer` 同一套论证（见 D4）。
@@ -495,9 +490,9 @@ class SqliteStore:
     def iter_pairs(self, conn: sqlite3.Connection, *, user_id: str | None = None) -> list[QaPair]:
         """枚举全部对（可选按 `user_id` 限定），按 `(session_id, pair_idx)` 排序。
 
-        ⚠ **② 新增的只读访问器**，不改动 ① 的任何既有语义。存在的理由是 §6.3 那条
-        "Qdrant 可从 SQLite 全量重建"：重建需要一次枚举，而让 `qdrant_store.py`
-        自己写 SQL 会破坏"store/ 是唯一接触 SQLite 的目录"。
+        ⚠ **只读访问器**，不改动任何既有语义。存在的理由是 §6.3 那条"Qdrant 可从 SQLite
+        全量重建"：重建需要一次枚举，而让 `qdrant_store.py` 自己写 SQL 会破坏
+        "store/ 是唯一接触 SQLite 的目录"。
 
         **不是检索路径**——检索按主键批量取正文走 `fetch_pairs_by_ids`。
         """
