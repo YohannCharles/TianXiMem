@@ -668,3 +668,66 @@ def test_expanded_content_is_identical_to_a_direct_render(wired: Wired) -> None:
     item = wired.search(top_k=1).items[0]
 
     assert item.content == render_segment([render(f"q{i}", f"a{i}") for i in range(3)])
+
+
+# ── 段内顺序的三个变体（§11.2 的"组内顺序"，可消融项）──────────────────────
+def _seeded_line(store: SqliteStore) -> list[str]:
+    """插一次 `pair 0/1/2`（**写库，每个用例只该调一次**），返回三条 id。"""
+    return _line(store, range(3))
+
+
+def _segment(store: SqliteStore, ids: list[str], placement: str):
+    """**只读**：以 `pair 1` 为唯一候选合并出那一段（种子落在段中间）。"""
+    ranked = _ranked(ids[1])
+    got = expand_neighbors(ranked, store=store, seed_limit=30, radius=1)
+    segments = merge_segments(got.selected, counter=FakeCounter(), seed_placement=placement)
+    assert len(segments) == 1
+    return segments[0]
+
+
+def test_seed_placement_keep_is_the_default_and_time_ordered(store: SqliteStore) -> None:
+    """`keep`（默认）＝纯时间序，种子在它本来的位置——**既有行为一个字节都不许变**。"""
+    ids = _seeded_line(store)
+    segment = _segment(store, ids, "keep")
+
+    lines = segment.content.split("\n")
+    assert lines[0].endswith("q0") and lines[-1].endswith("a2")
+    assert segment.source_memory_ids == tuple(ids)
+
+
+def test_seed_placement_front_moves_only_the_text(store: SqliteStore) -> None:
+    """`front`：种子排到段首，**但 `id` / 段数 / 锚点 / 名次全不变**。
+
+    ⚠ 这条纯度是关键：段优先级只看真实候选（`best_rank` / 锚点），
+    若换序顺带改了它们，§13 的对照就不成立了——而**看起来只是"顺序变了"**。
+    """
+    ids = _seeded_line(store)
+    keep = _segment(store, ids, "keep")
+    front = _segment(store, ids, "front")
+
+    seed_pair = "Q: q1\nA: a1"  # 种子（pair 1）渲染出来的那两行
+    assert front.content.startswith(seed_pair)  # 种子在最前
+    assert front.content != keep.content  # 顺序确实变了
+    # ★ 其余一切逐字相同
+    assert front.source_memory_ids == keep.source_memory_ids
+    assert front.anchor_memory_id == keep.anchor_memory_id
+    assert front.best_rank == keep.best_rank
+    assert front.start_pair_idx == keep.start_pair_idx
+    assert front.end_pair_idx == keep.end_pair_idx
+    # 段内的对**一个不多一个不少**（只是重排）
+    assert sorted(front.content.split("\n")) == sorted(keep.content.split("\n"))
+
+
+def test_seed_placement_echo_repeats_the_seed_and_keeps_chronology(store: SqliteStore) -> None:
+    """`echo`：种子在段首重复一份，**下面完整的时间序块原样保留**（时间不断）。
+
+    它是"既要显眼、又不打破时序"的那条路——代价是多一对的 token。
+    """
+    ids = _seeded_line(store)
+    keep = _segment(store, ids, "keep")
+    echo = _segment(store, ids, "echo")
+
+    # 段首是种子那对的副本，其后**逐字**是原时间序块（⇒ 时序一次都没被打断）
+    assert echo.content == "Q: q1\nA: a1" + "\n" + keep.content
+    assert echo.anchor_memory_id == keep.anchor_memory_id
+    assert echo.best_rank == keep.best_rank

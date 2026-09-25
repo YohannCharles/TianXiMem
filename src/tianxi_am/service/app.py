@@ -182,6 +182,8 @@ def build_services(config: AppConfig) -> Services:
             radius=config.neighbor.radius,
             reranker=build_reranker(config),
             inject_abs_time=config.packaging.inject_abs_time,
+            seed_placement=config.neighbor.seed_placement,
+            annotate_relatives=config.packaging.annotate_relatives,
         ),
     )
 

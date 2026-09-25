@@ -336,8 +336,21 @@ def wired_dated(tmp_path) -> Iterator[Wired]:
     yield from _wire(own, inject_abs_time=True)
 
 
-def _wire(tmp_path, *, inject_abs_time: bool) -> Iterator[Wired]:
-    """`wired` / `wired_dated` 的**同一份**装配代码。**不要复制第二份。**"""
+@pytest.fixture
+def wired_annotated(tmp_path) -> Iterator[Wired]:
+    """同 `wired`，但开着**相对时间注解**（`packaging.annotate_relatives=True`）。
+
+    与 `wired_dated` 同一个理由：那条纯度断言（"开关只该改正文"）要**同时跑两臂**逐项比。
+    ⚠ 它**不开** `inject_abs_time`——这两个开关各测各的：本 fixture 要证明的正是
+    "**注解不进索引**"（与 T1 那条相反，T1 的正文**就是** embedding 输入）。
+    """
+    own = tmp_path / "annotated"
+    own.mkdir()
+    yield from _wire(own, inject_abs_time=False, annotate_relatives=True)
+
+
+def _wire(tmp_path, *, inject_abs_time: bool, annotate_relatives: bool = False) -> Iterator[Wired]:
+    """`wired` / `wired_dated` / `wired_annotated` 的**同一份**装配代码。**不要复制第二份。**"""
     config = AppConfig(
         # 不传 env ⇒ 不碰真实环境；只给必需的那几项，其余走 config.py 的内置默认值
         storage=StorageConfig(
@@ -367,6 +380,7 @@ def _wire(tmp_path, *, inject_abs_time: bool) -> Iterator[Wired]:
         counter=counter,
         budget_tokens=budget_tokens,
         inject_abs_time=inject_abs_time,
+        annotate_relatives=annotate_relatives,
     )
     services.add = AddPipeline(
         store=services.store,

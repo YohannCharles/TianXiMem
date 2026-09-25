@@ -104,6 +104,7 @@ def test_render_date_is_the_switch_and_nothing_else() -> None:
     from tianxi_am.common.render import day_granularity, render_date
 
     assert render_date(_MAY_8_2023_MS, inject_abs_time=False) == ""
+    # ⛔ 星期试过更差（见 `render_date` 的注释）⇒ 前缀**只到日粒度**
     assert render_date(_MAY_8_2023_MS, inject_abs_time=True) == "2023-05-08"
     # 时间缺失时**不是"1970-01-01"**，而是与 created_at 同一条降级路径：空串（§11.3）
     assert render_date(None, inject_abs_time=True) == ""
@@ -115,7 +116,7 @@ def test_date_prefix_goes_in_front_and_stays_trimmed() -> None:
     out = render("Q1", "A1", date="2023-05-08")
     assert out == "[2023-05-08] Q: Q1\nA: A1"
     assert out == out.strip()
-    assert render("Q1", "A1", date="") == "Q: Q1\nA: A1"  # 默认口径一字不变
+    assert render("Q1", "A1", date="") == "Q: Q1\nA: A1"  # 不传 date ⇒ 一字不变
 
 
 def test_empty_pair_gets_no_date_prefix() -> None:

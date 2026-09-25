@@ -50,15 +50,21 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from eval.datasets import Sample
 from eval.datasets.locomo import PIPELINE as LOCOMO_PIPELINE
 from eval.datasets.longmemeval import PIPELINE as LME_PIPELINE
 
+from .annotate import MARKS, annotate
 from .driver import SearchHit
 
 __all__ = [
+    "DATE_HEADER",
+    "DATE_MODES",
+    "DATE_PREFIX",
+    "MARKS",
     "JudgeResult",
     "MEMORY_FIELD",
     "build_input_items",
@@ -98,14 +104,146 @@ class JudgeResult:
     generated_answer: str
 
 
-def render_memories(hits: list[SearchHit]) -> str:
+#: 日期前缀的形状——**与 `src/tianxi_am/common/render.py` 的 `DATE_PREFIX` 必须逐字相同**
+#: （那边是 `content` 里加日期时用的同一段）。
+#: ⚠ 这里是**故意重复的一份字面量**：harness 不许 import `src/`（本目录最硬的一条边界，
+#: [`../../tests/test_harness.py`](../../tests/test_harness.py) 用 AST 钉着），
+#: 而"两处格式必须一致"由 [`../../tests/test_experiments.py`](../../tests/test_experiments.py)
+#: 的等价断言保证——**重复的是常量，不是逻辑**。
+#:
+#: ⚠ 同样的形状也是 AML 自己的约定：[`../../docs/contract.md`](../../docs/contract.md) §3
+#: 记着 CL-Bench 那条路径用 `- [timestamp] text` 渲染我们返回的 `created_at`。
+DATE_PREFIX: str = "[{date}] "
+
+#: 注入里怎么带日期——**三档**（`--memory-date` 的取值域）。
+#:
+#: * `none`：完全不带（**基线**，也是"AML 侧只取 content"那条 S1 假设）
+#: * `per_item`：每条记忆（= 一个段）前面加 `[YYYY-MM-DD] `（2026-09-25 第一版）
+#: * `per_pair`：**每一对**前面都加 `[YYYY-MM-DD] `——同一个日期，但离该句更近。
+#:   动机（2026-09-25）：temporal 的失败里有这么一类——模型**不缺信息**（`[2023-07-15]`
+#:   就在段首、"Last Friday" 就在下面），但不把锚点接到自己那句上（见 `eval/reports/ledger.md`）
+#: * `per_pair_wd`：`per_pair` + **星期**（`[2023-10-22 Sun] `）。⛔ **实测更差，别再跑**：
+#:   动机是"temporal 错的 70 题里 29 道的 gold 是某星期几之前/之后"，但那天**一道都没救回来**，
+#:   整体还从 0.633 掉到 0.601、三段全降
+#:   （见 [`../../docs/decisions.md`](../../docs/decisions.md) **D21**）。
+#:   留在模式表里只为"试过、有据可查"。
+#: * `header`：在上面的基础上，**记忆块顶部再加一行说明**，明说每块前面的日期是它的会话日期
+#: * `annotate`：**不动结构，只把句子里的相对表达就地注解成绝对日期**
+#:   （`last Tues (July 18, 2023)`）——动机见 [`annotate.py`](./annotate.py) 的模块 docstring
+#:   （2026-09-25：`t1-dated` 的 temporal 79 道里 **27 道卡在"要换算"这一步**）。
+#:   ⚠ **它不加前缀**：索引侧 `packaging.inject_abs_time=true` 已经给每一对加了日期，
+#:   这里再前缀一次会变成两个日期。
+#:   ⚠ **锚点用的是段级 `created_at`，生产侧用的是"每一对自己的 `event_time`"**——
+#:   两者只在**会话跨天**时才不同。LoCoMo 的 3 段 70 个 session **一个跨天的都没有**
+#:   （2026-09-26 核过）⇒ 这份数据上两者等价。**换数据集/换语料时要重核这一条**，
+#:   否则实验量的是 A、上线跑的是 B，而两边都不报错。
+#:
+#: 为什么要有 `header`：`per_item` 实测**没能改变模型行为**（27/35 仍答相对，与基线 26/35 几乎相同）
+#: ——"看得见日期"≠"用得上日期"。所以第二版把语义**写明**，看是提示不够清楚还是模型做不到。
+DATE_MODES: tuple[str, ...] = ("none", "per_item", "per_pair", "per_pair_wd", "header", "annotate")
+
+#: `header` 模式的那行说明。`{dates}` 是**去重后的会话日期**，按出现顺序。
+DATE_HEADER: str = (
+    "[Note: the memories below come from conversation sessions dated {dates}. "
+    "Each memory block is prefixed with the date of its own session.]"
+)
+
+
+def _weekday(date: str) -> str:
+    """`2023-10-22` → `Sun`。解析不了就返回空串（**不抛**：注入形状不该让整轮跑挂掉）。"""
+    from datetime import date as _date
+
+    try:
+        return _date.fromisoformat(date).strftime("%a")
+    except ValueError:  # pragma: no cover —— created_at 由我们自己生成，形状是固定的
+        return ""
+
+
+def _date_header(hits: list[SearchHit]) -> str:
+    """`header` 模式的首行：把这些记忆覆盖到的会话日期**列出来**（去重、按出现顺序）。"""
+    dates: list[str] = []
+    for hit in hits:
+        if hit.created_at and hit.created_at not in dates:
+            dates.append(hit.created_at)
+    return DATE_HEADER.format(dates=", ".join(dates))
+
+
+def _annotated(hit: SearchHit, mark: str) -> str:
+    """把一条命中的正文按**它自己的会话日期**注解。**解析不了就原样返回**（不抛）。
+
+    注入形状不该让整轮跑挂掉——与 `_weekday()` 同一条纪律。
+    """
+    if not hit.created_at:
+        return hit.content
+    try:
+        anchor = date.fromisoformat(hit.created_at)
+    except ValueError:  # pragma: no cover —— created_at 由我们自己生成，形状是固定的
+        return hit.content
+    return annotate(hit.content, anchor, mark=mark)
+
+
+def render_memories(
+    hits: list[SearchHit], *, date_mode: str = "none", annotate_mark: str = "paren"
+) -> str:
     """把命中拼成注入文本。
 
     **只取 `content`**——这是 S1 那条代理假设的落点（"AML 从返回项里取哪个字段"）。
     用 `"\\n"` 拼接而不是别的分隔符：归档的 `memory_text()` 对列表正是 `"\\n".join(...)`，
     所以"我们自己拼"与"把列表交给它拼"**逐字相同**。
+
+    `include_date=True` ⇒ 每条前面加 `[created_at] `；**默认 `False`**（理由见下）。
+
+    ## 为什么会有这个开关（2026-09-25）
+
+    LoCoMo 的时间题 gold 几乎全是**绝对日期**（`2 July 2023`），而对话正文里说的是
+    **相对**（"yesterday"）；裁判的 TIME 块要求**单位与 gold 一致、且不许相对↔绝对互转**。
+    答案 prompt 第 7 条允许换算，前提是"**记忆的时间戳让它清晰**"——
+    ⇒ 时间戳不可见，那条规则就无法执行，模型只能照抄 "Yesterday"，**必判错**
+    （实测 `eval/reports/ledger.md`：gold 含绝对日期的 35 道里 **26 道答成相对、全部判错**）。
+
+    ⚠ **`created_at` 服务本来就返回了**（`data[]` 四字段之一），是**本函数原先把它丢了**。
+    但"AML 真实侧往 `speaker_1_memories` 里填什么"仍是 **S1 未知**：
+    开这个开关是**换一条代理假设**，不是修一个 bug——所以默认关，
+    开启时要在 run record 里记明（runner 的 `--memory-date` + `--switches`）。
     """
-    return "\n".join(hit.content for hit in hits)
+    if date_mode == "none":
+        return "\n".join(hit.content for hit in hits)
+
+    if date_mode == "annotate":
+        # **不加前缀**——索引侧（`packaging.inject_abs_time`）已经给每一对加了日期。
+        # 这一档只做"在相对表达后面跟一个括号注"，其余一字不动。
+        return "\n".join(_annotated(hit, annotate_mark) for hit in hits)
+
+    if date_mode in ("per_pair", "per_pair_wd"):
+        with_weekday = date_mode == "per_pair_wd"
+        # 段里的正文形如 `Q: …\nA: …\nQ: …`（`common/render.py` 的模板）⇒ 按行首的 `Q: `
+        # 切成"对"，再给**每一对**前面加同一个日期。日期本来就只有段级粒度
+        # （同 session 共享一个日期），所以信息量与 `per_item` 相同，变的是**距离**。
+        numbered: list[str] = []
+        for hit in hits:
+            if not hit.created_at:
+                numbered.append(hit.content)
+                continue
+            stamp = hit.created_at
+            if with_weekday:
+                stamp = f"{stamp} {_weekday(hit.created_at)}"
+            prefix = DATE_PREFIX.format(date=stamp)
+            pairs = hit.content.split("\nQ: ")
+            numbered.append(
+                "\n".join(
+                    f"{prefix}{pair}" if index == 0 else f"{prefix}Q: {pair}"
+                    for index, pair in enumerate(pairs)
+                )
+            )
+        return "\n".join(numbered)
+
+    lines = [
+        f"{DATE_PREFIX.format(date=hit.created_at)}{hit.content}" if hit.created_at else hit.content
+        for hit in hits
+    ]
+    if date_mode == "header":
+        lines = [_date_header(hits), *lines]
+    return "\n".join(lines)
 
 
 def build_input_items(
@@ -113,6 +251,8 @@ def build_input_items(
     hits_by_qid: dict[str, list[SearchHit]],
     *,
     memory_field: str = MEMORY_FIELD,
+    date_mode: str = "none",
+    annotate_mark: str = "paren",
 ) -> list[dict]:
     """构造 pipeline `answer` 步读的 JSONL 项。
 
@@ -136,7 +276,7 @@ def build_input_items(
             # 让不对称原样暴露在 prompt 里，而不是我们自己造一个"看起来更合理"的形状。
             "speaker_2_memories": "",
         }
-        item[memory_field] = render_memories(hits)
+        item[memory_field] = render_memories(hits, date_mode=date_mode, annotate_mark=annotate_mark)
         items.append(item)
     return items
 

@@ -284,8 +284,9 @@ def test_default_profile_loads_the_repo_yaml(config_dir: Path) -> None:
     assert cfg.pairing.batch_max_messages == 20
     assert cfg.pairing.batch_max_words == 2000
     assert cfg.server.workers == 1
-    # T1 的对照开关：**默认必须是关的**（§11.3 的结论是"不注入绝对时间"）
-    assert cfg.packaging.inject_abs_time is False
+    # 2026-09-25 起默认为 True（**D21 推翻了 §11.3 的"不加"**，有 346 题的反例）——
+    # 这条断言是那个决定在本仓的**回归位**：谁把它改回去，这里立刻红。
+    assert cfg.packaging.inject_abs_time is True
 
 
 def test_packaging_switch_rejects_a_non_bool(config_dir: Path) -> None:

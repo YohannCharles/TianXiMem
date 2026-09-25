@@ -12,6 +12,7 @@ test_contract.py        §2.1 / §2.2 契约形状与计数（含真 HTTP 往返
 test_contract_preflight.py  `eval/smoke/preflight.py` 的静态一致性与**检查是否真会失败**
 test_isolation.py       §2.2 user_id 隔离
 test_render.py          §7.2 / §11.3 同一份渲染
+test_annotate.py        §11.3 / **D21** 相对时间就地注解：**只加不改**、推不出不动、**不碰索引**
 test_store.py           §6.1 / §6.3 DDL、连续性与索引、**连接生命周期与并发**
 test_config.py          §15 配置唯一入口（**AST 静态断言** + 校验 + `.env` 读取）
 test_neighbor.py        §10 / §11.2 扩窗 + 段合并（**24 条清单的主体**）
@@ -127,7 +128,7 @@ test_reranker.py        §11.2 远端精排：线格式、降级、两个计数�
 | `answer` 为空（`pending`） → 只有 `Q:` 行 | §11.3 |
 | 多非 user 消息**每条带 role 标记** | §11.3 |
 | **首尾无空白** | AML 只做 `"\n".join(...)`，**不插分隔符** |
-| **不含绝对时间戳前缀** | §11.3 的两条独立机制 |
+| **绝对时间只到日粒度**（秒级绝不出现）、**相对表述原样保留** | **D21**（2026-09-25 推翻了旧的"正文不含任何绝对时间戳"） |
 
 **第一条是最重要的**：两处一旦不一致，"检索命中的是什么"与"模型读到的是什么"会**漂移**，**而且这种漂移不会报错**。
 
@@ -144,6 +145,7 @@ test_reranker.py        §11.2 远端精排：线格式、降级、两个计数�
 | `rerank: false` | **候选数量**不变（只是顺序变了） |
 | `agent: false` | **打包顺序**不变（只是候选少了 agent 补的那部分） |
 | `neighbor: false` | 种子集合不变（只是没有扩窗） |
+| `packaging.annotate_relatives: false` | **名次 / `id` / `created_at` / `score` / 段数 / token 口径全不变**，而且**被索引的文本逐字相同**（只是 `content` 少了那层括号注） |
 | `dense: false` | ——（**无下游依赖**：D15 删掉了裸 BM25 模式与"验证后再加 dense"的分阶段，所以没有任何东西依赖它） |
 
 > ✅ **`rerank` 的纯度断言**：

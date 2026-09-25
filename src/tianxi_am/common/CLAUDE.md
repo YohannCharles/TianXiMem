@@ -6,6 +6,7 @@
 
 ```text
 render.py    ✅ 已实现——渲染模板的**唯一实现**
+annotate.py  ✅ 已实现——正文里的相对时间**就地注解**（只改 `content`、不碰索引）
 config.py    ✅ 已实现——**全包唯一**读环境变量的地方（③-d）
 tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 ```
@@ -29,7 +30,7 @@ tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 
 **渲染规则（模板、role 标记、自定界）的唯一声明处是 [`../rank/CLAUDE.md`](../rank/CLAUDE.md) §4**——本文件不重复，避免两处规则描述漂移（**同样的理由**）。
 
-**⚠ 「贵」消融项**：改渲染模板 = 改变 embedding 输入 = **整个向量索引要重建**。模板现为 `v1`（正文不含绝对时间戳，§11.3）——**推翻它要付重建索引的钱**。
+**⚠ 「贵」消融项**：改渲染模板 = 改变 embedding 输入 = **整个向量索引要重建**（[`../../tools/reindex.py`](../../tools/reindex.py)）。模板现为 `v1` + **日粒度日期前缀**（**D21**，2026-09-25）——**推翻它要付重建索引的钱**。
 
 **三个入口都在本模块**（一个对 → 它的文本只该有一条路）：
 
@@ -37,10 +38,25 @@ tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 | --- | --- |
 | `render(q, a, *, date="")` | 逐对的唯一拼装（`date` 非空 ⇒ 前缀 `[YYYY-MM-DD] `） |
 | `render_pair(pair, *, inject_abs_time)` | **三个调用点的入口**（索引 / 精排输入 / `content`）——日期口径只此一处 |
-| `render_date(...)` · `day_granularity(...)` | T1 的开关落点与日期格式（`created_at` 与 `content` **共用同一个格式**） |
+| `render_date(...)` · `day_granularity(...)` · `event_day(...)` | T1 的开关落点、日期格式（`created_at` 与 `content` **共用同一个格式**）与**时间换算的唯一一处** |
 
 ⇒ **T1 的"带日期"臂**（`packaging.inject_abs_time`）不是三处各改一遍，而是这一条路上的一个开关。
 ⛔ 反过来：**不要在别处再拼一次日期**——那会同时踩中"两处渲染漂移不报错"与"两臂同时在两个维度上不同"。
+
+> ### ⚠ `annotate.py` 是 I1 的**唯一例外**，边界写得死
+>
+> `packaging.annotate_relatives=true` ⇒ 正文里的相对时间就地注成绝对日期
+> （`last Tues (July 18, 2023)`），原文一字不动。**它只接在 `content` 这一条路上**
+> （[`../rank/neighbor.py`](../rank/neighbor.py) 的 `_text()`），索引侧与精排输入
+> 仍然只认 `render_pair` ⇒ **开它不用重建索引**（与 T1 正相反）。
+>
+> **例外到哪为止**：`content` = 被索引的文本 **+ 一层纯函数注解**，剥掉后**逐字相同**。
+> 别把它读成"以后可以往 `content` 里加任何东西"——每加一层都要重新回答
+> "它进不进索引、缓存坐标要不要动"（[`../../docs/architecture.md`](../../docs/architecture.md) §4）。
+>
+> ⚠ **[`eval/harness/annotate.py`](../../../eval/harness/annotate.py) 是同一套逻辑的第二份**
+> （harness 不许 import `src/`，而那次实验是在 harness 侧跑的）——**两份都对**，
+> 由 [`../../../tests/test_annotate.py`](../../../tests/test_annotate.py) 的逐例等价断言钉住。
 
 ---
 

@@ -33,8 +33,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, cast
 
+from tianxi_am.common.annotate import annotate
 from tianxi_am.common.config import DEFAULT_EXPANSION_SEED_LIMIT, DEFAULT_RADIUS
-from tianxi_am.common.render import render, render_date, render_segment
+from tianxi_am.common.render import event_day, render, render_date, render_segment
 from tianxi_am.common.tokens import TokenCounter
 from tianxi_am.retrieve.fusion import Candidate
 from tianxi_am.store.sqlite_store import QaPair, SqliteStore
@@ -224,6 +225,8 @@ def merge_segments(
     *,
     counter: TokenCounter,
     inject_abs_time: bool = False,
+    seed_placement: str = "keep",
+    annotate_relatives: bool = False,
 ) -> list[ContextSegment]:
     """把选中的记忆按"连续 `pair_idx`"合并成段，并按 `best_rank` 升序返回。
 
@@ -264,6 +267,8 @@ def merge_segments(
                     session_id=session_id,
                     counter=counter,
                     inject_abs_time=inject_abs_time,
+                    seed_placement=seed_placement,
+                    annotate_relatives=annotate_relatives,
                 )
             )
 
@@ -279,6 +284,8 @@ def _build_segment(
     session_id: str,
     counter: TokenCounter,
     inject_abs_time: bool = False,
+    seed_placement: str = "keep",
+    annotate_relatives: bool = False,
 ) -> ContextSegment:
     """把一段连续的成员收成一个 `ContextSegment`（含渲染与计数）。"""
     # 锚点 = 段内**真实名次最好**的那条。邻居（rerank_rank is None）不参与。
@@ -295,17 +302,39 @@ def _build_segment(
     )
     best_rank = anchor.rerank_rank if anchor.rerank_rank is not None else _NO_RANK
 
+    # ── 段内顺序（§11.2 的"组内顺序"，明文列为**可消融项**）─────────────────────
+    # 默认 `keep`：纯 `pair_idx` 时间序。它当初被选中的理由是"窗口是一段连续对话，
+    # 按时间序读才成立"——所以另两个变体**都要用数据说话**，不能凭直觉换。
+    # ⚠ 它们**只改渲染顺序**：`source_memory_ids` / `start_pair_idx` / 锚点 / `best_rank`
+    #   一个都不动（否则"段优先级只看真实候选"这条不变式就破了）。
+    ordered = run
+    echoed: list[SelectedMemory] = []
+    if seed_placement == "front" and anchor in run:
+        ordered = [anchor, *(m for m in run if m is not anchor)]
+    elif seed_placement == "echo" and anchor in run:
+        echoed = [anchor]  # 段首重复一份；下面的时间序块**原样保留**
+
     # ⚠ 逐对渲染，且**日期口径与索引侧、精排输入侧完全一致**（不变式 I1 / T1）：
     #    `inject_abs_time` 由 `packaging.inject_abs_time` 传下来，三处读的是同一个值。
-    pair_texts = [
-        render(
-            m.pair.question,
-            m.pair.answer,
-            date=render_date(m.pair.event_time, inject_abs_time=inject_abs_time),
+    #
+    # ⚠ 而 `annotate_relatives`（`packaging.annotate_relatives`）**只在这一处生效**——
+    #    它是那条不变式的**一个声明式例外**：索引侧与精排输入仍然只认 `render_pair`，
+    #    所以开它**不改 embedding 输入**（⇒ 不用重建索引、不用换集合）。
+    #    代价是 `content` 不再逐字等于被索引的文本，而是"被索引的文本 + 一层纯注解"
+    #    ——那层注解是 `annotate()` 的确定性输出，可逆、可测（见 `tests/test_annotate.py`）。
+    def _text(member: SelectedMemory) -> str:
+        text = render(
+            member.pair.question,
+            member.pair.answer,
+            date=render_date(member.pair.event_time, inject_abs_time=inject_abs_time),
         )
-        for m in run
-    ]
-    content = render_segment(pair_texts)
+        if not annotate_relatives:
+            return text
+        anchor = event_day(member.pair.event_time)
+        # 没有 `event_time` 就没有锚点 ⇒ **一个字都不动**（编一个日期比不注解更糟）
+        return text if anchor is None else annotate(text, anchor)
+
+    content = render_segment([*(_text(m) for m in echoed), *(_text(m) for m in ordered)])
 
     return ContextSegment(
         source_memory_ids=tuple(m.memory_id for m in run),

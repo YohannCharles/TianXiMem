@@ -88,9 +88,6 @@ neighbor:
   # `front`：种子移到段首——⚠ **段内时间连续性会断**，而"窗口是连续对话、按时间序读才
   #   成立"正是 §11.2 当初选时间序的理由 ⇒ 时序类任务有**真实风险**。
   # `echo`：种子在段首**重复一份**，下面完整的时间序块原样保留——不破时序，代价是多一对 token。
-  # ⛔ **2026-09-25 实测：两个变体都否掉了**（346 题，见 eval/reports/ledger.md 的 N2）——
-  #   `front` 净 −2.0pt（multi-hop +1.8 但 temporal −3.5、single-hop −2.6），`echo` 净 −1.2pt
-  #   （时间序块原样保留却连 temporal 都掉 −4.7 ⇒ **重复本身有害**）。**保持 `keep`。**
   # 实验动机：multi-hop 错的 29 题里 28 题的证据**就在上下文里**、模型没抓住（答得笼统 /
   #   抓错事实）⇒ 试"把命中的那对放显眼"。⚠ 三个变体都跑过再定，别凭直觉换。
   seed_placement: keep
@@ -107,29 +104,14 @@ budget:
 # 渲染规则（模板本身）一处声明在 `src/tianxi_am/rank/CLAUDE.md` §4，**不在配置里**——
 # 这里只有那个"贵"对照项（T1）的开关。
 packaging:
-  # C —— 正文里**带不带**会话日期前缀（每对渲染文本前加 `[YYYY-MM-DD] `，与 `created_at` 同格式）。
-  #
-  # ⛔ **2026-09-25 起默认为 `true`，推翻了 §11.3 的"不加"**（决策见 `docs/decisions.md` **D21**）：
-  #   三条腿上量出来的（3 段 346 题，`eval/reports/ledger.md`）——日期只写段首时 temporal 无感，
-  #   写到**每一对旁边**后 multi-hop +8.9pt、temporal +3.5pt，整体 0.601 → **0.633**。
-  #   机制：模型会把锚点接到自己那句相对表述上（`Last week` → `Last week (relative to …)`），
-  #   而那正是 LoCoMo-Refined 的 gold 形状（`The week before 6 March 2023`）。
-  # ⚠ **代价**：正文一改 ⇒ embedding 输入也改 ⇒ **整个向量索引要重建、缓存全失效**
-  #   （`tools/reindex.py`），且 `created_at` 的日粒度**必须**保持不变（秒级会踩"粒度变细"）。
-  # ⚠ 证据只有 **3 段 346 题**，不是全量 10 段；`false` 仍是合法取值（消融用）。
-  inject_abs_time: true
-
-  # C —— 正文里的**相对时间就地注解**成绝对日期：`last Tues` → `last Tues (July 18, 2023)`。
-  # 实现与口径（含"推不出就不动"那条硬纪律）在 `src/tianxi_am/common/annotate.py`。
-  # ⚠ **它与上面那个键有一处根本区别**：`inject_abs_time` 改的是 embedding 输入
-  #   （改它要重建索引），**本键只改 `content`** ⇒ 随时开关，不用重建索引、不用换集合。
-  #   代价是 `content` 不再逐字等于被索引的文本——这是不变式 I1 的**一个声明式例外**：
-  #   `content` = 被索引的文本 + 一层确定性注解，去掉注解后逐字相同（tests/test_annotate.py）。
-  # ⚠ 它是 **C 类**（自设阈值）：**任何调整都要有 ablation 数据**（§7.3），
-  #   开关买到的东西见 `eval/reports/ledger.md`。
-  # ✅ 2026-09-26 起默认 `true`：3 段 346 题、同一索引、背靠背两臂，
-  #   overall 0.6387 → **0.7948**（temporal 17/85 → **68/85**，逐题赢 58 / 输 4）。
-  annotate_relatives: true
+  # C —— §13 的 T1：**时间戳前缀 带 / 不带**（`config-reference.md` §2 要求它可配）。
+  # `false` = **v1 定稿口径**：正文里没有任何绝对时间戳，时间只走 `event_time` 筛选。
+  # `true` = **只为 T1 的"带"臂存在**：每对渲染文本前加 `[YYYY-MM-DD] `（与 `created_at` 同一个格式）。
+  # ⚠ §11.3 的结论是"不加"——打开它会同时踩中裁判 TIME 块的两条独立规则
+  #   （粒度变细 / 相对↔绝对互转），所以**它不是一个可调项，是一个对照臂**。
+  # ⚠ 它是"贵"消融项：正文一改，embedding 输入就改 ⇒ **必须跑在另一个集合上**
+  #   （两臂共用一个集合时，"检索到的是哪一臂的向量"看不出来）。见 `configs/CLAUDE.md` 的 `runs/`。
+  inject_abs_time: false
 
 # ══ 精排（§11.2 / D12）════════════════════════════════════════════════════
 # ⚠ **端点 / 密钥 / 模型名不在这里**——它们在 `.env` 的 `TIANXI_RERANKER_*`（②层分工）。

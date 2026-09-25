@@ -64,6 +64,7 @@ from eval.harness import (
     write_record,
 )
 from eval.harness.api_config import ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL
+from eval.harness.judge import DATE_MODES, MARKS
 
 EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1
@@ -167,6 +168,8 @@ def run_round(
     top_k: int = DEFAULT_TOP_K,
     limit: int | None = None,
     skip_ingest: bool = False,
+    date_mode: str = "none",
+    annotate_mark: str = "paren",
     client: ServiceClient | None = None,
 ) -> tuple[list[Sample], list]:
     """跑一轮的**机制部分**：加载 → 投喂 → 检索 → 裁判。返回 `(samples, results)`。
@@ -194,7 +197,9 @@ def run_round(
                 )
                 for question in sample.questions
             }
-            items = build_input_items(sample, hits_by_qid)
+            items = build_input_items(
+                sample, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
+            )
             results += run_judge(pipeline_for(bench_dir, dataset), items, out_dir / sample.user_id)
             print(f"  [{index}/{len(samples)}] {sample.user_id}：{len(items)} 题已判", flush=True)
         return samples, results
@@ -260,6 +265,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="只跑前 N 个 sample（**会写进数据指纹的 note**——截断过的数字不可与全量比）",
     )
     parser.add_argument("--skip-ingest", action="store_true", help="跳过 Add，复用已有语料")
+    parser.add_argument(
+        "--memory-date",
+        choices=DATE_MODES,
+        default="none",
+        help=(
+            "注入时怎么带日期：none（默认）/ per-item（每条前缀）/ header（再在顶部写明）"
+            " / annotate（把句子里的相对表达就地注解成绝对日期——见 eval/harness/annotate.py）"
+        ),
+    )
+    parser.add_argument(
+        "--annotate-mark",
+        choices=MARKS,
+        default="paren",
+        help="`--memory-date annotate` 的记号：paren（`last Tues (…2023)`）/ tag（`[= …]`）",
+    )
     parser.add_argument("--run-id", default=None, help="缺省 <dataset>-<UTC 时间戳>")
     parser.add_argument("--step", default="step-0", help="这次 run 属于哪个 Step（§16）")
     parser.add_argument("--profile", default="local", help="configs/<profile>.yaml")
@@ -315,6 +335,8 @@ def main(argv: list[str] | None = None) -> int:
             top_k=args.top_k,
             limit=args.limit,
             skip_ingest=args.skip_ingest,
+            date_mode=args.memory_date,
+            annotate_mark=args.annotate_mark,
         )
     except httpx.HTTPStatusError as error:
         status = error.response.status_code

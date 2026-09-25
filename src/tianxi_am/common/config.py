@@ -125,8 +125,14 @@ RRF_K: Final[int] = 61
 #:
 #: ⚠ 这两个量**不是调参项**：§10 明确"种子数、窗口大小、Top-K、token 预算**是同一道题**，
 #: 任何一项调整都要重算其余三项"⇒ 改它们之前要有消融数据（§12.1 R1 对冲 3；config-reference §6）。
-DEFAULT_EXPANSION_SEED_LIMIT: Final[int] = 30
-DEFAULT_RADIUS: Final[int] = 1
+#: ⚠ **2026-09-25 由 30 改成 1000**（= 全部候选当种子）：3 段 346 题的 A/B 显示
+#: 宽扩窗 +3.5pt 且无倒退（`eval/reports/ledger.md` 的 N1 一节）。它与 `default.yaml`
+#: 里的取值**必须一致**——两处不一致时，"代码默认值 vs 配置默认值"就又分叉了。
+DEFAULT_EXPANSION_SEED_LIMIT: Final[int] = 1000
+DEFAULT_RADIUS: Final[int] = 2  # 同日 1 → 2，与 `default.yaml` 同一条证据链
+
+#: `neighbor.seed_placement` 的取值域（§11.2 的组内顺序消融，2026-09-25）。
+SEED_PLACEMENTS: Final[tuple[str, ...]] = ("keep", "front", "echo")
 
 #: §7.3 的两个检索参数初值：每路进入 RRF 的候选池大小（`N`）与 `[w_bm25, w_dense]` 权重。
 #:
@@ -246,6 +252,17 @@ class NeighborConfig:
     expansion_seed_limit: int = DEFAULT_EXPANSION_SEED_LIMIT
     #: 扩窗半径，**单位是 QA 对**：±1 拿回前后各**一整对**（最多 4 条消息）。
     radius: int = DEFAULT_RADIUS
+    #: 段内**种子放在哪**（§11.2 的"组内顺序"，明文列为可消融项）。
+    #:
+    #: * `keep`（默认）：纯 `pair_idx` 时间序，种子在它本来的时间位置上
+    #: * `front`：种子移到**段首**，其余照时间序 —— ⚠ **段内时间连续性会断**，
+    #:   而"窗口是一段连续对话、按时间序读才成立"正是 §11.2 当初选时间序的理由
+    #: * `echo`：种子在段首**重复一遍**，下面**完整的时间序块原样保留** ——
+    #:   时间是连续的，代价是多花一对的 token（实测 ≈ +3.5%）
+    #:
+    #: 实验动机：multi-hop 错的 29 题里 **28 题的证据就在上下文里**、模型没抓住
+    #: （答得太笼统 / 抓错事实）⇒ 试"把命中的那对放显眼"。**三个变体都跑过再定**。
+    seed_placement: str = "keep"
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,20 +277,29 @@ class BudgetConfig:
 
 @dataclass(frozen=True, slots=True)
 class PackagingConfig:
-    """上下文打包的渲染变体（§11.3）。**只有一个键，而且默认值就是 v1 定稿口径。**
-
-    ⚠ 这个键**存在的唯一理由是 T1**（§13 的"时间戳前缀 带 / 不带"，config-reference §2）。
-    它**不是**调参项——§11.3 的结论是"不注入绝对时间"，打开它只会让分数变差；
-    打开它的目的是**把那条结论在代理评测上验一遍**。
-    """
+    """上下文打包的渲染变体（§11.3）。**两个键，默认值都是 v1 定稿口径。**"""
 
     #: `false`（**v1 定稿**）⇒ `content` 里没有任何绝对时间戳，时间只走 `event_time` 筛选。
-    #: `true`（**只为 T1 的"带"臂**）⇒ 每对正文前加日粒度日期前缀。
+    #: `true`（**D21 起为默认**）⇒ 每对正文前加日粒度日期前缀。
     #:
     #: ⚠ 它是**"贵"消融项**：正文一改，embedding 输入就改 ⇒ **向量索引要重建**，
     #: 而且必须跑在**另一个集合**上（`storage.qdrant.collection`）——两臂混在一个集合里，
     #: 检索到的是哪一臂的向量**根本看不出来**。
-    inject_abs_time: bool = False
+    inject_abs_time: bool = True
+
+    #: `false` ⇒ `content` 逐字等于被索引的文本（旧口径，仍可作消融臂）。
+    #: `true`（**2026-09-26 起默认**）⇒ 把每对正文里的**相对时间就地注解**成绝对日期
+    #: （`last Tues (July 18, 2023)`），原文一字不动——实现与口径见 [`annotate.py`](./annotate.py)。
+    #:
+    #: ⚠ **它与 `inject_abs_time` 有一处根本区别**：那个改的是 embedding 输入，
+    #: **本键只改 `content`** ⇒ 随时开关，**不用重建索引、不用换集合**。
+    #: 代价是 `content` 不再逐字等于被索引的文本（不变式 I1 的**一个声明式例外**）：
+    #: `content` = 被索引的文本 + 一层确定性注解，去掉注解后逐字相同（`tests/test_annotate.py`）。
+    #:
+    #: ⚠ 它是 **C 类**（自设阈值那一类），**任何调整都要有 ablation 数据**（§7.3）——
+    #: 开关本身与它买到的东西见
+    #: [`../../../eval/reports/ledger.md`](../../../eval/reports/ledger.md)。
+    annotate_relatives: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,7 +567,12 @@ def _retrieval(raw: object) -> RetrievalConfig:
 
 
 def _neighbor(raw: object) -> NeighborConfig:
-    g = _group(raw, where="neighbor", allowed={"expansion_seed_limit", "radius"})
+    g = _group(raw, where="neighbor", allowed={"expansion_seed_limit", "radius", "seed_placement"})
+    placement = _str(g.get("seed_placement"), where="neighbor.seed_placement", default="keep")
+    if placement not in SEED_PLACEMENTS:
+        raise ConfigError(
+            f"`neighbor.seed_placement` 只能是 {SEED_PLACEMENTS} 之一，收到 {placement!r}"
+        )
     return NeighborConfig(
         expansion_seed_limit=_int(
             g.get("expansion_seed_limit"),
@@ -549,6 +580,7 @@ def _neighbor(raw: object) -> NeighborConfig:
             default=DEFAULT_EXPANSION_SEED_LIMIT,
         ),
         radius=_int(g.get("radius"), where="neighbor.radius", default=DEFAULT_RADIUS),
+        seed_placement=placement,
     )
 
 
@@ -561,14 +593,23 @@ def _budget(raw: object) -> BudgetConfig:
 
 
 def _packaging(raw: object) -> PackagingConfig:
-    g = _group(raw, where="packaging", allowed={"inject_abs_time"})
+    g = _group(raw, where="packaging", allowed={"inject_abs_time", "annotate_relatives"})
     inject = g.get("inject_abs_time")
     if inject is not None and not isinstance(inject, bool):
         raise ConfigError(
             f"`packaging.inject_abs_time` 必须是布尔值，收到 {inject!r}——"
             "它是「带 / 不带时间戳前缀」那个对照臂的开关，不是日期格式"
         )
-    return PackagingConfig(inject_abs_time=False if inject is None else inject)
+    annotate = g.get("annotate_relatives")
+    if annotate is not None and not isinstance(annotate, bool):
+        raise ConfigError(
+            f"`packaging.annotate_relatives` 必须是布尔值，收到 {annotate!r}——"
+            "它是「正文里的相对时间要不要就地注解成绝对日期」那个开关"
+        )
+    return PackagingConfig(
+        inject_abs_time=True if inject is None else inject,
+        annotate_relatives=False if annotate is None else annotate,
+    )
 
 
 def _rerank(raw: object) -> RerankConfig:

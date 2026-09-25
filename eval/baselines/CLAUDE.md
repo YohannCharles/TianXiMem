@@ -5,9 +5,12 @@
 ## 要写什么
 
 ```text
-recency_only/    A0 —— 不检索，直接按时间倒序返回最近 N 对（可选 sanity）
-refind/          B1 —— ReFind 原版（MIT，**Vendor，不改动**）
+recency_only/         A0 —— 不检索，直接按时间倒序返回最近 N 对（可选 sanity）
+refind/               B1 —— ReFind 原版（MIT，**Vendor，不改动**）
+invmem-candidate/     InvMem 的**候选映射**（无 LICENSE，**只研读**，不是基线）
 ```
+
+**出处、commit SHA 与逐项对照见 [`../../docs/reference-implementations.md`](../../docs/reference-implementations.md)。** 两个克隆目录**都 gitignored**（[`.gitignore`](../../.gitignore) 的"参考实现"一节）——上游是别人的仓库，本地副本不入库。
 
 > **裸 BM25 不是这里的一条基线**——检索只有混合一种形态，参照点由**混合主路径自身**承担（§13）。
 > **纯 BM25 检索的代码仍然存在**，但身份是 [T2 的检索手段](../experiments/)与 [Checker 判据的一路](../../src/tianxi_am/retrieve/CLAUDE.md)。
@@ -53,13 +56,19 @@ refind/          B1 —— ReFind 原版（MIT，**Vendor，不改动**）
 
 ---
 
-## 一个不该出现在这里的基线
+## InvMem（榜上 45.06）：**只读，不是基线**
 
-| 系统 | 为什么不做 |
+| 事实 | 出处 |
 | --- | --- |
-| **InvMem**（榜上 45.06） | **不是论文，也没有可 fork 的代码。** 它是榜单上的**显示名**，无第一方文档；其对应的 repo **全库无 LICENSE**，且代码里**从不出现 "InvMem" 一词**——**名称到代码的映射是第三方推断**。**不可作为参考实现依赖**（§1） |
+| **不是论文，也没有第一方文档。** 它是榜单上的**显示名** | PRD §1 |
+| 其对应的 repo **全库无 LICENSE**，且代码里**从不出现 "InvMem" 一词**——**名称到代码的映射是第三方推断** | PRD 附录 B |
+| ⇒ **不可作为参考实现依赖**（§1）；它的分数只能作**目标参照**，不能作**本地对照** | PRD §1、§13 |
 
-**同理**：InvMem 的分数与做法只能作为**目标参照**，不能作为**本地对照**。
+**2026-09-25 变更**：候选仓库已克隆到 `invmem-candidate/`，**唯一的用途是读代码**（对照笔记见 [`../../docs/reference-implementations.md`](../../docs/reference-implementations.md)）。
+
+> **它不因此变成一条基线。** 上表四条事实一条都没变——**无 LICENSE ⇒ 不能分发、不能声称、不能依赖**；从它读出来的结论要写成"某候选实现"，**不能写成"InvMem 的做法"**（PRD §1 的"不可作为参考实现依赖"仍然有效）。
+>
+> 也**不要因为它进了这个目录就给它包 Add/Search 服务**——B1 的隔离边界（下节）是给 MIT 许可、映射确凿的 `refind/` 定的。
 
 ---
 
@@ -73,5 +82,8 @@ refind/          B1 —— ReFind 原版（MIT，**Vendor，不改动**）
 | 榜单分数（45.06 / 44.97 / 44.84） | ⚠️ 可作**目标参照**，不可作**本地对照** |
 | ActiveMemoryIndex 的 .6333 / .5887 | ⚠️ 其**自述**为本地 harness + 本地 judge 的 LoCoMo 结果，**非平台分**，重跑还有约 0.2pp 漂移 |
 | 任何系统**自报**数字 | ❌ 只有自己 harness 里跑出来的数才算数（§12.3 第 4 条） |
+| **候选映射仓库**（`invmem-candidate/`）的公开数据回归：0.6.0 在 LoCoMo-Refined **1,382 题、Top K=100**：Evidence Recall **0.9277**；同数据用官方 Answer/Judge 模板 + `gpt-4o-mini`：Judge Accuracy **76.92%**（1063/1382）。0.5.0：**扩窗 vs 无窗口** 54.0% vs 49.5%（200 题分层样本，TopK=90） | ⚠️ **自报 + 公开数据 + 自建流程**，非平台分（它自己也这么声明）。**但它是我们手上唯一与我们代理评测同场景的第三方数字**（LoCoMo-Refined + `gpt-4o-mini`），可作**量级校准**的参照——**仍不可当基线** |
+
+> **候选仓库那条的读法**：它的作用是回答"**我们的 0.52 离一个能上榜的系统有多远**"这类量级问题（对照口径见 [`../../docs/reference-implementations.md`](../../docs/reference-implementations.md)），**不是**"它 76.9% 所以我们也该有 76.9%"。**两边的题集、注入字段、裁判实现都可能不同。**
 
 > **注意 AML 自己的两篇技术解读末位差 0.04**（45.06/44.97/44.84 vs 45.10/45.00/44.80）。**本 PRD 取前者**（附录 B）。

@@ -151,9 +151,11 @@
 - [x] **渲染模板定稿为 `v1`**：`Q: {q}` / `A: {a}`，**正文不含任何绝对时间戳**（§11.3）。
       声明处是 [`../src/tianxi_am/rank/CLAUDE.md`](../src/tianxi_am/rank/CLAUDE.md) §4；实现是 [`../src/tianxi_am/common/render.py`](../src/tianxi_am/common/render.py)。
       ⚠ **「定稿」不等于「不可推翻」**：推翻它要付「重建索引」的钱，而 T1 就是那笔钱的用途
-- [ ] **跑 T1 实验**（§13），与 `created_at` 粒度那条同批测（§11.3）
-      🟡 **脚手架已就位**：开关 `packaging.inject_abs_time`（默认 `false`）+ 两臂冻结快照 `configs/runs/t1-{plain,dated}/`。
-      **两臂必须跑在两个集合上**（正文变了 ⇒ 向量也变）。`make t1`：不加参数只打印计划，`--freeze` 冻结快照、`--execute` 两臂开跑、`--compare` 比结果
+- [x] **跑 T1 实验**（§13），与 `created_at` 粒度那条同批测（§11.3）—— ✅ **2026-09-25 已跑**
+      结论：日期写**段首**无效、写**每一对旁边**有效（multi-hop +8.9pt / temporal +3.5pt，整体 0.601 → **0.633**）
+      ⇒ **`packaging.inject_abs_time` 默认改为 `true`**（**D21**，推翻 §11.3 的「不加」），代价是**索引重建**（`tools/reindex.py`）。
+      明细见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)；两臂快照 `configs/runs/t1-{plain,dated}/`
+      （`make t1`：不加参数只打印计划，`--freeze` 冻结、`--execute` 开跑、`--compare` 比结果）
 - [x] `created_at` 只给日粒度；`event_time` 为 NULL 时发 `""`（§11.3）——固定 UTC，无旋钮
       ⚠ **粒度变细 / 相对↔绝对那两条规则仍属 T1 的待验证项**，落地的只是"发日期、不发秒"
 
