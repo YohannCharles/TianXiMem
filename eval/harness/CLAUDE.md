@@ -100,6 +100,7 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 | `messages` | 恒为单条 `{"role": "user", ...}` |
 | timeout | locomo 硬编码 `120`；clb 默认 `180.0` |
 | 输出目录 | **clb 会 `mkdir(parents=True)`，locomo 不会**——locomo 需要 harness 先建目录 |
+| 续跑 | 两者 `answer` 步都会跳过已完成的 id 并以**追加**模式打开输出；`evaluate` 步以 `"w"` **覆盖**打开 |
 
 ### ⚠ 续跑的陷阱：**被强杀过的 run 会在同一样本上永久卡住**（2026-09-26，实测耗掉一小时）
 
@@ -123,7 +124,6 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 > **另一条同源的运维事实**：`HTTPS_PROXY` 指向本地代理时，**打网关的那条路也在走代理**
 > （只把 `localhost` 放进 `NO_PROXY` 是不够的）⇒ 把网关域名也加进 `NO_PROXY`。
 > 实测直连可用且小包更快。⚠ 这条属于**环境**，不是代码。
-| 续跑 | 两者 `answer` 步都会跳过已完成的 id 并以**追加**模式打开输出；`evaluate` 步以 `"w"` **覆盖**打开 |
 
 ---
 
