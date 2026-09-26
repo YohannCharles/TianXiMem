@@ -18,6 +18,10 @@ a4_agent.py           A4a 门控 / A4b always-on                    ⬜（v1 没
 make serve                    # 另一个终端；TIANXI_PROFILE=local 时用 memories_dev 集合
 make eval                     # = DATASET=locomo-refined；ARGS='--limit 3 --skip-ingest' 可冒烟
 make eval DATASET=longmemeval-s
+# ⚠ LongMemEval **部分跑必须加 `--spread`**：它的文件**按 `question_type` 分块**
+#   （70 个 single-session-user → 62 个 multi-session → …），`--limit 60` 不加它
+#   只会拿到**一类**题——而分数看起来完全正常。`--spread` 按比例跨类取（确定性、可复现）。
+#   例：ARGS='--limit 60 --spread'
 ```
 
 > **纯 BM25 检索是本目录的 T2 手段**（见下），**不是一条被评分的 arm**——检索只有混合一种形态，参照点由**混合主路径自身**承担（§13）。

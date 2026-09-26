@@ -80,18 +80,25 @@ DEFAULT_BASE_URL: Final[str] = "http://127.0.0.1:8000"
 DATASETS: Final[tuple[str, ...]] = ("locomo-refined", "longmemeval-s")
 
 
-def _load(dataset: str, bench_dir: Path, limit: int | None) -> list[Sample]:
+def _load(
+    dataset: str, bench_dir: Path, limit: int | None, *, spread: bool = False
+) -> list[Sample]:
     """加载 + `limit`。
 
     ⚠ **两份数据集的 `limit` 不是同一个机制**，别当成对称的：
     LongMemEval 的 `limit` 在**加载器里**做（那份 277 MB，全量解析要几十秒、几 GB 内存），
     而 LoCoMo 的加载器没有这个参数（它整份才 10 段对话，切片在加载后做）。
+
+    ⚠ **`spread` 只对 LongMemEval 有意义**：它的文件**按 `question_type` 分块**，
+    所以"前 N 题"往往只有一类 ⇒ 部分跑要**分层抽样**才代表整个数据集
+    （理由见 `eval/datasets/longmemeval.py` 的 `_spread`）。LoCoMo 是"10 段对话 ×
+    若干题"的结构，切片天然跨段，不需要它——**传了也只当没看见**（不静默改语义）。
     """
     if dataset == "locomo-refined":
         samples = load_locomo(bench_dir)
         return samples[:limit] if limit is not None else samples
     if dataset == "longmemeval-s":
-        return load_longmemeval(bench_dir, limit=limit)
+        return load_longmemeval(bench_dir, limit=limit, spread=spread)
     raise ValueError(f"未知数据集 {dataset!r}——只有 {' / '.join(DATASETS)} 有加载器")
 
 
@@ -170,6 +177,7 @@ def run_round(
     skip_ingest: bool = False,
     date_mode: str = "none",
     annotate_mark: str = "paren",
+    spread: bool = False,
     client: ServiceClient | None = None,
 ) -> tuple[list[Sample], list]:
     """跑一轮的**机制部分**：加载 → 投喂 → 检索 → 裁判。返回 `(samples, results)`。
@@ -180,7 +188,7 @@ def run_round(
     """
     if dataset not in DATASETS:
         raise ValueError(f"未知数据集 {dataset!r}——只有 {' / '.join(DATASETS)} 有加载器")
-    samples = _load(dataset, bench_dir, limit)
+    samples = _load(dataset, bench_dir, limit, spread=spread)
     if not samples:
         raise ValueError(f"{dataset}：一个 sample 都没加载到——bench_dir={bench_dir} 对吗？")
 
@@ -225,14 +233,20 @@ def _parse_switches(raw: str | None) -> dict[str, Any]:
     return parsed
 
 
-def truncation_note(limit: int | None) -> str:
+def truncation_note(limit: int | None, *, spread: bool = False) -> str:
     """`--limit` 的警示语——写进数据指纹的 `note`（§13）。
 
     **这是本文件唯一一处"截断是否发生过"的判断**：跑了一小撮与跑完了的数字
     **在 run record 里长得一模一样**，不写下来就会有人拿它们比。
+    ⚠ **抽样方式也要写**：`spread` 时取的是**跨类**的题，不写就成了"另一种前 N 题"。
     """
     if limit is None:
         return ""
+    if spread:
+        return (
+            f"⚠ **截断跑（分层抽样）**：按 `question_type` 按比例取了约 {limit} 题"
+            "（**不是前 N 题**）——不可与全量比"
+        )
     return f"⚠ **截断跑**：只加载了前 {limit} 个 sample——不可与全量比"
 
 
@@ -265,6 +279,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="只跑前 N 个 sample（**会写进数据指纹的 note**——截断过的数字不可与全量比）",
     )
     parser.add_argument("--skip-ingest", action="store_true", help="跳过 Add，复用已有语料")
+    parser.add_argument(
+        "--spread",
+        action="store_true",
+        help=(
+            "**分层抽样**（只有 LongMemEval 用得上）：它的文件按 `question_type` 分块，"
+            "所以 `--limit N` 不加本标志时取到的是**单一类型**——部分跑要用它跨类取题"
+        ),
+    )
     parser.add_argument(
         "--memory-date",
         choices=DATE_MODES,
@@ -312,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     run_id = args.run_id or derive_run_id(args.dataset)
     out_dir = reports_dir / "runs" / run_id
 
-    note = truncation_note(args.limit)
+    note = truncation_note(args.limit, spread=args.spread)
 
     missing = judge_preconditions()
     if missing:
@@ -337,6 +359,7 @@ def main(argv: list[str] | None = None) -> int:
             skip_ingest=args.skip_ingest,
             date_mode=args.memory_date,
             annotate_mark=args.annotate_mark,
+            spread=args.spread,
         )
     except httpx.HTTPStatusError as error:
         status = error.response.status_code

@@ -153,7 +153,7 @@ def test_switches_must_be_a_json_object():
 def test_run_round_ingests_searches_and_judges(bench_dir, tmp_path, monkeypatch):
     """一轮的完整形状：**先 Add 后 Search**、每题一次 `top_k=100`、裁判落在 per-user 目录。"""
     recorder = _Recorder()
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
 
     samples, results = runner.run_round(
         dataset="locomo-refined",
@@ -184,7 +184,7 @@ def test_run_round_ingests_searches_and_judges(bench_dir, tmp_path, monkeypatch)
 def test_run_round_skips_ingest_when_asked(bench_dir, tmp_path, monkeypatch):
     """`--skip-ingest` 只掉 Add，**Search 一次都不能少**——少检索就是静默漏题。"""
     recorder = _Recorder()
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
 
     runner.run_round(
         dataset="locomo-refined",
@@ -227,7 +227,7 @@ def test_main_returns_precondition_code_when_service_is_unreachable(
     会把任意 localhost 端口接成 **502**（不是拒绝连接），那样写出来的用例**换台机器就变**。
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     monkeypatch.setattr(runner, "ServiceClient", _exploding_client)
     _pretend_judge_is_configured(monkeypatch)
 
@@ -245,7 +245,7 @@ def test_main_writes_a_record_that_carries_the_fingerprints(bench_dir, tmp_path,
     """
     recorder = _Recorder()
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     monkeypatch.setattr(runner, "ServiceClient", lambda *a, **kw: recorder.client())
     _pretend_judge_is_configured(monkeypatch)
     reports = tmp_path / "reports"
@@ -295,7 +295,7 @@ def test_main_fails_before_running_when_the_judge_is_not_configured(
     ⇒ 少了 `--env-file` 时 Add/Search 会**全部正常跑完**，然后才在裁判那一步炸。
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     monkeypatch.setattr(runner, "judge_preconditions", lambda: ["AML_BASE_URL", "AML_MODEL"])
 
     def _never(*_a, **_kw):  # pragma: no cover —— 走到这里就说明检查没拦住
@@ -373,7 +373,7 @@ def test_runner_flag_reaches_the_injection(bench_dir, tmp_path, monkeypatch):
         return real_build(sample, hits_by_qid, **kwargs)
 
     monkeypatch.setattr(runner, "build_input_items", spy)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
 
     runner.run_round(
         dataset="locomo-refined",

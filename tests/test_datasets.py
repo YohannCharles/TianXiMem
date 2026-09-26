@@ -403,3 +403,69 @@ def test_archive_lme_head_shape():
     assert len(samples) == 3
     assert all(s.questions[0].category for s in samples)
     assert all(s.message_count > 0 for s in samples)
+
+
+# ── LongMemEval 的**分层抽样**（2026-09-26）──────────────────────────────
+def _write_grouped_lme(tmp: Path) -> Path:
+    """按类型**分块**排的 fixture——**这正是真文件的样子**（实测 7 个连续块）。"""
+    bench = tmp / "lme-grouped"
+    bench.mkdir(parents=True, exist_ok=True)
+    entries = []
+    groups = (("single-session-user", 8), ("multi-session", 8), ("temporal-reasoning", 4))
+    for kind, count in groups:
+        for i in range(count):
+            entries.append(
+                {
+                    "question_id": f"{kind}-{i}",
+                    "question_type": kind,
+                    "question": "Q?",
+                    "question_date": "2023/05/30 (Tue) 23:40",
+                    "answer": "A",
+                    "answer_session_ids": ["s0"],
+                    "haystack_dates": ["2023/05/20 (Sat) 02:20"],
+                    "haystack_session_ids": ["s0"],
+                    "haystack_sessions": [[{"role": "user", "content": "u", "has_answer": True}]],
+                }
+            )
+    (bench / LME_JSON).write_text(json.dumps(entries), encoding="utf-8")
+    return bench
+
+
+def test_lme_limit_alone_takes_one_single_type(tmp_path):
+    """**这条是"为什么需要 spread"的证据**：文件按类型分块 ⇒ `[:limit]` 只取到一类。"""
+    from eval.datasets.longmemeval import _spread
+
+    bench = _write_grouped_lme(tmp_path)
+    entries = json.loads((bench / LME_JSON).read_text(encoding="utf-8"))
+    naive = entries[:6]
+    assert {e["question_type"] for e in naive} == {"single-session-user"}  # ← 单一类型
+
+    spread = _spread(entries, 6)
+    assert {e["question_type"] for e in spread} == {
+        "single-session-user",
+        "multi-session",
+        "temporal-reasoning",
+    }
+
+
+def test_lme_spread_is_deterministic_and_ordered(tmp_path):
+    """分层抽样**不随机**：同一份文件两次给同一批题，且保持文件原顺序。"""
+    from eval.datasets.longmemeval import _spread
+
+    entries = json.loads((_write_grouped_lme(tmp_path) / LME_JSON).read_text(encoding="utf-8"))
+    first, second = _spread(entries, 5), _spread(entries, 5)
+
+    assert [e["question_id"] for e in first] == [e["question_id"] for e in second]
+    order = [e["question_id"] for e in entries]
+    picked = [e["question_id"] for e in first]
+    assert picked == sorted(picked, key=order.index)  # 原顺序
+
+
+def test_lme_spread_noop_when_limit_covers_everything(tmp_path):
+    """`limit` 不小于总数 ⇒ 原样返回（不抽样、不重排）。"""
+    from eval.datasets.longmemeval import _spread
+
+    entries = json.loads((_write_grouped_lme(tmp_path) / LME_JSON).read_text(encoding="utf-8"))
+    assert [e["question_id"] for e in _spread(entries, len(entries))] == [
+        e["question_id"] for e in entries
+    ]
