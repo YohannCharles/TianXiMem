@@ -633,3 +633,39 @@ def test_jsonl_line_survives_the_archives_splitlines_reader(tmp_path):
 
         # ② 反面证据：不转义就会被劈开 —— 这条断言钉的就是那个 bug 本身
         assert len(json.dumps(item, ensure_ascii=False).splitlines()) == 2, repr(sep)
+
+
+def test_readers_split_on_newline_not_splitlines(tmp_path):
+    """**按写它的方式读**：`answers.jsonl` 里出现 `U+2028` 时不能被 `splitlines()` 劈开。
+
+    这个文件是**归档**写的（`json.dumps(..., ensure_ascii=False) + "\\n"`），我们只读。
+    ⇒ 读法必须与写法一致，否则一条记录会被看成两条，而**不会报错**——
+    表现是"答案对不上号"。
+    """
+
+    answer = "He said: first;  second"
+    path = tmp_path / "answers.jsonl"
+    path.write_text(
+        json.dumps({"id": "q1", "generated_answer": answer}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 3  # ← 反面证据：劈成 3 行
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").split("\n")
+        if line.strip()
+    ]
+    assert rows == [{"id": "q1", "generated_answer": answer}]
+
+
+def test_drop_trailing_partial_line_keeps_a_valid_line_with_u2028(tmp_path):
+    """**"半行修复"不能把一条完整记录当成坏的**——它自己也得按 `"\\n"` 切。"""
+    from eval.harness import judge
+
+    path = tmp_path / "answers.jsonl"
+    good = json.dumps({"id": "a", "generated_answer": "x y"}, ensure_ascii=False)
+    path.write_text(f"{good}\n", encoding="utf-8")
+
+    assert judge._drop_trailing_partial_line(path) == 0
+    assert path.read_text(encoding="utf-8") == f"{good}\n"

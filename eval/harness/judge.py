@@ -367,7 +367,10 @@ def _drop_trailing_partial_line(path: Path) -> int:
     """
     if not path.exists():
         return 0
-    lines = path.read_text(encoding="utf-8").splitlines()
+    # ⚠ **按 `"\n"` 切，不用 `splitlines()`**：这个文件是归档按 `+ "\n"` 写出来的，
+    #   而 `splitlines()` 会把正文里的 `U+2028` 也当换行——那会把一条**完整**的记录
+    #   看成两条坏的，于是被"修"掉（该记录会被重新生成，白花一次调用）。
+    lines = path.read_text(encoding="utf-8").split("\n")
     keep = len(lines)
     while keep > 0 and lines[keep - 1].strip():
         try:
@@ -491,8 +494,10 @@ def run_judge(
     generated = {
         row["id"]: row["generated_answer"]
         for row in (
+            # ⚠ 同样按 `"\n"` 切：答案文本里出现 `U+2028` 时，`splitlines()`
+            #   会把这一条劈开 ⇒ 答案对不上号（而**不会报错**）。
             json.loads(line)
-            for line in answers_path.read_text(encoding="utf-8").splitlines()
+            for line in answers_path.read_text(encoding="utf-8").split("\n")
             if line.strip()
         )
     }
