@@ -421,3 +421,55 @@ def test_would_trigger_rate_is_none_not_zero_without_data() -> None:
 def test_checker_default_instrument_is_a_noop() -> None:
     """不传记录出口时不得炸（与 ① 的 `NullPendingInstrument` 同一个模式）。"""
     EvidenceChecker().decide(query="q")
+
+
+# ── 并列分数的次序（V13，2026-09-26）────────────────────────────────────
+def _tied_hits() -> list[ScoredMemoryId]:
+    """一组**故意同分**的候选——RRF 的日常形态（`1/(61+名次)` 是离散值）。
+
+    ⚠ 三条的 `score` 完全一样：`dense` 与 `bm25` 里名次相同的两条会落在同一个值上。
+    """
+    return [
+        ScoredMemoryId(memory_id="cc" * 32, score=0.125),
+        ScoredMemoryId(memory_id="aa" * 32, score=0.125),
+        ScoredMemoryId(memory_id="bb" * 32, score=0.125),
+        ScoredMemoryId(memory_id="dd" * 32, score=0.0625),
+    ]
+
+
+def test_tied_scores_get_a_deterministic_order() -> None:
+    """**同分项的次序必须与上游给的顺序无关**（V13）。
+
+    为什么这条重要：名次是**位置派生**的（`retrieve()` 里的 `enumerate`），而下游
+    （种子选择 → 扩窗 → 打包顺序）全都读名次。上游（Qdrant）对同分项的返回顺序在两次
+    相同请求之间都会变 ⇒ 不在这里定死，整条链就跟着抖，表现为"**同配置重跑差 ±3pt**"，
+    **而没有任何东西会报错**。
+
+    ⇒ 断言：把同一批同分候选**按不同顺序**喂进去，得到的 `memory_id → rank` 完全一致，
+    且并列内部按 `memory_id` 升序。
+    """
+    orders = [
+        _tied_hits(),
+        list(reversed(_tied_hits())),
+        [_tied_hits()[i] for i in (1, 3, 0, 2)],
+    ]
+    results = []
+    for hits in orders:
+        retriever = _retriever(_StubStore(hits=hits), _InstructionStub(vector=[1.0, 0.0]))
+        ranked = retriever.search(user_id="u1", query="q", top_k=10)
+        results.append([(c.memory_id, c.rank) for c in ranked])
+
+    assert results[0] == results[1] == results[2], "同一批同分候选，次序随上游顺序变了"
+    # 并列内部按 `memory_id` 升序；分数高的仍在前（`dd` 分低，排最后）
+    assert [mid[:2] for mid, _ in results[0]] == ["aa", "bb", "cc", "dd"]
+
+
+def test_score_still_wins_over_the_tie_break() -> None:
+    """次级键**只在并列时**生效——不能把分数更高的挤到后面去。"""
+    hits = [
+        ScoredMemoryId(memory_id="zz" * 32, score=0.9),
+        ScoredMemoryId(memory_id="aa" * 32, score=0.1),
+    ]
+    retriever = _retriever(_StubStore(hits=hits), _InstructionStub(vector=[1.0, 0.0]))
+    ranked = retriever.search(user_id="u1", query="q", top_k=10)
+    assert [c.memory_id[:2] for c in ranked] == ["zz", "aa"]

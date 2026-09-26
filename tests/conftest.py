@@ -275,7 +275,16 @@ class FakeQdrantSearch:
             }
         )
         ids = self.by_user.get(user_id, [])
-        return [ScoredMemoryId(mid, FUSED_SCORE) for mid in ids[:top_k]]
+        # ⚠ **分数必须严格递减**，与真 Qdrant 的契约一致（融合结果按分数降序返回）。
+        #   给全部命中同一个分数会让"并列次序"进入下游——而 `retrieve/` 现在会按
+        #   `(-score, memory_id)` 定死并列次序（**V13**），于是本夹具声明的顺序会被
+        #   按 id 重排，用例断言的"返回的就是我给的顺序"就不成立了。
+        #   ⇒ 递减分数既忠实于真实现，也让"顺序 = 我给的顺序"这条断言继续有效。
+        #   ⚠ 仍然是**刻意刺眼**的值：它绝不允许出现在响应里（`test_contract.py` 钉着）。
+        return [
+            ScoredMemoryId(mid, FUSED_SCORE - index * FUSED_SCORE_STEP)
+            for index, mid in enumerate(ids[:top_k])
+        ]
 
     def index_pairs(self, pairs, embedder, *, renderer=render_pair, wait=True) -> int:
         """Add 侧只需要这一件事：渲染 → 嵌入（走假 embedder）→ 记下 point。"""
@@ -290,6 +299,10 @@ class FakeQdrantSearch:
 
 #: 一个**刻意刺眼**的"融合分数"——它绝不允许出现在响应里
 FUSED_SCORE = 0.987654321
+
+#: 名次之间那一点递减量——只为让顺序**唯一确定**（见 `hybrid_search` 的注释）。
+#: 取值不影响任何断言：用例只断言"这个刺眼的分数没有出现在响应里"。
+FUSED_SCORE_STEP = 1e-6
 
 
 @dataclass
