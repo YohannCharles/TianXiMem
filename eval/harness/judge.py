@@ -53,6 +53,7 @@ import time
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Final
 
 from eval.datasets import Sample
 from eval.datasets.locomo import PIPELINE as LOCOMO_PIPELINE
@@ -385,6 +386,42 @@ def _drop_trailing_partial_line(path: Path) -> int:
     return dropped
 
 
+#: `str.splitlines()` **会断行**、而 `json.dumps(ensure_ascii=False)` **不转义**的字符。
+#:
+#: ⚠ `\n` / `\r` / `\x0b` / `\x0c` / `\x1c-\x1e` 都由 `json.dumps` 自己转义掉了；
+#: 只有 **`\x85` / `\u2028` / `\u2029`** 是它不碰、而 `splitlines()` 照断的——
+#: 这三个才是真正会咬人的（列全是为了"下次有人加字符时不假思索"）。
+_LINE_BREAKS: Final[tuple[str, ...]] = ("\x85", "\u2028", "\u2029")
+
+
+def _jsonl_line(item: dict) -> str:
+    """把一项写成**一行** JSONL——**转义掉 `splitlines()` 会断行的字符**。
+
+    ## 为什么（2026-09-26，LongMemEval 那轮的真实阻塞）
+
+    归档 pipeline 的 `rows()` 是这么读的：
+
+    ```python
+    [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
+    ```
+
+    **`splitlines()` 断的比 `\n` 多得多**（`\x85`、`\u2028`、`\u2029`、`\v`、`\f`、`\x1c-\x1e`），
+    而 `json.dumps(..., ensure_ascii=False)` **不转义**其中三个 ⇒ 只要**正文里出现
+    `U+2028`**，那一行就会被劈成两半，前半段的字符串没有闭合
+    ⇒ `JSONDecodeError: Unterminated string`。
+
+    ⇒ 现象是"**卡在同一道题**"（实测 47 个席位里只有 1 个含 `U+2028` ⇒
+    **数据相关**，却看起来像网络问题，排查方向整个跑偏）。**写入侧转义是唯一的修法**
+    ——读的那侧是归档代码，不许改。
+    """
+    line = json.dumps(item, ensure_ascii=False)
+    for char in _LINE_BREAKS:
+        if char in line:
+            # 换成 JSON 转义序列：`json.loads` 会解回同一个字符，语义一字不变。
+            line = line.replace(char, f"\\u{ord(char):04x}")
+    return line + "\n"
+
+
 def run_judge(
     pipeline: Path,
     items: list[dict],
@@ -414,7 +451,7 @@ def run_judge(
 
     with input_path.open("w", encoding="utf-8") as handle:
         for item in items:
-            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+            handle.write(_jsonl_line(item))
 
     # ★ 续跑前先修掉上次被强杀留下的半行——否则 `answer` 步读它就 `JSONDecodeError`，
     #   而表现是"**卡在同一道题**"（详见 `_drop_trailing_partial_line` 的事故记录）。

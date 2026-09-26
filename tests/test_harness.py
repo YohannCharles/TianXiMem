@@ -606,3 +606,30 @@ def test_drop_trailing_partial_line_noop_without_file(tmp_path):
     from eval.harness import judge
 
     assert judge._drop_trailing_partial_line(tmp_path / "nope.jsonl") == 0
+
+
+def test_jsonl_line_survives_the_archives_splitlines_reader(tmp_path):
+    """正文里的 `U+2028` 不能让那一行被劈开——**归档是按 `splitlines()` 读的**。
+
+    事故见 `judge._jsonl_line` 的 docstring：LongMemEval 那轮有 1 个席位的正文含
+    `U+2028`，`json.dumps(ensure_ascii=False)` 不转义它、而 `splitlines()` 照断 ⇒
+    那一行被劈成两半 ⇒ `JSONDecodeError: Unterminated string` ⇒ **卡在同一道题**，
+    却看起来像网络问题（实测耗掉一小时，11 次续跑全死在同一题）。
+    """
+    from eval.harness import judge
+
+    for sep in (" ", " ", "\x85"):
+        item = {"id": "q1", "speaker_1_memories": f"before{sep}after", "gold_answer": "x"}
+        path = tmp_path / "input.jsonl"
+        path.write_text(judge._jsonl_line(item), encoding="utf-8")
+
+        # ① 用**归档的读法**读回来：一行一项，且语义一字不变
+        parsed = [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert parsed == [item], repr(sep)
+
+        # ② 反面证据：不转义就会被劈开 —— 这条断言钉的就是那个 bug 本身
+        assert len(json.dumps(item, ensure_ascii=False).splitlines()) == 2, repr(sep)
