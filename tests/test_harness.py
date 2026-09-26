@@ -772,9 +772,11 @@ def test_build_input_items_reports_truncation(monkeypatch, capsys):
     from eval.harness import judge
     from eval.harness.driver import SearchHit
 
-    monkeypatch.setattr(judge, "truncate_to_platform_prefix", lambda text: (text[:10], True))
+    monkeypatch.setattr(
+        judge, "truncate_to_platform_prefix", lambda text: (text[:10], True)
+    )
     hit = SearchHit(id="a", content="Q: x\nA: y" * 100, created_at="", score=1.0)
-    sample = type("S", (), {"questions": [type("Q", (), {"qid": "q1", "question": "?", "gold": "g"})()],
-                            "speaker_names": ("A", "B")})()
+    question = type("Q", (), {"qid": "q1", "question": "?", "gold": "g"})()
+    sample = type("S", (), {"questions": [question], "speaker_names": ("A", "B")})()
     judge.build_input_items(sample, {"q1": [hit]})
     assert "被截到平台前缀" in capsys.readouterr().out

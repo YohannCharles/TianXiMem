@@ -283,7 +283,11 @@ def build_input_items(
         #   因为基线未必守预算（实测 ReFind 有一题返回 89.8 万字符）。详见常量的注释。
         text, cut = truncate_to_platform_prefix(text)
         if cut:
-            print(f"  ⚠ {question.qid}：注入被截到平台前缀（{PLATFORM_TOKEN_PREFIX:,} token）", flush=True)
+            print(
+                f"  ⚠ {question.qid}：注入被截到平台前缀"
+                f"（{PLATFORM_TOKEN_PREFIX:,} token）",
+                flush=True,
+            )
         item[memory_field] = text
         items.append(item)
     return items
