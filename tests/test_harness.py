@@ -575,10 +575,10 @@ def test_run_gives_up_after_the_attempt_budget(monkeypatch, tmp_path):
     assert calls["n"] == 3
 
 
-def test_drop_trailing_partial_line(tmp_path):
+def test_sanitize_jsonl_tmp_path(tmp_path):
     """末尾被截断的半行要被丢掉，**完整行一行不动**。
 
-    事故见 `judge._drop_trailing_partial_line` 的 docstring：半行会让 `answer` 步
+    事故见 `judge._sanitize_jsonl` 的 docstring：半行会让 `answer` 步
     `JSONDecodeError`，而表现是"**卡在同一道题**"（看起来像网络问题）。
     """
     from eval.harness import judge
@@ -587,25 +587,25 @@ def test_drop_trailing_partial_line(tmp_path):
     good = '{"id": "a", "generated_answer": "x"}'
     path.write_text(f'{good}\n{good}\n{{"id": "b", "generated', encoding="utf-8")
 
-    assert judge._drop_trailing_partial_line(path) == 1
+    assert judge._sanitize_jsonl(path) == 1
     assert path.read_text(encoding="utf-8") == f"{good}\n{good}\n"
 
 
-def test_drop_trailing_partial_line_keeps_middle_lines(tmp_path):
+def test_sanitize_jsonl_keeps_middle_lines(tmp_path):
     """**只在末尾删**：中途的坏行说明别的问题，不该被静默吞掉。"""
     from eval.harness import judge
 
     path = tmp_path / "answers.jsonl"
     path.write_text('{"id": "a"}\n{坏行\n{"id": "c"}\n', encoding="utf-8")
 
-    assert judge._drop_trailing_partial_line(path) == 0
+    assert judge._sanitize_jsonl(path) == 0
     assert "坏行" in path.read_text(encoding="utf-8")
 
 
-def test_drop_trailing_partial_line_noop_without_file(tmp_path):
+def test_sanitize_jsonl_noop_without_file(tmp_path):
     from eval.harness import judge
 
-    assert judge._drop_trailing_partial_line(tmp_path / "nope.jsonl") == 0
+    assert judge._sanitize_jsonl(tmp_path / "nope.jsonl") == 0
 
 
 def test_jsonl_line_survives_the_archives_splitlines_reader(tmp_path):
@@ -659,13 +659,52 @@ def test_readers_split_on_newline_not_splitlines(tmp_path):
     assert rows == [{"id": "q1", "generated_answer": answer}]
 
 
-def test_drop_trailing_partial_line_keeps_a_valid_line_with_u2028(tmp_path):
-    """**"半行修复"不能把一条完整记录当成坏的**——它自己也得按 `"\\n"` 切。"""
+def test_sanitize_jsonl_treats_a_u2028_line_as_one_record(tmp_path):
+    """一条**完整**记录不能因为含 `U+2028` 就被当成"坏的"丢掉——那会白重生成一次。
+
+    正确处置是**就地转义**（语义不变），而不是删。⚠ 它自己也得按 `"\n"` 切：
+    用 `splitlines()` 的话，这一条会被看成两条坏的。
+    """
     from eval.harness import judge
 
     path = tmp_path / "answers.jsonl"
-    good = json.dumps({"id": "a", "generated_answer": "x y"}, ensure_ascii=False)
-    path.write_text(f"{good}\n", encoding="utf-8")
+    line = json.dumps({"id": "a", "generated_answer": "x y"}, ensure_ascii=False)
+    path.write_text(f"{line}\n", encoding="utf-8")
 
-    assert judge._drop_trailing_partial_line(path) == 0
-    assert path.read_text(encoding="utf-8") == f"{good}\n"
+    assert judge._sanitize_jsonl(path) == 1  # 转义 1 行（**不是**丢掉）
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "id": "a",
+        "generated_answer": "x y",
+    }
+
+def test_sanitize_jsonl_escapes_a_line_that_would_be_split(tmp_path):
+    """**归档自己写的行**里若带 `U+2028`，也要在它读之前转义掉。
+
+    这是我们控制不了写入侧时的唯一办法：`answers.jsonl` 由归档写、又由它自己的
+    `rows()`（`splitlines()`）读 ⇒ 一旦**模型生成的答案**里带 `U+2028`，
+    **归档会在下一次续跑时崩在自己写的文件上**，而"丢半行"救不了（那行解析得通）。
+    """
+    from eval.harness import judge
+
+    path = tmp_path / "answers.jsonl"
+    path.write_text(
+        json.dumps({"id": "q1", "generated_answer": "a b"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    assert judge._sanitize_jsonl(path) == 1  # 改了 1 行
+    text = path.read_text(encoding="utf-8")
+    assert len(text.splitlines()) == 1, "还是会被劈行"
+    assert json.loads(text) == {"id": "q1", "generated_answer": "a b"}  # 语义一字不变
+
+
+def test_sanitize_jsonl_is_a_noop_on_a_clean_file(tmp_path):
+    from eval.harness import judge
+
+    path = tmp_path / "answers.jsonl"
+    good = json.dumps({"id": "a", "generated_answer": "x"}, ensure_ascii=False) + "\n"
+    path.write_text(good, encoding="utf-8")
+
+    assert judge._sanitize_jsonl(path) == 0
+    assert path.read_text(encoding="utf-8") == good

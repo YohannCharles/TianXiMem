@@ -347,8 +347,21 @@ def _run(
     raise last  # type: ignore[misc] —— attempts ≥ 1，循环至少设过一次
 
 
-def _drop_trailing_partial_line(path: Path) -> int:
-    """删掉 `answers.jsonl` **末尾的半行**；返回删了几行。
+def _sanitize_jsonl(path: Path) -> int:
+    """把 `answers.jsonl` 修成**归档读得下去**的样子；返回改动了几行。
+
+    **两件事一起做**（都只针对这个文件，且都保持语义不变）：
+
+    | 症状 | 处置 |
+    | --- | --- |
+    | 末尾有**半行 JSON**（上次被强杀留下的） | **丢掉**——对应的题会被重新生成 |
+    | 某行里含 `U+2028` 之类的字符（**归档自己写的**，我们只读不写） | **就地转义**成 `\u2028` |
+
+    ⚠ 第二条是**我们控制不了写入侧**时的唯一办法：`answers.jsonl` 由归档的 `answer()`
+    以 `json.dumps(..., ensure_ascii=False)` 写、又由它自己的 `rows()`（`splitlines()`）
+    读 —— 万一**模型生成的答案**里带 `U+2028`，**归档会在下一次续跑时崩在自己写的文件上**。
+    我们改不了归档，所以只能在它读之前把文件修好。转义是安全的：`json.loads` 会解回
+    同一个字符，**语义一字不变**。
 
     ## 为什么需要它（2026-09-26，一次真实事故，比网络抖动更隐蔽）
 
@@ -370,23 +383,40 @@ def _drop_trailing_partial_line(path: Path) -> int:
     # ⚠ **按 `"\n"` 切，不用 `splitlines()`**：这个文件是归档按 `+ "\n"` 写出来的，
     #   而 `splitlines()` 会把正文里的 `U+2028` 也当换行——那会把一条**完整**的记录
     #   看成两条坏的，于是被"修"掉（该记录会被重新生成，白花一次调用）。
-    lines = path.read_text(encoding="utf-8").split("\n")
-    keep = len(lines)
-    while keep > 0 and lines[keep - 1].strip():
+    raw = path.read_text(encoding="utf-8").split("\n")
+    if raw and raw[-1] == "":
+        raw.pop()  # 文件以 `"\n"` 结尾 ⇒ `split` 会多出一个空元素，重写时要还回去
+
+    # ① 末尾的半行：从后往前丢（只丢**解析不了**的）
+    keep = len(raw)
+    while keep > 0 and raw[keep - 1].strip():
         try:
-            json.loads(lines[keep - 1])
+            json.loads(raw[keep - 1])
             break
         except json.JSONDecodeError:
             keep -= 1
-    dropped = len(lines) - keep
-    if dropped:
-        path.write_text("".join(f"{line}\n" for line in lines[:keep]), encoding="utf-8")
+    dropped = len(raw) - keep
+
+    # ② 会被 `splitlines()` 劈开的字符：**就地转义**（语义不变）
+    escaped = 0
+    fixed: list[str] = []
+    for line in raw[:keep]:
+        if line.strip() and any(char in line for char in _LINE_BREAKS):
+            try:
+                line = _jsonl_line(json.loads(line)).rstrip("\n")
+                escaped += 1
+            except json.JSONDecodeError:  # pragma: no cover —— 上面刚验过能解析
+                pass
+        fixed.append(line)
+
+    if dropped or escaped:
+        path.write_text("".join(f"{line}\n" for line in fixed), encoding="utf-8")
         print(
-            f"  ⚠ 修复 `{path.name}`：丢掉末尾 {dropped} 行**不完整的 JSON**"
-            "（上次被强杀留下的）",
+            f"  ⚠ 修复 `{path.name}`：丢掉末尾 {dropped} 行不完整的 JSON、"
+            f"转义 {escaped} 行里的行分隔符字符",
             flush=True,
         )
-    return dropped
+    return dropped + escaped
 
 
 #: `str.splitlines()` **会断行**、而 `json.dumps(ensure_ascii=False)` **不转义**的字符。
@@ -457,8 +487,8 @@ def run_judge(
             handle.write(_jsonl_line(item))
 
     # ★ 续跑前先修掉上次被强杀留下的半行——否则 `answer` 步读它就 `JSONDecodeError`，
-    #   而表现是"**卡在同一道题**"（详见 `_drop_trailing_partial_line` 的事故记录）。
-    _drop_trailing_partial_line(answers_path)
+    #   而表现是"**卡在同一道题**"（详见 `_sanitize_jsonl` 的事故记录）。
+    _sanitize_jsonl(answers_path)
 
     # `--model` / `--base-url` / `--api-key-env` 都**是死的**：这两个子命令在协程开头
     # 就用 `api_config` 的常量重写 `args.*`。所以这里一个都不传（传了只会让人以为生效了）。
