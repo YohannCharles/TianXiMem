@@ -746,3 +746,35 @@ def test_search_falls_back_only_on_server_errors():
     no_fallback = _client("http://main", status=500)
     with pytest.raises(httpx.HTTPStatusError):
         no_fallback.search_raw(user_id="u", query="q", top_k=1)  # 没配兜底 ⇒ 照旧抛
+
+
+def test_injection_is_capped_at_the_platform_prefix(monkeypatch):
+    """**平台的答案阶段是"取 117,760 token 前缀"**——harness 要自己模拟。
+
+    为什么：我们自己的服务守预算，**基线不一定**。实测 ReFind 在 LongMemEval 上有一题
+    返回 **897,838 字符**（≈22–30 万 token）⇒ 判分提示爆 128k ⇒ 网关 400 ⇒ 整轮被打死。
+    而平台会替它截断 ⇒ 正确的模拟是"截前缀"，不是"让整轮炸掉"。
+    """
+    from eval.harness import judge
+
+    small = "hello world"
+    assert judge.truncate_to_platform_prefix(small) == (small, False)
+
+    huge = "word " * 200_000  # 远超 117,760 token
+    text, cut = judge.truncate_to_platform_prefix(huge)
+    assert cut is True
+    assert judge._encoder().encode(text).__len__() <= judge.PLATFORM_TOKEN_PREFIX
+    assert huge.startswith(text)  # ★ 是**前缀**，不是重排、不是摘要
+
+
+def test_build_input_items_reports_truncation(monkeypatch, capsys):
+    """截断要在跑批时**可见**（打印一行），否则"这一题的上下文少了一截"没人知道。"""
+    from eval.harness import judge
+    from eval.harness.driver import SearchHit
+
+    monkeypatch.setattr(judge, "truncate_to_platform_prefix", lambda text: (text[:10], True))
+    hit = SearchHit(id="a", content="Q: x\nA: y" * 100, created_at="", score=1.0)
+    sample = type("S", (), {"questions": [type("Q", (), {"qid": "q1", "question": "?", "gold": "g"})()],
+                            "speaker_names": ("A", "B")})()
+    judge.build_input_items(sample, {"q1": [hit]})
+    assert "被截到平台前缀" in capsys.readouterr().out

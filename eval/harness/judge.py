@@ -278,7 +278,13 @@ def build_input_items(
             # 让不对称原样暴露在 prompt 里，而不是我们自己造一个"看起来更合理"的形状。
             "speaker_2_memories": "",
         }
-        item[memory_field] = render_memories(hits, date_mode=date_mode, annotate_mark=annotate_mark)
+        text = render_memories(hits, date_mode=date_mode, annotate_mark=annotate_mark)
+        # ★ 平台的答案阶段是"按返回顺序取 117,760 token 前缀"——**harness 要自己模拟**，
+        #   因为基线未必守预算（实测 ReFind 有一题返回 89.8 万字符）。详见常量的注释。
+        text, cut = truncate_to_platform_prefix(text)
+        if cut:
+            print(f"  ⚠ {question.qid}：注入被截到平台前缀（{PLATFORM_TOKEN_PREFIX:,} token）", flush=True)
+        item[memory_field] = text
         items.append(item)
     return items
 
@@ -453,6 +459,34 @@ def _jsonl_line(item: dict) -> str:
             # 换成 JSON 转义序列：`json.loads` 会解回同一个字符，语义一字不变。
             line = line.replace(char, f"\\u{ord(char):04x}")
     return line + "\n"
+
+
+#: 平台在**答案阶段**对返回列表做的截断：**按返回顺序取 117,760 token 前缀**（§2.2 / §6.4）。
+#:
+#: ⚠ **harness 必须自己模拟这一步**，不能假设"服务返回的证据自己会守预算"：
+#: 我们自己的服务确实守（`packaging` 的双预算），但**基线不一定**——
+#: 2026-09-26 实测：ReFind 在 LongMemEval 上有一题返回了 **897,838 字符**（≈22–30 万 token），
+#: 判分提示直接爆 128k ⇒ 网关 400 ⇒ **整轮被打死**。而**平台会替它截断**，
+#: 所以正确的模拟是"截前缀"，不是"让整轮炸掉"。
+#:
+#: ⚠ 分词器用 **`o200k_base`**（= 平台答案模型 `gpt-4o-mini` 的分词器），与
+#: `budget.tokenizer` 同一口径——**不要用字符数近似**（§6.4）。
+PLATFORM_TOKEN_PREFIX: Final[int] = 117_760
+
+
+def _encoder():
+    import tiktoken  # 只在真要用时才 import（harness 的纯逻辑用例不必装它）
+
+    return tiktoken.get_encoding("o200k_base")
+
+
+def truncate_to_platform_prefix(text: str) -> tuple[str, bool]:
+    """按平台规则截断；返回 `(文本, 是否截过)`。"""
+    encoder = _encoder()
+    ids = encoder.encode(text)
+    if len(ids) <= PLATFORM_TOKEN_PREFIX:
+        return text, False
+    return encoder.decode(ids[:PLATFORM_TOKEN_PREFIX]), True
 
 
 def run_judge(
