@@ -49,6 +49,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -294,20 +295,94 @@ def _subprocess_env() -> dict[str, str]:
     return env
 
 
-def _run(pipeline: Path, argv: list[str], *, timeout: float | None) -> None:
-    completed = subprocess.run(
-        [sys.executable, str(pipeline), *argv],
-        env=_subprocess_env(),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(
+def _run(
+    pipeline: Path, argv: list[str], *, timeout: float | None, attempts: int = 3
+) -> None:
+    """跑一个 pipeline 子命令，**瞬时故障自动重试**。
+
+    ## 为什么必须重试（2026-09-26，一次真实事故）
+
+    LongMemEval 那轮跑到第 47 题时，**判分侧一次 TLS 握手失败**
+    （`httpcore ... start_tls` → `httpx.ConnectError`）就把**两小时的跑批整个打死**，
+    而**没有任何东西会重试**。那一轮实际被同类故障打断过 11 次。
+
+    ⚠ **重试是安全的**，因为两个子命令都幂等：`answer` 以**追加**模式打开、按 `id`
+    跳过已完成的题；`evaluate` 以 `"w"` **覆盖**打开。⇒ 重跑一次最坏是白跑一遍。
+    ⇒ **不重试的代价（整轮作废）远大于重试的代价（几十秒）**。
+
+    ⚠ **重试次数要有界**：真 bug（形状不符、数据坏了）重试 3 次还是失败 ⇒ 照样抛，
+    错误信息原样带出去——**不把"一直失败"伪装成"在重试"**。
+    """
+    last: RuntimeError | None = None
+    for attempt in range(1, attempts + 1):
+        completed = subprocess.run(
+            [sys.executable, str(pipeline), *argv],
+            env=_subprocess_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if completed.returncode == 0:
+            if attempt > 1:
+                print(
+                    f"  （{pipeline.name} {' '.join(argv[:1])}：第 {attempt} 次尝试成功）",
+                    flush=True,
+                )
+            return
+        last = RuntimeError(
             f"{pipeline.name} {' '.join(argv[:1])} 失败（exit {completed.returncode}）\n"
             f"--- stdout ---\n{completed.stdout[-4000:]}\n"
             f"--- stderr ---\n{completed.stderr[-4000:]}"
         )
+        if attempt < attempts:
+            wait = 5 * attempt
+            print(
+                f"  ⚠ {pipeline.name} {' '.join(argv[:1])} "
+                f"第 {attempt}/{attempts} 次失败（exit {completed.returncode}），"
+                f"{wait}s 后重试（该步骤幂等）",
+                flush=True,
+            )
+            time.sleep(wait)
+    raise last  # type: ignore[misc] —— attempts ≥ 1，循环至少设过一次
+
+
+def _drop_trailing_partial_line(path: Path) -> int:
+    """删掉 `answers.jsonl` **末尾的半行**；返回删了几行。
+
+    ## 为什么需要它（2026-09-26，一次真实事故，比网络抖动更隐蔽）
+
+    那次事故的真实链条是这样的：
+
+    1. 判分侧**一次 TLS 抖动**把 runner 打死；
+    2. 死的时候 pipeline 正以**追加**模式写 `answers.jsonl`（逐行 `write` + `flush`，
+       见 `pipeline_longmemeval-s.py` 的 `answer()`）⇒ 留下**半行 JSON**；
+    3. 而同一个 `answer()` 开头会 `rows(output)` **读它来跳过已完成的题**
+       （`done = {item["id"] for item in rows(output)}`）⇒ `JSONDecodeError`；
+    4. ⇒ **之后每次续跑都在同一个样本上确定性失败**——表现为"卡在同一题"，
+       而**看起来像网络问题**（第一次确实是），于是排查方向全错。
+
+    ⚠ **只在末尾删**：中途的坏行说明别的问题（磁盘、并发写），不该被静默吞掉。
+    ⚠ 删掉的只有**半行**——它对应的那道题会被重新生成（`answer` 是追加 + 跳过已完成）。
+    """
+    if not path.exists():
+        return 0
+    lines = path.read_text(encoding="utf-8").splitlines()
+    keep = len(lines)
+    while keep > 0 and lines[keep - 1].strip():
+        try:
+            json.loads(lines[keep - 1])
+            break
+        except json.JSONDecodeError:
+            keep -= 1
+    dropped = len(lines) - keep
+    if dropped:
+        path.write_text("".join(f"{line}\n" for line in lines[:keep]), encoding="utf-8")
+        print(
+            f"  ⚠ 修复 `{path.name}`：丢掉末尾 {dropped} 行**不完整的 JSON**"
+            "（上次被强杀留下的）",
+            flush=True,
+        )
+    return dropped
 
 
 def run_judge(
@@ -340,6 +415,10 @@ def run_judge(
     with input_path.open("w", encoding="utf-8") as handle:
         for item in items:
             handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+    # ★ 续跑前先修掉上次被强杀留下的半行——否则 `answer` 步读它就 `JSONDecodeError`，
+    #   而表现是"**卡在同一道题**"（详见 `_drop_trailing_partial_line` 的事故记录）。
+    _drop_trailing_partial_line(answers_path)
 
     # `--model` / `--base-url` / `--api-key-env` 都**是死的**：这两个子命令在协程开头
     # 就用 `api_config` 的常量重写 `args.*`。所以这里一个都不传（传了只会让人以为生效了）。

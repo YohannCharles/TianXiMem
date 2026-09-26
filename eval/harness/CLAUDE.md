@@ -100,6 +100,29 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 | `messages` | 恒为单条 `{"role": "user", ...}` |
 | timeout | locomo 硬编码 `120`；clb 默认 `180.0` |
 | 输出目录 | **clb 会 `mkdir(parents=True)`，locomo 不会**——locomo 需要 harness 先建目录 |
+
+### ⚠ 续跑的陷阱：**被强杀过的 run 会在同一样本上永久卡住**（2026-09-26，实测耗掉一小时）
+
+链条是这样的，**每一步都不报错到最后一步**：
+
+1. 判分侧**一次瞬时网络抖动**（实测经本地代理时 TLS 握手偶发失败）把 runner 打死；
+2. 死的那一刻 pipeline 正以**追加**模式写 `answers.jsonl`（逐行 `write` + `flush`）
+   ⇒ 文件末尾留下**半行 JSON**；
+3. 而 `answer` 步开头**要读它**来跳过已完成的题
+   （`done = {item["id"] for item in rows(output)}`）⇒ `JSONDecodeError`；
+4. ⇒ **之后每次续跑都在同一个样本上确定性失败**——现象是"**卡在同一道题**"，
+   而它**看起来仍像网络问题**（第一次确实是），于是排查方向整个跑偏。
+
+**处置（已落地，都在 [`judge.py`](./judge.py)）**：
+
+| 症状 | 修法 |
+| --- | --- |
+| 半行 JSON 让续跑卡死 | `_drop_trailing_partial_line()`——每次 `answer` 之前**丢掉末尾不完整的行**（⚠ **只在末尾删**：中途的坏行说明别的问题，不该被静默吞掉） |
+| 一次抖动打死整轮 | `_run(..., attempts=3)`——**子命令级退避重试**。安全，因为两个子命令都幂等（`answer` 追加 + 跳过已完成、`evaluate` 覆盖）。**重试有界**，失败信息原样带出去 |
+
+> **另一条同源的运维事实**：`HTTPS_PROXY` 指向本地代理时，**打网关的那条路也在走代理**
+> （只把 `localhost` 放进 `NO_PROXY` 是不够的）⇒ 把网关域名也加进 `NO_PROXY`。
+> 实测直连可用且小包更快。⚠ 这条属于**环境**，不是代码。
 | 续跑 | 两者 `answer` 步都会跳过已完成的 id 并以**追加**模式打开输出；`evaluate` 步以 `"w"` **覆盖**打开 |
 
 ---

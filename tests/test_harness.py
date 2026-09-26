@@ -517,3 +517,92 @@ def test_harness_sources_have_no_src_path_hack():
             if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "insert":
                 text = ast.unparse(node)
                 assert "src" not in text, f"{path.name}:{node.lineno}: {text}"
+
+
+# ── 判分步骤的**瞬时故障重试**（2026-09-26 事故）────────────────────────
+def test_run_retries_a_transient_failure(monkeypatch, tmp_path):
+    """瞬时失败要重试，**成功即返回**——不把"抖了一下"升级成"整轮作废"。
+
+    动机是一次真实事故：LongMemEval 那轮跑到第 47 题，判分侧一次 TLS 握手失败就把
+    **两小时的跑批整个打死**。两个子命令都幂等（`answer` 追加并跳过已完成、
+    `evaluate` 覆盖），所以重试是安全的。
+    """
+    from eval.harness import judge
+
+    calls = {"n": 0}
+
+    class _Completed:
+        returncode = 1
+        stdout = ""
+        stderr = "boom"
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _Completed()
+        return type("C", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(judge.subprocess, "run", fake_run)
+    monkeypatch.setattr(judge.time, "sleep", lambda _s: None)  # 别真睡
+
+    judge._run(tmp_path / "p.py", ["answer"], timeout=None)
+    assert calls["n"] == 2  # 第一次失败、第二次成功
+
+
+def test_run_gives_up_after_the_attempt_budget(monkeypatch, tmp_path):
+    """**重试要有界**：真 bug 重试 3 次还是失败 ⇒ 照样抛，错误信息原样带出去。
+
+    "一直失败"绝不能被伪装成"在重试"。
+    """
+    from eval.harness import judge
+
+    calls = {"n": 0}
+
+    class _Completed:
+        returncode = 2
+        stdout = "out"
+        stderr = "err"
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        return _Completed()
+
+    monkeypatch.setattr(judge.subprocess, "run", fake_run)
+    monkeypatch.setattr(judge.time, "sleep", lambda _s: None)
+
+    with pytest.raises(RuntimeError, match="exit 2"):
+        judge._run(tmp_path / "p.py", ["evaluate"], timeout=None)
+    assert calls["n"] == 3
+
+
+def test_drop_trailing_partial_line(tmp_path):
+    """末尾被截断的半行要被丢掉，**完整行一行不动**。
+
+    事故见 `judge._drop_trailing_partial_line` 的 docstring：半行会让 `answer` 步
+    `JSONDecodeError`，而表现是"**卡在同一道题**"（看起来像网络问题）。
+    """
+    from eval.harness import judge
+
+    path = tmp_path / "answers.jsonl"
+    good = '{"id": "a", "generated_answer": "x"}'
+    path.write_text(f'{good}\n{good}\n{{"id": "b", "generated', encoding="utf-8")
+
+    assert judge._drop_trailing_partial_line(path) == 1
+    assert path.read_text(encoding="utf-8") == f"{good}\n{good}\n"
+
+
+def test_drop_trailing_partial_line_keeps_middle_lines(tmp_path):
+    """**只在末尾删**：中途的坏行说明别的问题，不该被静默吞掉。"""
+    from eval.harness import judge
+
+    path = tmp_path / "answers.jsonl"
+    path.write_text('{"id": "a"}\n{坏行\n{"id": "c"}\n', encoding="utf-8")
+
+    assert judge._drop_trailing_partial_line(path) == 0
+    assert "坏行" in path.read_text(encoding="utf-8")
+
+
+def test_drop_trailing_partial_line_noop_without_file(tmp_path):
+    from eval.harness import judge
+
+    assert judge._drop_trailing_partial_line(tmp_path / "nope.jsonl") == 0
