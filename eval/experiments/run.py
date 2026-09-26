@@ -178,6 +178,7 @@ def run_round(
     date_mode: str = "none",
     annotate_mark: str = "paren",
     spread: bool = False,
+    fallback_base_url: str | None = None,
     client: ServiceClient | None = None,
 ) -> tuple[list[Sample], list]:
     """跑一轮的**机制部分**：加载 → 投喂 → 检索 → 裁判。返回 `(samples, results)`。
@@ -193,7 +194,11 @@ def run_round(
         raise ValueError(f"{dataset}：一个 sample 都没加载到——bench_dir={bench_dir} 对吗？")
 
     owns_client = client is None
-    client = client or ServiceClient(base_url)
+    client = client or ServiceClient(
+        base_url,
+        # 超限兜底（只为 B1）：见 `driver.ServiceClient.__init__` 的注释。
+        fallback=ServiceClient(fallback_base_url) if fallback_base_url else None,
+    )
     try:
         results: list = []
         for index, sample in enumerate(samples, start=1):
@@ -312,6 +317,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--reports-dir", default="eval/reports", help="run record 的落点")
     parser.add_argument(
+        "--fallback-base-url",
+        default=None,
+        help=(
+            "**超限兜底**（只为 B1）：主服务返回 5xx 时，改问这个实例（同一个 vendor、"
+            "另一档 RETRIEVAL_MODE）。用过的题数会记进 run record 的 notes"
+        ),
+    )
+    parser.add_argument(
         "--switches", default=None, help="消融臂声明，如 '{\"rerank.enabled\": false}'"
     )
     parser.add_argument("--notes", default="", help="写进 run record 的自由文本")
@@ -360,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
             date_mode=args.memory_date,
             annotate_mark=args.annotate_mark,
             spread=args.spread,
+            fallback_base_url=args.fallback_base_url,
         )
     except httpx.HTTPStatusError as error:
         status = error.response.status_code

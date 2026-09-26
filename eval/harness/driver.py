@@ -53,10 +53,21 @@ class ServiceClient:
         *,
         timeout: float = REQUEST_TIMEOUT_S,
         client: httpx.Client | None = None,
+        fallback: ServiceClient | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._client = client or httpx.Client(timeout=timeout)
         self._owns_client = client is None
+        #: **超限兜底**（2026-09-26，只为 B1）：同一个问题再问一次**另一个实例**。
+        #:
+        #: 动机：ReFind 的 agent 把历次观测累加在对话里、**没有输入 token 预算**，
+        #: 而 LongMemEval 里有 2.3 万字符的长消息 ⇒ 一次观测就可能超过 128k ⇒ 网关 400
+        #: ⇒ **整轮跑批被打死**。它的 `METHOD_CARD` 声明的提交配置里没有预算这一项。
+        #: ⇒ 兜底形态按**项目负责人的指示**做，但**不碰 vendor 代码**：让 harness 换一个
+        #: 「同一个 vendor、另一档 `RETRIEVAL_MODE`」的实例去回答那道题。
+        #: ⚠ 用了兜底就必须在台账里写明口径——**这一臂不再等于"ReFind 原样"**。
+        self._fallback = fallback
+        self.fallback_used = 0
 
     # ── Add ────────────────────────────────────────────────────────────
     def add(
@@ -88,11 +99,24 @@ class ServiceClient:
         ⚠ 缺字段（比如 `created_at`）在 `SearchHit(**item)` 里是 `TypeError`，
         而预检必须把它报成**一条结论**而不是崩掉。所以形状检查走这里。
         """
-        response = self._client.post(
-            f"{self.base_url}/search",
-            json={"user_id": user_id, "query": query, "top_k": top_k},
-        )
-        response.raise_for_status()
+        payload_body = {"user_id": user_id, "query": query, "top_k": top_k}
+        try:
+            response = self._client.post(f"{self.base_url}/search", json=payload_body)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            # 只在**服务端错误**上兜底（4xx 是我们自己的 bug，兜底会把 bug 藏起来）。
+            if self._fallback is None or error.response.status_code < 500:
+                raise
+            self.fallback_used += 1
+            print(
+                f"  ⚠ {self.base_url} 返回 {error.response.status_code} ⇒ "
+                f"**兜底**到 {self._fallback.base_url}（该题）",
+                flush=True,
+            )
+            response = self._fallback._client.post(
+                f"{self._fallback.base_url}/search", json=payload_body
+            )
+            response.raise_for_status()
         payload = response.json()
         data = payload.get("data")
         if not isinstance(data, list):

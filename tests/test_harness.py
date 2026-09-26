@@ -708,3 +708,41 @@ def test_sanitize_jsonl_is_a_noop_on_a_clean_file(tmp_path):
 
     assert judge._sanitize_jsonl(path) == 0
     assert path.read_text(encoding="utf-8") == good
+
+
+# ── 超限兜底（2026-09-26，只为 B1）──────────────────────────────────────
+def _client(base_url, *, status, body=None):
+    """一个用 `MockTransport` 造出来的客户端：**所有请求都回同一个状态码**。"""
+    from eval.harness import ServiceClient
+
+    def handler(request):
+        if status >= 400:
+            return httpx.Response(status, json={"detail": "boom"})
+        return httpx.Response(200, json=body or {"data": []})
+
+    return ServiceClient(
+        base_url,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+
+def test_search_falls_back_only_on_server_errors():
+    """5xx ⇒ 兜底到第二个实例；**4xx 不兜底**（那是我们自己的 bug，兜底会把 bug 藏起来）。"""
+
+    hit = {"id": "x", "content": "c", "created_at": "", "score": 1.0}
+    ok = _client("http://main", status=200, body={"data": [hit]})
+    primary = _client("http://fallback", status=500)
+    primary._fallback = ok  # 主实例 5xx ⇒ 兜底
+
+    assert primary.search_raw(user_id="u", query="q", top_k=1)["data"][0]["id"] == "x"
+    assert primary.fallback_used == 1
+
+    client_4xx = _client("http://main", status=400)
+    client_4xx._fallback = ok
+    with pytest.raises(httpx.HTTPStatusError):
+        client_4xx.search_raw(user_id="u", query="q", top_k=1)
+    assert client_4xx.fallback_used == 0  # ← 4xx 不该兜底
+
+    no_fallback = _client("http://main", status=500)
+    with pytest.raises(httpx.HTTPStatusError):
+        no_fallback.search_raw(user_id="u", query="q", top_k=1)  # 没配兜底 ⇒ 照旧抛
