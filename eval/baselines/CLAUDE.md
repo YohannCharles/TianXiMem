@@ -96,6 +96,42 @@ uv run --env-file .env python -m eval.experiments.run --dataset locomo-refined -
 >
 > 也**不要因为它进了这个目录就给它包 Add/Search 服务**——B1 的隔离边界（下节）是给 MIT 许可、映射确凿的 `refind/` 定的。
 
+### ✅ 2026-09-26：**用户明确授权跑它作参考**（上面那条规则没有失效，是**被显式覆盖一次**）
+
+**决策人：项目负责人**（原话："请你继续跑 InvMem 吧，毕竟也是作为一个参考"）。
+上面四条事实**一条都没变**——它**仍然不是基线**、**仍然不可声称**：台账里它的身份照旧是
+"**候选映射仓库**（第三方推断的映射）"，不是"InvMem"。**引用它时要照旧写"某候选实现"。**
+
+**怎么跑的**（[`../../reports/ledger.md`](../../eval/reports/ledger.md) 有数字）：
+
+```bash
+# 1) 独立 venv（依赖重：torch CPU + sentence-transformers + faiss）
+uv venv /tmp/invmem-venv --python 3.12
+uv pip install --python /tmp/invmem-venv/bin/python torch --index-url https://download.pytorch.org/whl/cpu
+uv pip install --python /tmp/invmem-venv/bin/python -r eval/baselines/invmem-candidate/requirements.txt
+
+# 2) 起它 —— **用我们的启动器**（见下），vendor 代码一行不改
+mkdir -p /tmp/invmem-qwen
+NO_PROXY=127.0.0.1,localhost \
+MEMORY_DB_PATH=/tmp/invmem-qwen/memory.db ALLOW_UNAUTHENTICATED=true PORT=8002 \
+/tmp/invmem-venv/bin/python eval/baselines/serve_invmem_qwen.py
+
+# 3) harness 打它
+uv run --env-file .env python -m eval.experiments.run --dataset locomo-refined --limit 3 \
+  --base-url http://127.0.0.1:8002 --run-id invmem-qwen-3conv \
+  --configs-dir configs/runs/invmem-qwen --profile local
+```
+
+**⚠ 关键：跑的是 [`serve_invmem_qwen.py`](./serve_invmem_qwen.py)，不是它的 `uvicorn`。**
+那个启动器在进程内只换掉 `build_embedder` **一个函数**，把 embedding 换成我们的
+`Qwen3-Embedding-8B`（用户要求：它自带的 `bge-small-en-v1.5` 只有 33M，直接比会把
+"embedding 强弱"混进"管线设计"）——**vendor 依旧保持原样**。
+⇒ 台账里那一行的口径是"**它的管线 + 我们的 embedding**"。
+
+> ⚠ **两条别踩**：① `MEMORY_DB_PATH` **必须指向 /tmp**——它的默认值是仓库内的
+> `artifacts/memory.db`，会用运行时文件污染 vendor 目录；② 别在 vendor 目录里敲
+> `uv run`——那会按**它的** pyproject 解析环境，往 vendor 里拖一个 `.venv` 并开始下 CUDA 轮子。
+
 ---
 
 ## 引用数字的纪律
