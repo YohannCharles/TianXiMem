@@ -41,6 +41,7 @@ from .preprocess import (
     parse_lme_time,
     to_epoch_ms,
 )
+from .sampling import stratified_sample
 
 __all__ = ["load_longmemeval", "LME_JSON", "PIPELINE"]
 
@@ -86,17 +87,27 @@ def _sessions(entry: dict, *, source: Path) -> tuple[Session, ...]:
     return tuple(sessions)
 
 
-def load_longmemeval(bench_dir: str | Path, *, limit: int | None = None) -> list[Sample]:
+def load_longmemeval(
+    bench_dir: str | Path, *, limit: int | None = None, spread: bool = False
+) -> list[Sample]:
     """加载 LongMemEval-S。
 
     `limit` 只给冒烟与调试用（这份文件 277 MB，全量解析要几十秒、几 GB 内存）。
     **正式跑必须不传**——截断的题集会改变分数，而 `registry` 的数据指纹会如实记下
     实际用了几题，所以不留"看起来跑全了"的空间。
+
+    ⚠ **`limit` 与 `spread` 是两件事**：`limit=N` 取**前 N 题**（文件按类型分块 ⇒
+    很可能只有一类）；`spread=True` 才按比例**跨类**取。**"跑一部分"要用后者**
+    ——理由见 [`sampling.py`](./sampling.py)。
     """
     source = Path(bench_dir) / LME_JSON
     entries = json.loads(source.read_text(encoding="utf-8"))
     if limit is not None:
-        entries = entries[:limit]
+        entries = (
+            stratified_sample(entries, limit, key=lambda e: str(e["question_type"]))
+            if spread
+            else entries[:limit]
+        )
 
     samples = []
     for entry in entries:

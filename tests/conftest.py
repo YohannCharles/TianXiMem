@@ -275,7 +275,16 @@ class FakeQdrantSearch:
             }
         )
         ids = self.by_user.get(user_id, [])
-        return [ScoredMemoryId(mid, FUSED_SCORE) for mid in ids[:top_k]]
+        # ⚠ **分数必须严格递减**，与真 Qdrant 的契约一致（融合结果按分数降序返回）。
+        #   给全部命中同一个分数会让"并列次序"进入下游——而 `retrieve/` 现在会按
+        #   `(-score, memory_id)` 定死并列次序（**V13**），于是本夹具声明的顺序会被
+        #   按 id 重排，用例断言的"返回的就是我给的顺序"就不成立了。
+        #   ⇒ 递减分数既忠实于真实现，也让"顺序 = 我给的顺序"这条断言继续有效。
+        #   ⚠ 仍然是**刻意刺眼**的值：它绝不允许出现在响应里（`test_contract.py` 钉着）。
+        return [
+            ScoredMemoryId(mid, FUSED_SCORE - index * FUSED_SCORE_STEP)
+            for index, mid in enumerate(ids[:top_k])
+        ]
 
     def index_pairs(self, pairs, embedder, *, renderer=render_pair, wait=True) -> int:
         """Add 侧只需要这一件事：渲染 → 嵌入（走假 embedder）→ 记下 point。"""
@@ -290,6 +299,10 @@ class FakeQdrantSearch:
 
 #: 一个**刻意刺眼**的"融合分数"——它绝不允许出现在响应里
 FUSED_SCORE = 0.987654321
+
+#: 名次之间那一点递减量——只为让顺序**唯一确定**（见 `hybrid_search` 的注释）。
+#: 取值不影响任何断言：用例只断言"这个刺眼的分数没有出现在响应里"。
+FUSED_SCORE_STEP = 1e-6
 
 
 @dataclass
@@ -336,8 +349,21 @@ def wired_dated(tmp_path) -> Iterator[Wired]:
     yield from _wire(own, inject_abs_time=True)
 
 
-def _wire(tmp_path, *, inject_abs_time: bool) -> Iterator[Wired]:
-    """`wired` / `wired_dated` 的**同一份**装配代码。**不要复制第二份。**"""
+@pytest.fixture
+def wired_annotated(tmp_path) -> Iterator[Wired]:
+    """同 `wired`，但开着**相对时间注解**（`packaging.annotate_relatives=True`）。
+
+    与 `wired_dated` 同一个理由：那条纯度断言（"开关只该改正文"）要**同时跑两臂**逐项比。
+    ⚠ 它**不开** `inject_abs_time`——这两个开关各测各的：本 fixture 要证明的正是
+    "**注解不进索引**"（与 T1 那条相反，T1 的正文**就是** embedding 输入）。
+    """
+    own = tmp_path / "annotated"
+    own.mkdir()
+    yield from _wire(own, inject_abs_time=False, annotate_relatives=True)
+
+
+def _wire(tmp_path, *, inject_abs_time: bool, annotate_relatives: bool = False) -> Iterator[Wired]:
+    """`wired` / `wired_dated` / `wired_annotated` 的**同一份**装配代码。**不要复制第二份。**"""
     config = AppConfig(
         # 不传 env ⇒ 不碰真实环境；只给必需的那几项，其余走 config.py 的内置默认值
         storage=StorageConfig(
@@ -367,6 +393,7 @@ def _wire(tmp_path, *, inject_abs_time: bool) -> Iterator[Wired]:
         counter=counter,
         budget_tokens=budget_tokens,
         inject_abs_time=inject_abs_time,
+        annotate_relatives=annotate_relatives,
     )
     services.add = AddPipeline(
         store=services.store,

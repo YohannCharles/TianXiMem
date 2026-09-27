@@ -18,8 +18,8 @@
 
 | 状态 | 模块 |
 | --- | --- |
-| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）、**`config.py`**（**全包唯一读环境变量的地方**，③-d）与 **`tokens.py`**（`o200k_base` 计数，§6.4）· [`retrieve/`](src/tianxi_am/retrieve/)（**策略与参数所有权** + §8 判据 + `dedup_candidates`）· [`rank/`](src/tianxi_am/rank/) 的 **`reranker.py`**（**远端精排接入**）、**`neighbor.py`**（**扩窗 + 段合并**，§10/§11.2）与 **`packaging.py`**（**段级打包 + 双预算**）· [`service/`](src/tianxi_am/service/)（HTTP 层 + **Add/Search 端到端编排**，③-c + **`GET /health` 探活**，S4）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）· [`eval/datasets/`](eval/datasets/)（**加载层 + schema 落差预处理**）· [`eval/harness/`](eval/harness/)（**HTTP 驱动 / 切批 / 裁判包装 / run record + `api_config.py`**）· [`eval/reports/schema.py`](eval/reports/schema.py)（**run record 的形状**）· [`tools/check_env.py`](tools/check_env.py)（**环境自检，含 V7 探针**）、[`tools/probe_reranker.py`](tools/probe_reranker.py)（**精排探针**）与 [`tools/t2_retrieval_dump.py`](tools/t2_retrieval_dump.py)（**T2 的纯 BM25 转储**）· [`eval/experiments/`](eval/experiments/)（**通用 runner `run.py` + T1/T2/A3 三个 arm**）· [`eval/reports/ledger.md`](eval/reports/ledger.md)（**结果台账**）· [`configs/runs/`](configs/runs/)（**各 arm 的冻结配置**）——测试在 [`tests/`](tests/) |
-| ⬜ **未实现** | [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `embed/` 的 `text_embedding_v4.py` · `configs/submit.yaml` · **`eval/` 还没写的**：`datasets/contracts.py`、`experiments/` 的 **A4/A0 两个 arm**、`baselines/`（**含 B1 包装 ReFind**）、`smoke/` 的 S1/S2/S3 探针与 `quota.py` · 尚未接线的消融开关（**逐项状态以 [`docs/config-reference.md`](docs/config-reference.md) §2 的表为准**——`checker.*` / `agent.*` / `rrf` 未接，`neighbor` 只有 `radius` 可关） |
+| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（配对 / 续接三步 / 计数器）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）、**`annotate.py`**（**相对时间就地注解**，只改 `content`、不碰索引，**D22**）、**`config.py`**（**全包唯一读环境变量的地方**，③-d）与 **`tokens.py`**（`o200k_base` 计数，§6.4）· [`retrieve/`](src/tianxi_am/retrieve/)（**策略与参数所有权** + §8 判据 + `dedup_candidates`）· [`rank/`](src/tianxi_am/rank/) 的 **`reranker.py`**（**远端精排接入**）、**`neighbor.py`**（**扩窗 + 段合并**，§10/§11.2）与 **`packaging.py`**（**段级打包 + 双预算**）· [`service/`](src/tianxi_am/service/)（HTTP 层 + **Add/Search 端到端编排**，③-c + **`GET /health` 探活**，S4）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）· [`eval/datasets/`](eval/datasets/)（**加载层 + schema 落差预处理**）· [`eval/harness/`](eval/harness/)（**HTTP 驱动 / 切批 / 裁判包装 / run record + `api_config.py` + `annotate.py` 注解原型**）· [`eval/reports/schema.py`](eval/reports/schema.py)（**run record 的形状**）· [`tools/check_env.py`](tools/check_env.py)（**环境自检，含 V7 探针**）、[`tools/probe_reranker.py`](tools/probe_reranker.py)（**精排探针**）、[`tools/t2_retrieval_dump.py`](tools/t2_retrieval_dump.py)（**T2 的纯 BM25 转储**）与 [`tools/reindex.py`](tools/reindex.py)（**从 SQLite 全量重建 Qdrant**）· [`eval/experiments/`](eval/experiments/)（**通用 runner `run.py` + T1/T2/A3 三个 arm**）· [`eval/reports/ledger.md`](eval/reports/ledger.md)（**结果台账**）· [`configs/runs/`](configs/runs/)（**各 arm 的冻结配置**）——测试在 [`tests/`](tests/) |
+| ⬜ **未实现** | [`llm/`](src/tianxi_am/llm/) · [`observability/`](src/tianxi_am/observability/) · `embed/` 的 `text_embedding_v4.py` · `configs/submit.yaml` · **`eval/` 还没写的**：`datasets/contracts.py`、`experiments/` 的 **A4/A0 两个 arm**、`baselines/`（**两个参考实现的代码已 Vendor 就位，B1 包装仍未做**——[`refind/`](eval/baselines/refind/) 是 MIT 的 B1，[`invmem-candidate/`](eval/baselines/invmem-candidate/) **只读、不是基线**）、`smoke/` 的 S1/S2/S3 探针与 `quota.py` · 尚未接线的消融开关（**逐项状态以 [`docs/config-reference.md`](docs/config-reference.md) §2 的表为准**——`checker.*` / `agent.*` / `rrf` 未接，`neighbor` 只有 `radius` 可关） |
 | ⛔ **v1 不做** | [`agent/`](src/tianxi_am/agent/)（D13） |
 
 > **⚠ 状态描述是本仓最易过期的东西**：改动状态时，**连同搜一遍所有声称"未实现 / 未开始"的地方**——本表是唯一权威，别处只应指回这里。
@@ -38,6 +38,7 @@
 | 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（D1–D20 + 待决事项） |
 | 跑对照实验 | [`docs/experiments.md`](docs/experiments.md)（协议）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（怎么跑） |
 | 数据集加载 / harness | [`docs/benchmark-data.md`](docs/benchmark-data.md) + [`eval/datasets/CLAUDE.md`](eval/datasets/CLAUDE.md) |
+| 读参考实现（InvMem / ReFind 的代码——**代码在哪、什么别学**） | [`docs/reference-implementations.md`](docs/reference-implementations.md) |
 | **取回 / 校验 `benchmark_data/`**（新机器、数据缺了、要确认手上的是不是同一份） | [`docs/benchmark-data.md`](docs/benchmark-data.md) 的"出处链" + **"本地修订"**（7 个 pipeline 有一处已声明的偏离：上游那份跑不起来）+ [`tools/fetch_benchmark_data.py`](tools/fetch_benchmark_data.py)。`make fetch-data` / `make data-check` / `make data-patch` |
 | 提交周期与截止日 | [`docs/submission.md`](docs/submission.md) §0（**第二期 09-20 已开，材料截止 10-31**） |
 | 发 Smoke / Full | [`docs/submission.md`](docs/submission.md)（配额与版本冻结） |
@@ -77,11 +78,36 @@
 
 **两者互换都会静默出错。** 缓存**必须落盘**，且要能在 Step 5 切模型时整体失效（§7.2 / §12.1 R1）。
 
-### 时间处理：不要在 content 里注入绝对时间戳前缀
+### 时间处理：**content 里带日粒度会话日期，但绝不许出现秒级**（D21）
 
-裁判 prompt 的 TIME 块有**两条独立规则**都会因此判负：**粒度变细**（DAY → Second，与 gold 是否相对无关）、**相对↔绝对互转**。而答案 prompt 第 7 条**却要求**转换相对时间——所以加绝对时间戳**可能反而有害**（§11.3）。
+> ⛔ **2026-09-25 起这条规则被 D21 推翻**（原文保留以存档当时的判断）：
+> ~~裁判 prompt 的 TIME 块有**两条独立规则**都会因此判负：**粒度变细**、**相对↔绝对互转**，
+> 所以加绝对时间戳**可能反而有害**（§11.3）。~~
+>
+> **实测反例**（3 段 346 题，[`eval/reports/ledger.md`](eval/reports/ledger.md)）：日期**写在段首**毫无作用，
+> 写到**每一对旁边**后 multi-hop +8.9pt、temporal +3.5pt，整体 0.601 → **0.633**。机制：LoCoMo-Refined
+> 的时间 gold 是**锚定式相对**形式（`The Friday before 22 October 2023`），模型只有把锚点放在那句话**旁边**
+> 才会接上去（答成 `Last Friday (relative to March 6, 2023)`）。
+>
+> **新规则（两条边界照旧）**：
+>
+> 1. **粒度**：正文前缀**只给到日**（`[2023-10-22]`）——**秒级绝不许出现**（那正是「粒度变细」判负的来源；
+>    [`preflight`](eval/smoke/preflight.py) 有检查钉着，**不许放宽**）。
+>    ⛔ **也别加星期**：试过（`2023-10-22 Sun`），整体 −3.2pt 且三段全降，见 **D21**；
+> 2. **相对↔绝对**：原文的相对表述**原样保留**，日期是**额外锚点**，不是替换。
+>
+> **代价**：正文变了 ⇒ embedding 输入也变 ⇒ **整个向量索引要重建**（[`tools/reindex.py`](tools/reindex.py)）。
+> **边界**：证据只来自 LoCoMo-Refined 3 段；其余四份数据集契约不同（BEAM 的时间规则甚至相反），**不要外推**。
+>
+> **`created_at` 照旧**：必须带、只给到日粒度（如 `2026-07-26`），**不带星期**——CL-Bench 那条路径靠它渲染时间。
 
-推论：**筛选走 `event_time` 列；正文只保留原始时间表述。** 但 **`created_at` 必须带，且只给到日粒度**（如 `2026-07-26`）——CL-Bench 那条路径靠它渲染时间，而秒级粒度会诱发模型按秒级回答。
+> **2026-09-26 再加一层（D22）：正文里的相对时间就地注解成绝对日期**——
+> `last Tues` → `last Tues (July 18, 2023)`，**原文一字不动**（同一份 D21 口径：日期是额外锚点）。
+> 它把答案 prompt 第 7 条**要求模型做的那步日历换算替它做掉**，而**只改 `content`、不进索引**
+> ⇒ **不用重建索引**（这是它与上面那条日期前缀的根本区别）。
+> 实测 3 段 346 题：temporal **0.200 → 0.800**、overall 0.639 → **0.795**（逐题赢 58 / 输 4；
+> 只看"两臂检索逐字相同"的 321 道，赢 51 / 输 4）。⚠ **它替模型做的正是模型最弱的一步**
+> ⇒ Step 5 换 `gpt-4o-mini` 后**必须重测这一类**。开关：`packaging.annotate_relatives`（默认 `true`）。
 
 > 这条来自 LoCoMo-Refined / LongMemEval 共用的契约，**不是全赛道规则**：BEAM 的裁判正好相反（允许等价形式），CL-Bench 由 AML 侧主动注入时间戳。**代理评测按"不加"执行，但不要外推。**
 
@@ -130,7 +156,7 @@
 - **数字只住在 [`eval/reports/`](eval/reports/)**——其余文档引用数字时**指回去**，不要复制。
 - **单数来源**：一条约束只有一个家。写了第二遍就是漂移的开始——发现重复，改成指针。
 - **配置化 ≠ 可调**。`rrf.k = 61` 与 `top_k = 100` 都是**正确性常量**，写进配置是为了追溯与切换，**不是为了调**。
-- **编号纪律**：`S1`–`S3` 属 §17.1、`P1`–`P3` 属 §17.3、`R1` 属 §12.1、`E1`–`E7` 属 §17.2（**E2 已随 D15 删除，该号不再启用**），**不要挪作他用**；Step 5 专属事项用 `S5-*`。
+- **编号纪律**：`S1`–`S3` 属 §17.1（**`S4`–`S7` 是按同一系列增补的**，逐条出处见 [`docs/open-questions.md`](docs/open-questions.md)——**别以为 `S4+` 是空的**）、`P1`–`P3` 属 §17.3、`R1` 属 §12.1、`E1`–`E7` 属 §17.2（**E2 已随 D15 删除，该号不再启用**），**不要挪作他用**；Step 5 专属事项用 `S5-*`。
 - **任何"顺手在写入时抽个摘要 / 抽事实 / 归并实体"的想法都属于 v2**——它会同时破坏 Add 侧的成本属性与 §11.3 的"原文优先"（v1 不产生任何合成文本）。
 
 ```bash

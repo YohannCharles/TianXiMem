@@ -517,3 +517,268 @@ def test_harness_sources_have_no_src_path_hack():
             if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "insert":
                 text = ast.unparse(node)
                 assert "src" not in text, f"{path.name}:{node.lineno}: {text}"
+
+
+# ── 判分步骤的**瞬时故障重试**（2026-09-26 事故）────────────────────────
+def test_run_retries_a_transient_failure(monkeypatch, tmp_path):
+    """瞬时失败要重试，**成功即返回**——不把"抖了一下"升级成"整轮作废"。
+
+    动机是一次真实事故：LongMemEval 那轮跑到第 47 题，判分侧一次 TLS 握手失败就把
+    **两小时的跑批整个打死**。两个子命令都幂等（`answer` 追加并跳过已完成、
+    `evaluate` 覆盖），所以重试是安全的。
+    """
+    from eval.harness import judge
+
+    calls = {"n": 0}
+
+    class _Completed:
+        returncode = 1
+        stdout = ""
+        stderr = "boom"
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _Completed()
+        return type("C", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(judge.subprocess, "run", fake_run)
+    monkeypatch.setattr(judge.time, "sleep", lambda _s: None)  # 别真睡
+
+    judge._run(tmp_path / "p.py", ["answer"], timeout=None)
+    assert calls["n"] == 2  # 第一次失败、第二次成功
+
+
+def test_run_gives_up_after_the_attempt_budget(monkeypatch, tmp_path):
+    """**重试要有界**：真 bug 重试 3 次还是失败 ⇒ 照样抛，错误信息原样带出去。
+
+    "一直失败"绝不能被伪装成"在重试"。
+    """
+    from eval.harness import judge
+
+    calls = {"n": 0}
+
+    class _Completed:
+        returncode = 2
+        stdout = "out"
+        stderr = "err"
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        return _Completed()
+
+    monkeypatch.setattr(judge.subprocess, "run", fake_run)
+    monkeypatch.setattr(judge.time, "sleep", lambda _s: None)
+
+    with pytest.raises(RuntimeError, match="exit 2"):
+        judge._run(tmp_path / "p.py", ["evaluate"], timeout=None)
+    assert calls["n"] == 3
+
+
+def test_sanitize_jsonl_tmp_path(tmp_path):
+    """末尾被截断的半行要被丢掉，**完整行一行不动**。
+
+    事故见 `judge._sanitize_jsonl` 的 docstring：半行会让 `answer` 步
+    `JSONDecodeError`，而表现是"**卡在同一道题**"（看起来像网络问题）。
+    """
+    from eval.harness import judge
+
+    path = tmp_path / "answers.jsonl"
+    good = '{"id": "a", "generated_answer": "x"}'
+    path.write_text(f'{good}\n{good}\n{{"id": "b", "generated', encoding="utf-8")
+
+    assert judge._sanitize_jsonl(path) == 1
+    assert path.read_text(encoding="utf-8") == f"{good}\n{good}\n"
+
+
+def test_sanitize_jsonl_keeps_middle_lines(tmp_path):
+    """**只在末尾删**：中途的坏行说明别的问题，不该被静默吞掉。"""
+    from eval.harness import judge
+
+    path = tmp_path / "answers.jsonl"
+    path.write_text('{"id": "a"}\n{坏行\n{"id": "c"}\n', encoding="utf-8")
+
+    assert judge._sanitize_jsonl(path) == 0
+    assert "坏行" in path.read_text(encoding="utf-8")
+
+
+def test_sanitize_jsonl_noop_without_file(tmp_path):
+    from eval.harness import judge
+
+    assert judge._sanitize_jsonl(tmp_path / "nope.jsonl") == 0
+
+
+def test_jsonl_line_survives_the_archives_splitlines_reader(tmp_path):
+    """正文里的 `U+2028` 不能让那一行被劈开——**归档是按 `splitlines()` 读的**。
+
+    事故见 `judge._jsonl_line` 的 docstring：LongMemEval 那轮有 1 个席位的正文含
+    `U+2028`，`json.dumps(ensure_ascii=False)` 不转义它、而 `splitlines()` 照断 ⇒
+    那一行被劈成两半 ⇒ `JSONDecodeError: Unterminated string` ⇒ **卡在同一道题**，
+    却看起来像网络问题（实测耗掉一小时，11 次续跑全死在同一题）。
+    """
+    from eval.harness import judge
+
+    for sep in (" ", " ", "\x85"):
+        item = {"id": "q1", "speaker_1_memories": f"before{sep}after", "gold_answer": "x"}
+        path = tmp_path / "input.jsonl"
+        path.write_text(judge._jsonl_line(item), encoding="utf-8")
+
+        # ① 用**归档的读法**读回来：一行一项，且语义一字不变
+        parsed = [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert parsed == [item], repr(sep)
+
+        # ② 反面证据：不转义就会被劈开 —— 这条断言钉的就是那个 bug 本身
+        assert len(json.dumps(item, ensure_ascii=False).splitlines()) == 2, repr(sep)
+
+
+def test_readers_split_on_newline_not_splitlines(tmp_path):
+    """**按写它的方式读**：`answers.jsonl` 里出现 `U+2028` 时不能被 `splitlines()` 劈开。
+
+    这个文件是**归档**写的（`json.dumps(..., ensure_ascii=False) + "\\n"`），我们只读。
+    ⇒ 读法必须与写法一致，否则一条记录会被看成两条，而**不会报错**——
+    表现是"答案对不上号"。
+    """
+
+    answer = "He said: first;  second"
+    path = tmp_path / "answers.jsonl"
+    path.write_text(
+        json.dumps({"id": "q1", "generated_answer": answer}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 3  # ← 反面证据：劈成 3 行
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").split("\n")
+        if line.strip()
+    ]
+    assert rows == [{"id": "q1", "generated_answer": answer}]
+
+
+def test_sanitize_jsonl_treats_a_u2028_line_as_one_record(tmp_path):
+    """一条**完整**记录不能因为含 `U+2028` 就被当成"坏的"丢掉——那会白重生成一次。
+
+    正确处置是**就地转义**（语义不变），而不是删。⚠ 它自己也得按 `"\n"` 切：
+    用 `splitlines()` 的话，这一条会被看成两条坏的。
+    """
+    from eval.harness import judge
+
+    path = tmp_path / "answers.jsonl"
+    line = json.dumps({"id": "a", "generated_answer": "x y"}, ensure_ascii=False)
+    path.write_text(f"{line}\n", encoding="utf-8")
+
+    assert judge._sanitize_jsonl(path) == 1  # 转义 1 行（**不是**丢掉）
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "id": "a",
+        "generated_answer": "x y",
+    }
+
+def test_sanitize_jsonl_escapes_a_line_that_would_be_split(tmp_path):
+    """**归档自己写的行**里若带 `U+2028`，也要在它读之前转义掉。
+
+    这是我们控制不了写入侧时的唯一办法：`answers.jsonl` 由归档写、又由它自己的
+    `rows()`（`splitlines()`）读 ⇒ 一旦**模型生成的答案**里带 `U+2028`，
+    **归档会在下一次续跑时崩在自己写的文件上**，而"丢半行"救不了（那行解析得通）。
+    """
+    from eval.harness import judge
+
+    path = tmp_path / "answers.jsonl"
+    path.write_text(
+        json.dumps({"id": "q1", "generated_answer": "a b"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    assert judge._sanitize_jsonl(path) == 1  # 改了 1 行
+    text = path.read_text(encoding="utf-8")
+    assert len(text.splitlines()) == 1, "还是会被劈行"
+    assert json.loads(text) == {"id": "q1", "generated_answer": "a b"}  # 语义一字不变
+
+
+def test_sanitize_jsonl_is_a_noop_on_a_clean_file(tmp_path):
+    from eval.harness import judge
+
+    path = tmp_path / "answers.jsonl"
+    good = json.dumps({"id": "a", "generated_answer": "x"}, ensure_ascii=False) + "\n"
+    path.write_text(good, encoding="utf-8")
+
+    assert judge._sanitize_jsonl(path) == 0
+    assert path.read_text(encoding="utf-8") == good
+
+
+# ── 超限兜底（2026-09-26，只为 B1）──────────────────────────────────────
+def _client(base_url, *, status, body=None):
+    """一个用 `MockTransport` 造出来的客户端：**所有请求都回同一个状态码**。"""
+    from eval.harness import ServiceClient
+
+    def handler(request):
+        if status >= 400:
+            return httpx.Response(status, json={"detail": "boom"})
+        return httpx.Response(200, json=body or {"data": []})
+
+    return ServiceClient(
+        base_url,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+
+def test_search_falls_back_only_on_server_errors():
+    """5xx ⇒ 兜底到第二个实例；**4xx 不兜底**（那是我们自己的 bug，兜底会把 bug 藏起来）。"""
+
+    hit = {"id": "x", "content": "c", "created_at": "", "score": 1.0}
+    ok = _client("http://main", status=200, body={"data": [hit]})
+    primary = _client("http://fallback", status=500)
+    primary._fallback = ok  # 主实例 5xx ⇒ 兜底
+
+    assert primary.search_raw(user_id="u", query="q", top_k=1)["data"][0]["id"] == "x"
+    assert primary.fallback_used == 1
+
+    client_4xx = _client("http://main", status=400)
+    client_4xx._fallback = ok
+    with pytest.raises(httpx.HTTPStatusError):
+        client_4xx.search_raw(user_id="u", query="q", top_k=1)
+    assert client_4xx.fallback_used == 0  # ← 4xx 不该兜底
+
+    no_fallback = _client("http://main", status=500)
+    with pytest.raises(httpx.HTTPStatusError):
+        no_fallback.search_raw(user_id="u", query="q", top_k=1)  # 没配兜底 ⇒ 照旧抛
+
+
+def test_injection_is_capped_at_the_platform_prefix(monkeypatch):
+    """**平台的答案阶段是"取 117,760 token 前缀"**——harness 要自己模拟。
+
+    为什么：我们自己的服务守预算，**基线不一定**。实测 ReFind 在 LongMemEval 上有一题
+    返回 **897,838 字符**（≈22–30 万 token）⇒ 判分提示爆 128k ⇒ 网关 400 ⇒ 整轮被打死。
+    而平台会替它截断 ⇒ 正确的模拟是"截前缀"，不是"让整轮炸掉"。
+    """
+    from eval.harness import judge
+
+    small = "hello world"
+    assert judge.truncate_to_platform_prefix(small) == (small, False)
+
+    huge = "word " * 200_000  # 远超 117,760 token
+    text, cut = judge.truncate_to_platform_prefix(huge)
+    assert cut is True
+    assert judge._encoder().encode(text).__len__() <= judge.PLATFORM_TOKEN_PREFIX
+    assert huge.startswith(text)  # ★ 是**前缀**，不是重排、不是摘要
+
+
+def test_build_input_items_reports_truncation(monkeypatch, capsys):
+    """截断要在跑批时**可见**（打印一行），否则"这一题的上下文少了一截"没人知道。"""
+    from eval.harness import judge
+    from eval.harness.driver import SearchHit
+
+    monkeypatch.setattr(
+        judge, "truncate_to_platform_prefix", lambda text: (text[:10], True)
+    )
+    hit = SearchHit(id="a", content="Q: x\nA: y" * 100, created_at="", score=1.0)
+    question = type("Q", (), {"qid": "q1", "question": "?", "gold": "g"})()
+    sample = type(
+        "S", (), {"questions": [question], "speaker_names": ("A", "B"), "dataset": "locomo-refined"}
+    )()
+    judge.build_input_items(sample, {"q1": [hit]})
+    assert "被截到平台前缀" in capsys.readouterr().out

@@ -220,6 +220,8 @@ class SearchPipeline:
         radius: int = DEFAULT_RADIUS,
         reranker: Reranker | None = None,
         inject_abs_time: bool = False,
+        seed_placement: str = "keep",
+        annotate_relatives: bool = False,
     ) -> None:
         self._store = store
         self._qdrant = qdrant
@@ -234,6 +236,14 @@ class SearchPipeline:
         #: 精排的输入文本（`_maybe_rerank`）与最终的 `content`（`merge_segments` 逐对渲染）。
         #: 漏掉任何一处 ⇒ 与索引侧的渲染分叉，**而分叉不报错**（不变式 I1）。
         self._inject_abs_time = inject_abs_time
+        #: 段内顺序（§11.2 的"组内顺序"，明文列为可消融项）。
+        #: **只影响正文怎么排**——`id` / 段数 / 锚点 / `best_rank` 一个都不动。
+        self._seed_placement = seed_placement
+        #: 正文里的相对时间就地注解成绝对日期（`packaging.annotate_relatives`）。
+        #: ⚠ **只在 `content` 这一条路上生效**——精排输入与索引侧仍是 `render_pair`，
+        #: 所以开它**不改 embedding 输入**（不用重建索引）。理由与实测见
+        #: [`neighbor.py`](../rank/neighbor.py) 的 `_build_segment`。
+        self._annotate_relatives = annotate_relatives
         #: 诊断计数（§14）。**不进响应**——响应的形状是契约，一个字段都不能多。
         self.rerank_calls = 0
         self.rerank_degraded = 0
@@ -276,7 +286,11 @@ class SearchPipeline:
             ranked, store=self._store, seed_limit=self._seed_limit, radius=self._radius
         )
         segments = merge_segments(
-            expansion.selected, counter=self._counter, inject_abs_time=self._inject_abs_time
+            expansion.selected,
+            counter=self._counter,
+            inject_abs_time=self._inject_abs_time,
+            seed_placement=self._seed_placement,
+            annotate_relatives=self._annotate_relatives,
         )
 
         # ⑦ 预算 + 打包（段是原子单位；`top_k` 约束的是**段数**）

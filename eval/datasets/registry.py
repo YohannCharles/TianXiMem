@@ -30,6 +30,7 @@ import hashlib
 import os
 from pathlib import Path
 
+from .clbench import CLBENCH_JSONL
 from .locomo import QUESTIONS_JSONL, conversation_file
 from .longmemeval import LME_JSON
 
@@ -61,7 +62,9 @@ def _sources(bench_dir: Path, dataset: str) -> list[Path]:
         return [bench_dir / QUESTIONS_JSONL, conversation_file(bench_dir)]
     if dataset == "longmemeval-s":
         return [bench_dir / LME_JSON]
-    raise ValueError(f"未知数据集 {dataset!r}——只有 locomo-refined / longmemeval-s 是计分数据集")
+    if dataset == "clbench":
+        return [bench_dir / CLBENCH_JSONL]
+    raise ValueError(f"未知数据集 {dataset!r}——没有登记源文件")
 
 
 def data_fingerprint(

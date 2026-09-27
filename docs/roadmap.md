@@ -151,9 +151,11 @@
 - [x] **渲染模板定稿为 `v1`**：`Q: {q}` / `A: {a}`，**正文不含任何绝对时间戳**（§11.3）。
       声明处是 [`../src/tianxi_am/rank/CLAUDE.md`](../src/tianxi_am/rank/CLAUDE.md) §4；实现是 [`../src/tianxi_am/common/render.py`](../src/tianxi_am/common/render.py)。
       ⚠ **「定稿」不等于「不可推翻」**：推翻它要付「重建索引」的钱，而 T1 就是那笔钱的用途
-- [ ] **跑 T1 实验**（§13），与 `created_at` 粒度那条同批测（§11.3）
-      🟡 **脚手架已就位**：开关 `packaging.inject_abs_time`（默认 `false`）+ 两臂冻结快照 `configs/runs/t1-{plain,dated}/`。
-      **两臂必须跑在两个集合上**（正文变了 ⇒ 向量也变）。`make t1`：不加参数只打印计划，`--freeze` 冻结快照、`--execute` 两臂开跑、`--compare` 比结果
+- [x] **跑 T1 实验**（§13），与 `created_at` 粒度那条同批测（§11.3）—— ✅ **2026-09-25 已跑**
+      结论：日期写**段首**无效、写**每一对旁边**有效（multi-hop +8.9pt / temporal +3.5pt，整体 0.601 → **0.633**）
+      ⇒ **`packaging.inject_abs_time` 默认改为 `true`**（**D21**，推翻 §11.3 的「不加」），代价是**索引重建**（`tools/reindex.py`）。
+      明细见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)；两臂快照 `configs/runs/t1-{plain,dated}/`
+      （`make t1`：不加参数只打印计划，`--freeze` 冻结、`--execute` 开跑、`--compare` 比结果）
 - [x] `created_at` 只给日粒度；`event_time` 为 NULL 时发 `""`（§11.3）——固定 UTC，无旋钮
       ⚠ **粒度变细 / 相对↔绝对那两条规则仍属 T1 的待验证项**，落地的只是"发日期、不发秒"
 
@@ -186,7 +188,7 @@
 
 ## Step 6 — 对照实验 + Smoke + Full 定稿
 
-- [ ] 跑完 §13 全部对照（含 **B1**——**先估包装 ReFind 的工作量**，它未计入任何 Step）
+- [ ] 跑完 §13 全部对照（**B1 已跑**：agent 模式 3 段 346 题，我们领先 +29.5pt；**还剩 A0/A4/T2**）
 - [ ] **Smoke 验证契约合规**
 - [ ] **Smoke 跑通后第一件事：设计 S1 的判别实验**（§17.1）
 - [ ] **Full 定稿**——每 Key 每轨道 **2 次**，第二次隔 30 天；**一旦接受即版本冻结**
@@ -197,5 +199,5 @@
 
 | 项 | 说明 |
 | --- | --- |
-| **B1 包装 ReFind** | ReFind 是**方法实现**，要进我们的 harness，得**给它包一层 Add/Search 服务**（或把它的检索器接到我们的 harness 接口上）。**这部分工作量目前未计入任何 Step**（§13） |
+| ~~**B1 包装 ReFind**~~ | ✅ **已估（2026-09-26）：不用包装**——ReFind 自带 AML 兼容的 `/add` `/search` ⇒ 起它、把 `--base-url` 指过去即可。**剩余成本是它的 agentic 检索**（每 query ≈ 6 秒） |
 | **Step 0 的 schema 预处理层** | 数据集与 pipeline 之间存在落差，**不是"读个 JSON 就能跑"**（§12.3 第 9 条） |

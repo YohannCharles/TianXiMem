@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Final
 
 # ── 模板版本 ────────────────────────────────────────────────────────────
@@ -49,6 +49,18 @@ _DATE_FORMAT: Final[str] = "%Y-%m-%d"
 DATE_PREFIX: Final[str] = "[{date}] "
 
 
+def event_day(event_time: int | None) -> date | None:
+    """Unix 毫秒 → `date`（**UTC 口径**）；`None` → `None`。
+
+    **时间换算只此一处**：`day_granularity`（要字符串）与
+    [`annotate`](./annotate.py)（要 `date` 做日历算术）都从这里走。
+    两条各写一份换算，早晚会在时区或取整上分叉——而**分叉不报错，只会差一天**。
+    """
+    if event_time is None:
+        return None
+    return datetime.fromtimestamp(event_time / 1000, tz=UTC).date()
+
+
 def day_granularity(event_time: int | None) -> str:
     """Unix 毫秒 → `YYYY-MM-DD`（**UTC 口径**）；`None` → **空串 `""`**。
 
@@ -66,20 +78,21 @@ def day_granularity(event_time: int | None) -> str:
     * **时区固定 UTC、无旋钮**：契约没规定时区，而它必须与加载层合成 `event_time` 时的
       口径一致——不一致会让日期整体偏一天，**且不报错**
     """
-    if event_time is None:
-        return ""
-    return datetime.fromtimestamp(event_time / 1000, tz=UTC).strftime(_DATE_FORMAT)
+    day = event_day(event_time)
+    return "" if day is None else day.strftime(_DATE_FORMAT)
 
 
 def render_date(event_time: int | None, *, inject_abs_time: bool) -> str:
-    """**T1 的开关落点**（`packaging.inject_abs_time`，config-reference §2）。
+    """正文前缀里的日期串（`packaging.inject_abs_time`，见 **D21**）。
 
-    * `inject_abs_time=False`（**v1 定稿，默认**）⇒ `""`：正文里**没有任何绝对时间**
-      （§11.3 的两条独立机制）
-    * `True` ⇒ 日粒度日期串，`render()` 把它作为前缀加在正文前
+    * `inject_abs_time=False` ⇒ `""`：正文里不带任何时间（旧口径，仍可作消融臂）
+    * `True`（**2026-09-25 起默认**）⇒ **日粒度日期**，如 `2023-10-22`
 
-    ⚠ **它只是个"取不取那个串"的开关，不改变日期口径**——口径只有 `day_granularity`
-    一处。把开关做成"换一种日期格式"会让 T1 的两臂同时在两个维度上不同。
+    ⚠ **只给到"日"**：`created_at` 与它同口径（契约 §3 要求日粒度）；**秒级绝不许出现**
+    （那会踩裁判的「粒度变细」，`preflight` 有检查钉着）。
+
+    ⛔ **星期试过，更差**（2026-09-25）：`[2023-10-22 Sun]` 让整体 0.633 → 0.601、三段全降，
+    而对"某星期几之前"那 29 道 gold **一道没救回来** ⇒ 已撤回。**不要再加回星期。**
     """
     return day_granularity(event_time) if inject_abs_time else ""
 
@@ -169,6 +182,7 @@ __all__ = [
     "SEGMENT_SEP",
     "TEMPLATE_VERSION",
     "day_granularity",
+    "event_day",
     "render",
     "render_date",
     "render_pair",

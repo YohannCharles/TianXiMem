@@ -153,7 +153,7 @@ def test_switches_must_be_a_json_object():
 def test_run_round_ingests_searches_and_judges(bench_dir, tmp_path, monkeypatch):
     """一轮的完整形状：**先 Add 后 Search**、每题一次 `top_k=100`、裁判落在 per-user 目录。"""
     recorder = _Recorder()
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
 
     samples, results = runner.run_round(
         dataset="locomo-refined",
@@ -184,7 +184,7 @@ def test_run_round_ingests_searches_and_judges(bench_dir, tmp_path, monkeypatch)
 def test_run_round_skips_ingest_when_asked(bench_dir, tmp_path, monkeypatch):
     """`--skip-ingest` 只掉 Add，**Search 一次都不能少**——少检索就是静默漏题。"""
     recorder = _Recorder()
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
 
     runner.run_round(
         dataset="locomo-refined",
@@ -227,7 +227,7 @@ def test_main_returns_precondition_code_when_service_is_unreachable(
     会把任意 localhost 端口接成 **502**（不是拒绝连接），那样写出来的用例**换台机器就变**。
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     monkeypatch.setattr(runner, "ServiceClient", _exploding_client)
     _pretend_judge_is_configured(monkeypatch)
 
@@ -245,7 +245,7 @@ def test_main_writes_a_record_that_carries_the_fingerprints(bench_dir, tmp_path,
     """
     recorder = _Recorder()
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     monkeypatch.setattr(runner, "ServiceClient", lambda *a, **kw: recorder.client())
     _pretend_judge_is_configured(monkeypatch)
     reports = tmp_path / "reports"
@@ -295,7 +295,7 @@ def test_main_fails_before_running_when_the_judge_is_not_configured(
     ⇒ 少了 `--env-file` 时 Add/Search 会**全部正常跑完**，然后才在裁判那一步炸。
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit: [_sample()])
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     monkeypatch.setattr(runner, "judge_preconditions", lambda: ["AML_BASE_URL", "AML_MODEL"])
 
     def _never(*_a, **_kw):  # pragma: no cover —— 走到这里就说明检查没拦住
@@ -308,6 +308,176 @@ def test_main_fails_before_running_when_the_judge_is_not_configured(
     assert code == runner.EXIT_PRECONDITION_FAILED
     err = capsys.readouterr().err
     assert "AML_BASE_URL" in err and "--env-file" in err
+
+
+# ── 记忆注入里的日期锚点（S1 的第二条假设，2026-09-25）──
+def test_date_prefix_matches_the_one_in_src():
+    """harness 里的 `DATE_PREFIX` 与 `src` 里那份**必须逐字相同**。
+
+    harness 不许 import `src/`（AST 钉着），所以这个常量**故意重复了一份**——
+    而"两处格式一致"只能靠这条断言守。一旦分叉，注入给模型的日期与 `created_at`
+    就是两种形状，**而没有任何东西会报错**。
+    """
+    from eval.harness.judge import DATE_PREFIX as HARNESS_PREFIX
+
+    from tianxi_am.common.render import DATE_PREFIX as SRC_PREFIX
+
+    assert HARNESS_PREFIX == SRC_PREFIX
+
+
+def test_render_memories_date_prefix_is_opt_in():
+    """默认**不加**日期（保持既有基线可比）；开了才加，且缺 `created_at` 时不加。"""
+    from eval.harness import render_memories
+    from eval.harness.driver import SearchHit
+
+    hits = [
+        SearchHit(id="a", content="Q: q\nA: a", created_at="2023-07-02", score=1.0),
+        SearchHit(id="b", content="Q: q2", created_at="", score=0.5),
+    ]
+
+    assert render_memories(hits) == "Q: q\nA: a\nQ: q2"
+    assert render_memories(hits, date_mode="per_item") == (
+        "[2023-07-02] Q: q\nA: a\nQ: q2"  # ← 空 created_at 的那条不加前缀（§11.3 的降级路径）
+    )
+
+
+def test_render_memories_header_mode_states_what_the_dates_are():
+    """`header` 模式：**把"这些日期是什么"写明**。
+
+    `per_item` 单独用实测没能让模型改用日期（27/35 仍答相对），所以第二版把语义写出来——
+    这一档存在就是为了分辨"提示不够清楚"与"模型做不到"。
+    """
+    from eval.harness import render_memories
+    from eval.harness.driver import SearchHit
+    from eval.harness.judge import DATE_HEADER
+
+    hits = [
+        SearchHit(id="a", content="Q: q", created_at="2023-07-03", score=1.0),
+        SearchHit(id="b", content="Q: q2", created_at="2023-05-08", score=0.5),
+    ]
+    out = render_memories(hits, date_mode="header")
+
+    assert out.startswith(DATE_HEADER.format(dates="2023-07-03, 2023-05-08"))
+    assert "[2023-07-03] Q: q" in out and "[2023-05-08] Q: q2" in out
+
+
+def test_runner_flag_reaches_the_injection(bench_dir, tmp_path, monkeypatch):
+    """`--memory-date` 要真的走到 `build_input_items`——否则这个开关是**静默无效**的。"""
+    from eval.experiments import run as runner
+
+    seen: dict = {}
+    real_build = runner.build_input_items
+
+    def spy(sample, hits_by_qid, **kwargs):
+        seen.update(kwargs)
+        return real_build(sample, hits_by_qid, **kwargs)
+
+    monkeypatch.setattr(runner, "build_input_items", spy)
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
+
+    runner.run_round(
+        dataset="locomo-refined",
+        base_url="http://stub",
+        bench_dir=bench_dir,
+        out_dir=tmp_path / "out",
+        skip_ingest=True,
+        date_mode="header",
+        client=_Recorder().client(),
+    )
+
+    assert seen == {"date_mode": "header", "annotate_mark": "paren"}
+
+
+# ── 注解模式：把句子里的相对时间就地换算成绝对日期（2026-09-25）──
+# 动机：`t1-dated` 的 temporal 79 道里 27 道**只差"把 yesterday 减一天"这一步**。
+# 这组用例钉住三件事：**只加不改**、**推不出不动**、**锚点是段自己的日期**。
+_ANCHOR = __import__("datetime").date(2023, 7, 20)  # 2023-07-20 是周四
+
+
+def test_annotate_only_adds_and_never_replaces():
+    """**原文一字不动**，注解跟在后面——D21 的口径（"日期是额外锚点，不是替换"）。"""
+    from eval.harness.annotate import annotate
+
+    out = annotate("Hey Mel! I joined an activist group last Tues.", _ANCHOR)
+    assert out == "Hey Mel! I joined an activist group last Tues (July 18, 2023)."
+
+
+def test_annotate_refuses_to_guess():
+    """**推不出就不动**：`a few years ago` 没有数字，换算它等于编一个日期——
+    而编错的日期比不换算更糟（模型会照抄，裁判是精确比值的）。"""
+    from eval.harness.annotate import annotate
+
+    assert annotate("A few years ago I moved.", _ANCHOR) == "A few years ago I moved."
+    assert annotate("Several weeks ago we spoke.", _ANCHOR) == "Several weeks ago we spoke."
+    assert annotate("Nothing temporal here.", _ANCHOR) == "Nothing temporal here."
+
+
+def test_annotate_week_and_weekend_start_on_monday():
+    """周的起点是**周一**——这条是拿 gold 反推出来的，不是选出来的。
+
+    `The weekend before 17 July 2023`（gold 并列 `From July 15, 2023 to July 16, 2023`）
+    与 `two weekends before 17 July 2023`（`From July 8, 2023 to July 9, 2023`）都锚在
+    2023-07-17（周一）上；**按周日为界这两条都会差一天**。
+    """
+    from datetime import date
+
+    from eval.harness.annotate import annotate
+
+    monday = date(2023, 7, 17)
+    assert annotate("last weekend we camped", monday) == (
+        "last weekend (July 15 to 16, 2023) we camped"
+    )
+    assert annotate("camping two weekends ago", monday) == (
+        "camping two weekends ago (July 8 to 9, 2023)"
+    )
+    # 2023-06-09 是周五：`The week before 9 June 2023` 的 gold 并列形式是 5/29–6/4
+    assert annotate("last week", date(2023, 6, 9)) == "last week (May 29 to June 4, 2023)"
+
+
+def test_annotate_covers_month_year_and_duration():
+    """月/年粒度与"持续了多久"（`for 7 years` → `since 2016`）各一例。"""
+    from eval.harness.annotate import annotate
+
+    assert annotate("I started last month", _ANCHOR) == "I started last month (June 2023)"
+    assert annotate("I moved last year", _ANCHOR) == "I moved last year (2022)"
+    assert annotate("I've been teaching for seven years", _ANCHOR) == (
+        "I've been teaching for seven years (since 2016)"
+    )
+
+
+def test_annotate_mark_switch_only_changes_the_wrapper():
+    """两种记号**只差外壳**：换算结果一字不改（否则它就不是单变量对照了）。"""
+    from eval.harness.annotate import MARKS, annotate
+
+    paren = annotate("last night we talked", _ANCHOR, mark="paren")
+    tag = annotate("last night we talked", _ANCHOR, mark="tag")
+
+    assert MARKS == ("paren", "tag")
+    assert paren == "last night (July 19, 2023) we talked"
+    assert tag == "last night [= July 19, 2023] we talked"
+    assert paren.count("July 19, 2023") == tag.count("July 19, 2023") == 1
+
+
+def test_render_memories_annotate_mode_adds_no_prefix():
+    """`annotate` **不加前缀**——索引侧 `packaging.inject_abs_time=true` 已经给每一对
+    加了日期，这里再前缀一次会变成两个日期（而"多一个日期"不会有任何东西报错）。"""
+    from eval.harness import render_memories
+    from eval.harness.driver import SearchHit
+
+    hits = [
+        SearchHit(
+            id="a", content="Q: x\nA: I joined last Tues", created_at="2023-07-20", score=1.0
+        ),
+        SearchHit(id="b", content="Q: y\nA: a few years ago", created_at="2023-07-20", score=0.5),
+        SearchHit(id="c", content="Q: z\nA: undated", created_at="", score=0.1),
+    ]
+
+    out = render_memories(hits, date_mode="annotate")
+
+    assert "[2023-07-20]" not in out  # ← 不加前缀
+    assert "last Tues (July 18, 2023)" in out
+    assert "a few years ago" in out and "a few years ago (" not in out  # 推不出 ⇒ 不动
+    assert out.endswith("Q: z\nA: undated")  # 没有 created_at 的那条原样保留
 
 
 # ── T1：两臂的冻结快照与核对（§13 的配置指纹）──

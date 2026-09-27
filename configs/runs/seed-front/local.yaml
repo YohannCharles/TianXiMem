@@ -1,0 +1,9 @@
+# 段内顺序臂 `seed-front` 的冻结配置（§11.2 的组内顺序消融）
+# 冻结时刻：2026-09-25T09:11:15Z（UTC）· 基线 default.yaml 的 sha256[:16] = 45952f8550070536
+# 相对基线只动一件事：neighbor.seed_placement = front
+#   种子移到段首（⚠ 段内时序会断）
+neighbor:
+  seed_placement: front
+storage:
+  qdrant:
+    collection: memories_dev

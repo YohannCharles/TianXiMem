@@ -173,7 +173,19 @@ class HybridRetriever:
             dense_vector=dense_vector,
             top_k=top_k,
         )
+        # ★ V13（2026-09-26）：**并列分数的次序必须在这里定死。**
+        #   RRF 的分数是离散的（`1/(61+名次)`），一趟里几十条并列是**常态**；而
+        #   Qdrant 对**同分项**的返回顺序在两次相同请求之间都可能变
+        #   （实测：同一请求连打 6 次，前 3 名 6 次全同，**第 7 名起有 3 次不同，
+        #   而两侧的 `score` 完全相同**）。名次是**位置派生**的（下面的 `enumerate`），
+        #   所以不排序的话，整条链（种子 → 扩窗 → 打包顺序）会跟着抖——
+        #   表现为"**同配置重跑差 ±3pt**"，而**没有任何东西会报错**。
+        #   ⇒ 主键 `score` 降序、**次级键 `memory_id` 升序**：纯确定性，不带排序意图。
+        #     （更讲究的一档是拿 dense 分当次级键——同类实现有这么做——但那要求
+        #     拿得到**分路**分数，而融合整个交给 Qdrant 是我们既定的形态，见 D5。）
+        #   ⚠ 分数在这里**只用于排序**，排完照旧丢掉（它不是校准量，见下）。
+        ordered = sorted(hits, key=lambda h: (-h.score, h.memory_id))
         # ⚠ 这里【丢掉】store 返回的融合分数：它不是校准量，且响应里的 `score`
         #    必须是最终名次的函数（由 `rank/` 现算）。丢掉是**结构性**的，
         #    不是"记得别传"——见 Candidate 的 docstring。
-        return [Candidate(memory_id=h.memory_id, rank=rank) for rank, h in enumerate(hits)]
+        return [Candidate(memory_id=h.memory_id, rank=rank) for rank, h in enumerate(ordered)]

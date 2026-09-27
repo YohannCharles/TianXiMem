@@ -1,0 +1,12 @@
+# 覆盖率臂 `cov-wide` 的冻结配置 —— **由手写冻结生成**（非某个 script）
+# 冻结时刻：2026-09-25T06:22:02Z（UTC）· 基线 default.yaml 的 sha256[:16] = fef102e31025ea9b
+# 相对基线只动两件事（**§10 说种子数/窗口/Top-K/预算 是同一道题**）：
+#   neighbor.expansion_seed_limit = 1000  （⇒ 全部候选都当种子）
+#   neighbor.radius = 2                   （±2 对，让 100 个段槽装下更多对话）
+# 依据：conv-26 全文 215 对只覆盖了 55%，而 token 预算只用了 7%。
+neighbor:
+  expansion_seed_limit: 1000
+  radius: 2
+storage:
+  qdrant:
+    collection: memories_dev

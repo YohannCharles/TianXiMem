@@ -1,0 +1,9 @@
+# CL-Bench 那一轮（2026-09-27）的冻结配置。
+# 相对 baseline（= 当时的 configs/default.yaml，逐字复制）只动一件事：
+#   storage.qdrant.collection = memories_clbench —— 分集合是 V9 那条纪律。
+# ⚠ 没动任何开关：这就是**当前默认形态**（D21 日期前缀 + D22 相对时间注解）。
+#   ⚠ CL-Bench 的消息**没有时间戳** ⇒ event_time 为 NULL ⇒ 日期前缀与注解在这份数据上
+#     **都是惰性的**（created_at 发空串，§11.3 那条有定义的降级路径）。
+storage:
+  qdrant:
+    collection: memories_clbench

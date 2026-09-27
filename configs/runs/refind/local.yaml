@@ -1,0 +1,2 @@
+# B1 没有 profile 之分——它的配置全在环境变量里（见 default.yaml 的注释）。
+# 这份 local.yaml 是空的占位：run record 的 config_fingerprint 要求两个文件都在。

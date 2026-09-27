@@ -31,6 +31,7 @@
 
 1. **`store/` 是唯一接触 SQLite 与 Qdrant 的目录。** 上层拿到领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`。
 2. **`common/render` 是渲染的唯一实现**（§7.2 / §11.3）：embedding 的输入与返回给 AML 的 `content` 必须是同一份渲染，不一致会让"检索命中的"与"模型读到的"**静默漂移**。`embed/` 与 `rank/` 都不自己拼字符串。
+   ⚠ **这条纪律有一个、也是唯一一个例外**（不变式 **I1** 的松动，声明在 [`docs/architecture.md`](../../docs/architecture.md) §4）：`packaging.annotate_relatives` 会在 `content` 上叠一层**纯函数注解**（相对时间就地注成绝对日期）。它**只走 `content`**、剥掉注解后逐字相同，所以**不碰索引**——别把它当成"可以再往 content 里随手加东西"的先例。
 3. **`Search` 路径不调用任何生成式 LLM**，除非走了 `agent/`。**`Add` 路径完全不调用 LLM**（§7.2）——embedding 是唯一的 Add 侧成本。
 
 ---

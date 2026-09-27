@@ -1,0 +1,23 @@
+# InvMem **候选映射仓库**（vendor 在 eval/baselines/invmem-candidate/，**无 LICENSE、只研读**）
+# 的冻结配置 —— 2026-09-26。vendor commit: 31ab7bf
+#
+# ⚠ 与其它 arm 快照不同：这一份记的是**启动它时用的环境变量**（它没有我们的 yaml）。
+# ⚠ **本臂改了它的 embedding**：用 eval/baselines/serve_invmem_qwen.py 在进程内把
+#   build_embedder 换成走我们网关的 Qwen/Qwen3-Embedding-8B（**vendor 代码一行未改**），
+#   理由：它自带的 BAAI/bge-small-en-v1.5 是 33M 的小模型，直接比会把"embedding 强弱"
+#   混进"管线设计"里。
+# ⇒ **这个数字是"它的管线 + 我们的 embedding"，不是"候选仓库的分数"。**
+baseline:
+  name: invmem-candidate (modified: our embedding)
+  vendor_commit: "31ab7bf"
+  license: 无 —— 不可分发 / 不可声称 / 不可依赖（eval/baselines/CLAUDE.md）
+  embedding: "Qwen/Qwen3-Embedding-8B（shim，查询侧无 instruction）"
+  retrieval_mode: hybrid
+  rrf_k: 60
+  lexical_weight: 0.5
+  chunk_tokens: 320
+  chunk_overlap: 40
+  context_messages: 0
+  result_window: 1
+  reranker: "关（MEMORY_RERANKER_MODEL 空）"
+  temporal_enrichment: false
