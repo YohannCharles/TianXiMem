@@ -41,6 +41,7 @@ from .preprocess import (
     parse_lme_time,
     to_epoch_ms,
 )
+from .sampling import stratified_sample
 
 __all__ = ["load_longmemeval", "LME_JSON", "PIPELINE"]
 
@@ -86,33 +87,6 @@ def _sessions(entry: dict, *, source: Path) -> tuple[Session, ...]:
     return tuple(sessions)
 
 
-def _spread(entries: list[dict], limit: int) -> list[dict]:
-    """按 `question_type` **按比例**取约 `limit` 题——**分层抽样**。
-
-    ⚠ **为什么必须有它**：这份文件**按类型分块排**（实测 7 个连续块：
-    70 个 `single-session-user` → 62 个 `multi-session` → 30 个 `single-session-preference`
-    → 71 个 `multi-session` → 133 个 `temporal-reasoning` → …）。
-    所以 `entries[:limit]` **取到的是单一类型**——"跑一部分"会变成"**跑一类**"，
-    而**分数看起来完全正常**。这正是本项目反复要避免的那类失败。
-
-    **确定性**：组内**等间隔**取（不随机、不用 seed）⇒ 同一份文件永远给同一批题，
-    所以它是**可复现的部分跑**，不是"随机抽一点"。
-    组内至少取 1 题 ⇒ 实际条数**可能略多于 `limit`**（组数 ≤ 6 时最多多 5）。
-    """
-    if limit >= len(entries):
-        return entries
-    groups: dict[str, list[int]] = {}
-    for index, entry in enumerate(entries):
-        groups.setdefault(str(entry["question_type"]), []).append(index)
-    picked: list[int] = []
-    for indices in groups.values():
-        share = max(1, round(limit * len(indices) / len(entries)))
-        step = len(indices) / share
-        picked.extend(indices[min(len(indices) - 1, int(i * step))] for i in range(share))
-    picked.sort()  # 回到文件原顺序，让"截断"这件事本身不改变题目顺序
-    return [entries[i] for i in picked]
-
-
 def load_longmemeval(
     bench_dir: str | Path, *, limit: int | None = None, spread: bool = False
 ) -> list[Sample]:
@@ -124,12 +98,16 @@ def load_longmemeval(
 
     ⚠ **`limit` 与 `spread` 是两件事**：`limit=N` 取**前 N 题**（文件按类型分块 ⇒
     很可能只有一类）；`spread=True` 才按比例**跨类**取。**"跑一部分"要用后者**
-    ——理由见 `_spread` 的 docstring。
+    ——理由见 [`sampling.py`](./sampling.py)。
     """
     source = Path(bench_dir) / LME_JSON
     entries = json.loads(source.read_text(encoding="utf-8"))
     if limit is not None:
-        entries = _spread(entries, limit) if spread else entries[:limit]
+        entries = (
+            stratified_sample(entries, limit, key=lambda e: str(e["question_type"]))
+            if spread
+            else entries[:limit]
+        )
 
     samples = []
     for entry in entries:

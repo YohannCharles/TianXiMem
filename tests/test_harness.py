@@ -777,6 +777,8 @@ def test_build_input_items_reports_truncation(monkeypatch, capsys):
     )
     hit = SearchHit(id="a", content="Q: x\nA: y" * 100, created_at="", score=1.0)
     question = type("Q", (), {"qid": "q1", "question": "?", "gold": "g"})()
-    sample = type("S", (), {"questions": [question], "speaker_names": ("A", "B")})()
+    sample = type(
+        "S", (), {"questions": [question], "speaker_names": ("A", "B"), "dataset": "locomo-refined"}
+    )()
     judge.build_input_items(sample, {"q1": [hit]})
     assert "被截到平台前缀" in capsys.readouterr().out

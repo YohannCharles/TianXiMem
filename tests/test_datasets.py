@@ -433,14 +433,14 @@ def _write_grouped_lme(tmp: Path) -> Path:
 
 def test_lme_limit_alone_takes_one_single_type(tmp_path):
     """**这条是"为什么需要 spread"的证据**：文件按类型分块 ⇒ `[:limit]` 只取到一类。"""
-    from eval.datasets.longmemeval import _spread
+    from eval.datasets.sampling import stratified_sample
 
     bench = _write_grouped_lme(tmp_path)
     entries = json.loads((bench / LME_JSON).read_text(encoding="utf-8"))
     naive = entries[:6]
     assert {e["question_type"] for e in naive} == {"single-session-user"}  # ← 单一类型
 
-    spread = _spread(entries, 6)
+    spread = stratified_sample(entries, 6, key=lambda e: str(e["question_type"]))
     assert {e["question_type"] for e in spread} == {
         "single-session-user",
         "multi-session",
@@ -450,10 +450,11 @@ def test_lme_limit_alone_takes_one_single_type(tmp_path):
 
 def test_lme_spread_is_deterministic_and_ordered(tmp_path):
     """分层抽样**不随机**：同一份文件两次给同一批题，且保持文件原顺序。"""
-    from eval.datasets.longmemeval import _spread
+    from eval.datasets.sampling import stratified_sample
 
     entries = json.loads((_write_grouped_lme(tmp_path) / LME_JSON).read_text(encoding="utf-8"))
-    first, second = _spread(entries, 5), _spread(entries, 5)
+    key = lambda e: str(e["question_type"])  # noqa: E731 —— 测试里就地用
+    first, second = stratified_sample(entries, 5, key=key), stratified_sample(entries, 5, key=key)
 
     assert [e["question_id"] for e in first] == [e["question_id"] for e in second]
     order = [e["question_id"] for e in entries]
@@ -463,9 +464,126 @@ def test_lme_spread_is_deterministic_and_ordered(tmp_path):
 
 def test_lme_spread_noop_when_limit_covers_everything(tmp_path):
     """`limit` 不小于总数 ⇒ 原样返回（不抽样、不重排）。"""
-    from eval.datasets.longmemeval import _spread
+    from eval.datasets.sampling import stratified_sample
 
     entries = json.loads((_write_grouped_lme(tmp_path) / LME_JSON).read_text(encoding="utf-8"))
-    assert [e["question_id"] for e in _spread(entries, len(entries))] == [
-        e["question_id"] for e in entries
+    assert [
+        e["question_id"]
+        for e in stratified_sample(
+            entries, len(entries), key=lambda e: str(e["question_type"])
+        )
+    ] == [e["question_id"] for e in entries]
+
+
+# ── CL-Bench 的加载层（2026-09-27）──────────────────────────────────────
+def _write_clbench(tmp: Path) -> Path:
+    """按真实形状造一份：`system` + 装着文档与任务的 `user` + rubrics + metadata。"""
+    bench = tmp / "clb"
+    bench.mkdir(parents=True, exist_ok=True)
+    records = []
+    for kind, n in (("Rule System Application", 4), ("Domain Knowledge Reasoning", 4)):
+        for i in range(n):
+            records.append(
+                {
+                    "messages": [
+                        {"role": "system", "content": f"SYSTEM {kind}"},
+                        {
+                            "role": "user",
+                            "content": (
+                                f"DOC {kind} {i}\n" + "filler " * 50 + f"\n\nTask {i}: what is X?"
+                            ),
+                        },
+                    ],
+                    "rubrics": [f"r{i}-1", f"r{i}-2"],
+                    "metadata": {
+                        "task_id": f"{kind}-{i}",
+                        "context_id": f"ctx-{kind}",
+                        "context_category": kind,
+                        "sub_category": "sub",
+                    },
+                }
+            )
+    (bench / "clbench.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n", encoding="utf-8"
+    )
+    return bench
+
+
+def test_clbench_one_sample_per_task(tmp_path):
+    """一个 `task_id` 一个 Sample，`user_id` 带 `clb-` 前缀——**每题自带自己的记忆**。"""
+    from eval.datasets import load_clbench
+
+    samples = load_clbench(_write_clbench(tmp_path))
+    assert [s.user_id for s in samples][:2] == [
+        "clb-Rule System Application-0",
+        "clb-Rule System Application-1",
     ]
+    assert all(len(s.questions) == 1 for s in samples)
+    # rubrics 原样进 gold（`clb_pipeline` 的 `official_rubrics()` 认它）
+    assert samples[0].questions[0].gold == ["r0-1", "r0-2"]
+    assert samples[0].questions[0].category == "Rule System Application / sub"
+
+
+def test_clbench_task_text_is_the_tail_window(tmp_path):
+    """**任务文本 = 末条 user 的尾部窗口**——CL-Bench 没有独立的 question 字段。
+
+    实测规律：任务指令写在末条 user 的**最末尾**（`…what do Sightings Cards do?`）；
+    而末段中位只有 434 字符、最长的却有 13.4 万（整本手册塞成一段）⇒ 取尾部固定窗口。
+    """
+    from eval.datasets import load_clbench
+    from eval.datasets.clbench import TASK_TAIL_CHARS
+
+    sample = load_clbench(_write_clbench(tmp_path))[0]
+    question = sample.questions[0].question
+    assert question.endswith("Task 0: what is X?"), question[-60:]
+    assert len(question) <= TASK_TAIL_CHARS
+
+
+def test_clbench_messages_keep_roles_and_have_no_timestamp(tmp_path):
+    """role 原样保留（`system` 那条要在），**时间戳为空**——这份数据本来就没有。"""
+    from eval.datasets import load_clbench
+
+    sample = load_clbench(_write_clbench(tmp_path))[0]
+    roles = [m.role for m in sample.sessions[0].messages]
+    assert roles == ["system", "user"]
+    assert all(m.timestamp_ms is None for m in sample.sessions[0].messages)
+
+
+def test_clbench_rejects_a_record_without_rubrics(tmp_path):
+    """**没有 rubrics 就判不了分** ⇒ 必须抛，不能静默跑出一堆 0。"""
+    import pytest
+    from eval.datasets import load_clbench
+
+    bench = _write_clbench(tmp_path)
+    (bench / "clbench.jsonl").write_text(
+        json.dumps(
+            {
+                "messages": [{"role": "user", "content": "x"}],
+                "rubrics": [],
+                "metadata": {"task_id": "t"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="rubrics"):
+        load_clbench(bench)
+
+
+def test_clbench_reader_survives_u2028(tmp_path):
+    """**这份文件里真的有 `U+2028`** ⇒ 必须按 `"\\n"` 切，不能用 `splitlines()`。
+
+    实测：`clbench.jsonl` 用 `splitlines()` 读会在 char 22463 处 `JSONDecodeError`。
+    """
+    from eval.datasets import load_clbench
+
+    bench = _write_clbench(tmp_path)
+    record = {
+        "messages": [{"role": "user", "content": "doc end\n\nTask?"}],
+        "rubrics": ["r"],
+        "metadata": {"task_id": "u2028", "context_category": "C", "sub_category": "s"},
+    }
+    with (bench / "clbench.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    samples = load_clbench(bench)
+    assert any(s.user_id == "clb-u2028" for s in samples)

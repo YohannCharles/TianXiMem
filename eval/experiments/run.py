@@ -52,6 +52,7 @@ from eval.datasets import (
     Sample,
     benchmark_dir,
     data_fingerprint,
+    load_clbench,
     load_locomo,
     load_longmemeval,
 )
@@ -77,7 +78,7 @@ DEFAULT_TOP_K: Final[int] = 100
 DEFAULT_BASE_URL: Final[str] = "http://127.0.0.1:8000"
 
 #: 有加载器的数据集（**只服务两个计分数据集**，§12.4）。
-DATASETS: Final[tuple[str, ...]] = ("locomo-refined", "longmemeval-s")
+DATASETS: Final[tuple[str, ...]] = ("clbench", "locomo-refined", "longmemeval-s")
 
 
 def _load(
@@ -99,6 +100,8 @@ def _load(
         return samples[:limit] if limit is not None else samples
     if dataset == "longmemeval-s":
         return load_longmemeval(bench_dir, limit=limit, spread=spread)
+    if dataset == "clbench":
+        return load_clbench(bench_dir, limit=limit, spread=spread)
     raise ValueError(f"未知数据集 {dataset!r}——只有 {' / '.join(DATASETS)} 有加载器")
 
 
@@ -213,7 +216,12 @@ def run_round(
             items = build_input_items(
                 sample, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
             )
-            results += run_judge(pipeline_for(bench_dir, dataset), items, out_dir / sample.user_id)
+            results += run_judge(
+                pipeline_for(bench_dir, dataset),
+                items,
+                out_dir / sample.user_id,
+                dataset=dataset,
+            )
             print(f"  [{index}/{len(samples)}] {sample.user_id}：{len(items)} 题已判", flush=True)
         return samples, results
     finally:

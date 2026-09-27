@@ -10,11 +10,13 @@ samples = load_locomo(benchmark_dir())
 唯一共用同一套契约的（§12.4）。其余四份的契约差异**不在这里加载**。
 
 > **边界（D16）**：只有 [`locomo`][eval.datasets.locomo] /
-> [`longmemeval`][eval.datasets.longmemeval] / [`registry`][eval.datasets.registry]
-> 三个模块允许知道数据集的文件名。`pairing/` 与 `store/` 只能看见
+> [`longmemeval`][eval.datasets.longmemeval] / [`clbench`][eval.datasets.clbench] /
+> [`registry`][eval.datasets.registry] 四个模块
+> 允许知道数据集的文件名。`pairing/` 与 `store/` 只能看见
 > [`preprocess`][eval.datasets.preprocess] 归一化后的形状。
 """
 
+from .clbench import load_clbench
 from .locomo import load_locomo
 from .longmemeval import load_longmemeval
 from .preprocess import Message, Question, Sample, Session
@@ -29,6 +31,7 @@ __all__ = [
     "benchmark_dir",
     "data_fingerprint",
     "file_fingerprint",
+    "load_clbench",
     "load_locomo",
     "load_longmemeval",
 ]

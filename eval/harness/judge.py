@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import Final
 
 from eval.datasets import Sample
+from eval.datasets.clbench import PIPELINE as CLB_PIPELINE
 from eval.datasets.locomo import PIPELINE as LOCOMO_PIPELINE
 from eval.datasets.longmemeval import PIPELINE as LME_PIPELINE
 
@@ -83,6 +84,7 @@ MEMORY_FIELD = "speaker_1_memories"
 _PIPELINES = {
     "locomo-refined": LOCOMO_PIPELINE,
     "longmemeval-s": LME_PIPELINE,
+    "clbench": CLB_PIPELINE,
 }
 
 
@@ -265,6 +267,9 @@ def build_input_items(
     归档的 `gold_answer()` 走 `memory_text()`，**列表由它自己用 `\\n` 拼**，
     在这里预先拼会改变那条链路的行为。
     """
+    if sample.dataset == "clbench":
+        return _build_clbench_items(sample, hits_by_qid)
+
     items = []
     for question in sample.questions:
         hits = hits_by_qid.get(question.qid, [])
@@ -493,11 +498,127 @@ def truncate_to_platform_prefix(text: str) -> tuple[str, bool]:
     return encoder.decode(ids[:PLATFORM_TOKEN_PREFIX]), True
 
 
+def _build_clbench_items(sample: Sample, hits_by_qid: dict[str, list[SearchHit]]) -> list[dict]:
+    """CL-Bench 的项——**形状与那两份完全不同**
+    （见 [`../datasets/clbench.py`](../datasets/clbench.py)）。
+
+    | 字段 | 哪来的 / 为什么 |
+    | --- | --- |
+    | `idx` | `clb_pipeline.py` 的 `row_id()` **先认 `idx`**（`answer` 靠它跳过已完成） |
+    | `system_prompt` | 记录里第一条 `system` 消息——**raw 文件里没有这个顶层键**，不补就塌成空串 |
+    | `question` | 加载器切出来的任务文本（末条 user 的尾部窗口） |
+    | `rubrics` | 判分标准；`official_rubrics()` 认 `item["rubrics"]` |
+    | `retrieval.selected` | **每项 `created_at` + `text`**——⚠ 读的是 **`text`**，
+而且**缺 `text` 的项会被直接跳过**（`docs/contract.md` §5） |
+
+    ⚠ 记忆块**按平台的 117,760 token 前缀截断**，且**按项截**（不切半个段）——
+    与 `packaging` 的"段是原子单位"同一条理由。
+    """
+    system_prompt = next(
+        (
+            message.content
+            for session in sample.sessions
+            for message in session.messages
+            if message.role.lower() == "system"
+        ),
+        "",
+    )
+    items: list[dict] = []
+    for question in sample.questions:
+        hits, cut = _prefix_within_budget(hits_by_qid.get(question.qid, []))
+        if cut:
+            print(
+                f"  ⚠ {question.qid}：注入被截到平台前缀"
+                f"（{PLATFORM_TOKEN_PREFIX:,} token）",
+                flush=True,
+            )
+        items.append(
+            {
+                "idx": question.qid,
+                "question": question.question,
+                "system_prompt": system_prompt,
+                "rubrics": question.gold,
+                "retrieval": {
+                    "selected": [
+                        {"created_at": hit.created_at, "text": hit.content} for hit in hits
+                    ]
+                },
+            }
+        )
+    return items
+
+
+def _prefix_within_budget(
+    hits: list[SearchHit], budget: int = PLATFORM_TOKEN_PREFIX
+) -> tuple[list[SearchHit], bool]:
+    """只保留**放得进预算的前缀项**；返回 `(保留的项, 是否截过)`。
+
+    ⚠ **整项保留**（不切半个）——与 `packaging` 的"段是原子单位"同一条理由：
+    切一半的段会让模型读到缺一环的上下文，而 `content` 里看不出来。
+    """
+    encoder = _encoder()
+    kept: list[SearchHit] = []
+    used = 0
+    for hit in hits:
+        cost = len(encoder.encode(hit.content))
+        if used + cost > budget:
+            return kept, True
+        kept.append(hit)
+        used += cost
+    return kept, False
+
+
+def _read_clbench_labels(answers_path: Path, labels_path: Path) -> list[JudgeResult]:
+    """读 CL-Bench 的两份产物——**字段名与那两份完全不同**。
+
+    | 文件 | 谁写的 / 读什么 |
+    | --- | --- |
+    | `answers.jsonl` | `answer` 步写 **`model_output`**（不是 `generated_answer`），
+行键是 **`idx`** |
+    | `labels.jsonl` | `evaluate` 步写 `rubric_clbench_score` / `_rationale` /
+`_requirement_status` / `_requirement_ratio` |
+
+    ⚠ **它是严格全有全无**：`score` 只有 0 或 1 ⇒ 映射成 `is_correct = score >= 1.0`，
+    并把 `requirement_ratio`（满足了几成要求）一并留进 `judge_response`——**分档信息在
+    二值化之后会丢**，而"差一点就满分"与"完全跑偏"是两回事。
+    """
+    generated = {
+        str(row.get("idx", row.get("id", ""))): str(row.get("model_output") or "")
+        for row in (
+            json.loads(line)
+            for line in answers_path.read_text(encoding="utf-8").split("\n")
+            if line.strip()
+        )
+    }
+    results: list[JudgeResult] = []
+    for line in labels_path.read_text(encoding="utf-8").split("\n"):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        ident = str(row.get("idx", row.get("id", "")))
+        score = float(row.get("rubric_clbench_score") or 0.0)
+        ratio = float(row.get("rubric_clbench_requirement_ratio") or 0.0)
+        results.append(
+            JudgeResult(
+                qid=ident,
+                is_correct=score >= 1.0,
+                label="CORRECT" if score >= 1.0 else "WRONG",
+                judge_response=(
+                    f"[rubric score={score:.0f} ratio={ratio:.2f}] "
+                    f"{str(row.get('rubric_clbench_rationale') or '')[:1500]}"
+                ),
+                generated_answer=generated.get(ident, ""),
+            )
+        )
+    return results
+
+
 def run_judge(
     pipeline: Path,
     items: list[dict],
     out_dir: Path,
     *,
+    dataset: str = "locomo-refined",
     max_tokens: int = 256,
     timeout: float | None = None,
 ) -> list[JudgeResult]:
@@ -530,17 +651,12 @@ def run_judge(
 
     # `--model` / `--base-url` / `--api-key-env` 都**是死的**：这两个子命令在协程开头
     # 就用 `api_config` 的常量重写 `args.*`。所以这里一个都不传（传了只会让人以为生效了）。
+    # ⚠ **`clb_pipeline.py` 的两个子命令都不收 `--max-tokens`**（它的 `argparse` 里没有
+    #   这个选项，传了会直接 `unrecognized arguments` 退出）——**按 pipeline 代码为准**。
+    extra = [] if dataset == "clbench" else ["--max-tokens", str(max_tokens)]
     _run(
         pipeline,
-        [
-            "answer",
-            "--input",
-            str(input_path),
-            "--output",
-            str(answers_path),
-            "--max-tokens",
-            str(max_tokens),
-        ],
+        ["answer", "--input", str(input_path), "--output", str(answers_path), *extra],
         timeout=timeout,
     )
     _run(
@@ -553,11 +669,13 @@ def run_judge(
             str(answers_path),
             "--output",
             str(labels_path),
-            "--max-tokens",
-            str(max_tokens),
+            *extra,
         ],
         timeout=timeout,
     )
+
+    if dataset == "clbench":
+        return _read_clbench_labels(answers_path, labels_path)
 
     generated = {
         row["id"]: row["generated_answer"]
