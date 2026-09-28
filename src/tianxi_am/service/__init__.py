@@ -10,7 +10,6 @@
 
 from tianxi_am.common.config import AppConfig, ConfigError, assert_single_process, load_config
 from tianxi_am.service.app import Services, build_services, create_app, create_app_from_env
-from tianxi_am.service.locks import SessionLocks, SessionLockTimeout
 from tianxi_am.service.pipeline import AddOutcome, AddPipeline, SearchPipeline
 from tianxi_am.service.schemas import (
     AddMessage,
@@ -34,8 +33,6 @@ __all__ = [
     "SearchResponse",
     "SearchResultItem",
     "Services",
-    "SessionLockTimeout",
-    "SessionLocks",
     "assert_single_process",
     "build_services",
     "create_app",

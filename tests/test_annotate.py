@@ -134,7 +134,9 @@ def _strip_annotations(text: str) -> str:
     return _ANNOTATION.sub("", text)
 
 
-#: 三条**互不相邻**的 `pair_idx`（相邻会被扩窗合进同一段，段数断言就验不出东西）。
+#: 三条**互不相邻**的位置（相邻会被扩窗合进同一段，段数断言就验不出东西）。
+#: ⚠ D25 起 `seq` 由**已有的行**现算 ⇒ 跳号会挨在一起，
+#: 所以要落满中间那些位置（`conftest.seed_line`）。
 _PAIRS: tuple[tuple[int, str, str], ...] = (
     (0, "What's new?", "I joined a new activist group last Tues."),
     (2, "How was your weekend?", "Last weekend our city held a pride parade!"),
@@ -147,13 +149,14 @@ def _dress(chain) -> list[str]:
     """灌三条带相对表达的 `pair`，返回被索引的 id。"""
     ids: list[str] = []
     pairs = []
-    for pair_idx, question, answer in _PAIRS:
+    for ordinal, question, answer in _PAIRS:
         with chain.store.transaction() as conn:
             pair = chain.store.insert_pair(
                 conn,
                 user_id="u1",
                 session_id="s1",
-                pair_idx=pair_idx,
+                chunk_ordinal=ordinal,
+                local_index=0,
                 question=question,
                 answer=answer,
                 status="complete",

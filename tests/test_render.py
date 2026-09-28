@@ -24,7 +24,7 @@ def test_question_empty_only_answer_line() -> None:
 
 
 def test_answer_empty_only_question_line() -> None:
-    """`answer` 暂缺的 `pending` 对**只输出 `Q:` 那一行**。"""
+    """`answer` 暂缺的块**只输出 `Q:` 那一行**。"""
     assert render("Q1", None) == "Q: Q1"
     assert render("Q1", "") == "Q: Q1"
 
@@ -154,12 +154,12 @@ def test_render_pair_takes_the_date_from_the_pair_itself() -> None:
 
 # ── T1 的开关纯度（§13）：两臂**只该差正文**────────────────────────────────
 def _dress(chain, *, inject_abs_time: bool) -> list[str]:
-    """灌三条**相隔的** `pair_idx`（0/2/4）、每条都带 `event_time`，返回被索引的 id。
+    """灌三条**相隔的**位置（chunk 0/2/4）、每条都带 `event_time`，返回被索引的 id。
 
     ⚠ 三条不是相邻的：相邻会被扩窗合进同一段，那样"段数没变"这条断言就验不出东西
     （[`../tests/CLAUDE.md`](../tests/CLAUDE.md) §三 的"一个候选 ≠ 一项"）。
-    ⚠ 用 `insert_pair` 而不是走 Add：这里要的是**确定的** `pair_idx` 与 `event_time`
-    （Add 路径的 `pair_idx` 由配对逻辑给，`event_time` 取消息上的 timestamp）。
+    ⚠ 用 `insert_pair` 而不是走 Add：这里要的是**确定的**位置与 `event_time`
+    （Add 路径的位置由 `request_id` 的 chunk 序号给，`event_time` 取消息上的 timestamp）。
     索引侧仍然走**生产路径的同一个渲染函数**（`index_pairs` 的 `renderer`）。
     """
     from functools import partial
@@ -168,15 +168,16 @@ def _dress(chain, *, inject_abs_time: bool) -> list[str]:
 
     ids: list[str] = []
     pairs = []
-    for pair_idx in (0, 2, 4):
+    for ordinal in (0, 2, 4):
         with chain.store.transaction() as conn:
             pair = chain.store.insert_pair(
                 conn,
                 user_id="u1",
                 session_id="s1",
-                pair_idx=pair_idx,
-                question=f"Q{pair_idx}",
-                answer=f"A{pair_idx}",
+                chunk_ordinal=ordinal,
+                local_index=0,
+                question=f"Q{ordinal}",
+                answer=f"A{ordinal}",
                 status="complete",
                 event_time=_MAY_8_2023_MS,
                 request_id="seed",

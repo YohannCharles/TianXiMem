@@ -81,7 +81,8 @@ class _Recorder:
 
 # ── 切批（§6.5）──
 def test_batches_are_20_and_keep_source_order():
-    """**源序就是 `pair_idx` 的最终依据**——重排会静默改变邻域，绝不能做。"""
+    """**源序切批、不重排**——批序号就是 `request_id` 里的 chunk 序号（D25 的位置来源），
+    重排会让同一 `request_id` 对应另一批消息。"""
     got = batches(_messages(45))
     assert [len(b) for b in got] == [20, 20, 5]
     assert [m.content for b in got for m in b] == [f"m{i}" for i in range(45)]
@@ -383,7 +384,9 @@ def test_build_record_validates_and_states_why_dimensions_are_empty(tmp_path):
     assert all(record.scores[d] is None for d in DIMENSIONS)
     # **空值必须带理由**——否则与"跑了但没分"无法区分（§3.2）
     assert record.scores["by_dimension_note"].startswith("代理评测的七个维度子分")
-    assert "observability/ 未实现" in record.counters["note"]
+    # ⚠ D24 起这个量已不存在 ⇒ 理由从"聚合端未实现"变成"概念已取消"，
+    #   但**仍然必须显式说明**：`None` 不能光秃秃地出现（否则读的人以为是漏填）。
+    assert "D24" in record.counters["note"]
     assert record.counters["pending_orphaned_real"] is None
     # 第 4/7 维的证据指向机制与单测，不是一个编出来的数
     assert "test_idempotency" in record.dimension_mechanism["Memory governance"]

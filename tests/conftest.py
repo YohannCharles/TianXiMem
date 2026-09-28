@@ -1,7 +1,7 @@
 """单元测试的共用 fixture。
 
 测试清单的权威来源是 [`../tests/CLAUDE.md`](../tests/CLAUDE.md)：
-配对 / 续接 / 幂等 / 契约 / 隔离 / 开关纯度 / 存储。
+记忆块组合 / 幂等 / 契约 / 隔离 / 开关纯度 / 存储。
 
 ⚠ 本目录的测试**只用合成的 canonical 消息**（`role` / `content` / 可选 `timestamp`），
 **不碰任何数据集文件**——LoCoMo 只作为实现完成后的 fixture 验证数据，
@@ -33,7 +33,7 @@ from tianxi_am.common.config import (
     StorageConfig,
 )
 from tianxi_am.common.render import render_pair
-from tianxi_am.pairing.pairing import BatchLimits, Message
+from tianxi_am.pairing.pairing import Message
 from tianxi_am.retrieve import (
     DenseArm,
     EvidenceChecker,
@@ -129,22 +129,6 @@ def M() -> Callable[..., Message]:
         return Message(role=role, content=content, timestamp=ts)
 
     return _make
-
-
-@pytest.fixture
-def limits_small() -> BatchLimits:
-    """小上限，让"命中上限"的用例可读。
-
-    顺带证明一件事：**上限是配置项，不是硬编码**（§15 / D2 对冲 ③）——
-    能用别的值跑通，就说明实现里没有把 20 / 2000 写死。
-    """
-    return BatchLimits(max_messages=3, max_words=1000)
-
-
-@pytest.fixture
-def limits_two() -> BatchLimits:
-    """上限 = 2 条消息，用来构造"批次末尾是 pending"的最小场景。"""
-    return BatchLimits(max_messages=2, max_words=1000)
 
 
 # ── ② 的 fixture ────────────────────────────────────────────────────────
@@ -341,7 +325,7 @@ def wired_dated(tmp_path) -> Iterator[Wired]:
     那条断言要同时跑两臂并逐项比，所以两臂都得能就地造出来。
 
     ⚠ **它用自己的子目录**：两臂若共用 `tmp_path`，它们会写**同一个 `tianxi.db`**，
-    于是第二个 `wired` 落种子时直接撞 `UNIQUE(user_id, session_id, pair_idx)`。
+    于是第二个 `wired` 落种子时直接撞 `UNIQUE(user_id, session_id, chunk_ordinal, local_index)`。
     真实对照里两臂本来就该各有各的库与集合（见 `configs/CLAUDE.md` 的 `runs/`）。
     """
     own = tmp_path / "dated"
@@ -399,7 +383,6 @@ def _wire(tmp_path, *, inject_abs_time: bool, annotate_relatives: bool = False) 
         store=services.store,
         qdrant=qdrant,
         embedder=embedder,
-        locks=services.locks,
         inject_abs_time=inject_abs_time,
     )
     try:
@@ -419,7 +402,7 @@ def _wire(tmp_path, *, inject_abs_time: bool, annotate_relatives: bool = False) 
 
 def seed_pair_in(
     store: SqliteStore,
-    pair_idx: int,
+    index: int,
     question: str | None = None,
     answer: str | None = None,
     *,
@@ -427,12 +410,16 @@ def seed_pair_in(
     session_id: str = "s1",
     event_time: int | None = None,
 ) -> str:
-    """落一个对，返回它的 canonical `memory_id`（位置派生，见 ① 的 ID 纪律）。
+    """落一个块，返回它的 canonical `memory_id`（位置派生，见 ① 的 ID 纪律）。
+
+    ⚠ **`index` 被映成 `(chunk_ordinal=index, local_index=0)`**（D25）：于是每个 chunk
+    恰好一块 ⇒ 读时的 `seq` **恰好等于 `index`**。这让既有调用点（"落 0..n-1 号"）
+    的语义一字不变地保留下来——**不是为了兼容，是因为那些用例要的就是"会话里第 i 块"**。
 
     **全测试层唯一的一份**——`test_neighbor.py` / `test_reranker.py` 都从
     `tests.conftest import seed_pair_in as _seed` 取它，**别再各写一份**。
 
-    * `question` / `answer` 省掉时按 `q{pair_idx}` / `a{pair_idx}` 补
+    * `question` / `answer` 省掉时按 `q{index}` / `a{index}` 补
     * `session_id` 可传——那两个文件要造"两个 session 各有一条候选"的形状
     * `event_time` 可传——`test_contract.py` 要造"有/无时间戳"两条
     """
@@ -441,9 +428,10 @@ def seed_pair_in(
             conn,
             user_id=user_id,
             session_id=session_id,
-            pair_idx=pair_idx,
-            question=question if question is not None else f"q{pair_idx}",
-            answer=answer if answer is not None else f"a{pair_idx}",
+            chunk_ordinal=index,
+            local_index=0,
+            question=question if question is not None else f"q{index}",
+            answer=answer if answer is not None else f"a{index}",
             status="complete",
             event_time=event_time,
             request_id="seed",
@@ -451,7 +439,44 @@ def seed_pair_in(
     return pair.id
 
 
+def seed_line(
+    store: SqliteStore,
+    positions: Sequence[int],
+    *,
+    user_id: str = "u1",
+    session_id: str = "s1",
+    qa: Callable[[int], tuple[str, str]] | None = None,
+) -> list[str]:
+    """在 `0..max(positions)` 上**落满**，只返回 `positions` 那几行的 `memory_id`（D25）。
+
+    **为什么需要它**：想造"这几个块被选中了、中间那几个没被选中"，光落被选中的那几行
+    **不够**——`seq`（相邻性的依据）是 `ROW_NUMBER()` 在**库里已有的行**上现算的，
+    只落 0 和 2 的话它们的 `seq` 是 0 和 1，**挨着**（= 这段对话里就这两块）⇒ 会被合并。
+
+    旧口径下这两种情况长得一样（位置都带着洞），所以老 fixture 只落被选中的那几行；
+    D25 把"对话里的洞"与"没被选中"分开了，fixture 就得说清楚是哪一种。
+
+    `qa`：可选，`(position) -> (question, answer)`；缺省是 `q{position}` / `a{position}`。
+    """
+    wanted = list(positions)
+    if not wanted:
+        return []
+    by_pos: dict[int, str] = {}
+    for i in range(max(wanted) + 1):
+        question, answer = (f"q{i}", f"a{i}") if qa is None else qa(i)
+        by_pos[i] = seed_pair_in(
+            store, i, question, answer, user_id=user_id, session_id=session_id
+        )
+    return [by_pos[i] for i in wanted]
+
+
 @pytest.fixture
 def seed_pair() -> Callable[..., str]:
     """`seed_pair_in` 的 fixture 形态——**同一份实现**，用它的测试就不必自己 import。"""
     return seed_pair_in
+
+
+@pytest.fixture
+def seed_sparse() -> Callable[..., list[str]]:
+    """`seed_line` 的 fixture 形态——"落满、只返回选中那几个"。"""
+    return seed_line

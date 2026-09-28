@@ -72,7 +72,8 @@ def _rec(memory_id: str, user_id: str, text: str, **over) -> MemoryRecord:
         "memory_id": memory_id,
         "user_id": user_id,
         "session_id": "s1",
-        "pair_idx": 0,
+        "chunk_ordinal": 0,
+        "local_index": 0,
         "event_time": 1_700_000_000_000,
         "text": text,
     }
@@ -161,19 +162,31 @@ def test_point_id_rejects_too_short_id() -> None:
 
 
 def test_payload_carries_identity_fields(qdrant_store: QdrantStore, emb: FakeEmbedder) -> None:
-    """payload 里 `user_id` / `memory_id` 都要正确（`memory_id` 是 canonical id）。"""
+    """payload 里 `user_id` / `memory_id` / 位置两半都要正确（`memory_id` 是 canonical id）。"""
     mid = _mid("payload")
     _index(
         qdrant_store,
         emb,
-        [_rec(mid, "u1", "Q: a\nA: b", session_id="s9", pair_idx=7, event_time=123)],
+        [
+            _rec(
+                mid,
+                "u1",
+                "Q: a\nA: b",
+                session_id="s9",
+                chunk_ordinal=7,
+                local_index=3,
+                event_time=123,
+            )
+        ],
     )
 
     payload = qdrant_store.fetch_payloads([mid])[mid]
     assert payload["memory_id"] == mid
     assert payload["user_id"] == "u1"
     assert payload["session_id"] == "s9"
-    assert payload["pair_idx"] == 7
+    # D25：位置的两半都在 payload 里（**只用于溯源**，检索不按它们过滤/排序）
+    assert payload["chunk_ordinal"] == 7
+    assert payload["local_index"] == 3
     assert payload["event_time"] == 123
     # 正文不进 payload（§6.3）
     assert "text" not in payload
@@ -450,17 +463,16 @@ def test_rebuild_from_sqlite_reproduces_search(store, make_store, emb: FakeEmbed
     ⚠ 这里给每条渲染文本**预设互不相同的 dense 向量**。若两路都出现并列，
     名次的抖动会掩盖"重建是否真的复现"这个要测的东西。
     """
-    from tianxi_am.pairing import AddBatch, BatchLimits, Message, apply_batch
+    from tianxi_am.pairing import AddBatch, Message, apply_batch
 
-    limits = BatchLimits(max_messages=20, max_words=1000)
     msgs = tuple(
         Message(role="user" if i % 2 == 0 else "assistant", content=f"alpha beta {i}")
         for i in range(4)
     )
-    apply_batch(store, AddBatch("r1", "u1", "s1", msgs), limits=limits)
+    apply_batch(store, AddBatch("u1|s1|0", "u1", "s1", msgs))
 
     pairs = rd(store, store.iter_pairs, user_id="u1")
-    assert len(pairs) == 2, "① 落库的对数不是预期的 2"
+    assert len(pairs) == 2, "① 落库的块数不是预期的 2"
 
     # 预设两条渲染文本的 dense 向量：一条与查询完全一致、另一条正交 ⇒ 两路都不并列
     texts = [render_pair(p) for p in pairs]
@@ -513,17 +525,16 @@ def test_equal_weights_do_not_change_ranking(make_store, emb: FakeEmbedder) -> N
 
 def test_index_pairs_renders_through_common_render(store, make_store, emb: FakeEmbedder) -> None:
     """索引侧的文本必须是渲染后的——**同一个 render 函数**，不是这里另拼一份。"""
-    from tianxi_am.pairing import AddBatch, BatchLimits, Message, apply_batch
+    from tianxi_am.pairing import AddBatch, Message, apply_batch
 
     apply_batch(
         store,
         AddBatch(
-            "r1",
+            "u1|s1|0",
             "u1",
             "s1",
             (Message(role="user", content="问题"), Message(role="assistant", content="回答")),
         ),
-        limits=BatchLimits(),
     )
     qstore = make_store()
     pairs = rd(store, store.iter_pairs, user_id="u1")

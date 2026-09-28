@@ -3,7 +3,7 @@
 ```text
 ranked（已去重、已 rerank）
   → expand_neighbors：全部保留 + 只对前 N 条扩 ±radius（同 user / 同 session）
-  → merge_segments  ：连续 pair_idx 合成段，段内会话序、段间 best_rank 序
+  → merge_segments  ：连续 `seq` 合成段，段内会话序、段间 best_rank 序
 ```
 
 > **段模型是 `Search` 链上的一环**——排在 `hybrid → checker` 之后。段的三个概念
@@ -13,7 +13,7 @@ ranked（已去重、已 rerank）
 ⚠ 这里**不测** rerank（在 [`test_reranker.py`](./test_reranker.py)），
 也不测打包的 `score` / 预算（在 [`test_packaging.py`](./test_packaging.py)）。
 
-⚠ 真源一律是**真的 `SqliteStore`**（按行、按 `pair_idx`、按 `(user_id, session_id)` 取数），
+⚠ 真源一律是**真的 `SqliteStore`**（按行、按会话位置、按 `(user_id, session_id)` 取数），
 不 mock——扩窗的正确性**全在 SQL 的过滤条件上**，mock 掉就等于没测。
 """
 
@@ -35,11 +35,34 @@ from tianxi_am.store.sqlite_store import SqliteStore, make_pair_id
 def _line(
     store: SqliteStore, indices: range | list[int], *, user_id: str = "u1", session_id: str = "s1"
 ) -> list[str]:
-    """一串 `pair_idx` ⇒ 它们的 `memory_id`（顺序与 `indices` 一致）。"""
+    """一串**会话位置** ⇒ 它们在那些位置上的 `memory_id`（顺序与 `indices` 一致）。
+
+    ⚠ **只落被请求的那几个**。D25 之后"这段对话里中间少了一块"要靠 `_fill` 显式表达
+    ——见那里的说明。
+    """
     return [
         _seed(store, i, user_id=user_id, session_id=session_id)
         for i in (indices if isinstance(indices, list) else list(indices))
     ]
+
+
+def _fill(
+    store: SqliteStore, indices: range | list[int], *, user_id: str = "u1", session_id: str = "s1"
+) -> None:
+    """把这几块**也落进库**（返回的 `id` 不用），用来制造"**存在但没被选中**"的缺口。
+
+    D25 把两件事分开了，而它们**在旧口径下长得一样**（位置都带着洞）：
+
+    | | 意思 | 该不该合并 |
+    | --- | --- | --- |
+    | `_line(store, [0, 2])`（只落 0、2） | 这段对话**就只有这两块** | ✅ 合并 |
+    | `_line(store, [0, 2])` + `_fill(store, [1])` | 对话里有 1，但**这一轮没选中它** | ❌ 断开 |
+
+    `seq` 是 `ROW_NUMBER()` 在**库里已有的行**上现算的 ⇒ 上一行使 0 与 2 的 `seq` 变成
+    0 与 1（挨着），下一行才是"中间真的缺一环"。
+    """
+    for i in (indices if isinstance(indices, list) else list(indices)):
+        _seed(store, i, user_id=user_id, session_id=session_id)
 
 
 def _ranked(*memory_ids: str) -> list[Candidate]:
@@ -55,9 +78,13 @@ def _expand(store: SqliteStore, ranked: list[Candidate], **kwargs) -> tuple[Sele
     return expand_neighbors(ranked, store=store, **kwargs).selected
 
 
-def _idx(store: SqliteStore, session_id: str, pair_idx: int, *, user_id: str = "u1") -> str:
-    """按位置**直接算出** `memory_id`——用来断言"某一行**不在**结果里"。"""
-    return make_pair_id(user_id, session_id, pair_idx)
+def _idx(store: SqliteStore, session_id: str, index: int, *, user_id: str = "u1") -> str:
+    """按会话位置**直接算出** `memory_id`——用来断言"某一行**不在**结果里"。
+
+    ⚠ 位置是 `(chunk_ordinal=index, local_index=0)`（`_line` / `seed_pair_in` 同一个约定），
+    于是 `seq == index`。
+    """
+    return make_pair_id(user_id, session_id, index, 0)
 
 
 def _set_qa(store: SqliteStore, memory_id: str, question: str, answer: str) -> None:
@@ -104,7 +131,7 @@ def test_only_the_top_seed_limit_candidates_expand(
 ) -> None:
     """种子数**精确等于** `seed_limit`——第 `seed_limit + 1` 名之后**不扩**。
 
-    构造：`pair_idx` 0…9 连续落库，候选只挑 `pair 4`（名次 0）、`pair 5`（名次 1）、
+    构造：位置 0…9 连续落库，候选只挑 `pair 4`（名次 0）、`pair 5`（名次 1）、
     `pair 0`（名次 2）。此时每颗种子能扩出什么完全由 `seed_limit` 决定。
     """
     ids = _line(store, range(10))
@@ -118,7 +145,7 @@ def test_only_the_top_seed_limit_candidates_expand(
     ]
     for seed_limit, expected_pairs in expectations:
         got = expand_neighbors(ranked, store=store, seed_limit=seed_limit, radius=1)
-        neighbors = {m.pair_idx for m in got.selected if m.is_neighbor}
+        neighbors = {m.seq for m in got.selected if m.is_neighbor}
         assert neighbors == set(expected_pairs), f"seed_limit={seed_limit}"
         assert got.neighbors_added == len(expected_pairs)
         # 不论扩不扩，三条候选**始终在里面**
@@ -128,7 +155,7 @@ def test_only_the_top_seed_limit_candidates_expand(
 def test_candidates_after_the_seed_limit_are_kept_but_not_expanded(store: SqliteStore) -> None:
     """`rank31+`：**保留但不扩**——它们的邻域不许被拉进来（§10 的种子数）。
 
-    构造：`pair_idx` 0…63 连续落库。候选 = `pair 20…49`（名次 0…29，种子）
+    构造：位置 0…63 连续落库。候选 = `pair 20…49`（名次 0…29，种子）
     + `pair 0…9`（名次 30…39，尾巴）。两组邻域不相交。
     """
     ids = _line(store, range(64))
@@ -166,7 +193,7 @@ def test_neighbor_already_a_candidate_is_not_added_twice(store: SqliteStore) -> 
     got = expand_neighbors(ranked, store=store, seed_limit=30, radius=1)
     by_id = _by_id(got.selected)
 
-    pairs = [m.pair_idx for m in got.selected]
+    pairs = [m.seq for m in got.selected]
     assert sorted(pairs) == [0, 1, 2, 3, 4]
     assert len(pairs) == len(set(pairs))  # 结构上就不可能重复
     assert got.neighbors_added == 2  # pair 1 与 pair 4（pair 3 是候选，不是新增）
@@ -187,7 +214,7 @@ def test_overlapping_neighborhoods_are_deduplicated(store: SqliteStore) -> None:
 
     got = expand_neighbors(ranked, store=store, seed_limit=30, radius=1)
 
-    pairs = sorted(m.pair_idx for m in got.selected)
+    pairs = sorted(m.seq for m in got.selected)
     assert pairs == [0, 1, 2, 3, 4]  # pair 2 只出现一次
     assert len(got.selected) == len(set(_by_id(got.selected)))  # 结构上就不可能重复
     assert got.neighbors_added == 3  # 0 / 2 / 4
@@ -205,22 +232,22 @@ def test_new_neighbors_carry_no_rank(store: SqliteStore) -> None:
     neighbors = [m for m in got.selected if m.is_neighbor]
     assert len(neighbors) == 2
     assert all(m.rerank_rank is None for m in neighbors)
-    assert {m.pair_idx for m in neighbors} == {0, 2}
+    assert {m.seq for m in neighbors} == {0, 2}
 
 
 def test_radius_widens_the_window(store: SqliteStore) -> None:
-    """`radius` 的**单位是 QA 对**：`±2` 拿回前后各两整对（§10 的粒度提醒）。"""
+    """`radius` 的**单位是记忆块**：`±2` 拿回会话里前后各两整块（§10 的粒度提醒）。"""
     ids = _line(store, range(9))
     got = expand_neighbors(_ranked(ids[4]), store=store, seed_limit=30, radius=2)
 
-    assert {m.pair_idx for m in got.selected} == {2, 3, 4, 5, 6}
+    assert {m.seq for m in got.selected} == {2, 3, 4, 5, 6}
 
 
 def test_radius_zero_means_no_expansion(store: SqliteStore) -> None:
     ids = _line(store, range(3))
     got = expand_neighbors(_ranked(ids[1]), store=store, seed_limit=30, radius=0)
 
-    assert [m.pair_idx for m in got.selected] == [1]
+    assert [m.seq for m in got.selected] == [1]
     assert got.neighbors_added == 0
 
 
@@ -232,11 +259,11 @@ def test_expansion_never_crosses_sessions(store: SqliteStore) -> None:
 
     ⚠ `session_id` 只是**分组字段、不是 Search 的过滤器**（根 `CLAUDE.md` 的硬约束），
     所以它**不能**靠"检索时只返回本 session"来兜住——扩窗那一步必须自己带上它。
-    这里同一个 user 下故意放三个 `session_id` 不同、`pair_idx` 相同的行。
+    这里同一个 user 下故意放三个 `session_id` 不同、**位置相同**的行。
     """
     a0 = _seed(store, 0, session_id="s1")
     a1 = _seed(store, 1, session_id="s1")
-    b0 = _seed(store, 0, session_id="s2")  # 同 pair_idx、不同 session
+    b0 = _seed(store, 0, session_id="s2")  # 同位置、不同 session
     c0 = _seed(store, 0, session_id="s1", user_id="u2")  # 同 session、不同 user
 
     got = expand_neighbors(_ranked(a0), store=store, seed_limit=30, radius=1)
@@ -250,10 +277,10 @@ def test_expansion_never_crosses_sessions(store: SqliteStore) -> None:
 
 
 def test_expansion_at_session_boundaries(store: SqliteStore) -> None:
-    """session 的头尾：`pair_idx - 1` 会走到 `-1`，末尾会走到 `n`——**都不许出事**。
+    """session 的头尾：窗口下标会走到 `-radius` 与 `n`——**都不许出事**。
 
     ⚠ 越界不报错，越界**静默少一条**：`BETWEEN -1 AND 1` 在 SQL 里完全合法。
-    真正要防的是有人把窗口写成 `LIMIT=2*radius` 之类**不按 `pair_idx`** 的写法——
+    真正要防的是有人把窗口写成 `LIMIT=2*radius` 之类**不按位置**的写法——
     那会在首尾返回**别的 session** 的行。本用例把首尾两侧都钉住。
     """
     ids = _line(store, range(3))  # pair 0 / 1 / 2
@@ -261,9 +288,9 @@ def test_expansion_at_session_boundaries(store: SqliteStore) -> None:
     head = expand_neighbors(_ranked(ids[0]), store=store, seed_limit=30, radius=1)
     tail = expand_neighbors(_ranked(ids[2]), store=store, seed_limit=30, radius=1)
 
-    assert sorted(m.pair_idx for m in head.selected) == [0, 1]  # 没有 -1
-    assert sorted(m.pair_idx for m in tail.selected) == [1, 2]  # 没有 3
-    assert all(m.pair_idx >= 0 for m in head.selected + tail.selected)
+    assert sorted(m.seq for m in head.selected) == [0, 1]  # 没有 -1
+    assert sorted(m.seq for m in tail.selected) == [1, 2]  # 没有 3
+    assert all(m.seq >= 0 for m in head.selected + tail.selected)
 
 
 def test_missing_source_row_is_counted_not_fabricated(store: SqliteStore) -> None:
@@ -273,7 +300,7 @@ def test_missing_source_row_is_counted_not_fabricated(store: SqliteStore) -> Non
     静默丢掉会让"少了哪一条"永远查不出来。
     """
     a = _seed(store, 0)
-    ghost = make_pair_id("u1", "s1", 99)  # 库里没有这一行
+    ghost = make_pair_id("u1", "s1", 99, 0)  # 库里没有这一行
 
     got = expand_neighbors(_ranked(a, ghost), store=store, seed_limit=30, radius=1)
 
@@ -303,18 +330,25 @@ def test_negative_parameters_are_rejected(store: SqliteStore, seed_limit: int, r
 def test_the_spec_example_merges_into_three_segments(
     store: SqliteStore, counter: FakeCounter
 ) -> None:
-    """**规格里那个例子**：`8,9,10,11,15,16,30` ⇒ `8..11` / `15..16` / `30`。
+    """**规格里那个例子**：块 `8,9,10,11,15,16,30` ⇒ `8..11` / `15..16` / `30`。
 
-    ⚠ 断言的是一条**规则**（`current == previous.end + 1`），不是一个实现：
-    中间缺一个对就说明那段对话**不完整**，硬拼成一整段会让模型读到自己以为连续、
+    ⚠ 断言的是一条**规则**（`current == previous + 1`），不是一个实现：
+    中间缺一个块就说明那段对话**不完整**，硬拼成一整段会让模型读到自己以为连续、
     实际缺了一环的上下文——而 `content` 里**看不出来**。
+
+    ⚠ **D25 起"缺口"必须靠"存在但没被选中"表达**：只落 8..11 与 15,16,30 的话，
+    它们的 `seq` 是**稠密的** 0..6，即"这段对话里就这七块"——那就该合成**一段**。
+    这里用 `_fill` 把 12..14 与 17..29 也落进去，才是"对话是连续的，但我只选中了这几个"。
     """
     ids = _line(store, [8, 9, 10, 11, 15, 16, 30])
-    selected = _expand(store, _ranked(*ids))
+    _fill(store, [*range(12, 15), *range(17, 30)])
 
-    segments = merge_segments(selected, counter=counter)
+    # `radius=0`：本用例测的是**合并**，不测扩窗（扩窗会把缺口填上）
+    segments = merge_segments(_expand(store, _ranked(*ids), radius=0), counter=counter)
 
-    assert [(s.start_pair_idx, s.end_pair_idx) for s in segments] == [(8, 11), (15, 16), (30, 30)]
+    # ⚠ 段边界断言的是 `seq`（稠密序）而非块号——`start_seq/end_seq` 是**读出来的下标**，
+    #   不是 `chunk_ordinal`（见 `ContextSegment` 的字段说明）。块号看 `source_memory_ids`。
+    assert [(s.start_seq, s.end_seq) for s in segments] == [(0, 3), (7, 8), (22, 22)]
     assert [s.length for s in segments] == [4, 2, 1]
     assert [s.source_memory_ids for s in segments] == [
         tuple(ids[0:4]),
@@ -333,17 +367,18 @@ def test_contiguous_runs_of_any_length_merge_into_one_segment(
 
     assert len(segments) == 1
     assert segments[0].length == n
-    assert segments[0].start_pair_idx == 0
-    assert segments[0].end_pair_idx == n - 1
+    assert segments[0].start_seq == 0
+    assert segments[0].end_seq == n - 1
     assert segments[0].source_memory_ids == tuple(ids)
 
 
 def test_a_gap_starts_a_new_segment(store: SqliteStore, counter: FakeCounter) -> None:
-    """**非连续的 `pair_idx` 一律新建一段**——差 1 是边界，差 2 就断开。"""
-    ids = _line(store, [0, 1, 3, 4, 6])  # 在 2 和 5 处断开
-    segments = merge_segments(_expand(store, _ranked(*ids)), counter=counter)
+    """**非连续的 `seq` 一律新建一段**——差 1 是边界，差 2 就断开。"""
+    ids = _line(store, [0, 1, 3, 4, 6])
+    _fill(store, [2, 5])  # 2 和 5 也在对话里，只是没被选中 ⇒ 该断开
+    segments = merge_segments(_expand(store, _ranked(*ids), radius=0), counter=counter)
 
-    assert [(s.start_pair_idx, s.end_pair_idx) for s in segments] == [(0, 1), (3, 4), (6, 6)]
+    assert [(s.start_seq, s.end_seq) for s in segments] == [(0, 1), (3, 4), (6, 6)]
 
 
 def test_adjacent_member_extends_the_previous_segment_rather_than_creating_one(
@@ -355,21 +390,23 @@ def test_adjacent_member_extends_the_previous_segment_rather_than_creating_one(
     段数少了，`top_k` 名额与 token 预算都省下来——这正是合并的意义。
     """
     contiguous = _line(store, [20, 21, 22, 23], session_id="s1")
-    # 同样的 4 条，但两两相邻
+    # 同样的 4 条，但两两相邻——中间那几块**也在对话里**，只是没被选中
     split = _line(store, [30, 31, 40, 41], session_id="s2")
+    _fill(store, range(32, 40), session_id="s2")
 
-    c = merge_segments(_expand(store, _ranked(*contiguous)), counter=counter)
-    s = merge_segments(_expand(store, _ranked(*split)), counter=counter)
+    c = merge_segments(_expand(store, _ranked(*contiguous), radius=0), counter=counter)
+    s = merge_segments(_expand(store, _ranked(*split), radius=0), counter=counter)
 
     assert [seg.length for seg in c] == [4]  # 一段
     assert [seg.length for seg in s] == [2, 2]  # 两段
 
 
 def test_different_sessions_never_merge(store: SqliteStore, counter: FakeCounter) -> None:
-    """**不同 session 永远不能合并**——即使 `pair_idx` 刚好接得上。
+    """**不同 session 永远不能合并**——即使位置刚好接得上。
 
     ⚠ 分组键里就带着 `session_id`，所以跨 session 合并**在结构上做不到**，
-    不是靠一句 `if`。本用例特意让 `s2` 从 `s1` 的下一格开始，把那条边界顶到脸上。
+    不是靠一句 `if`。两个 session 各从 0 起编号，所以它们的 `seq` **必然**接得上
+    ——这条边界**每次**都被顶到脸上，不需要特意构造。
     """
     s1 = _line(store, [0, 1], session_id="s1")
     s2 = _line(store, [2, 3], session_id="s2")
@@ -392,23 +429,23 @@ def test_different_users_never_merge(store: SqliteStore, counter: FakeCounter) -
     assert {s.user_id for s in segments} == {"alice", "bob"}
 
 
-def test_members_within_a_segment_are_ordered_by_pair_idx(
+def test_members_within_a_segment_are_ordered_by_seq(
     store: SqliteStore, counter: FakeCounter
 ) -> None:
-    """段内 = **`pair_idx` 升序**（会话顺序），**不把种子提到最前**（§11.2）。
+    """段内 = **`seq` 升序**（会话顺序），**不把种子提到最前**（§11.2）。
 
     ⚠ 种子在段中间是常态（它前面被扩出来的邻居才是上下文）。
     把种子提到最前会把一段话**拦腰截断**，而答案阶段按前缀截断——
     截断点从此落在段内部，模型读到的是半截对话。
     """
     ids = _line(store, [10, 11, 12, 13])
-    # 名次故意与 pair_idx 反过来：种子是 pair 12（名次 0）与 pair 11（名次 1）
+    # 名次故意与位置反过来：种子是第 12 块（名次 0）与第 11 块（名次 1）
     ranked = _ranked(ids[2], ids[1])
 
     segments = merge_segments(_expand(store, ranked), counter=counter)
 
     assert segments[0].source_memory_ids == (ids[0], ids[1], ids[2], ids[3])
-    assert [s.start_pair_idx for s in segments] == [10]
+    assert [s.start_seq for s in segments] == [0]
     # 种子**不在**段首——它在它本来该在的位置上
     assert segments[0].anchor_memory_id == ids[2]
     assert segments[0].source_memory_ids[0] != segments[0].anchor_memory_id
@@ -418,7 +455,7 @@ def test_members_within_a_segment_are_ordered_by_pair_idx(
 
 
 def test_best_rank_is_the_minimum_among_real_candidates(store: SqliteStore) -> None:
-    """规格里的另一个例子：`pair9` 邻居 / `pair10` 名次 2 / `pair11` 名次 57 / `pair12` 邻居
+    """规格里的另一个例子：第 9 块邻居 / 第 10 块名次 2 / 第 11 块名次 57 / 第 12 块邻居
     ⇒ `best_rank = 2`，锚点 = `pair10`。
 
     ⚠ 段里**有多条真实候选时取最小的那个**——取最后一条、或取段内第一条，
@@ -434,12 +471,12 @@ def test_best_rank_is_the_minimum_among_real_candidates(store: SqliteStore) -> N
 
     assert len(segments) == 1
     seg = segments[0]
-    assert (seg.start_pair_idx, seg.end_pair_idx) == (9, 12)
+    assert (seg.start_seq, seg.end_seq) == (0, 3)
     assert seg.best_rank == 2
     assert seg.anchor_memory_id == ids[1]  # pair 10
     assert seg.length == 4
     assert seg.rerank_member_count == 2  # 9/12 是邻居
-    assert {m.pair_idx for m in expansion.selected if m.is_neighbor} == {9, 12}
+    assert {m.seq for m in expansion.selected if m.is_neighbor} == {0, 3}
 
 
 def test_neighbors_do_not_change_segment_priority(store: SqliteStore) -> None:
@@ -461,7 +498,7 @@ def test_neighbors_do_not_change_segment_priority(store: SqliteStore) -> None:
 
     assert len(without) == len(with_neighbors) == 1
     assert without[0].length == 2  # 只有那两条真实候选
-    assert with_neighbors[0].length == 4  # 加上扩出来的 pair 9 / 12
+    assert with_neighbors[0].length == 4  # 加上扩出来的第 9 / 12 块
 
     # ★ 关掉扩窗只减少上下文：优先级与锚点原封不动
     assert without[0].best_rank == with_neighbors[0].best_rank == 2
@@ -488,17 +525,17 @@ def test_anchor_comes_from_the_best_ranked_candidate_not_the_first_member(
     assert seg.anchor_memory_id == ids[1]
     assert seg.anchor_event_time == 1683525360000
     assert seg.best_rank == 0
-    assert seg.source_memory_ids[0] != seg.anchor_memory_id  # pair 5 才是第一条
+    assert seg.source_memory_ids[0] != seg.anchor_memory_id  # 第 5 块才是第一条
 
 
 def test_segments_are_sorted_by_best_rank(store: SqliteStore, counter: FakeCounter) -> None:
-    """**段间按 `best_rank` 升序**——相关性顺序，不是 `pair_idx` 顺序，也不是段长。
+    """**段间按 `best_rank` 升序**——相关性顺序，不是位置顺序，也不是段长。
 
     ⚠ 段内是"会话顺序"、段间是"相关性顺序"（§11.2 的两条规则）。
     两边搞反不会报错：返回的每一段都完整、合法，只是**最好的一段不在最前面**——
     而答案阶段按前缀截断，于是最相关的那段可能整个被丢掉。
     """
-    # 落库顺序与 pair_idx 顺序都刻意与"应当的段顺序"相反
+    # 落库顺序与位置顺序都刻意与"应当的段顺序"相反
     late = _line(store, [90, 91], session_id="s_late")
     mid = _line(store, [50], session_id="s_mid")
     early = _line(store, [10, 11, 12], session_id="s_early")
@@ -513,7 +550,7 @@ def test_segments_are_sorted_by_best_rank(store: SqliteStore, counter: FakeCount
 
 
 def test_segment_content_is_the_rendered_run_in_order(store: SqliteStore) -> None:
-    """段的 `content` = 段内各对**按 `pair_idx` 序**渲染后、用 `SEGMENT_SEP` 连起来。
+    """段的 `content` = 段内各对**按位置序**渲染后、用 `SEGMENT_SEP` 连起来。
 
     ⚠ 走 [`common/render`](../../src/tianxi_am/common/render.py)——它是渲染的**唯一实现**
     （不变式 I1）。这里断言的是"段这一层没有自己拼字符串"。
@@ -712,8 +749,8 @@ def test_seed_placement_front_moves_only_the_text(store: SqliteStore) -> None:
     assert front.source_memory_ids == keep.source_memory_ids
     assert front.anchor_memory_id == keep.anchor_memory_id
     assert front.best_rank == keep.best_rank
-    assert front.start_pair_idx == keep.start_pair_idx
-    assert front.end_pair_idx == keep.end_pair_idx
+    assert front.start_seq == keep.start_seq
+    assert front.end_seq == keep.end_seq
     # 段内的对**一个不多一个不少**（只是重排）
     assert sorted(front.content.split("\n")) == sorted(keep.content.split("\n"))
 

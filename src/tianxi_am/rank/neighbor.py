@@ -3,9 +3,9 @@
 ```text
 ranked（已去重、已 rerank 的名次）
   → ① 全部保留进 selected（rerank_rank = 真实名次）
-  → ② 只对前 expansion_seed_limit 条扩窗 ± radius（**SQL 在 store/**）
+  → ② 只对前 expansion_seed_limit 条扩窗 ± radius（**整段取回，按会话下标切窗口**）
   → ③ 新扩出来的进 selected（rerank_rank = None —— **不造排名**）
-  → ④ 按 (user_id, session_id) 分组、组内按 pair_idx 升序，**一次线性扫描**合并成段
+  → ④ 按 (user_id, session_id) 分组、组内按 `seq` 升序，**一次线性扫描**合并成段
   → ⑤ 段按 best_rank（段内最小的真实名次）升序
 ```
 
@@ -17,20 +17,35 @@ ranked（已去重、已 rerank 的名次）
    —— 编个假名次会让"段优先级只看真实名次"失去意义，锚点也会指向一条从没被选中过的记忆
 3. **禁止跨 session 扩窗**
    —— 那是跨对话拼接，语义上不成立；而这两个字段是**隔离契约**（§2.2）
-4. **只有 `pair_idx` 相邻才合并**
+4. **只有 `seq` 相邻才合并**
    —— 段的定义就是"连续对话"；硬拼不连续的对会让模型读到**断裂的上下文**，而 `content` 里看不出来
-5. **段内顺序只能是 `pair_idx` 升序**
+5. **段内顺序只能是 `seq` 升序**
    —— 把种子提到最前会把一段话**拦腰截断**（§11.2），而答案阶段按前缀截断
+
+## D25：相邻性从"整数加一"换成"会话内稠密序 `seq`"
+
+旧口径的位置是 `pair_idx`（session 内连续整数，写时 `MAX+1` 分配），所以"相邻"可以直接
+写成 `b == a + 1`、扩窗可以直接写成 `BETWEEN k-r AND k+r`。
+
+D25 把位置换成 `(chunk_ordinal, local_index)`（**请求的纯函数**，见
+[`../../../docs/decisions.md`](../../../docs/decisions.md) 的 D25），它**可能有空洞**
+（跳号、某批没产出块）⇒ 整数算术**不再等于**"会话里前后各 r 个"。⇒ 改成：
+
+* **扩窗**：取回该 session 的**整段有序列表**，按**列表下标**切 `[i-r, i+r]`
+* **合并**：按 `seq`（`ROW_NUMBER()` 现算的稠密序）判相邻
+
+两者都让**缺号不破坏相邻**，而"中间真的少了一块"仍然被抓住（`seq` 有洞）。
 
 ## 为什么扩窗要读 SQLite 而不是 Qdrant
 
-§6.3 的分工：**正文不进 Qdrant**。邻域查询正好命中
-`UNIQUE(user_id, session_id, pair_idx)` 的索引（不变式 4）——一次 `BETWEEN`、不扫全表。
+§6.3 的分工：**正文不进 Qdrant**。邻域查询走
+`UNIQUE(user_id, session_id, chunk_ordinal, local_index)` 建出的索引（不变式 4）
+——`WHERE` 命中前两列前缀、`ORDER BY` 命中后两列 ⇒ **不扫全表、不额外排序**。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, cast
 
 from tianxi_am.common.annotate import annotate
@@ -56,7 +71,7 @@ __all__ = [
 #: 各写一份会出现"代码默认值 30 / 配置里写了 20"这种没人会发现的漂移——它只会表现为
 #: "扩窗比预期少了几条"，**不报错**。
 #:
-#: ⚠ 半径的单位是 **QA 对**：`±1` 拿回前后各**一整对**（最多 4 条消息），
+#: ⚠ 半径的单位是 **记忆块**（D24 前叫 QA 对）：`±1` 拿回前后各**一整块**（最多 4 条消息），
 #: 不是各一条消息——**扩窗比 message 粒度时更贵**（值见 config-reference §6）。
 
 
@@ -73,8 +88,16 @@ class SelectedMemory:
     is_neighbor: bool
 
     @property
-    def pair_idx(self) -> int:
-        return self.pair.pair_idx
+    def seq(self) -> int:
+        """**会话内稠密序**（0-based 连续，按 `(chunk_ordinal, local_index)` 排）。
+
+        ⚠ 它**不是列**，由 `store.fetch_session_ordered` 的 `ROW_NUMBER()` 现算。
+        ⚠ **它必须是真值**：`expand_neighbors` 保证每条 `SelectedMemory` 都拿到它
+        （候选那一路由 `fetch_pairs_by_ids` 回来时是 `-1`，那里补过一次）。
+        `-1` 流进 `merge_segments` 的相邻判断会让**所有块各自成段**，
+        而那看起来只像"检索质量差"。
+        """
+        return self.pair.seq
 
     @property
     def session_key(self) -> tuple[str, str]:
@@ -134,6 +157,25 @@ def expand_neighbors(
         pairs = store.fetch_pairs_by_ids(conn, list(by_id))
         pair_by_id: dict[str, QaPair] = {p.id: p for p in pairs}
 
+        # ② 给候选所在的每个 session **取一次有序全段**（带 `seq`）。同时供两处用：
+        #      (a) 补上候选自己的 `seq`——`fetch_pairs_by_ids` 给不了（见它的 docstring：
+        #          按主键取一批没有会话上下文，窗口函数只会算出"这一批里的第几个"）
+        #      (b) 给种子切 `±radius` 窗口
+        #    ⚠ **一个 session 只取一次**：种子密集时同一个 session 会被反复扩窗，
+        #    重复查询纯属浪费（D17：每次都要 connect）；也让同一 session 的多个种子
+        #    看到**同一份**快照。
+        session_cache: dict[tuple[str, str], list[QaPair]] = {}
+        for row in pair_by_id.values():
+            # ⚠ 变量名不与下面那个 `pair` 复用：mypy 会按第一次赋值定死类型，
+            #   而下一个 `pair` 是 `QaPair | None`（`.get()` 的返回）
+            key = (row.user_id, row.session_id)
+            if key not in session_cache:
+                session_cache[key] = store.fetch_session_ordered(conn, *key)
+        #: `id → 它在会话里的下标`。`ordered` 按 `seq` 升序且 0-based 连续 ⇒ 下标就是 `seq`。
+        pos_by_id: dict[str, int] = {
+            q.id: index for ordered in session_cache.values() for index, q in enumerate(ordered)
+        }
+
         selected: dict[str, SelectedMemory] = {}
         for memory_id, candidate in by_id.items():
             pair = pair_by_id.get(memory_id)
@@ -141,7 +183,10 @@ def expand_neighbors(
                 continue  # 真源缺行 ⇒ 记进 missing_rows，不补造
             selected[memory_id] = SelectedMemory(
                 memory_id=memory_id,
-                pair=pair,
+                # ★ 补上 `seq`：`merge_segments` 按它排序与判相邻，而按主键取回来的行
+                #   `seq` 是 `-1` ⇒ 不补的话**所有块都会各自成段**，
+                #   而那看起来只像"检索质量差"。
+                pair=replace(pair, seq=pos_by_id[pair.id]),
                 rerank_rank=candidate.rank,
                 is_neighbor=False,
             )
@@ -156,14 +201,13 @@ def expand_neighbors(
         for seed in seeds:
             anchor = selected.get(seed.memory_id)
             if anchor is None:
-                continue  # 种子自己的真源行缺失 ⇒ 连它的 session/pair_idx 都不知道，扩不了
-            window = store.fetch_pairs_by_idx_range(
-                conn,
-                anchor.pair.user_id,
-                anchor.pair.session_id,
-                anchor.pair_idx - radius,
-                anchor.pair_idx + radius,
-            )
+                continue  # 种子自己的真源行缺失 ⇒ 连它在会话里的位置都不知道，扩不了
+            ordered = session_cache[(anchor.pair.user_id, anchor.pair.session_id)]
+            center = pos_by_id[anchor.memory_id]
+            # ⚠ 按**列表下标**切，不是 `pair_idx - r .. + r` 那种整数算术：
+            #    位置（`chunk_ordinal`）有空洞时整数窗口会拿到"位置上相邻、
+            #    会话里不相邻"的块。这里实现的是**"会话里前后各 r 个"**这个定义本身。
+            window = ordered[max(0, center - radius) : center + radius + 1]
             for pair in window:
                 # 已经在里面（它本身就是候选，或已被前一个种子扩到）⇒ **跳过**
                 if pair.id in selected:
@@ -188,12 +232,12 @@ class ContextSegment:
     """一段**连续**对话（§11.2 / §11.3）。**它是 v1 打包与预算的原子单位。**"""
 
     source_memory_ids: tuple[str, ...]
-    """段内全部记忆的 `id`，**按 `pair_idx` 升序**（= 会话顺序）。"""
+    """段内全部记忆的 `id`，**按 `seq` 升序**（= 会话顺序）。"""
 
     user_id: str
     session_id: str
-    start_pair_idx: int
-    end_pair_idx: int
+    start_seq: int
+    end_seq: int
 
     anchor_memory_id: str
     """**段优先级的来源**：段内真实名次最好的那条候选的 `id`。
@@ -206,7 +250,7 @@ class ContextSegment:
     """锚点的 `event_time` ⇒ 最终响应的 `created_at`（UTC 日粒度）。"""
 
     content: str
-    """`common/render` 拼好的正文（`render` 逐对 + `render_segment` 连接）。"""
+    """`common/render` 拼好的正文（`render` 逐块 + `render_segment` 连接）。"""
 
     token_count: int
     """**对 `content` 这个真实字符串**数的 token（§6.4）——不是各对 token 之和。"""
@@ -216,7 +260,7 @@ class ContextSegment:
 
     @property
     def length(self) -> int:
-        """段里有几个 QA 对。"""
+        """段里有几个记忆块。"""
         return len(self.source_memory_ids)
 
 
@@ -228,33 +272,37 @@ def merge_segments(
     seed_placement: str = "keep",
     annotate_relatives: bool = False,
 ) -> list[ContextSegment]:
-    """把选中的记忆按"连续 `pair_idx`"合并成段，并按 `best_rank` 升序返回。
+    """把选中的记忆按"连续 `seq`"合并成段，并按 `best_rank` 升序返回。
 
-    **算法是一次线性扫描**：按 `(user_id, session_id)` 分组 → 组内按 `pair_idx` 升序 →
-    遍历维护"当前段"，`pair_idx == end + 1` 就**直接延长**，否则收尾当前段、新建一段。
+    **算法是一次线性扫描**：按 `(user_id, session_id)` 分组 → 组内按 `seq` 升序 →
+    遍历维护"当前段"，`seq == end + 1` 就**直接延长**，否则收尾当前段、新建一段。
+
+    ⚠ `seq` 是**读时的会话内稠密序**（D25），不是 `chunk_ordinal`：所以"中间少了一个块"
+    仍然被抓住（`seq` 有洞 ⇒ 中间真的少了一块），而"chunk 序号跳号"（AML 那边的批次编号）
+    **不会**被误判成断裂。
 
     ⚠ **不同 session 永远不能合并**：分组键里就带着 `session_id`，所以
     跨 session 合并**在结构上做不到**，而不是靠一句判断。
 
-    ⚠ **只有 `pair_idx` 严格相邻才延长**。`end + 1` 而不是 `end + k`：
-    中间缺一个对就说明那段对话**不完整**，硬拼成一整段会让模型读到自己以为连续、
+    ⚠ **只有 `seq` 严格相邻才延长**。`end + 1` 而不是 `end + k`：
+    中间缺一个块就说明那段对话**不完整**，硬拼成一整段会让模型读到自己以为连续、
     实际缺了一环的上下文——而 `content` 里**看不出来**。
 
-    ⚠ 段内顺序 = `pair_idx` 升序（**不把锚点提到最前**，§11.2）。
+    ⚠ 段内顺序 = `seq` 升序（**不把锚点提到最前**，§11.2）。
     """
-    # ── 分组：session_key → 该 session 的成员，组内按 pair_idx 升序 ──
+    # ── 分组：session_key → 该 session 的成员，组内按 seq 升序 ──
     groups: dict[tuple[str, str], list[SelectedMemory]] = {}
     for memory in selected:
         groups.setdefault(memory.session_key, []).append(memory)
 
     segments: list[ContextSegment] = []
     for (user_id, session_id), members in groups.items():
-        members.sort(key=lambda m: m.pair_idx)
+        members.sort(key=lambda m: m.seq)
 
         # 一次线性扫描：`runs` 里每个元素是一段连续的成员列表
         runs: list[list[SelectedMemory]] = []
         for memory in members:
-            if runs and memory.pair_idx == runs[-1][-1].pair_idx + 1:
+            if runs and memory.seq == runs[-1][-1].seq + 1:
                 runs[-1].append(memory)  # ★ 直接延长，不新建
             else:
                 runs.append([memory])
@@ -290,7 +338,7 @@ def _build_segment(
     """把一段连续的成员收成一个 `ContextSegment`（含渲染与计数）。"""
     # 锚点 = 段内**真实名次最好**的那条。邻居（rerank_rank is None）不参与。
     #
-    # ⚠ 扩窗窗口是 `[k-r, k+r]` 的**整段**行，所以种子必与它扩出来的邻居同段 ⇒ 段里
+    # ⚠ 扩窗窗口是"种子前后各 r 个"的**连续区间**，所以种子必与它扩出来的邻居同段 ⇒ 段里
     #    至少有一条真实候选。但 `radius` 可配、`selected` 也可能被别的调用方构造出来，
     #    所以这里**不假设**那个不变量：全是邻居时取会话顺序的第一条当锚点，而不是崩掉。
     ranked_members = [m for m in run if m.rerank_rank is not None]
@@ -303,9 +351,9 @@ def _build_segment(
     best_rank = anchor.rerank_rank if anchor.rerank_rank is not None else _NO_RANK
 
     # ── 段内顺序（§11.2 的"组内顺序"，明文列为**可消融项**）─────────────────────
-    # 默认 `keep`：纯 `pair_idx` 时间序。它当初被选中的理由是"窗口是一段连续对话，
+    # 默认 `keep`：纯 `seq` 时间序。它当初被选中的理由是"窗口是一段连续对话，
     # 按时间序读才成立"——所以另两个变体**都要用数据说话**，不能凭直觉换。
-    # ⚠ 它们**只改渲染顺序**：`source_memory_ids` / `start_pair_idx` / 锚点 / `best_rank`
+    # ⚠ 它们**只改渲染顺序**：`source_memory_ids` / `start_seq` / 锚点 / `best_rank`
     #   一个都不动（否则"段优先级只看真实候选"这条不变式就破了）。
     ordered = run
     echoed: list[SelectedMemory] = []
@@ -314,7 +362,7 @@ def _build_segment(
     elif seed_placement == "echo" and anchor in run:
         echoed = [anchor]  # 段首重复一份；下面的时间序块**原样保留**
 
-    # ⚠ 逐对渲染，且**日期口径与索引侧、精排输入侧完全一致**（不变式 I1 / T1）：
+    # ⚠ 逐块渲染，且**日期口径与索引侧、精排输入侧完全一致**（不变式 I1 / T1）：
     #    `inject_abs_time` 由 `packaging.inject_abs_time` 传下来，三处读的是同一个值。
     #
     # ⚠ 而 `annotate_relatives`（`packaging.annotate_relatives`）**只在这一处生效**——
@@ -330,9 +378,9 @@ def _build_segment(
         )
         if not annotate_relatives:
             return text
-        anchor = event_day(member.pair.event_time)
+        anchor_day = event_day(member.pair.event_time)
         # 没有 `event_time` 就没有锚点 ⇒ **一个字都不动**（编一个日期比不注解更糟）
-        return text if anchor is None else annotate(text, anchor)
+        return text if anchor_day is None else annotate(text, anchor_day)
 
     content = render_segment([*(_text(m) for m in echoed), *(_text(m) for m in ordered)])
 
@@ -340,13 +388,13 @@ def _build_segment(
         source_memory_ids=tuple(m.memory_id for m in run),
         user_id=user_id,
         session_id=session_id,
-        start_pair_idx=run[0].pair_idx,
-        end_pair_idx=run[-1].pair_idx,
+        start_seq=run[0].seq,
+        end_seq=run[-1].seq,
         anchor_memory_id=anchor.memory_id,
         best_rank=best_rank,
         anchor_event_time=anchor.pair.event_time,
         content=content,
-        # ★ 对**拼好的真实字符串**计数，不是把各对的计数加起来
+        # ★ 对**拼好的真实字符串**计数，不是把各块的计数加起来
         token_count=counter.count(content),
         rerank_member_count=len(ranked_members),
     )

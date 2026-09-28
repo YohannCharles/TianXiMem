@@ -281,8 +281,6 @@ def test_default_profile_loads_the_repo_yaml(config_dir: Path) -> None:
     assert cfg.retrieval.rrf.k == RRF_K
     assert cfg.retrieval.rrf.weights == (0.5, 0.5)
     assert cfg.retrieval.query_instruction == ""
-    assert cfg.pairing.batch_max_messages == 20
-    assert cfg.pairing.batch_max_words == 2000
     assert cfg.server.workers == 1
     # 2026-09-25 起默认为 True（**D21 推翻了 §11.3 的"不加"**，有 346 题的反例）——
     # 这条断言是那个决定在本仓的**回归位**：谁把它改回去，这里立刻红。
@@ -377,7 +375,6 @@ def test_profile_overlays_only_what_it_names(config_dir: Path) -> None:
     # 其余一律继承
     assert local.retrieval.rrf.weights == base.retrieval.rrf.weights
     assert local.retrieval.prefetch_limit == base.retrieval.prefetch_limit
-    assert local.pairing.batch_max_messages == base.pairing.batch_max_messages
     assert local.models.embedder == base.models.embedder
 
 
@@ -424,13 +421,11 @@ def test_thresholds_are_not_overridable_from_env(config_dir: Path) -> None:
         config_dir,
         TIANXI_PREFETCH_LIMIT="999",
         TIANXI_RRF_K="2",
-        TIANXI_BATCH_MAX_MESSAGES="3",
         AML_EMB_MODEL="some-other-model",
     )
 
     assert cfg.retrieval.prefetch_limit == 200  # yaml 说了算
     assert cfg.retrieval.rrf.k == RRF_K
-    assert cfg.pairing.batch_max_messages == 20
     assert cfg.models.embedder == "Qwen/Qwen3-Embedding-8B"
 
 
@@ -479,9 +474,11 @@ def test_model_default_is_the_same_in_both_places() -> None:
 def test_workers_must_be_one(config_dir: Path) -> None:
     """**`workers != 1` 拒绝启动**（§15）。
 
-    `SessionLocks` 是**进程内** `threading.Lock`，多 worker 会**静默失效**——
-    每个 worker 各有各的锁，同 session 的两个批次照旧并发，`pair_idx` 撞车。
-    所以这条不能只是文档警告。
+    ⚠ **D25 之后原因变了**（结论没变）：旧理由是"`SessionLocks` 是进程内锁，
+    多 worker 下每个 worker 各有各的锁 ⇒ 静默失效"。`SessionLocks` 已删，
+    那条不再成立；现在拒的是**"放开多 worker 需要的验证一件都没做"**
+    （并发写压力、`busy_timeout` 争用、多进程各自的 Qdrant 客户端）。
+    ⇒ 这条不能只是文档警告，因为**去掉它的诱惑比从前更大了**。
     """
     with pytest.raises(ConfigError, match="server.workers"):
         _load(config_dir, **{ENV_WORKERS: "4"})
@@ -499,8 +496,7 @@ def test_workers_must_be_one(config_dir: Path) -> None:
         ("retrieval.prefetch_limit", 0),
         ("retrieval.prefetch_limit", -1),
         ("storage.sqlite.busy_timeout_ms", 0),
-        ("pairing.batch_max_messages", 0),
-        ("pairing.batch_max_words", -5),
+        ("rerank.timeout_seconds", 0),
     ],
 )
 def test_non_positive_numbers_are_rejected(config_dir: Path, key: str, value: int) -> None:
@@ -600,9 +596,9 @@ def test_malformed_yaml_fails_loudly(config_dir: Path) -> None:
 def test_wrong_type_fails_loudly(config_dir: Path) -> None:
     """类型不对时错误里带**键名与收到的值**。"""
     (config_dir / "default.yaml").write_text(
-        "pairing:\n  batch_max_messages: twenty\n", encoding="utf-8"
+        "retrieval:\n  prefetch_limit: many\n", encoding="utf-8"
     )
-    with pytest.raises(ConfigError, match="pairing.batch_max_messages"):
+    with pytest.raises(ConfigError, match="retrieval.prefetch_limit"):
         _load(config_dir)
 
 

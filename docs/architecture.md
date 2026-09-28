@@ -12,17 +12,20 @@
 
 ```text
 1. 幂等守卫         查 applied_batches；命中 → 直接 200，不写任何东西
-2. 恢复位置         next_idx = MAX(pair_idx)+1；定位**可续写的对**
-3. 挂接本批消息     前导 user → 并入它的 question；前导非 user → 追加到它的 answer；
-                    首个 user **且它已有 answer** → 关闭它；
-                    其余按 §6.2 配对，pair_idx 从 next_idx 起连续赋值
-4. 同一事务         upsert qa_pairs（填空 + 追加，绝不覆盖）
+2. 取位置           chunk_ordinal = parse_chunk_ordinal(request_id)   ← 来自请求（**D25**）
+3. 组合             compose_memory_blocks(messages)   ← 只看本批，无跨 Add 状态（**D24**）
+4. 同一事务         INSERT qa_pairs（每块一行、`(chunk_ordinal, local_index=i)`、status 恒为 complete）
                     + 向 applied_batches 插入本批记录
-5. 同步 upsert      Qdrant（wait=true）；补全的对必须**重算 embedding**
+5. 同步 upsert      Qdrant（wait=true）
 6. 返回 200
 ```
 
-**第 1 步不能省，这是本项目最容易踩的陷阱**（§6.5）：内容写入靠"填空 + 追加"确实幂等，但**位置分配不幂等**。事务提交后、响应发出前崩溃 → AML 重试同一批 → `MAX(pair_idx)` 已前移 → 同一批消息落到**新的 `pair_idx`** 上，重复记录，**且不报错**。
+**D24（2026-09-27）起第 3 步不再有跨批分支**——组合的边界是一次 Add。
+**D25（2026-09-27）起第 2 步不再读库**——位置是**请求的纯函数**（`chunk_ordinal` 从 `request_id` 解析，
+`local_index` 是本批块序号），所以既没有读-改-写，也没有 `SessionLocks`；同 session 的 Add 可以并发，
+**乱序到达也不会翻转会话顺序**。⚠ 解析不到 chunk 序号 ⇒ **响亮失败**（非 200），不回退。
+**第 1 步不能省**：位置虽然幂等了，但 AML 的重试是**正常行为**，不能每次都靠撞 `UNIQUE` 兜
+（那会把正常重试变成 500）。
 
 **第 4 步与第 5 步的边界**：SQLite 是事务的，Qdrant 不是。因此第 4 步先落真源、第 5 步再同步派生索引；若第 5 步失败，Qdrant 可以从 SQLite 重建（它是派生读存储），而反过来不行。
 
@@ -48,7 +51,12 @@ query → BM25 ┐
 ```
 
 > **`top_k` 数的是段、不是 raw memory**：扩窗会把 raw 条数抬到 `top_k` 之上，
-> 而连续 `pair_idx` 的合并又把它降回来 ⇒ **截断只能在合并之后做**。
+> 而相邻块的合并又把它降回来 ⇒ **截断只能在合并之后做**。
+
+> ⚠ **"相邻"自 D25 起是读时稠密序 `seq`**，不是 `pair_idx`：
+> `ROW_NUMBER() OVER (PARTITION BY user_id, session_id ORDER BY chunk_ordinal, local_index) - 1`。
+> 顺序 ingest 下 `seq` 与旧 `pair_idx` **逐一相等** ⇒ 行为不变；好处是 chunk 序号**跳号不破坏相邻**，
+> 而"中间真的少了一块"仍然被抓住。
 
 **"合并而非替换"**（§9）：Agent 的产出与初始候选按 `id` 去重后一起进 Rerank。理由——初始那一路往往已经有正确答案，Agent 的价值是**补上它找不到的那部分**，而不是推翻它。
 
@@ -58,8 +66,8 @@ query → BM25 ┐
 
 | 目录 | 负责什么 | PRD |
 | --- | --- | --- |
-| `service/` | HTTP 层：`POST /add`、`POST /search`（+ `GET /health` 探活）；请求/响应模型；按 `(user_id, session_id)` 串行化 | §2.1、§15 |
-| `pairing/` | QA 对配对判据；批次续接三步；`pending` 判定；**§15 写入路径的唯一所有者** | §6.2、§6.5、§15 |
+| `service/` | HTTP 层：`POST /add`、`POST /search`（+ `GET /health` 探活）；请求/响应模型；~~按 `(user_id, session_id)` 串行化~~（⛔ **D25 已删**——位置成为请求的纯函数后不再需要） | §2.1、§15 → **D25** |
+| `pairing/` | **记忆块组合（一次 Add = 唯一边界，D24）**；幂等守卫 + 位置分配 + 落库；**§15 写入路径的唯一所有者** | §6.2、§6.5（D24 后的口径）、§15 |
 | `store/` | SQLite 真源（`qa_pairs` + `applied_batches`）；Qdrant 派生索引；邻域查询的 SQL | §6.1、§6.3 |
 | `embed/` | `Embedder` 协议 + 两个实现；**落盘的向量缓存** | §7.4、§7.2 |
 | `retrieve/` | BM25；dense；**混合检索的策略与参数所有权**；Evidence Checker（**到 rerank 为止**） | §7.1–§7.3、§8 |
@@ -67,7 +75,7 @@ query → BM25 ┐
 | `agent/` | Conditional Agentic Search 循环与三个工具 | §9 |
 | `llm/` | LLM 后端抽象（`gpt-4o-mini` / qwen3.5-9b） | §2.3、§12.1 |
 | `common/` | **渲染模板的唯一实现**；token 计数；配置加载 + **开关校验** | §11.3、§6.4、§15 |
-| `observability/` | §14 指标 + §6.5 三个 `pending` 计数器的聚合 | §14、§6.5 |
+| `observability/` | §14 指标（**各层发射、本层聚合**；~~§6.5 三个 `pending` 计数器~~ ⛔ **D24 已作废**） | §14 |
 
 ### 四处容易摆错的位置
 
@@ -75,7 +83,7 @@ query → BM25 ┐
 | --- | --- | --- |
 | **Neighbor Expansion** | **`rank/`** | §10 明确它跑在 rerank **之后**，属"排序 → 扩窗 → 打包"；且它是 SQLite 读，不是 Qdrant 操作。**在 §5 的流程图里它位置很靠上，极易被误读成检索的一环**（§10 开头的顺序说明是权威的） |
 | **向量缓存** | **`embed/`** | 缓存键是"渲染后文本的哈希"（§7.2），属渲染 + embedding 的关注点。且 §6.3 把这层定义为**恰好两样东西**（SQLite 真源 + Qdrant 派生索引，**明确"不可互换"**）——塞进第三个存储会削弱那条规则 |
-| **§15 的六步写入路径** | **`pairing/`** | 它是一个事务，跨"幂等守卫 → 恢复位置 → 配对 → upsert → 记旁表"。若 `service/` 也碰它，**两边会长出半个事务**。`service/` 只负责 HTTP 形状、校验、按 session 的锁，**不碰 Qdrant** |
+| **§15 的六步写入路径** | **`pairing/`** | 它是一个事务，跨"幂等守卫 → 分配位置 → 组合 → 写正文 → 记旁表"。若 `service/` 也碰它，**两边会长出半个事务**。`service/` 只负责 HTTP 形状、校验、按 session 的锁，**不碰 Qdrant** |
 | **检索的"参数"与"执行"** | **参数在 `retrieve/`，执行在 `store/qdrant_store.py`** | `prefetch_limit` / `weights` / `k` / `top_k` 的**取值、校验、标定**是检索策略（要能被配置驱动、能被 ablation 检验）；而把它们翻成 `prefetch` + `rrf` 的**Qdrant 语法**是 `store/` 的事。**分界线**：`retrieve/` 说"用什么参数"，`store/` 说"怎么发给 Qdrant"。⚠ 一份实现**不许两边都写**——`k=61` 的由来见 D5，校验只在 `retrieve/` |
 
 ---
@@ -106,7 +114,7 @@ pairing  retrieve   rank      agent
 
 1. **`store/` 是唯一接触 SQLite 与 Qdrant 的目录。** §6.3 的分工表（真源 vs 派生索引、谁能做什么谁不能做什么）只有在所有读写都收口到一处时才守得住。上层拿到的是领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`。
 2. **`common/render` 是渲染的唯一实现。** §7.2 与 §11.3 要求 **embedding 的输入**与**返回给 AML 的 `content`** 是**同一份渲染**——两处一旦不一致，"检索命中的是什么"与"模型读到的是什么"就会漂移，**而且这种漂移不会报错**。这是 `common/` 存在的全部理由：它不是工具箱，是一条不变式的落地点。
-3. **`observability` 不反向依赖业务层。** 埋点是被调用的，不是去拉取的。**每个指标由产生它的那一层发射**（`pending_*` 由 `pairing/` 发、embedding 调用数由 `embed/` 发、Agent Trigger Rate 由 `agent/` 发），本目录只聚合。
+3. **`observability` 不反向依赖业务层。** 埋点是被调用的，不是去拉取的。**每个指标由产生它的那一层发射**（embedding 调用数由 `embed/` 发、Agent Trigger Rate 由 `agent/` 发、rerank 的 `degraded`/`disabled` 由 `rank/` 发），本目录只聚合。
 
 ---
 
@@ -131,7 +139,7 @@ pairing  retrieve   rank      agent
 | 1 | Explicit fact recall | 索引单元 = **完整 QA 对**（不是 message）；**原文优先**，v1 不产生任何合成文本 | `store/` · `rank/packaging` |
 | 2 | Relational and multi-hop reasoning | `agent/` 的多轮检索（**合并而非替换**）；`retrieve/` 的 hybrid + RRF | §9 · §7.3 |
 | 3 | Temporal and event understanding | `event_time` 列负责**筛选**；正文**保留原始时间表述**；`created_at` 日粒度 | §11.3 |
-| 4 | **Memory governance** | ① **批次级幂等守卫**（`applied_batches`）② `status` 只允许 `pending → complete` ③ **写入是填空 + 追加，绝不覆盖** ④ 补全时**重算 embedding** | §6.1 · §6.5 |
+| 4 | **Memory governance** | ① **批次级幂等守卫**（`applied_batches`）② **块写下即最终**、此后再无改写路径（**D24**）③ 索引损坏时可从真源全量重建（`tools/reindex.py`） | §6.1 · §6.5（**D24** 后的口径） |
 | 5 | Personalization and care | 按 `user_id` 严格隔离；`rank/packaging` 的**原文优先**与窗口内**时间序** | §2.2 · §11.2 |
 | 6 | Rules and process execution | 契约合规本身：精确 `top_k`、双预算截断、原样回显；以及 agent 的**受控工具面**（只能给关键词与日期范围） | `service/` · §9 |
 | 7 | **Epistemic safety and privacy** | ① **`user_id` 是唯一检索隔离字段**，跨 user 检索被禁止 ② **`Search` 不生成答案、不把答案伪装成记忆记录** ③ **冲突消解靠时间可见性**（保留原始时间表述让模型看得出哪个更新） | §2.2 · §2.1 · §11.3 |
@@ -156,9 +164,9 @@ pairing  retrieve   rank      agent
 | I1 | `content` 与 embedding 输入来自**同一次渲染调用**（**一个声明式例外**：只改 `content` 的确定性注解，见下） | §7.2 / §11.3 |
 | I2 | 任何返回值都精确 ≤ `top_k`，且**同时按槽位数与 token 数双预算截断** | §2.2 / §6.4 |
 | I3 | 一个 `request_id` 至多被应用一次——守卫查 `applied_batches`，**不是查 `qa_pairs.request_id`** | §6.5 |
-| I4 | `pair_idx` 在 session 内**连续**；有空洞则邻域静默消失 | §6.1 |
+| I4 | ~~`pair_idx` 在 session 内**连续**；有空洞则邻域静默消失~~ ⛔ **D25 已作废**——相邻性改走**读时稠密序** `seq`，chunk 序号跳号不再破坏邻域；**留下的是它的反面**："中间真的少了一块"仍被抓住 | §6.1 → **D25** |
 | I5 | `id` 位置派生；缓存键内容哈希。**两者不能互换** | §6.1 / §7.2 |
-| I6 | 补全 `pending` 对时必须**重算 embedding 并 upsert 覆盖原 point**（`id` 不变） | §6.5 |
+| I6 | ~~补全 `pending` 对时必须**重算 embedding 并 upsert 覆盖原 point**（`id` 不变）~~ ⛔ **D24 已作废**——没有 `pending` 可补。**留下的是它的反面**：`index_pairs` 失败会留下「SQLite 有、Qdrant 没有」的行，修复路径见 `service/pipeline.py` | §6.5 → **D24** |
 | I7 | `Search` 不生成答案、不把答案伪装成记忆记录；reranker 只重排证据 | §2.1 / §11.2 |
 | I8 | 所有消融开关只影响它命名的那一件事 | §13 / §15 |
 | I9 | 每个返回项单件**带 `created_at`**（日粒度；`event_time` 为 NULL 时发 `""`） | §11.3 |

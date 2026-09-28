@@ -1,12 +1,12 @@
 # tests/ — 单元测试
 
-**PRD**：§2.2（硬性规则）、§6.5（幂等与续接）、§7.2 / §11.3（同一份渲染）、§13（开关纯度）
+**PRD**：§2.2（硬性规则）、§6.2 / **D24**（记忆块组合）、§6.5（幂等）、§7.2 / §11.3（同一份渲染）、§13（开关纯度）
 
 ## 要写什么
 
 ```text
 test_pairing.py         §6.2 配对判据（三种真实情况）
-test_continuation.py    §6.5 续接三步 + pending 判定
+test_apply.py           一次 Add 的落库边界（D24）+ 幂等协作
 test_idempotency.py     §6.5 / §15 批次级守卫
 test_contract.py        §2.1 / §2.2 契约形状与计数（含真 HTTP 往返）
 test_contract_preflight.py  `eval/smoke/preflight.py` 的静态一致性与**检查是否真会失败**
@@ -29,49 +29,56 @@ test_reranker.py        §11.2 远端精排：线格式、降级、两个计数�
 
 ---
 
-## 一、配对与续接（§6.2 / §6.5）
+## 一、记忆块组合（§6.2 / **D24**）
 
-**这是全项目逻辑最绕的一层，出错的表现是"某些记忆永远检索不到"，而不会有任何报错。**
+**组合规则一处声明在 [`../src/tianxi_am/pairing/CLAUDE.md`](../src/tianxi_am/pairing/CLAUDE.md)**，
+本节只列**要覆盖的用例**。
 
-**规则本身一处声明在 [`../src/tianxi_am/pairing/CLAUDE.md`](../src/tianxi_am/pairing/CLAUDE.md)**，本节只列**要覆盖的用例**：
+```text
+test_pairing.py    组合规则本身（纯函数）
+test_apply.py      一次 Add 的落库边界（含跨 Add 的三条）
+test_idempotency.py  批次级守卫
+```
 
-| 用例 | 覆盖 |
-| --- | --- |
-| 连续多条 user 消息 | **并进同一个 `question`**（[D20](../docs/decisions.md) 对 §6.2 字面的修正） |
-| **同 role 的 user 消息跨批到达**（超长消息被切开 / 各占一个 Add） | **仍并进同一个 `question`**，且**不依赖词数计数**——见 `test_cross_batch_fragments_*` |
-| **前一个对已有 `answer`** | 下一条 user 必须开**新**对（防过度合并） |
-| 一条 user 后跟多条 assistant | 全部归入该对，**每条带 role 标记** |
-| session 以 assistant 开头 | `question` 为空的对 |
-| **遇到未知 role** | **不得丢消息**——判据只依赖"是不是 `user`"，**不要枚举白名单**（§6.2） |
-| 跨批续接三步 | **3a′ / 3a / 3b / 3c 逐条**，**特别是 3b** |
-| **纯接续批**（零条 user 消息） | 3d 的"也走这一步"——被续写的那个对要标 `complete` |
-| `pair_idx` 连续性 | 迭代若干批后仍无空洞 |
+| 用例 | 覆盖 | 住在哪 |
+| --- | --- | --- |
+| `U A U A` / `U U A A A U A` / `A U A` / `U A U` / `A` / `U` | 六个形状逐字对照 | `test_pairing.py`（**Test 1–6**） |
+| 连续同 role 合并、相邻 U+A 配对、落单独立成块 | 同上，含工具调用序列**不劈开** | `test_pairing.py` |
+| 未知 role（`system` / `tool` …） | **不得丢消息**——判据只依赖"是不是 `user`"，**不要枚举白名单** | `test_pairing.py` |
+| 来源元数据 | `source_idxs` 合起来是 `0..n-1` 的**排列**（无丢失、无重复） | `test_pairing.py` |
+| **跨 Add 不拼接** | `Add0=[U A U]` + `Add1=[A U A]` ⇒ **不出现 U(Add0)+A(Add1)** | `test_apply.py`（**Test 7**） |
+| **连续 assistant 跨 Add** | 不合并成 `AAA` | `test_apply.py`（**Test 8**） |
+| **乱序 Add / 同 session 并发** | **D25 起是性质级断言**：乱序 + 多线程投喂的最终 `{位置集合, 每块正文, `id` 集合, `seq` 序}` 与顺序投喂**逐字一致**（不是"每个 Add 各自对"） | `test_apply.py`（**Test 9**） |
+| 同一 `request_id` 重试 | 不重复落库 / 不重复 embedding | `test_idempotency.py`（**Test 10**） |
+| `(chunk_ordinal, local_index)` 不重号 | 同 session 并发时**互不相交**（D25）；重放撞 `UNIQUE` 而**不是**静默重复 | `test_apply.py`、`test_store.py` |
+| 空批次 | **响亮失败**，不静默 no-op | `test_apply.py` |
+| `request_id` 取不出 chunk 序号 | **响亮失败**（非 200），**不许回退到"按到达顺序分配"** | `test_apply.py`、`test_contract.py` |
 
-### `pending_orphaned` 的两种来源必须可区分
+> ⛔ **不要再写这几类的用例**（D24 已把对应实现整体删除，写了也无处落）：
+> 跨批续接三步 `3a′/3a/3b/3d`、`pending` 判定与三个计数器、`open_pair` /
+> `append_question` / `append_answer` / `mark_complete`。
 
-**用例要能分别触发这两种**（两种来源的定义见 [`../src/tianxi_am/observability/CLAUDE.md`](../src/tianxi_am/observability/CLAUDE.md)）：
-
-| 来源 | 期望 |
-| --- | --- |
-| **(i) 真·残缺** | session 结束，对里确实少一半 —— **正常** |
-| **(ii) 误判残留** | 本批命中上限、最后一对**其实已完整**，下一批以 user 开头 —— **应被 3b 关掉；没关掉就是 bug** |
-
-**若测试里这两种无法区分，那三个计数器就没有诊断价值。**
-
----
-
-## 二、幂等（§6.5 / §15）—— 唯一能抓到"位置重分配"的用例
+## 二、幂等（§6.5 / §15）—— 唯一能抓到"守卫被绕开"的用例
 
 **核心用例必须模拟这个时序**：
 
 ```text
-1. 批次 A 应用成功（事务已提交，pair_idx 已分配）
+1. 批次 A 应用成功（事务已提交，位置已分配）
 2. 响应【未发出】或进程崩溃
 3. AML 重试批次 A（request_id 与 payload 不变）
-4. 断言：库里【没有新增行】，且既有行的 pair_idx 不变
+4. 断言：库里【没有新增行】，且既有行的内容不变
 ```
 
-**只测"重复 POST 两次"抓不到这个 bug**——因为重复 POST 时 `MAX(pair_idx)` 的状态与崩溃重试时**不同**。必须显式构造"提交后、响应前"的中间态。
+⚠ **D25 让这条用例的"抓什么"变了**（**结论仍是必测，理由不同了**）：
+
+| | D25 之前 | D25 之后 |
+| --- | --- | --- |
+| 位置从哪来 | `MAX(pair_idx)+1`（读-改-写） | **请求的纯函数** ⇒ 重放必然算出**同一位置** |
+| 守卫被绕开的后果 | 静默**落成重复记录** | 撞 `UNIQUE` ⇒ **整批 500** |
+| 用例抓的是 | 位置重分配 | **守卫把"正常重试"从 500 里救回来** |
+
+**只测"重复 POST 两次"仍然太弱**——它测不到"提交后、响应前"那个中间态。
+必须显式构造（这正是 ≥1 次真 HTTP 往返的用例存在的理由）。
 
 **另外两条**：
 
@@ -97,7 +104,7 @@ test_reranker.py        §11.2 远端精排：线格式、降级、两个计数�
 
 | 陷阱 | 会空过的假设 | 现在怎么造用例 |
 | --- | --- | --- |
-| **一个候选 ≠ 一项** | "落 N 条记忆 ⇒ 返回 N 项" | 想要 N 项就**把 `pair_idx` 隔开**（`0,2,4…`，见 `test_contract._idx`），或者**分属 N 个 session** |
+| **一个候选 ≠ 一项** | "落 N 条记忆 ⇒ 返回 N 项" | 想要 N 项就**把位置隔开**（`0,2,4…`，见 `test_contract._idx`），或者**分属 N 个 session**。⚠ **D25 起光隔开位置不够**——`seq` 在**已有的行**上现算，跳号的行照样挨着 ⇒ 要落满中间那些位置（`conftest.seed_line`） |
 | **相邻会被扩进来** | "只落了 1 条 ⇒ 只返回那 1 条" | 落单条时它会把 `±1` 的邻居**一起带回来**（`test_neighbor` 的那几条整链用例） |
 | **重复写入 ≠ 多一项** | "重复 POST ⇒ 检索里多一条" | 多出来的行与旧行**相邻 ⇒ 合进同一段**、只是**段变宽**。**必须比 `content`、不能只比 `id` 与条数**（`preflight.check_replay_does_not_write_again` 的两个新断言） |
 | **`score` 数的是段的位置** | "`score = 1/(rerank 名次+1)`" | 是 `1/(**输出位置**+1)`——预算跳段时照抄名次会出现空洞，而"还是单调递减" |
@@ -114,7 +121,7 @@ test_reranker.py        §11.2 远端精排：线格式、降级、两个计数�
 | `session_id` **没有**被当成 Search 的过滤条件 | 它是分组字段，不是过滤器 |
 
 **隔离要按"路径"逐个测**，不能只测主检索路径——**邻域扩展是 SQL 查询，很容易忘记带 `user_id` 条件**。
-⇒ ✅ 已覆盖：`test_neighbor.py::test_expansion_never_crosses_sessions`（同 `pair_idx`、不同 session / 不同 user
+⇒ ✅ 已覆盖：`test_neighbor.py::test_expansion_never_crosses_sessions`（**同位置**、不同 session / 不同 user
 三种行同时摆在库里，只有同 `(user_id, session_id)` 的那条能进）。
 
 ---
@@ -125,7 +132,7 @@ test_reranker.py        §11.2 远端精排：线格式、降级、两个计数�
 | --- | --- |
 | **embedding 的输入 == 返回的 `content`** | 同一个 QA 对、同一次渲染调用 |
 | `question` 为空 → 只有 `A:` 行 | §11.3 |
-| `answer` 为空（`pending`） → 只有 `Q:` 行 | §11.3 |
+| `answer` 为空（块里没有非 user 消息） → 只有 `Q:` 行 | §11.3 |
 | 多非 user 消息**每条带 role 标记** | §11.3 |
 | **首尾无空白** | AML 只做 `"\n".join(...)`，**不插分隔符** |
 | **绝对时间只到日粒度**（秒级绝不出现）、**相对表述原样保留** | **D21**（2026-09-25 推翻了旧的"正文不含任何绝对时间戳"） |
@@ -194,10 +201,10 @@ test_reranker.py        §11.2 远端精排：线格式、降级、两个计数�
 
 | 断言 | 说明 |
 | --- | --- |
-| `UNIQUE(user_id, session_id, pair_idx)` 上的 `BETWEEN` 邻域查询命中索引 | 它**正好是**该查询的键（§10） |
-| `pair_idx` 无空洞 | 有空洞则邻域**静默消失** |
-| **`id` 位置派生**；补全后 `id` 不变 | 内容哈希会让补全时变 `id`、留下**孤儿 point** |
-| 补全时**重算 embedding 并 upsert 覆盖原 point** | §6.5 |
+| `UNIQUE(user_id, session_id, chunk_ordinal, local_index)` 上的 `ORDER BY` 决定 `seq` | **D25**：它既保唯一、又是 `seq` 的排序键（`ROW_NUMBER() ... - 1`） |
+| ~~`pair_idx` 无空洞~~ → **`seq` 稠密且连续** | 有空洞则邻域**静默消失**。⚠ 现在"空洞"指的是**库里真缺行**，不是 chunk 序号跳号（跳号由 `ORDER BY` 吸收） |
+| **`id` 位置派生**；同一位置重放得到**同一个 `id`** | 内容哈希会留下**孤儿 point**；D25 之后 `id` 由 `(chunk_ordinal, local_index)` 决定 |
+| ~~补全时**重算 embedding 并 upsert 覆盖原 point**~~ ⛔ **D24 已作废** | 改为它的反面：`index_pairs` 失败会留下"SQLite 有、Qdrant 没有"的行 |
 | **配的向量维度来自接口，不是常量** | §2.3 / §7.4——写死会在 Step 5 静默错 |
 | **能仅凭 SQLite 全量重建 Qdrant** | §6.3 的"派生读存储"就是这条的意思 |
 | **代码中没有硬编码 `benchmark_data/` 或 `eval/datasets/`** | D16：路径一律走 `TIANXI_BENCHMARK_DIR` |
@@ -209,8 +216,9 @@ test_reranker.py        §11.2 远端精排：线格式、降级、两个计数�
 | **连接不跨线程复用**：在另一个线程里读 + 写都正常 | 长期持有一个连接会在另一个线程里抛 `ProgrammingError`——而 FastAPI 的 `def` 路由**就在线程池里** |
 | 同一操作**各拿一个连接**（两次 `read()` 不是同一个对象） | 短生命周期模型最直接的可观测性质 |
 | **异常后：事务已回滚 + 连接已关** | 只断言回滚会漏掉连接泄漏；只断言关闭会漏掉脏数据。**两条都要** |
-| **并发写不丢不串**：多 session 同时 `BEGIN IMMEDIATE` ⇒ 无 `SQLITE_BUSY`、每 session `pair_idx` 连续、无跨 session 污染 | 见 `test_store.py` 与 `test_service_add.py` 的**压力**用例 |
-| **同 session 串行 / 不同 session 不互相阻塞** | 后者用 `Barrier` **证明**（而不是靠 sleep 赌时间）——若被串行化，barrier 会超时 |
+| **并发写不丢不串**：多 session 同时 `BEGIN IMMEDIATE` ⇒ 无 `SQLITE_BUSY`、**每 session 的位置不重号**、无跨 session 污染 | 见 `test_store.py` 与 `test_service_add.py` 的**压力**用例 |
+| **同 session 并发不再串行**（**D25**） | 位置互不相交 ⇒ 断言**两端都成功**且位置集合不重。⚠ **旧用例 `test_same_session_is_serialized` 已删**——它断言的正是 D25 取消的行为 |
+| **跨 session 不互相阻塞** | 用 `Barrier` **证明**（而不是靠 sleep 赌时间）——若被串行化，barrier 会超时 |
 
 > **测试里读一律写 `rd(store, store.<方法>, ...)`**（[`conftest.py`](./conftest.py)）：
 > 它对应生产代码的 `with store.read() as conn:`——**一次逻辑操作一个连接**（D17）。

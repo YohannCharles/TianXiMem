@@ -79,7 +79,7 @@
 
 > **检索只有混合一种形态**（D15）：参照点由**混合主路径自身**承担（§13）。
 
-**存储分工不可互换**（§6.3）：**SQLite 是真源**（QA 对正文、`status`、`pair_idx`、`event_time`），**Qdrant 是派生索引**（向量 + 过滤键 payload，**不含正文**，坏了可从 SQLite 全文重建）。
+**存储分工不可互换**（§6.3）：**SQLite 是真源**（QA 对正文、`status`、位置 `(chunk_ordinal, local_index)`、`event_time`），**Qdrant 是派生索引**（向量 + 过滤键 payload，**不含正文**，坏了可从 SQLite 全文重建）。
 
 **索引单元 = 一个 QA 对**（不是一个 message），一对一个向量。一个 QA 对 = **一段连续 user 消息，加上直到下一条 user 消息为止的全部非 user 消息**（§6.2；理由见 [D20](docs/decisions.md)）。
 
@@ -99,7 +99,7 @@
 | [`deploy/`](./deploy/) | Qdrant server（**版本钉死**）、Step 5 重建 runbook | §6.3、§7.3 |
 | [`src/tianxi_am/`](./src/tianxi_am/) | 检索服务本体 | §6–§11、§14、§15 |
 | [`eval/`](./eval/) | 代理评测：`datasets/` `harness/` `experiments/` `baselines/` `smoke/` `reports/` | §12、§13 |
-| [`tests/`](./tests/) | 单元测试（配对 / 续接 / 幂等 / 契约 / 隔离 / 开关纯度） | — |
+| [`tests/`](./tests/) | 单元测试（记忆块组合 / 幂等 / 契约 / 隔离 / 开关纯度） | — |
 | [`var/`](./var/) | 运行时产物（**gitignored**，只保留说明） | §6.1 |
 
 ---
@@ -167,5 +167,15 @@ cp .env.example .env      # 填密钥与路径
 make sync                 # uv sync --all-extras
 make help                 # 看全部目标
 ```
+
+**部署到服务器**（只跑检索服务 + Qdrant，不需要 GPU）：
+
+```bash
+cp deploy/.env.example deploy/.env   # 填 AML_EMB_*（reranker 可选）
+make up                              # 起整栈（容器形态）
+make deploy-check                    # 在容器里跑契约预检（14 条，真 HTTP）
+```
+
+细节（单进程约束、真源卷、服务器要满足什么）见 [`deploy/CLAUDE.md`](./deploy/CLAUDE.md) §0。
 
 `Makefile` 里服务与评测的目标**指向尚未实现的模块时会明确失败**——这是有意的，**避免误以为某一步已经实现**。

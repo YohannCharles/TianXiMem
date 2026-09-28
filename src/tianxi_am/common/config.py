@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -133,6 +134,18 @@ DEFAULT_RADIUS: Final[int] = 2  # 同日 1 → 2，与 `default.yaml` 同一条�
 
 #: `neighbor.seed_placement` 的取值域（§11.2 的组内顺序消融，2026-09-25）。
 SEED_PLACEMENTS: Final[tuple[str, ...]] = ("keep", "front", "echo")
+
+#: `ingest.chunk_ordinal_pattern` 的默认值（D25）——**取 chunk 序号的那个正则**。
+#:
+#: 两种形态各一个分支（`re.search`，取**最后一个**捕获组）：
+#:
+#: * `chunk-3` —— 平台实发：`eval:<run_id>:locomo_refined:conv-0:chunk-3`
+#: * `|3`     —— 本仓 harness 的 `request_id_for()`：`<user_id>|<session_id>|3`
+#:
+#: ⚠ **只锚定末尾**：中间还有别的数字（`run_id` 里可能有、`conv-26` 里就有 `26`）
+#: ⇒ 不锚定会取到 `26`，而那样**每一批都会解析成同一个序号**，落库时撞 UNIQUE
+#: ——**响亮**，比静默错位好，但没必要去撞。
+DEFAULT_CHUNK_ORDINAL_PATTERN: Final[str] = r"(?:chunk-|\|)(\d+)\s*$"
 
 #: §7.3 的两个检索参数初值：每路进入 RRF 的候选池大小（`N`）与 `[w_bm25, w_dense]` 权重。
 #:
@@ -236,11 +249,25 @@ class RetrievalConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class PairingConfig:
-    """批次切分上限（§6.5）。"""
+class IngestConfig:
+    """`Add` 的接入口径（D25）。"""
 
-    batch_max_messages: int = 20
-    batch_max_words: int = 2000
+    #: 从 `request_id` 里**取 chunk 序号**的正则（D25）。
+    #:
+    #: 位置 = `(chunk_ordinal, local_index)`，而 chunk 序号是**唯一**从请求里拿的东西
+    #: ——它决定顺序、`id`、以及"位置不再需要读-改-写"。**取不到就响亮失败**
+    #: （`pairing.parse_chunk_ordinal`），**没有回退**：回退会把"乱序到达静默翻转顺序"
+    #: 那个 bug 偷偷带回来。
+    #:
+    #: 默认值同时匹配两种形态（`re.search` 语义）：
+    #:
+    #: * 平台实发：`eval:<run_id>:locomo_refined:conv-0:chunk-3`
+    #: * 本仓 harness：`<user_id>|<session_id>|3`
+    #:
+    #: ⚠ **格式假设的来源是团队告知，不是一手文档**（见 D25 的"关键依据"）。
+    #: 做成配置项是为了让"平台换了个形状"**不必改代码**——但**必须响亮失败**，
+    #: 否则我们会拿一个解析错的序号安静地跑完整场。
+    chunk_ordinal_pattern: str = DEFAULT_CHUNK_ORDINAL_PATTERN
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,7 +281,8 @@ class NeighborConfig:
     radius: int = DEFAULT_RADIUS
     #: 段内**种子放在哪**（§11.2 的"组内顺序"，明文列为可消融项）。
     #:
-    #: * `keep`（默认）：纯 `pair_idx` 时间序，种子在它本来的时间位置上
+    #: * `keep`（默认）：纯位置（读时稠密序 `seq`，D25 前叫 `pair_idx`）时间序，
+    #:   种子在它本来的时间位置上
     #: * `front`：种子移到**段首**，其余照时间序 —— ⚠ **段内时间连续性会断**，
     #:   而"窗口是一段连续对话、按时间序读才成立"正是 §11.2 当初选时间序的理由
     #: * `echo`：种子在段首**重复一遍**，下面**完整的时间序块原样保留** ——
@@ -337,7 +365,7 @@ class AppConfig:
     cache: CacheConfig = field(default_factory=CacheConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
-    pairing: PairingConfig = field(default_factory=PairingConfig)
+    ingest: IngestConfig = field(default_factory=IngestConfig)
     neighbor: NeighborConfig = field(default_factory=NeighborConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     packaging: PackagingConfig = field(default_factory=PackagingConfig)
@@ -368,7 +396,7 @@ class AppConfig:
 #: yaml 顶层允许的段。**env 拥有的键不出现在这里**（见模块 docstring 的分工表）：
 #: 路径 / 端点 / 密钥 / worker 数都只从环境变量来。
 _TOP_LEVEL_KEYS: Final[frozenset[str]] = frozenset(
-    {"storage", "models", "retrieval", "pairing", "neighbor", "budget", "packaging", "rerank"}
+    {"storage", "models", "retrieval", "ingest", "neighbor", "budget", "packaging", "rerank"}
 )
 
 
@@ -566,6 +594,17 @@ def _retrieval(raw: object) -> RetrievalConfig:
     )
 
 
+def _ingest(raw: object) -> IngestConfig:
+    g = _group(raw, where="ingest", allowed={"chunk_ordinal_pattern"})
+    return IngestConfig(
+        chunk_ordinal_pattern=_str(
+            g.get("chunk_ordinal_pattern"),
+            where="ingest.chunk_ordinal_pattern",
+            default=DEFAULT_CHUNK_ORDINAL_PATTERN,
+        )
+    )
+
+
 def _neighbor(raw: object) -> NeighborConfig:
     g = _group(raw, where="neighbor", allowed={"expansion_seed_limit", "radius", "seed_placement"})
     placement = _str(g.get("seed_placement"), where="neighbor.seed_placement", default="keep")
@@ -627,18 +666,6 @@ def _rerank(raw: object) -> RerankConfig:
     )
 
 
-def _pairing(raw: object) -> PairingConfig:
-    g = _group(raw, where="pairing", allowed={"batch_max_messages", "batch_max_words"})
-    return PairingConfig(
-        batch_max_messages=_int(
-            g.get("batch_max_messages"), where="pairing.batch_max_messages", default=20
-        ),
-        batch_max_words=_int(
-            g.get("batch_max_words"), where="pairing.batch_max_words", default=2000
-        ),
-    )
-
-
 # ── 校验 ───────────────────────────────────────────────────────────────
 
 _MISSING_HINT: Final[str] = (
@@ -682,12 +709,21 @@ def validate(cfg: AppConfig) -> AppConfig:
         raise ConfigError(f"`retrieval.rrf.weights` 不得为负：{[w_bm25, w_dense]!r}")
     if w_bm25 == 0 and w_dense == 0:
         raise ConfigError("`retrieval.rrf.weights` 两项不能同时为 0——那等于不检索")
-    if cfg.pairing.batch_max_messages <= 0:
+    # D25：位置由 `request_id` 的 chunk 序号派生 ⇒ 这个正则**必须在启动时就验**。
+    # 它是"取不到就响亮失败"的第一道：模式写错在启动时炸，而不是等第一批请求。
+    try:
+        compiled = re.compile(cfg.ingest.chunk_ordinal_pattern)
+    except re.error as exc:
         raise ConfigError(
-            f"`pairing.batch_max_messages` 必须为正：{cfg.pairing.batch_max_messages}"
+            f"`ingest.chunk_ordinal_pattern` 不是合法正则：{cfg.ingest.chunk_ordinal_pattern!r}\n"
+            f"  正则引擎报：{exc}"
+        ) from exc
+    if compiled.groups != 1:
+        raise ConfigError(
+            f"`ingest.chunk_ordinal_pattern` 必须恰好有 **1** 个捕获组（chunk 序号），"
+            f"收到 {compiled.groups} 个：{cfg.ingest.chunk_ordinal_pattern!r}\n"
+            "  0 个 ⇒ 取不出序号；多个 ⇒ 不知道该用哪个。两种都会让位置失去依据（D25）。"
         )
-    if cfg.pairing.batch_max_words <= 0:
-        raise ConfigError(f"`pairing.batch_max_words` 必须为正：{cfg.pairing.batch_max_words}")
     if cfg.rerank.timeout_seconds <= 0:
         raise ConfigError(
             f"`rerank.timeout_seconds` 必须为正：{cfg.rerank.timeout_seconds}\n"
@@ -697,10 +733,12 @@ def validate(cfg: AppConfig) -> AppConfig:
     if cfg.server.workers != 1:
         raise ConfigError(
             f"`server.workers`（`{ENV_WORKERS}`）必须是 1，收到 {cfg.server.workers}。\n"
-            "  §15：Add 的按 session 串行化用的是【进程内】锁（service/locks.py 的 SessionLocks），"
-            "多 worker 会**静默失效**——每个 worker 各有各的锁，同 session 的两个批次照旧并发，"
-            "于是 pair_idx 撞车。\n"
-            "  ⇒ v1 必须 `--workers 1`。这不是可调项，是约束。"
+            "  §15 要求 `--workers 1`。\n"
+            "  ⚠ **D25 之后原因变了**：位置分配已不再依赖进程内状态（`SessionLocks` 已删），"
+            "所以「多 worker 会静默撞车」那条**不再成立**。\n"
+            "  但**放开多 worker 需要的验证没有做过**（并发写入压力、`busy_timeout` 争用、"
+            "多进程各自的 Qdrant 客户端）⇒ 在那之前保持这条约束，"
+            "**不要用「反正现在安全了」当理由把它去掉**。"
         )
 
     return replace(
@@ -732,7 +770,7 @@ def assert_single_process() -> None:
         return
     raise ConfigError(
         f"检测到本进程是多进程派生的 worker（pid={os.getpid()}，父进程 pid={parent.pid}）。\n"
-        "  §15 要求 `--workers 1`：SessionLocks 是【进程内】锁，多 worker 会**静默失效**。\n"
+        "  §15 要求 `--workers 1`（D25 之后原因已变，见 validate() 里那条错误消息的说明）。\n"
         "  ⇒ 去掉 `--workers N`（N>1）。若你在用 `--reload`：本守卫无法把它与多 worker 区分"
         "（两者在子进程里形状相同），请改用 `make serve`。\n"
         "  ⚠ uvicorn 的 `--workers N` 监督进程会**反复重启**这些 worker，于是这条错误会反复刷——"
@@ -797,7 +835,7 @@ def load_config(
             cache=cache,
             models=_models(data.get("models")),
             retrieval=_retrieval(data.get("retrieval")),
-            pairing=_pairing(data.get("pairing")),
+            ingest=_ingest(data.get("ingest")),
             neighbor=_neighbor(data.get("neighbor")),
             budget=_budget(data.get("budget")),
             packaging=_packaging(data.get("packaging")),

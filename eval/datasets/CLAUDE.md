@@ -107,7 +107,7 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 **两个直接后果：**
 
 1. **harness 必须为每条消息合成 `timestamp`**——否则 §2.1 的可选字段为空，§6.1 的 `event_time` 全为 NULL，`created_at` 只能发 `""`（§11.3 的有定义降级路径）。
-2. **同一个 session 内所有消息拿到同一个日期** ⇒ `event_time` 在 session 内没有区分度 ⇒ **`pair_idx` 是唯一能保证邻域稳定的东西**（§6.1）。
+2. **同一个 session 内所有消息拿到同一个日期** ⇒ `event_time` 在 session 内没有区分度 ⇒ **位置是唯一能保证邻域稳定的东西**（§6.1；D25 起 = `(chunk_ordinal, local_index)` + 读时稠密序 `seq`）。
 
 ---
 
@@ -142,7 +142,7 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 
 **一条细化（PRD 说"1,230 个空 session 与 15 个干扰 session"，措辞可以更准）**：在 120 条的抽样里，`test` 多出的 309 个 session 中 **302 个是空的、7 个有内容**。所以"多出来的都是空的"**过强**——**是"绝大多数空 + 极少数有内容"**，而那些有内容的正是"干扰"。**结论不变：用 `lme_s_cleaned.json`。**
 
-**为什么不用 `lme_test.json`**：**空 session 会污染按"20 条消息"切批的埋点逻辑**（§6.5）——一个 0-turn session 会让切批与 `pending` 判定出现本地无法解释的边界。
+**为什么不用 `lme_test.json`**：**空 session 会让本地切批与线上对不上**——一个 0-turn session 会凭空多出一个（空的）批次边界，而 D24 之后**批界落在哪直接决定组合结果**。
 
 ### LoCoMo-Refined
 

@@ -49,4 +49,4 @@ var/
 
 ## 一条本地限制（别误读数字）
 
-`pending_*` 三个计数器在本地测出的值与线上**必然对不上**——原因与推论见 [`../src/tianxi_am/observability/CLAUDE.md`](../src/tianxi_am/observability/CLAUDE.md)（§6.5 / §12.3 第 5 条）。**本目录不重复。**
+**本地复现的批次边界与线上不一定一致**（§12.3 第 5 条："Adapter 计数的词"官方从未定义）。D24 之后它不再影响任何埋点，但**它决定有多少 QA 对被批界切成两半**——原因与实测见 [`../docs/decisions.md`](../docs/decisions.md) 的 **D24**。**本目录不重复。**

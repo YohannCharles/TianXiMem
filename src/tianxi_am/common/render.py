@@ -116,7 +116,7 @@ def render(question: str | None, answer: str | None, *, date: str = "") -> str:
     | --- | --- |
     | 都有 | `Q: {question}\\nA: {answer}` |
     | `question` 为空（§6.2 的"无问的对"） | 只输出 `A:` 那一行 |
-    | `answer` 为空（`pending` 对） | 只输出 `Q:` 那一行 |
+    | `answer` 为空（块里没有非 user 消息） | 只输出 `Q:` 那一行 |
 
     返回值**首尾无空白**：AML 只做 `"\\n".join(...)` 拼接、不插分隔符，
     任何一项首尾留白都会让拼接处粘连（§11.3"content 必须自定界"）。

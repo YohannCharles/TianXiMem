@@ -163,16 +163,22 @@ def build_record(
 
 
 def _unavailable_counters() -> dict[str, Any]:
-    """§6.5 的三个计数器的**当前状态**：发射端在 `pairing/instrument.py` 已有，
-    但**聚合端 `observability/` 未实现** ⇒ 这里没有任何数字可填。
-    **不填 0**：`0` 会被读成"没有 pending"，而事实是"没读"。
+    """§6.5 那三个计数器的**当前状态**：**D24（2026-09-27）起它们已不存在**。
+
+    它们量的是"一个 QA 对是新建 / 被补全 / 落单"，而 D24 取消了跨 Add 合并
+    ⇒ 块在写下那一刻就是最终形状，**没有"补全"这种归宿**，发射端
+    `pairing/instrument.py` 也已删除。
+
+    **保留字段、不填 0**：字段留着是为了**旧 run record 仍然读得回来**
+    （[`schema.py`](../reports/schema.py) 的校验要求它存在）；而 `None` 比 `0` 诚实——
+    `0` 会被读成"没有 pending"，事实是"**这个量已经不存在**"。
     """
     return {
         "pending_created": None,
         "pending_completed": None,
         "pending_orphaned_real": None,
         "pending_orphaned_misjudged": None,
-        "note": "聚合端 observability/ 未实现（发射在 pairing/instrument.py）——**不是 0**",
+        "note": "D24 起 pending 概念已取消（发射端已删除）——这个量**不存在**，不是 0",
     }
 
 

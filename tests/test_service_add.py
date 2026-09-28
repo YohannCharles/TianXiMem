@@ -26,7 +26,6 @@ from tests.conftest import FakeEmbedder, rd, run_parallel
 from tianxi_am.common.render import render_pair
 from tianxi_am.pairing import AddBatch
 from tianxi_am.pairing.pairing import Message
-from tianxi_am.service.locks import SessionLocks, SessionLockTimeout
 from tianxi_am.service.pipeline import AddPipeline
 from tianxi_am.store.sqlite_store import SqliteStore
 
@@ -107,13 +106,18 @@ def embedder() -> FakeEmbedder:
 
 
 @pytest.fixture
-def locks() -> SessionLocks:
-    return SessionLocks()
+def pipeline(store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder):
+    return AddPipeline(store=store, qdrant=qdrant, embedder=embedder)
 
 
-@pytest.fixture
-def pipeline(store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder, locks: SessionLocks):
-    return AddPipeline(store=store, qdrant=qdrant, embedder=embedder, locks=locks)
+def _rid(ordinal: int, *, user_id: str = "u1", session_id: str = "s1") -> str:
+    """造一个 **符合 `ingest.chunk_ordinal_pattern`** 的 `request_id`（D25）。
+
+    ⚠ 不再是随便一个字符串：位置由它派生，**取不到 chunk 序号就响亮失败**。
+    这里用本仓 harness 的形态（`<user>|<session>|<n>`，见 `eval/harness/batching.py`
+    的 `request_id_for`）——默认正则同时认它和平台实发的 `...:chunk-<n>`。
+    """
+    return f"{user_id}|{session_id}|{ordinal}"
 
 
 def _batch(
@@ -142,7 +146,7 @@ def test_add_writes_both_sqlite_and_qdrant(
     pipeline: AddPipeline, store: SqliteStore, qdrant: _FakeQdrant
 ) -> None:
     """端到端：SQLite 有真源，Qdrant 有对应的 point。"""
-    outcome = pipeline.apply(_batch("r1", "Q1", "A1"))
+    outcome = pipeline.apply(_batch(_rid(1), "Q1", "A1"))
 
     assert outcome.applied is True
     assert outcome.repaired is False
@@ -157,44 +161,53 @@ def test_add_indexes_only_what_the_batch_touched(
     pipeline: AddPipeline, qdrant: _FakeQdrant
 ) -> None:
     """正常路径**精确到本批触碰的对**，不做全 session 重建。"""
-    pipeline.apply(_batch("r1", "Q1", "A1"))
-    pipeline.apply(_batch("r2", "Q2", "A2", user_id="u1", session_id="s1"))
+    pipeline.apply(_batch(_rid(1), "Q1", "A1"))
+    pipeline.apply(_batch(_rid(2), "Q2", "A2", user_id="u1", session_id="s1"))
 
     assert len(qdrant.upsert_calls) == 2
     assert all(len(call) == 1 for call in qdrant.upsert_calls)  # 每次只索引 1 条
 
 
-def test_add_continues_pair_idx_across_batches(pipeline: AddPipeline, store: SqliteStore) -> None:
-    pipeline.apply(_batch("r1", "Q1", "A1"))
-    pipeline.apply(_batch("r2", "Q2", "A2"))
+def test_positions_come_from_the_chunk_ordinal(pipeline: AddPipeline, store: SqliteStore) -> None:
+    """**位置由 `request_id` 的 chunk 序号派生**（D25）——不是到达顺序。
 
-    assert [p.pair_idx for p in _pairs(store)] == [0, 1]
+    ⚠ 这里刻意**先发 chunk 2 再发 chunk 1**：旧口径（`MAX+1`）下它们会按到达顺序
+    拿到 0 与 1，**把会话顺序读反**；现在它们各自拿自己的序号。
+    """
+    pipeline.apply(_batch(_rid(2), "Q2", "A2"))
+    pipeline.apply(_batch(_rid(1), "Q1", "A1"))
+
+    assert sorted(p.chunk_ordinal for p in _pairs(store)) == [1, 2]
+    assert [p.question for p in sorted(_pairs(store), key=lambda x: x.chunk_ordinal)] == [
+        "Q1",
+        "Q2",
+    ]
+    # 会话顺序（`seq`）由 chunk 序号给出，与到达顺序无关
+    assert [p.seq for p in sorted(_pairs(store), key=lambda x: x.seq)] == [0, 1]
 
 
 # ── 幂等：两层 ─────────────────────────────────────────────────────────
 
 
-def test_same_request_id_does_not_create_new_pair_idx(
+def test_same_request_id_does_not_create_new_rows(
     pipeline: AddPipeline, store: SqliteStore
 ) -> None:
-    """**batch 层幂等**：`applied_batches` 命中 ⇒ 不产生新的 `pair_idx`。"""
-    pipeline.apply(_batch("r1", "Q1", "A1"))
-    before = [(p.id, p.pair_idx) for p in _pairs(store)]
-    next_before = rd(store, store.next_pair_idx, "u1", "s1")
+    """**batch 层幂等**：`applied_batches` 命中 ⇒ 不产生新的行。"""
+    pipeline.apply(_batch(_rid(1), "Q1", "A1"))
+    before = [(p.id, p.chunk_ordinal, p.local_index) for p in _pairs(store)]
 
-    outcome = pipeline.apply(_batch("r1", "Q1", "A1"))
+    outcome = pipeline.apply(_batch(_rid(1), "Q1", "A1"))
 
     assert outcome.applied is False
-    assert [(p.id, p.pair_idx) for p in _pairs(store)] == before
-    assert rd(store, store.next_pair_idx, "u1", "s1") == next_before
+    assert [(p.id, p.chunk_ordinal, p.local_index) for p in _pairs(store)] == before
 
 
 def test_same_request_id_does_not_duplicate_points(
     pipeline: AddPipeline, store: SqliteStore, qdrant: _FakeQdrant
 ) -> None:
     """**point 层幂等**：point id 由位置派生 ⇒ 重放是覆盖，不是新增。"""
-    pipeline.apply(_batch("r1", "Q1", "A1"))
-    pipeline.apply(_batch("r1", "Q1", "A1"))
+    pipeline.apply(_batch(_rid(1), "Q1", "A1"))
+    pipeline.apply(_batch(_rid(1), "Q1", "A1"))
 
     assert len(qdrant.points) == len(_pairs(store)) == 1
 
@@ -212,7 +225,7 @@ def test_qdrant_failure_keeps_truth_source_and_fails_the_request(
     qdrant.fail_next = 1
 
     with pytest.raises(RuntimeError, match="模拟 Qdrant"):
-        pipeline.apply(_batch("r1", "Q1", "A1"))
+        pipeline.apply(_batch(_rid(1), "Q1", "A1"))
 
     assert len(_pairs(store)) == 1  # 真源在
     assert qdrant.points == {}  # 派生索引没写成
@@ -228,9 +241,9 @@ def test_retry_after_qdrant_failure_repairs_the_index(
     """
     qdrant.fail_next = 1
     with pytest.raises(RuntimeError):
-        pipeline.apply(_batch("r1", "Q1", "A1"))
+        pipeline.apply(_batch(_rid(1), "Q1", "A1"))
 
-    outcome = pipeline.apply(_batch("r1", "Q1", "A1"))  # ← 相同 request_id
+    outcome = pipeline.apply(_batch(_rid(1), "Q1", "A1"))  # ← 相同 request_id
 
     assert outcome.applied is False  # 守卫命中（没写新的真源行）
     assert outcome.repaired is True  # 但走了修复路径
@@ -246,10 +259,10 @@ def test_repair_covers_the_earlier_batches_of_the_same_session_too(
     这顺带说明代价：重放 upsert 的是该 session 的全部对，而不是只有本批那几条
     （换取"不改 ① 的 DDL"，见 `pipeline.py` 的说明）。
     """
-    pipeline.apply(_batch("r1", "Q1", "A1"))  # 第一批成功
+    pipeline.apply(_batch(_rid(1), "Q1", "A1"))  # 第一批成功
     qdrant.points.clear()  # 模拟"派生索引丢了"
 
-    pipeline.apply(_batch("r1", "Q1", "A1"))  # 重放
+    pipeline.apply(_batch(_rid(1), "Q1", "A1"))  # 重放
 
     assert len(qdrant.points) == len(_pairs(store)) == 1
 
@@ -265,38 +278,49 @@ def test_sqlite_failure_does_not_touch_qdrant(
     monkeypatch.setattr("tianxi_am.service.pipeline.apply_batch", _boom)
 
     with pytest.raises(RuntimeError, match="模拟 SQLite"):
-        pipeline.apply(_batch("r1", "Q1", "A1"))
+        pipeline.apply(_batch(_rid(1), "Q1", "A1"))
 
     assert qdrant.upsert_calls == []
     assert qdrant.points == {}
 
 
-# ── 串行化 ─────────────────────────────────────────────────────────────
+# ── D25：同 session 的 Add **可以并发** ─────────────────────────────────
 
 
-def test_same_session_is_serialized(
-    store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder, locks: SessionLocks
+def test_same_session_adds_run_concurrently_and_do_not_collide(
+    store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder
 ) -> None:
-    """**同 `(user_id, session_id)` 的 Add 不得并发**——否则 `pair_idx` 会撞车。
+    """**同一个 `(user_id, session_id)` 的 Add 并发**——D25 之后这是**允许**的。
 
-    断言两件事：peak 并发数为 1，且 `pair_idx` 仍然唯一、连续。
+    旧口径（`MAX+1` 分配位置）下这条必须串行，否则位置撞车；现在位置是请求的纯函数
+    （`(chunk_ordinal, local_index)`）⇒ 各批触碰**互不相交**的位置。
+
+    断言四件事：
+      1. 无异常（**含 `IntegrityError`**——那正是"位置撞车"的信号）
+      2. **峰值并发 > 1**：不并发的话这条用例证明不了任何事（旧锁会把它压成 1）
+      3. 每个 chunk 的块都落下了，且块序号从 0 连续
+      4. `id` 两两不同（位置派生 ⇒ 不同位置必然不同 id）
     """
     qdrant.overlap = _Overlap()
-    qdrant.hold_s = 0.05
-    pipeline = AddPipeline(store=store, qdrant=qdrant, embedder=embedder, locks=locks)
+    qdrant.hold_s = 0.05  # 拉长 Qdrant 阶段，让"真的并发重叠"可观测
+    pipeline = AddPipeline(store=store, qdrant=qdrant, embedder=embedder)
 
     errors = run_parallel(
-        [(lambda i=i: pipeline.apply(_batch(f"r{i}", f"Q{i}", f"A{i}"))) for i in range(4)]
+        [(lambda i=i: pipeline.apply(_batch(_rid(i), f"Q{i}", f"A{i}"))) for i in range(4)]
     )
 
     assert errors == []  # ← 线程里的异常会让用例"空过"，必须显式断言
-    assert qdrant.overlap.peak == 1  # ← 串行
-    idxs = [p.pair_idx for p in _pairs(store)]
-    assert sorted(idxs) == list(range(len(idxs)))  # 无重复、无空洞
+    assert qdrant.overlap.peak > 1  # ← **真的并发了**（旧锁下恒为 1）
+
+    pairs = _pairs(store)
+    assert sorted((p.chunk_ordinal, p.local_index) for p in pairs) == [
+        (0, 0), (1, 0), (2, 0), (3, 0)
+    ]
+    assert len({p.id for p in pairs}) == 4
 
 
 def test_different_sessions_do_not_block_each_other(
-    store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder, locks: SessionLocks
+    store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder
 ) -> None:
     """**不同 session 不互相阻塞**（哪怕同一个 user）。
 
@@ -316,11 +340,11 @@ def test_different_sessions_do_not_block_each_other(
             return original(pairs, emb, renderer=renderer, wait=wait)
 
     qdrant.index_pairs = index_pairs  # type: ignore[method-assign]
-    pipeline = AddPipeline(store=store, qdrant=qdrant, embedder=embedder, locks=locks)
+    pipeline = AddPipeline(store=store, qdrant=qdrant, embedder=embedder)
 
     errors = run_parallel(
         [
-            (lambda i=i: pipeline.apply(_batch(f"r{i}", f"Q{i}", f"A{i}", session_id=f"s{i}")))
+            (lambda i=i: pipeline.apply(_batch(_rid(i), f"Q{i}", f"A{i}", session_id=f"s{i}")))
             for i in range(2)
         ]
     )
@@ -330,7 +354,7 @@ def test_different_sessions_do_not_block_each_other(
 
 
 def test_different_users_do_not_block_each_other(
-    store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder, locks: SessionLocks
+    store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder
 ) -> None:
     """**不同 user 不互相阻塞**（即使 `session_id` 相同）。"""
     barrier = threading.Barrier(2, timeout=5)
@@ -341,13 +365,19 @@ def test_different_users_do_not_block_each_other(
         return original(pairs, emb, renderer=renderer, wait=wait)
 
     qdrant.index_pairs = index_pairs  # type: ignore[method-assign]
-    pipeline = AddPipeline(store=store, qdrant=qdrant, embedder=embedder, locks=locks)
+    pipeline = AddPipeline(store=store, qdrant=qdrant, embedder=embedder)
 
     errors = run_parallel(
         [
             (
                 lambda i=i: pipeline.apply(
-                    _batch(f"r{i}", f"Q{i}", f"A{i}", user_id=f"u{i}", session_id="same")
+                    _batch(
+                        _rid(i, user_id=f"u{i}", session_id="same"),
+                        f"Q{i}",
+                        f"A{i}",
+                        user_id=f"u{i}",
+                        session_id="same",
+                    )
                 )
             )
             for i in range(2)
@@ -367,11 +397,11 @@ def test_different_sessions_write_to_sqlite_concurrently(
 
     与 `test_store.py::test_concurrent_write_transactions_across_sessions` 的分工：
     那一个直捣 `store.transaction()`（把写窗口拉长到**必然撞锁**），
-    这一个走 `AddPipeline.apply`（真链路、真 `SessionLocks`、真 Qdrant 调用），
+    这一个走 `AddPipeline.apply`（真链路、真 SQLite 事务、真 Qdrant 调用），
     验证"不同 session 不被 Service 串行化"**且**"并发下真源一行不差"。
 
     ⚠ 刻意用**同一个 user 的不同 session**：它们争抢**同一个库文件**，
-    所以这同时也在钉死"`SessionLocks` 的粒度是 `(user_id, session_id)`，不是 user"——
+    所以这同时也在钉死"不同 session 之间不共享任何写入状态"——
     锁若错按 user 分，这里的并发就没了（而结果一样"看起来正常"）。
     """
     n_sessions = 5
@@ -381,7 +411,13 @@ def test_different_sessions_write_to_sqlite_concurrently(
     def add(i: int) -> None:
         start.wait()  # 同时出发
         for k in range(rounds):
-            pipeline.apply(_batch(f"r{i}-{k}", f"Q{i}{k}", f"A{i}{k}", session_id=f"s{i}"))
+            # ⚠ `request_id` 里要带**这个 session 自己**的键：否则 5 个 session 的
+            #   第 k 批会共用同一个 `request_id`，而幂等守卫按它判重 ⇒ 只剩一个 session 落库
+            pipeline.apply(
+                _batch(
+                    _rid(k, session_id=f"s{i}"), f"Q{i}{k}", f"A{i}{k}", session_id=f"s{i}"
+                )
+            )
 
     assert run_parallel([(lambda i=i: add(i)) for i in range(n_sessions)]) == []
 
@@ -389,42 +425,8 @@ def test_different_sessions_write_to_sqlite_concurrently(
     assert len(pairs) == n_sessions * rounds  # 无丢批
     for i in range(n_sessions):
         mine = [p for p in pairs if p.session_id == f"s{i}"]
-        # 每个 session 内 `pair_idx` 连续、从 0 起（读-改-写没被别的线程插进来）
-        assert [p.pair_idx for p in mine] == list(range(rounds))
+        # 每个 session 内：chunk 序号恰好是 0..rounds-1，且每批各落一块
+        # （两批**互不相交** ⇒ 位置不会撞车，这正是 D25 让并发安全的原因）
+        assert sorted(p.chunk_ordinal for p in mine) == list(range(rounds))
+        assert [p.local_index for p in mine] == [0] * rounds
     assert len(qdrant.points) == n_sessions * rounds  # 派生索引也齐了
-
-
-# ── 锁本身 ─────────────────────────────────────────────────────────────
-
-
-def test_lock_is_released_after_an_exception(locks: SessionLocks) -> None:
-    """**异常后锁一定释放**——否则该 session 会被永久堵死。"""
-    with pytest.raises(RuntimeError), locks.hold("u1", "s1"):
-        raise RuntimeError("boom")
-
-    with locks.hold("u1", "s1", timeout=0.5):  # 能再拿到 ⇒ 已释放
-        pass
-
-
-def test_lock_timeout_is_a_retryable_error(locks: SessionLocks) -> None:
-    """拿不到锁时**明确失败**（可重试），而不是无限挂住一个 30 分钟预算的请求。"""
-    # 第三个 context 就是"必须失败"的那一次：同 key 已被第二个 context 持有
-    with (
-        locks.hold("u1", "s1"),
-        pytest.raises(SessionLockTimeout, match="session 锁"),
-        locks.hold("u1", "s1", timeout=0.05),
-    ):
-        pass
-
-
-def test_lock_table_is_shared_per_key(locks: SessionLocks) -> None:
-    """同一个 key 复用同一把锁；`__len__` 反映登记过的 key 数（不回收）。"""
-    with locks.hold("u1", "s1"):
-        pass
-    with locks.hold("u1", "s1"):
-        pass
-    assert len(locks) == 1
-
-    with locks.hold("u1", "s2"):
-        pass
-    assert len(locks) == 2

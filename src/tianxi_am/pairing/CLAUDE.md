@@ -1,126 +1,119 @@
-# pairing/ — 配对与批次续接
+# pairing/ — 记忆块组合与落库
 
-**PRD**：§6.2（一个 QA 对是什么）、§6.5（残缺对与跨批次补全）
+**PRD**：§6.2（一个 QA 对是什么）· **D24**（一次 Add = 组合的唯一边界）· **D25**（位置由 `request_id` 的 chunk 序号派生）
 
-## 本模块的构成（**实现已存在**）
+## 本模块的构成
 
 ```text
-pairing.py       本批消息 → QA 对（§6.2 的唯一判据）
-continuation.py  批次续接三步 + pending 判定（§6.5）
-instrument.py    三个 pending 计数器（计数器的读法与陷阱见 ../observability/）
+pairing.py   本批消息 → 记忆块（组合规则的**唯一实现**，纯函数）
+              + `parse_chunk_ordinal()`（从 request_id 取 chunk 序号，D25）
+apply.py     幂等守卫 → 组合 → 按 chunk 派生位置写入（一个事务）
 ```
 
-**这是全项目逻辑最绕的一层，也是最容易静默出错的一层。** 出错的表现是"某些记忆永远检索不到"，而**不会有任何报错**。
+> ⚠ **D24（2026-09-27）之后没有"批次续接"**：`continuation.py` 已改名 `apply.py`，
+> `instrument.py`（三个 `pending` 计数器）、`plan_batch`、`ResumeActions`、`open_pair`、
+> `append_question` / `append_answer` / `mark_complete` / `touch_request_id` **全部删除**。
+> 理由与实测代价见 [`../../../docs/decisions.md`](../../../docs/decisions.md) **D24**。
 
 ---
 
-## 配对判据只有一条（§6.2）
+## 组合规则（D24）
 
-> **一个 QA 对 = 一段连续 user 消息（= 它的 `question`），加上直到下一条 user 消息为止的非 user 消息（= 它的 `answer`）。**
+```text
+一次 Add 的消息（按原序）
+  → ① 连续同 role 合并成一个 RoleBlock
+  → ② 一个 UserBlock + 紧随其后的【全部】非 UserBlock 配成一个 MemoryBlock
+  → ③ 开头的非 UserBlock（前面没有 user）独立成块
+  → 每个 MemoryBlock 恰好一次 embedding
+```
 
-**实现里只做一种判断：这条消息的 `role` 是不是 `user`。**
-
-> ⚠ **不要枚举 role 白名单。** AML 传入的取值域**没有文档**，白名单会在遇到没见过的 role 时**静默丢消息**。其他 role（`assistant` / `system` / 工具输出…）**一律归入当前对**。
-
-**"一段连续 user 消息"覆盖三种真实情况**：
-
-| 情况 | 行为 |
+| 输入 | 输出 |
 | --- | --- |
-| **连续多条 user 消息** | **并进同一个 `question`**（不产生"有问无答"的对） |
-| 一条 user 后跟多条 assistant 消息（工具调用等） | 全部归入该对，**每条带 role 标记** |
-| session 以 assistant 开头 | `question` 为空，构成一个**无问的对** |
+| `U A U A` | `[U+A] [U+A]` |
+| `U U A A A U A` | `[UU+AAA] [U+A]` |
+| `A U A` | `[A] [U+A]` |
+| `U A U` | `[U+A] [U]` |
+| `U assistant tool assistant` | `[U+A0+T+A1]`（工具调用序列不劈开） |
 
-**为什么要覆盖第一种**：AML 可能把**一条超长 user 消息按句边界物理切开**，于是 `q q q a` 这种形状会出现，而它逻辑上仍是一问一答。**⚠ 该风险未被证实**（官方 API guide 对"单条超长怎么办"**没有任何规定**，见 §17.1 的 **S5**）——这是"风险未证实"下的权衡，**完整论证与代价见 D20**。
+**不同 Add 之间永不组合**：不拼 QA、不合并连续 assistant、不等下一个 chunk、不 repair、
+不重新 embedding。即使两个 Add 属于同一 session，也各自独立成块。
 
-**判据落在哪**：`pairing.py` 的 `_Draft.question_is_open`（"这个对的 `question` 还没写完吗"），
-以及 `store/sqlite_store.py` 的 `open_pair()`（"本批要续写哪一对"）。
-**`open_pair` 的第二个析取项 `answer IS NULL` 是关键**：它让跨批合并不依赖词数计数（S2）。
+**配不上的块直接独立存**——**不判断**它是不是"超长消息被截断"。任何"等下一个 Add
+补齐"的设计都会重新引入跨 Add 状态，而那正是 D24 取消的东西。
 
-**配对的作用域是整个 session，不是一个 Add 批次**（§6.5）。一个 QA 对**可以跨批次**——批次只是 AML 的传输单位。这一点直接决定了 `pair_idx` 必须 session 内连续、新批次要接着数。
+**② 吃掉的为什么是"全部"而不是"一个"**：§6.2 承认"一条 user 后跟多条 assistant 消息
+（工具调用等）"，只吃一个会把 `Q0 / assistant / tool / assistant` 劈成
+`[Q0+A0] [T0] [A1]`。在只有 user / assistant 的输入上两种写法**逐字相同**。
 
-**与 ReFind 的 turn 粒度**：出现连续 user 消息时我们把它并成一个对，产出的对**比 ReFind 少**——实测影响面 ≈ 0（LoCoMo 0 处、LongMemEval 10 个 run），但**引用"同粒度"那条消融前提时要加上这个限定**。
+### 判据只有一条，且**不枚举 role 白名单**
+
+**只判断这条消息的 `role` 是不是 `user`**（`is_user`）。
+
+> ⚠ AML 传入的 role 取值域**没有文档**。白名单会在遇到没见过的 role 时**静默丢消息**
+> ——其他 role（`assistant` / `system` / 工具输出…）**一律按非 user 处理**，
+> 且**每条带 `[role]` 标记**。
+
+### 两侧的 role 处理**故意不同**
+
+| 侧 | 写法 | 为什么 |
+| --- | --- | --- |
+| `question` | `join_question`，**不加标记** | role 均一（由渲染的 `Q: ` 前缀给出）；而拼接要把**被物理切开的一条原消息逐字拼回去** |
+| `answer` | `encode_answer`，**每条无条件加** `[role]` | 一个块里可能混着 `assistant` / `system` / 工具输出，不标就分不清哪句是谁说的（§11.3） |
 
 ---
 
-## 批次续接三步，顺序不能换（§6.5）
-
-新批次到达时，服务端**必须先从库里恢复上下文**。
+## 位置：`(chunk_ordinal, local_index)`（**D25**）
 
 ```text
-1. 幂等守卫（必须最先做）
-   SELECT 1 FROM applied_batches WHERE request_id = ? LIMIT 1
-   命中 → 本批已应用过（重试）→ 直接返回 200，不写任何东西
-   ※ 应用成功时，在**同一个事务**里向 applied_batches 插入本批这一行
-
-2. 恢复位置
-   next_idx = COALESCE(MAX(pair_idx) + 1, 0)        -- 限于该 (user_id, session_id)
-   可续写的对 = 该 session 中 status = 'pending' **或 answer IS NULL** 的那一对
-              （至多一个，且必在末尾：ORDER BY pair_idx DESC LIMIT 1）
-              ⚠ 第二个析取项**不能省**——见 open_pair() 的 docstring
-
-3. 挂接本批消息
-   a′. 本批开头的 user 消息，若那个对的 answer 还空着 → **并入它的 question**
-       （跨批时由 append_question 落库）
-   a. 本批开头、首个 user 消息之前的消息 → 追加到那个对的 answer
-      若此时不存在可续写的对 → 按 §6.2 处理（批次以 assistant 开头，建一个 question 为空的对）
-   b. 本批出现首个 user 消息**且那个对已有 answer** → 把它标 complete
-      （⚠ 判据是"已有 answer"，**不是**"出现了 user 消息"）
-   c. 其余消息按上面的配对判据配对，pair_idx 从 next_idx 起连续赋值
-   d. 收尾：给涉及到的最后一对标 status：
-      本批两限都未命中 ⇒ session 已结束 ⇒ 标 complete
-      ※ **纯接续批（零条 user 消息）也走这一步**
+chunk_ordinal  从 request_id 解析（`parse_chunk_ordinal`）——**只能从那儿取**
+local_index    这一批组合出的块序号（`compose_memory_blocks` 的输出下标）
+id              hash(user_id, session_id, chunk_ordinal, local_index)
 ```
 
-> **第 1 步不能省——这是本项目最容易踩的一个陷阱。**
->
-> "只填空不覆盖"只让**内容**幂等，**位置分配并不幂等**。若服务在事务提交之后、响应发出之前崩溃（或响应丢失），AML 会重试同一批（`request_id` 与 payload 不变），而此时 `MAX(pair_idx)` **已经前移**——重试会把**同一批消息重新分配到新的 `pair_idx` 上**，落成一份重复记录，**且不会报错**。
->
-> 详细论证见 [`../../../docs/decisions.md`](../../../docs/decisions.md) D4。**别把它和内容幂等混为一谈——它们解决的是两个不同的问题。**
+**两者都是请求的纯函数** ⇒ 没有共享计数器、没有读-改-写 ⇒
+**同 session 的 Add 可以并发**（`SessionLocks` 已删），**乱序到达也不翻转会话顺序**。
 
-> ⚠ **3b 最容易漏，且漏了会伪装成数据问题**（见下）。
+⚠ **取不到 chunk 序号 ⇒ 响亮失败**（非 200），**没有 `MAX+1` 回退`**——
+回退会把"乱序到达静默翻转顺序"那个 bug 带回来。格式住在
+`ingest.chunk_ordinal_pattern`（可配置，所以平台换形状不必改代码）。
+**这条格式假设的来源是团队告知、不是一手文档**（与 S2/S5 同类）——见 D25。
 
----
+### 位置对齐 ≠ 组合边界
 
-## `pending` 判定规则（§6.5）
-
-**只要本批命中任一上限（20 条消息 或 2,000 词），本批的最后一对就是 `pending`；两限都未命中，则最后一对是 `complete`**——AML 手上已经没有这个 session 的消息了，边界即 session 末端。
-
-> ⚠ **`pending` 不是"本批要续写哪一对"的判据**（D20）——续写的判据是 `status = 'pending' OR answer IS NULL`（见上文的第 2 步与 `open_pair()`）。原因是 `pending` 从"本批是否命中上限"推出，**而命中与否依赖那个我们复现不了的词数计数**（S2）——计数一旦与 AML 不一致，跨批合并就会**静默**失效。`pending` 只承担两件事：**它的三计数器**（观测），与 §6.5 步 3a 的答话续接。
-
-**为什么 `pair_idx` 必须连续**：`event_time` 保证不了 session 内顺序——同一秒的多条消息排序未定义，会让 `±1` 邻域扩展产生抖动，进而**让消融实验不可复现**（§6.1）。两个计分数据集**都没有 per-turn 时间戳**，所以在它们上面这不是"可能发生"而是必然（实证见 [`../eval/datasets/CLAUDE.md`](../../../eval/datasets/CLAUDE.md)）。
-
-### 三个埋点
-
-| 计数器 | 含义 |
+| | 作用域 |
 | --- | --- |
-| `pending_created` | 新建的 `pending` 对 |
-| `pending_completed` | 被后续批次补全的对 |
-| `pending_orphaned` | 到 session 结束仍是 `pending` 的对 |
+| **组合**（哪些消息进同一个块） | **一次 Add**（D24） |
+| **位置的作用域** | `chunk_ordinal` 由**请求**给出 ⇒ 与"哪个 Add 先到"无关（D25） |
 
-**本目录只负责发射**，读法与两个必须分开的来源见 [`../observability/CLAUDE.md`](../observability/CLAUDE.md)。**本地埋点数与线上必然对不上**（切批口径之一无定义）——那条也记在那里。
+**相邻性不走位置**，走 `store.fetch_session_ordered` 现算的稠密序 `seq`
+（`ROW_NUMBER() ... - 1`）——所以 chunk 序号**跳号不破坏相邻**，
+而"中间真的少了一块"仍然被抓住（见 [`../rank/neighbor.py`](../rank/neighbor.py)）。
 
 ---
 
-## 写入规则：填空 + 追加，绝不覆盖（§6.5）
+## 写入形态（D24 之后）
 
 ```text
-question      填空 + 追加（append-only）——**与 answer 同一个写模式**
-answer        填空 + 追加（append-only）
-status        只允许 pending → complete，不允许反向
+块在写下的那一刻就是最终形状 ⇒ status 恒为 'complete'
+没有任何后台任务会回头改这些行（没有 pending、没有 repair、没有重新 embedding）
 ```
 
-**`question` 允许追加**：它是**一段连续 user 消息**的拼接，而这段消息**可以跨批次**——续接批次带来的 user 消息是它的续写，必须并进去而不是丢掉。⇒ 写方法是 `append_question()`；**不要**写成"只在原值为 NULL 时写入"，那会让跨批续写被静默丢弃。
+`status` 列保留（§6.1 的 DDL 不改），但**不再有第二个取值**；`'pending'` 只在
+"按旧规则写过的库"里还读得到。
 
-**`answer` 允许追加**（§6.5）：§6.2 承认"一条 user 后跟多条 assistant 消息（工具调用等）"，这类对若跨批次，续接批次带来的消息同样必须并进去。
+**与幂等正交**：守卫仍查 `applied_batches`（D4），`BEGIN IMMEDIATE` 仍保留
+（它现在是**数据库级写者串行**的唯一落点——D25 删掉应用层锁之后，并发全在这一处排队）。
 
-**追加的安全性由批次级守卫保证**（同一批至多被应用一次），**不需要额外的判重逻辑**——`answer` 与 `question` 是同一套论证（见 D4）。
-
-**`question` 的拼接不加 role 标记**（与 `encode_answer` 相反）：这段文本是用户的原始发言，
-role 均一；标记会一并进 embedding（§7.2 同一份渲染），而它要能让**被切开的一条原消息逐字拼回去**。
-§11.3 要求逐条带标记的是 `answer` 侧（那里可能混着 `assistant` / `system` / 工具输出）。
+⚠ **D25 顺带把失败模式变响了**：位置是纯函数 ⇒ 同一批重放必然算出**同一位置**，
+于是重放撞 `UNIQUE` 而**不是**静默落成重复记录。守卫仍然必须留（AML 重试是正常行为，
+不能每次都靠撞约束失败）。
 
 ---
 
 ## 写完之后先测什么
 
-测试用例清单见 [`../../tests/CLAUDE.md`](../../../tests/CLAUDE.md)。**本目录的关键用例只有一条要在这里记住**：幂等测试必须模拟"**事务已提交、响应未发出**"的中间态——**只测"重复 POST 两次"抓不到位置重分配**，因为那时 `MAX(pair_idx)` 的状态与崩溃重试时不同。
+测试用例清单见 [`../../tests/CLAUDE.md`](../../../tests/CLAUDE.md)。**本目录的关键用例只有一条
+要在这里记住**：幂等测试必须模拟"**事务已提交、响应未发出**"的中间态（**只测"重复 POST 两次"
+太弱**）。D25 之前这一步抓的是"位置重分配"（那次 `MAX(pair_idx)` 的状态与崩溃重试时不同）；
+D25 之后位置是纯函数、重放必然算出同一位置，于是这一步抓的是**重放撞 `UNIQUE`**
+——守卫若被删掉，表现为**重放把整批写成 500**（`IntegrityError`），而不是静默重复。

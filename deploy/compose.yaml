@@ -15,13 +15,103 @@
 #   【不要改成 latest 或大版本浮标。】升级要先看 §7.3 的版本门槛。
 
 services:
+  # ══ 检索服务本体（Add / Search，§2.1）══════════════════════════════════════
+  #
+  # 起：  docker compose -f deploy/compose.yaml up -d --build
+  # 看：  docker compose -f deploy/compose.yaml logs -f app
+  # 验：  docker compose -f deploy/compose.yaml exec app \
+  #           python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
+  #
+  # ⚠ **密钥不进镜像**：全部走 `env_file`（下面 `deploy/.env`）+ `environment` 覆盖。
+  #   镜像里只有 `configs/*.yaml`（阈值/权重/模型名/集合名）与代码。
+  app:
+    build:
+      # ⚠ **上下文是仓库根**，不是本目录——Dockerfile 要 pyproject.toml / uv.lock / src/ / configs/。
+      #    `.dockerignore` 在仓库根，负责挡掉 benchmark_data / var / .env 那几样。
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: tianxi-am:local
+    container_name: tianxi-app
+    # 24×7：Full run 连续跑 0.5–2 天，崩了必须自己回来。
+    restart: unless-stopped
+    # ⚠ 单请求最长 30 分钟（§2.2）。默认 10s 的宽限期会在 `down` 时**拦腰砍断**一个正在跑的
+    #   Add/Search。这里给 60s 只为让"正在写库的那一批"收尾——真要长跑时请用
+    #   `docker compose stop` 之外的方式停（先确认没有在途请求）。
+    stop_grace_period: 60s
+    ports:
+      # 宿主端口 → 容器 8000。⚠ 容器内部固定听 0.0.0.0:8000（写死在 Dockerfile 的 ENTRYPOINT）。
+      #
+      # `TIANXI_BIND`：绑到宿主的哪个地址。**默认只听回环**——本服务**没有任何鉴权**
+      #   （`user_id` 是隔离字段，不是认证），所以默认不给外面看。
+      #   ⚠ 要让别的机器访问必须设 `0.0.0.0`（或某个具体网卡地址）：
+      #     只改端口不顶用——绑在 127.0.0.1 上的话，同机 `curl localhost:28088` 通、
+      #     从别的机器打过来是 connection refused，**而服务日志里什么都没有**。
+      # `TIANXI_PORT`：宿主端口。默认 8000（开发机）。
+      - "${TIANXI_BIND:-127.0.0.1}:${TIANXI_PORT:-8000}:8000"
+    extra_hosts:
+      # 让**容器内**的 `host.docker.internal` 指回宿主机（Linux 上必须显式写；
+      # Docker Desktop 自带这个名字，写了也不冲突）。
+      #
+      # ⚠ **这是干什么用的**：模型网关跑在同一台机器上时，`.env` 里**不能**写
+      #   `http://127.0.0.1:9002/v1`——容器里的 `127.0.0.1` 是**容器自己**，
+      #   那个地址连的是容器内没人监听的 9002 ⇒ `Connection refused`。
+      #   容器里"同机器"的正确写法是 `http://host.docker.internal:9002/v1`。
+      #   另一种写法是直接用宿主机的网卡地址（`http://10.193.135.28:9002/v1`），
+      #   但**前提是网关监听的不是 127.0.0.1**——只绑回环的话它连不到。
+      - "host.docker.internal:host-gateway"
+    env_file:
+      # 与 `.env.example` 同形，填真值。**不进 git**（.gitignore 已覆盖 .env*）。
+      # ⚠ 这个文件同时被 compose 用来做 `${...}` 插值（下面 qdrant URL 那几行），
+      #   所以它既是"容器的环境"又是"这份 compose 的变量表"——**一处声明**。
+      - .env
+    environment:
+      # ── 覆盖 .env 里那几项"跟着部署形态走"的值 ──────────────────────────
+      # ⚠ **`environment` 的优先级高于 `env_file`**（compose 的固定语义）。
+      #   这里只放"换成容器形态就必须变"的：地址、集合、profile。
+      #
+      # ① Qdrant：compose 网络内用服务名解析。**指外部 Qdrant 就在 .env 里设
+      #    TIANXI_QDRANT_URL**（下面的 `${...:-默认}` 就是那个口子）。
+      TIANXI_QDRANT_URL: "${TIANXI_QDRANT_URL:-http://qdrant:6333}"
+      # ② profile 选 configs/<name>.yaml。开发期是 local（集合 memories_dev）；
+      #    **提交期必须是 default**（集合 memories，见 configs/CLAUDE.md 的隔离说明）。
+      TIANXI_PROFILE: "${TIANXI_PROFILE:-local}"
+      # ③ 路径固定成卷里的位置（Dockerfile 里已经把目录建好并 chown 给 app 用户）。
+      TIANXI_SQLITE_PATH: /data/tianxi.db
+      TIANXI_EMBED_CACHE_DIR: /data/embed_cache
+      # ④ 单进程（§15）。Dockerfile 里已有第二道，这里写出来是为了让它**在 compose 上可见**。
+      TIANXI_WORKERS: "1"
+      # ⚠ **刻意不设 `TIANXI_ENV_FILE`**：容器里没有 .env 文件，配置全靠上面这些环境变量。
+      #   设了它反而会让服务去读一个不存在的路径。
+    volumes:
+      # **真源 + 向量缓存**。⚠ SQLite 是**唯一不可重建物**（Qdrant 可从它全量重建，
+      # 反过来不行）⇒ 这个卷是**备份对象**，`docker compose down -v` 会把它删掉。
+      - tianxi_data:/data
+    depends_on:
+      # ⚠ `service_started` 而不是 `service_healthy`：Qdrant 镜像里没有 curl/wget，
+      #   加 healthcheck 要额外塞工具。而**服务本来就不依赖 Qdrant 先起来**——
+      #   qdrant-client 是**懒连接**，集合也是第一次 Add 时才建（`ensure_collection`）。
+      - qdrant
+    healthcheck:
+      # 与 Dockerfile 里的同一条（这里写出来是为了让它一眼可见，改一处要改两处）。
+      # ⚠ 探的是 `/health`（S4）：**不碰下游**——Qdrant 或网关抖动不该让容器被判不健康。
+      test: ["CMD", "python", "-c", "import sys,httpx; sys.exit(0 if httpx.get('http://127.0.0.1:8000/health', timeout=4).status_code == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # ══ 派生索引（§6.3 / §7.3）══════════════════════════════════════════════════
   qdrant:
     image: qdrant/qdrant:v1.17.0
     container_name: tianxi-qdrant
     restart: unless-stopped
     ports:
-      - "6333:6333"   # REST —— 服务与 harness 都走这个
-      - "6334:6334"   # gRPC
+      # ⚠ **默认只绑回环**：应用走 compose 网络用服务名 `qdrant:6333` 访问，**不需要**这两个端口对外。
+      #   而 Qdrant **本身没有鉴权** ⇒ 绑到 0.0.0.0 等于把整个向量库摊在网络上（谁都读得到、
+      #   谁都能删）。它只是派生索引（可从 SQLite 重建），但被删了要重建一遍。
+      #   要在宿主上直连（`make qdrant-up` 的开发环路、tools/ 的脚本）走 127.0.0.1 就够。
+      - "127.0.0.1:${TIANXI_QDRANT_PORT:-6333}:6333"   # REST —— 服务与 harness 都走这个
+      - "127.0.0.1:${TIANXI_QDRANT_GRPC_PORT:-6334}:6334"   # gRPC
     volumes:
       # 派生数据的落点。Qdrant 可从 SQLite 全量重建，所以这个卷【不是备份对象】——
       # 真正的备份对象是 SQLite 真源文件（见 deploy/CLAUDE.md §4 的重建 runbook）。
@@ -40,15 +130,28 @@ volumes:
   # Qdrant 可从 SQLite 全量重建 ⇒ 这个卷不是备份对象，删掉即可重建。
   qdrant_storage:
 
+  # **真源卷**（`app` 服务的 `/data`）：`tianxi.db` + `embed_cache/`。
+  # ⚠ 与上面那个正相反——**这是唯一的备份对象**。`docker compose down -v` 会删掉它。
+  #   备份：`docker compose -f deploy/compose.yaml exec app tar -c -C /data . > backup.tar`
+  #   （SQLite 在 WAL 模式下直接拷文件可能不一致，所以"先停服务再拷"或走 SQLite 的备份 API。）
+  tianxi_data:
+
 # 注意：以下集合级设置【不在本文件里】，由客户端在建集合时施加（src/tianxi_am/store/）：
 #   - 分片数 = 1            （根级融合跨分片合并，分片数变化会改变排名且无报错）
 #   - 命名向量 dense + bm25 （稀疏向量距离固定为 Dot）
 #   - payload 索引          （必须在写入数据前建，否则 HNSW 需重建才有过滤感知）
 #   - 写入 wait=true        （契约要求"响应前立即可搜"）
 #
-# 部署位置（2026-09-23 定，见 docs/decisions.md D12）：
-#   检索服务 + Qdrant 跑在【本机】；三段模型经自建网关远程访问；harness 也在本机。
-#   本机已装 Docker Desktop 29.8.0（desktop-linux context，WSL2 后端，无额外用户发行版）：
-#   daemon 走 Windows 命名管道 ⇒ docker 命令直接从 Git Bash 可用，不必进 WSL；
-#   容器虽在 Docker Desktop 的 VM 内，但发布端口转发到 Windows 主机 ⇒
-#   服务在本机访问 localhost:6333 成立。**本机无 GPU，但已不需要**（模型不在本机）。
+# 部署位置（2026-09-23 定 D12；**2026-09-28 增加服务器形态**）：
+#
+#   【开发机形态】检索服务 + Qdrant 跑在**本机**；三段模型经自建网关远程访问；harness 也在本机。
+#     本机已装 Docker Desktop 29.8.0（desktop-linux context，WSL2 后端，无额外用户发行版）：
+#     daemon 走 Windows 命名管道 ⇒ docker 命令直接从 Git Bash 可用，不必进 WSL；
+#     容器虽在 Docker Desktop 的 VM 内，但发布端口转发到 Windows 主机 ⇒
+#     服务在本机访问 localhost:6333 成立。**本机无 GPU，但已不需要**（模型不在本机）。
+#
+#   【服务器形态】同一个 compose 文件，**只跑 `app` + `qdrant`**，harness 与答案/裁判
+#     生成留在本地。要求：能连到自建网关（embedding 必需、reranker 可选）、
+#     有持久盘、**不需要 GPU 也不需要外网**（tiktoken 的 BPE 已烘进镜像）。
+#     ⚠ 服务器上用 `default` profile（集合 `memories`），**不是 `local`**。
+#     ⚠ 本服务**没有任何鉴权** ⇒ 默认只听 `127.0.0.1`（`TIANXI_BIND`），对外要自己加 TLS/反代。

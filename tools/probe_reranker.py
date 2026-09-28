@@ -71,7 +71,8 @@ CONTEXT_ANSWER: Final[str] = "[assistant] never on sundays"
 
 #: 干扰项：**每条各占一个 session**、每对只有一对。
 #:
-#: ⚠ **这是关键**：同一 session 里 `pair_idx` 相邻的对会**合并成一段**，
+#: ⚠ **这是关键**：同一 session 里位置相邻的对会**合并成一段**
+#: （D25 起"位置相邻" = 读时稠密序 `seq` 相邻，
 #: 于是 6 条候选在输出里只剩 1 项——"顺序变没变"就**没有可观测的地方**了
 #: （那样写的探针两遍输出一模一样，其实什么也没证明）。
 #: 各占一个 session ⇒ 每对自成一段 ⇒ 段间顺序 = `best_rank` 顺序 = **精排名次的直接读数**。
@@ -258,7 +259,7 @@ def _seed_corpus(store: SqliteStore) -> tuple[str, str, list[str]]:
     ```
 
     ⚠ 干扰项的 id **在这里收集**，不去按 session 前缀回查：它们的 `session_id` 是
-    `s-distract-<i>`，用一个共同前缀去 `fetch_pairs_by_idx_range` 查**查不到任何东西**
+    `s-distract-<i>`，用一个共同前缀去 `fetch_session_ordered` 查**查不到任何东西**
     （那个查询要求 session 相等），于是"候选 7 条"实际只有 1 条，两遍输出一模一样
     ——**探针自己把自己测成了空过的**。
     """
@@ -267,7 +268,8 @@ def _seed_corpus(store: SqliteStore) -> tuple[str, str, list[str]]:
             conn,
             user_id="probe-u",
             session_id="s-match",
-            pair_idx=0,
+            chunk_ordinal=0,
+            local_index=0,
             question=MATCH_QUESTION,
             answer=MATCH_ANSWER,
             status="complete",
@@ -278,7 +280,8 @@ def _seed_corpus(store: SqliteStore) -> tuple[str, str, list[str]]:
             conn,
             user_id="probe-u",
             session_id="s-match",
-            pair_idx=1,
+            chunk_ordinal=1,
+            local_index=0,
             question=CONTEXT_QUESTION,
             answer=CONTEXT_ANSWER,
             status="complete",
@@ -291,7 +294,8 @@ def _seed_corpus(store: SqliteStore) -> tuple[str, str, list[str]]:
                 conn,
                 user_id="probe-u",
                 session_id=f"s-distract-{idx}",
-                pair_idx=0,
+                chunk_ordinal=0,
+                local_index=0,
                 question=question,
                 answer=answer,
                 status="complete",

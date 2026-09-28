@@ -21,7 +21,10 @@
 uvicorn tianxi_am.service.app:create_app_from_env --factory --workers 1
 ```
 
-**必须 `--workers 1`**（§15）：Add 的串行化用的是**进程内**锁，多 worker 会**静默失效**。
+**必须 `--workers 1`**（§15）：⚠ **D25 之后原因变了**——"进程内锁会静默失效"那条不再成立
+（`SessionLocks` 已删，位置是请求的纯函数）。保留它是因为**放开多 worker 需要的验证没做过**
+（并发写压力、`busy_timeout` 争用、多进程各自的 Qdrant 客户端）
+——**别用"反正现在安全了"当理由去掉它**。
 `assert_single_process()` 拦下配置与命令行两条路上的违规（`common/config.py`）。
 
 刻意**没有**模块级 `app = ...`：那会让"导入本模块"就要求环境变量齐备，测试没法只导入
@@ -49,11 +52,9 @@ from tianxi_am.common.tokens import load_counter
 from tianxi_am.embed.base import CachingEmbedder, DiskVectorCache, EmbeddingCoordinate
 from tianxi_am.embed.query_instruction import QueryInstructionEmbedder
 from tianxi_am.embed.qwen3_embedding import Qwen3EmbeddingEmbedder
-from tianxi_am.pairing.pairing import BatchLimits
 from tianxi_am.rank import RemoteReranker
 from tianxi_am.retrieve import DenseArm, EvidenceChecker, HybridRetriever, make_hybrid_params
 from tianxi_am.service.errors import register_error_handlers
-from tianxi_am.service.locks import SessionLocks
 from tianxi_am.service.pipeline import AddPipeline, SearchPipeline
 from tianxi_am.service.routes import build_router
 from tianxi_am.store.qdrant_store import QdrantStore
@@ -78,7 +79,6 @@ class Services:
     store: SqliteStore
     qdrant: QdrantStore
     embedder: QueryInstructionEmbedder
-    locks: SessionLocks
     add: AddPipeline
     search: SearchPipeline
 
@@ -145,33 +145,27 @@ def build_services(config: AppConfig) -> Services:
     )
     dense = DenseArm(embedder)
 
-    locks = SessionLocks()
     return Services(
         config=config,
         store=store,
         qdrant=qdrant,
         embedder=embedder,
-        locks=locks,
         add=AddPipeline(
             store=store,
             qdrant=qdrant,
             embedder=embedder,
-            locks=locks,
-            limits=BatchLimits(
-                max_messages=config.pairing.batch_max_messages,
-                max_words=config.pairing.batch_max_words,
-            ),
             inject_abs_time=config.packaging.inject_abs_time,
+            chunk_ordinal_pattern=config.ingest.chunk_ordinal_pattern,
         ),
         search=SearchPipeline(
             store=store,
             qdrant=qdrant,
             retriever=HybridRetriever(store=qdrant, dense=dense),
             # ⚠ `EvidenceChecker()` **不带 instrument** ⇒ 落到 `NullCheckerInstrument`，
-            #   即**每轮判定被丢弃**（`AddPipeline` 那侧的 `PendingInstrument` 同理）。
-            #   **这是刻意的，不是漏接**：真正的聚合口 `observability/` 尚未实现，而换成
-            #   `InMemory*` 会**无界增长**（Full run 连跑 0.5–2 天，§2.2）且那串记录没有
-            #   任何读取方。⇒ D13 的"**每轮判定必须记录**"落在 `observability/` 落地的时候，
+            #   即**每轮判定被丢弃**。**这是刻意的，不是漏接**：真正的聚合口
+            #   `observability/` 尚未实现，而换成 `InMemory*` 会**无界增长**
+            #   （Full run 连跑 0.5–2 天，§2.2）且那串记录没有任何读取方。
+            #   ⇒ D13 的"**每轮判定必须记录**"落在 `observability/` 落地的时候，
             #   **在那之前别把它当成已满足。**
             checker=EvidenceChecker(),
             # ⚠ 分词器**在这里就加载**（不是第一次请求时才加载）：它要联网取 BPE 文件
@@ -252,8 +246,10 @@ def create_app(services: Services) -> FastAPI:
 def create_app_from_env() -> FastAPI:
     """`uvicorn --factory` 的入口：**校验进程形态** → 读配置 → 装配 → 建 app。
 
-    ⚠ `assert_single_process()` 必须在**建对象图之前**：多 worker 下每个 worker 都会
-    自己开一个 `SessionLocks`，那时再报错也已经晚了——**锁已经形同虚设**。
+    ⚠ `assert_single_process()` 保留（D25 之后它守的是**别的东西**）：位置分配已不再
+    依赖进程内状态，但 `--workers N` 仍然是 **§15 的偏离**，而多进程会各自持一个
+    SQLite 连接池、把 `busy_timeout` 的争用放大。⇒ 放开 worker 是**单列的后续**，
+    不在 D25 范围内；在那之前这道守卫不许绕。
     """
     assert_single_process()
     return create_app(build_services(load_config()))

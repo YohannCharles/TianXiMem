@@ -8,10 +8,14 @@
 
 不变式归属（store/CLAUDE.md 的五条）：
   1. `id` 位置派生 .................... `make_pair_id()` + `schema.sql` 的 PRIMARY KEY
-  2. `pair_idx` session 内连续 ........ `next_pair_idx()`（读-改-写在**一个事务**里）
+  2. 位置 = 请求的纯函数 ............... `(chunk_ordinal, local_index)`，**D25** 起
+                                        **不再有读-改-写**（⇒ 没有"分配位置"这一步）
   3. `applied_batches` 只增不改 ....... `record_batch()`（只 INSERT，不 UPDATE）
-  4. UNIQUE 索引 = 邻域查询的键 ....... `schema.sql` 的 UNIQUE + `fetch_pairs_by_idx_range()`
+  4. UNIQUE 索引 = 会话顺序的排序键 .... `schema.sql` 的 UNIQUE + `fetch_session_ordered()`
   5. 缓存键 = 渲染文本哈希 ............ **不在本模块**，属 `embed/`（§7.2）
+
+⚠ **D25（2026-09-27）与 D24（同日）的区别**：D24 只改"哪些消息进同一个块"（组合），
+D25 改"块的位置从哪来"（`MAX+1` → 请求里的 chunk 序号）。**位置模型变了 ⇒ 旧库不可复用。**
 """
 
 from __future__ import annotations
@@ -47,35 +51,47 @@ def _canonical(*parts: str) -> str:
     return "".join(f"{len(p)}:{p}" for p in parts)
 
 
-def make_pair_id(user_id: str, session_id: str, pair_idx: int) -> str:
-    """不变式 1：`id` **位置派生** = hash(user_id, session_id, pair_idx)。（§6.1）
+def make_pair_id(user_id: str, session_id: str, chunk_ordinal: int, local_index: int) -> str:
+    """不变式 1：`id` **位置派生** = hash(user_id, session_id, chunk_ordinal, local_index)。
 
-    ⚠ **绝不能用内容哈希。** 补全（`pending` → `complete`）会改写 `question` / `answer`，
-    内容哈希会随之变化 ⇒ 同一个对拿到新 `id` ⇒ Qdrant 里留下一个**孤儿 point**
-    （旧的还在，新的也写进去，检索命中"不存在的那个版本"，**且不报错**）。
+    **D25 起位置是这两个数**（旧口径是 session 内连续的 `pair_idx`，由 `MAX+1` 现算）。
 
-    这也正是 `pair_idx` 必须连续的原因：`id` 依赖它。
+    ⚠ **绝不能用内容哈希。** 按内容算的 `id` 会在两段**内容相同**的记忆上撞车，
+    而**重建索引**要求「同一行永远是同一个 point」——做不到就会在 Qdrant 里留下
+    **孤儿 point**（旧的还在，新的也写进去，检索命中"不存在的那个版本"，**且不报错**）。
 
-    哈希算法本身**不是 §6.1 规定的**——规格只规定了**输入**是这三个字段。
+    ⚠ **这两个数都必须是请求的纯函数**（chunk 来自 `request_id`、local 来自组合结果）：
+    它们一旦依赖到达顺序，位置就又变成读-改-写，D25 想买的两件事（并发安全、乱序不翻转）
+    会一起消失。
+
+    哈希算法本身**不是规格规定的**——规格只规定了**输入**是位置四元组。
     这里取 SHA-256 全 64 位十六进制：确定性、无碰撞顾虑、长度对 TEXT 主键无所谓。
     """
-    payload = _canonical(user_id, session_id, str(pair_idx))
+    payload = _canonical(user_id, session_id, str(chunk_ordinal), str(local_index))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
 class QaPair:
-    """一个 QA 对的领域对象（§6.2）。"""
+    """一个记忆块的领域对象（§6.2 的 QA 对 + D24 的块模型）。
+
+    `seq` **不是列**——它是**读时算出来的会话内稠密序**（见 `fetch_session_ordered`），
+    扩窗与段合并只用它，所以"缺号的 chunk 不破坏相邻"这件事是结构性成立的。
+    """
 
     id: str
     user_id: str
     session_id: str
-    pair_idx: int
+    chunk_ordinal: int
+    local_index: int
     question: str | None
     answer: str | None
     status: Status
     event_time: int | None
     request_id: str
+    #: 会话内稠密序（0-based，按 `(chunk_ordinal, local_index)` 排）。
+    #: 只有 `fetch_session_ordered` / `iter_pairs` 会填；`insert_pair` 不知道它。
+    seq: int = -1
 
 
 def _now_ms() -> int:
@@ -214,22 +230,26 @@ class SqliteStore:
 
         **`BEGIN IMMEDIATE` 而不是默认的 `BEGIN`**（**已实测，不是引文档**）：
 
-        * **读-改-写**：`pair_idx` 的分配是 `MAX(pair_idx)` → 写位置。deferred `BEGIN`
-          在第一次**写**的时候才拿写锁，两个并发事务会先读到同一个 `MAX(pair_idx)`
-          ⇒ 位置撞车（撞 `UNIQUE`）。
-        * **升级写锁时 `busy_timeout` 不生效**：deferred 事务已持读锁，要写时得**升级**成
-          写锁；若对方正持写锁，SQLite **立刻**返回 `SQLITE_BUSY`（"database is locked"）
+        * **升级写锁时 `busy_timeout` 不生效**（**这是 D25 之后剩下的那一条理由**）：
+          写事务里**先读后写**（守卫 `SELECT` → `INSERT`）。deferred `BEGIN` 让事务
+          以**读**身份开始，要写时得**升级**成写锁；若对方也持着读锁并同样想升级，
+          SQLite **立刻**返回 `SQLITE_BUSY`（"database is locked"）
           ——它宁可立刻报错也不冒死锁的险，**不应用 `busy_timeout`**。
+        * ~~**读-改-写**：`pair_idx` 的分配是 `MAX(pair_idx)` → 写位置~~ ⛔ **D25 已取消**：
+          位置现在从 `request_id` 的 chunk 序号派生，**没有读-改-写**。
+          ⇒ 这条理由**不再成立**，但**上一条仍成立**，所以 `BEGIN IMMEDIATE` 照留。
 
         实测：把这一行换成 `BEGIN`，`tests/test_store.py` 的两条并发压力用例
         **双双失败**，报 `OperationalError('database is locked')` ×5——**而且跨 session
         那条也失败**（不同 `(user_id, session_id)` 一样撞），所以这不只是"位置撞车"的防护。
 
-        IMMEDIATE 在事务开头就拿写锁，把整个读-改-写串行化，也让并发写事务退化成
-        "排队"而不是"互锁"（完整论证见 D17）。
+        IMMEDIATE 在事务开头就拿写锁，让并发写事务退化成"排队"而不是"互锁"
+        （完整论证见 D17）。**它是数据库级的写者串行**（键是整个库文件），
+        与"按 session 的业务顺序"**不是一件事**——后者是 D25 删掉的那把锁。
 
-        ⚠ 这只解决**单库内**的并发。§15 还要求 Add 按 `(user_id, session_id)` 串行化
-        （进程内按 session 的锁），那一层属 `service/`，不在本模块。
+        ⚠ D25 之后**没有应用层的 session 锁了**：同 `(user_id, session_id)` 的 Add
+        可以并发进入本层，它们在**这里**排队（等待，而不是失败）。⇒ 本方法是
+        "并发安全"的**唯一**落点，`busy_timeout` 的取值（配置项）比过去更要紧。
 
         事务体里的**每一个 helper 都必须复用这里 yield 出去的 `conn`**——
         helper 自己 `connect()` 会落到另一个事务里（拿不到本事务的写锁、也看不到本事务
@@ -288,52 +308,18 @@ class SqliteStore:
             (request_id, user_id, session_id, _now_ms() if applied_at is None else applied_at),
         )
 
-    # ── 第 2 步：恢复位置（§6.5）────────────────────────────────────────
+    # ── 位置：D25 起**没有"分配"这一步** ────────────────────────────────
+    #
+    # 旧口径是 `next_pair_idx() = MAX(pair_idx)+1`（读-改-写，必须靠 `SessionLocks` 串行化，
+    # 且顺序 = 到达顺序）。D25 把它换成 `(chunk_ordinal, local_index)`——**请求的纯函数**：
+    #
+    #   * `chunk_ordinal` 从 `request_id` 解析（`pairing.parse_chunk_ordinal`）
+    #   * `local_index`   是这一批组合出的块的 0-based 序号（`compose_memory_blocks` 确定）
+    #
+    # ⇒ 没有共享计数器、没有读-改-写 ⇒ **不需要串行化**，且**乱序到达不会翻转顺序**。
+    # ⚠ **不要在这里加回一个"取下一个位置"的方法**——那会把 D25 买的两件事一起还回去。
 
-    def next_pair_idx(self, conn: sqlite3.Connection, user_id: str, session_id: str) -> int:
-        """`next_idx = COALESCE(MAX(pair_idx) + 1, 0)`，限于该 `(user_id, session_id)`。
-
-        ⚠ **绝不能从 0 重开**：`id` 是位置派生的，重开必然与既有行撞 `id`，
-        而写入是 upsert ⇒ **静默覆盖上一批的数据**。
-        """
-        row = conn.execute(
-            "SELECT COALESCE(MAX(pair_idx) + 1, 0) FROM qa_pairs"
-            " WHERE user_id = ? AND session_id = ?",
-            (user_id, session_id),
-        ).fetchone()
-        return int(row[0])
-
-    def open_pair(self, conn: sqlite3.Connection, user_id: str, session_id: str) -> QaPair | None:
-        """该 session 中**本批可以续写**的那一对（§6.5 第 2 步的"恢复位置"）。
-
-        两个析取项，缺一不可：
-
-        * `status = 'pending'` —— §6.5 的原有判据：上一批命中了上限，答话可能还没写完。
-        * **`answer IS NULL`** —— 本轮的**内容判据**：一个对只要还没收到任何非 user 消息，
-          它的 `question` 就**还没写完** ⇒ 后续的 user 消息是它的续写（配对规则见
-          [`../pairing/pairing.py`](../pairing/pairing.py) 的 `question_is_open`）。
-
-        ⚠ **第二个析取项不能省，也不能只靠第一个。** `pending` 是从"本批是否命中上限"
-        推出来的，而上限里的**词数计数我们复现不了**（S2："Adapter 计的词"官方从未定义）。
-        若 AML 按它的口径切出接近但不足 2,000 词的碎片、我们算出更少，这一对就会被标成
-        `complete`，下一批的碎片再也接不上——**静默退化成"有问无答"的对**。
-        `answer IS NULL` 是**内容事实**，与任何计数无关。
-
-        至多一个，且**必在末尾**，所以取 `ORDER BY pair_idx DESC LIMIT 1`：
-        在配对规则下，一个 `answer IS NULL` 的对会吃掉后续的 user（并入 `question`）
-        与非 user（并入 `answer`），所以它只能是最后一对。
-        （⚠ 这条不变式**只在当前配对规则下成立**：按旧规则写过的库不满足它
-        ——跨 arm 必须用干净的库，见 V9。）
-        """
-        row = conn.execute(
-            f"SELECT {_COLUMNS} FROM qa_pairs"
-            " WHERE user_id = ? AND session_id = ? AND (status = ? OR answer IS NULL)"
-            " ORDER BY pair_idx DESC LIMIT 1",
-            (user_id, session_id, STATUS_PENDING),
-        ).fetchone()
-        return None if row is None else _to_pair(row)
-
-    # ── 第 3 步：写（填空 + 追加，绝不覆盖 —— §6.5）──────────────────────
+    # ── 第 3 步：写 ────────────────────────────────────────────────────
 
     def insert_pair(
         self,
@@ -341,7 +327,8 @@ class SqliteStore:
         *,
         user_id: str,
         session_id: str,
-        pair_idx: int,
+        chunk_ordinal: int,
+        local_index: int,
         question: str | None,
         answer: str | None,
         status: Status,
@@ -349,21 +336,45 @@ class SqliteStore:
         request_id: str,
         pair_id: str | None = None,
     ) -> QaPair:
-        """新建一个对。`id` 由位置派生，调用方通常不必传 `pair_id`。"""
+        """新建一个块。`id` 由位置派生，调用方通常不必传 `pair_id`。
+
+        ⚠ **位置是传进来的、不是这里算的**（D25）：调用方（`pairing/apply.py`）从
+        `request_id` 解析 `chunk_ordinal`、从组合结果拿 `local_index`。
+        这里**不许**有"看起来更方便"的默认值——一个默认值就会让调用方悄悄退回旧口径。
+        ⚠ 主键/UNIQUE 冲突会直接抛 `IntegrityError`（同一 `(chunk, local)` 被写两次）：
+        那是"同一批被应用了两次"的信号，**要响**——守卫本该拦住它。
+        """
         if status not in _VALID_STATUSES:
             raise ValueError(f"非法 status: {status!r}（只允许 'complete' | 'pending'）")
-        pid = make_pair_id(user_id, session_id, pair_idx) if pair_id is None else pair_id
+        pid = (
+            make_pair_id(user_id, session_id, chunk_ordinal, local_index)
+            if pair_id is None
+            else pair_id
+        )
         conn.execute(
             "INSERT INTO qa_pairs"
-            " (id, user_id, session_id, pair_idx, question, answer, status, event_time, request_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (pid, user_id, session_id, pair_idx, question, answer, status, event_time, request_id),
+            " (id, user_id, session_id, chunk_ordinal, local_index,"
+            "  question, answer, status, event_time, request_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                pid,
+                user_id,
+                session_id,
+                chunk_ordinal,
+                local_index,
+                question,
+                answer,
+                status,
+                event_time,
+                request_id,
+            ),
         )
         return QaPair(
             id=pid,
             user_id=user_id,
             session_id=session_id,
-            pair_idx=pair_idx,
+            chunk_ordinal=chunk_ordinal,
+            local_index=local_index,
             question=question,
             answer=answer,
             status=status,
@@ -371,102 +382,51 @@ class SqliteStore:
             request_id=request_id,
         )
 
-    def append_question(self, conn: sqlite3.Connection, pair_id: str, text: str) -> bool:
-        """`question` **填空 + 追加**：原值为空则填入，否则**追加**（append-only）。
-
-        追加必须允许，理由与 `answer` 同源：一个对的 `question` 现在是一段**连续 user
-        消息**的拼接，而这段消息**可以跨批次**——续接批次带来的 user 消息是它的续写，
-        必须并进去而不是丢掉（配对规则见 `../pairing/pairing.py`）。
-
-        ⚠ `question` 与 `answer` 现在是**同一个写模式**（填空 + 追加），所以共用同一种写法
-        ——包括把空串当作空值处理，让"填空"与"追加"的边界与 `append_answer` 逐字一致。
-
-        追加的安全性由**批次级守卫**保证（同一批至多被应用一次），
-        所以这里**不需要**额外判重——与 `append_answer` 同一套论证（见 D4）。
-        """
-        if not text:
-            return False
-        cur = conn.execute(
-            "UPDATE qa_pairs"
-            " SET question = CASE"
-            "   WHEN question IS NULL OR question = '' THEN ?"
-            "   ELSE question || char(10) || ?"
-            " END"
-            " WHERE id = ?",
-            (text, text, pair_id),
-        )
-        return cur.rowcount > 0
-
-    def append_answer(self, conn: sqlite3.Connection, pair_id: str, text: str) -> bool:
-        """`answer` **填空 + 追加**：原值为空则填入，否则**追加**（append-only）。
-
-        追加必须允许（§6.5），因为 §6.2 承认"一条 user 后跟多条非 user 消息"，
-        这类对若跨批次，续接批次带来的消息必须并进去而不是丢掉。
-
-        追加的安全性由**批次级守卫**保证（同一批至多被应用一次），
-        所以这里**不需要**额外判重——两者解决的是两个不同的问题（见 D4）。
-        """
-        if not text:
-            return False
-        # 连接符是单个换行（char(10)）。AML 侧只做 "\n".join(...)、不插分隔符（§11.3），
-        # 所以这里用换行，保证渲染出来的 A: 块就是 §11.3 示例的形状。
-        cur = conn.execute(
-            "UPDATE qa_pairs"
-            " SET answer = CASE"
-            "   WHEN answer IS NULL OR answer = '' THEN ?"
-            "   ELSE answer || char(10) || ?"
-            " END"
-            " WHERE id = ?",
-            (text, text, pair_id),
-        )
-        return cur.rowcount > 0
-
-    def mark_complete(self, conn: sqlite3.Connection, pair_id: str) -> bool:
-        """`status` **只允许 pending → complete，不允许反向**。
-
-        `WHERE status = 'pending'` 是单向性的落点：对已经 complete 的行调用它是
-        **空操作**（返回 False），且**没有任何方法**能把状态写回 pending。
-        """
-        cur = conn.execute(
-            "UPDATE qa_pairs SET status = ? WHERE id = ? AND status = ?",
-            (STATUS_COMPLETE, pair_id, STATUS_PENDING),
-        )
-        return cur.rowcount > 0
-
-    def touch_request_id(self, conn: sqlite3.Connection, pair_id: str, request_id: str) -> bool:
-        """把该行的 `request_id` 改写为最近触碰它的那一批。
-
-        §6.1：`request_id` 记的是"最后触碰该行的 Add"，**只用于溯源**。
-        ⚠ 它被后一批覆盖正是幂等守卫**不能**复用它做判重的原因（D4）。
-        """
-        cur = conn.execute("UPDATE qa_pairs SET request_id = ? WHERE id = ?", (request_id, pair_id))
-        return cur.rowcount > 0
-
     # ── 读 ─────────────────────────────────────────────────────────────
 
-    def fetch_pairs_by_idx_range(
+    def fetch_session_ordered(
         self,
         conn: sqlite3.Connection,
         user_id: str,
         session_id: str,
-        lo: int,
-        hi: int,
     ) -> list[QaPair]:
-        """邻域查询（§10 的 ±1 扩窗）。**不变式 4 的落点。**
+        """该 session 的**全部块，按会话顺序**，并给每行填上 `seq`（D25）。
 
-        `WHERE user_id = ? AND session_id = ? AND pair_idx BETWEEN ? AND ?`
-        **正好命中** `UNIQUE(user_id, session_id, pair_idx)` 建出的索引——
-        扩窗从 ±1 改成 ±2 只需改这里的界，不动 schema。
+        这是 §10 邻域扩展的数据来源——**取代**旧的 `fetch_pairs_by_idx_range`。
 
-        `ORDER BY pair_idx` 而不是 `event_time`：`event_time` 在 session 内
-        **没有区分度**（时间戳是 session 级的，两个数据集都如此），用它排序
-        会让 ±1 邻域产生抖动，进而让消融实验不可复现（§6.1）。
+        ## 为什么改成"取整段"而不是"取 `BETWEEN` 窗口"
+
+        D25 把位置从"`session` 内连续整数"换成 `(chunk_ordinal, local_index)`：后者
+        **可能有空洞**（某个 chunk 一批都没产出块、或 chunk 序号跳号），于是
+        `pair_idx BETWEEN k-r AND k+r` 那种**整数算术**不再等价于"会话里前后各 r 个"。
+
+        改成：一次取整个 session 的有序列表（session 很小，实测最长 ~40 块），
+        在 Python 里按 `seq` 切窗口 ⇒ **"相邻"由列表位置给出，缺号不破坏相邻**
+        （这正是"仍然能相邻片段扩展"的落点）。
+
+        ## `seq` 的定义
+
+        `ROW_NUMBER() OVER (PARTITION BY user_id, session_id ORDER BY chunk_ordinal, local_index)`
+
+        ⚠ **稠密序必须是 0-based 连续的**：`merge_segments` 靠 `seq == end + 1` 判相邻。
+        `ROW_NUMBER()` 天然满足（有空洞的是 `chunk_ordinal`，不是 `seq`）。
+
+        ⚠ **排序键是 `(chunk_ordinal, local_index)`，不是 `event_time`**：`event_time`
+        在 session 内**没有区分度**（时间戳是 session 级的，两个数据集都如此），
+        用它排序会让邻域产生抖动（§6.1）。**顺序来自请求里的 chunk 序号**
+        ——这是 D25 与旧口径在"顺序从哪来"上的唯一区别，但那是根本区别。
+
+        ⚠ 跨 session **永远看不到对方**（`WHERE` 里带着两个键），所以"禁止跨对话拼接"
+        是结构性成立的，不靠调用方自觉（§2.2 的隔离契约 / §10）。
+
+        ⚠ 走的是 `UNIQUE(user_id, session_id, chunk_ordinal, local_index)` 建出的索引
+        （不变式 4）：`WHERE` 命中前两列作前缀，`ORDER BY` 命中后两列 ⇒ **不扫全表、不排序**。
         """
         rows = conn.execute(
-            f"SELECT {_COLUMNS} FROM qa_pairs"
-            " WHERE user_id = ? AND session_id = ? AND pair_idx BETWEEN ? AND ?"
-            " ORDER BY pair_idx",
-            (user_id, session_id, lo, hi),
+            f"SELECT {_COLUMNS}, {_SEQ_COLUMN}"
+            " FROM qa_pairs WHERE user_id = ? AND session_id = ?"
+            " ORDER BY chunk_ordinal, local_index",
+            (user_id, session_id),
         ).fetchall()
         return [_to_pair(r) for r in rows]
 
@@ -475,6 +435,14 @@ class SqliteStore:
 
         正文**不进** Qdrant payload；"取正文"这一步没有缓存层，也不应该有——
         正文的可信来源只有这一处。
+
+        ⚠ **这里回来的行 `seq` 全是 `-1`**（`QaPair.seq` 的默认值）：`seq` 是
+        **会话内**的稠密序，而"按主键取一批"跨 session、拿不到完整的会话上下文。
+        需要 `seq` 的调用方（`rank/neighbor.py`）自己去 `fetch_session_ordered` 取——
+        那边本来就要取整段来切窗口，顺带就能把 `id → seq` 补上。
+        ⚠ **别在这里用窗口函数"顺手"算**：`ROW_NUMBER() OVER (PARTITION BY ...)`
+        的窗口是 **`IN` 列表里那几行**，算出来的是"这一批里的第几个"，
+        不是"会话里的第几个"——**数值看起来完全正常**，而那正是最坏的一种错。
         """
         if not pair_ids:
             return []
@@ -488,7 +456,7 @@ class SqliteStore:
         return [by_id[pid] for pid in pair_ids if pid in by_id]
 
     def iter_pairs(self, conn: sqlite3.Connection, *, user_id: str | None = None) -> list[QaPair]:
-        """枚举全部对（可选按 `user_id` 限定），按 `(session_id, pair_idx)` 排序。
+        """枚举全部块（可选按 `user_id` 限定），按 `(session_id, chunk_ordinal, local_index)` 排序。
 
         ⚠ **只读访问器**，不改动任何既有语义。存在的理由是 §6.3 那条"Qdrant 可从 SQLite
         全量重建"：重建需要一次枚举，而让 `qdrant_store.py` 自己写 SQL 会破坏
@@ -498,11 +466,13 @@ class SqliteStore:
         """
         if user_id is None:
             rows = conn.execute(
-                f"SELECT {_COLUMNS} FROM qa_pairs ORDER BY session_id, pair_idx"
+                f"SELECT {_COLUMNS}, {_SEQ_COLUMN} FROM qa_pairs"
+                " ORDER BY user_id, session_id, chunk_ordinal, local_index"
             ).fetchall()
         else:
             rows = conn.execute(
-                f"SELECT {_COLUMNS} FROM qa_pairs WHERE user_id = ? ORDER BY session_id, pair_idx",
+                f"SELECT {_COLUMNS}, {_SEQ_COLUMN} FROM qa_pairs WHERE user_id = ?"
+                " ORDER BY session_id, chunk_ordinal, local_index",
                 (user_id,),
             ).fetchall()
         return [_to_pair(r) for r in rows]
@@ -514,24 +484,45 @@ class SqliteStore:
         **不是** Search 的过滤器（§2.2）。
         """
         rows = conn.execute(
-            f"SELECT {_COLUMNS} FROM qa_pairs WHERE user_id = ? ORDER BY session_id, pair_idx",
+            f"SELECT {_COLUMNS}, {_SEQ_COLUMN} FROM qa_pairs WHERE user_id = ?"
+            " ORDER BY session_id, chunk_ordinal, local_index",
             (user_id,),
         ).fetchall()
         return [_to_pair(r) for r in rows]
 
-    def explain_idx_range(
-        self, conn: sqlite3.Connection, user_id: str, session_id: str, lo: int, hi: int
+    def explain_session_ordered(
+        self, conn: sqlite3.Connection, user_id: str, session_id: str
     ) -> str:
-        """邻域查询的 `EXPLAIN QUERY PLAN`（测试用：断言它**不扫全表**）。"""
+        """会话有序查询的 `EXPLAIN QUERY PLAN`（测试用：断言它**不扫全表、不额外排序**）。"""
         rows = conn.execute(
             "EXPLAIN QUERY PLAN SELECT id FROM qa_pairs"
-            " WHERE user_id = ? AND session_id = ? AND pair_idx BETWEEN ? AND ?",
-            (user_id, session_id, lo, hi),
+            " WHERE user_id = ? AND session_id = ?"
+            " ORDER BY chunk_ordinal, local_index",
+            (user_id, session_id),
         ).fetchall()
         return " | ".join(str(r["detail"]) for r in rows)
 
 
-_COLUMNS = "id, user_id, session_id, pair_idx, question, answer, status, event_time, request_id"
+_COLUMNS = (
+    "id, user_id, session_id, chunk_ordinal, local_index,"
+    " question, answer, status, event_time, request_id"
+)
+
+#: `seq` = **会话内稠密序**（0-based、连续）。它**不是列**，每次都现算。
+#:
+#: ⚠ **凡是要喂给扩窗 / 段合并的查询都必须带上它**——`QaPair.seq` 的默认值是 `-1`，
+#: 而 `-1` 一旦流进 `merge_segments` 的 `seq == end + 1` 判断，会让**所有块各自成段**
+#: （看起来像"检索质量差"，而不像 bug）。⇒ 这里用**一个片段**而不是各查询各写一份。
+_SEQ_COLUMN = (
+    # ⚠ `ROW_NUMBER()` 是 **1-based** 的，而本仓的 `seq` 语义是 **0-based**
+    #   （`rank/neighbor.py` 的 `merge_segments` 拿它当列表下标用）⇒ **必须减 1**。
+    #   不减的话两处会用**不同的基准**：合并的 `seq == end + 1` 判断照样自洽
+    #   （1-based 也是稠密的），但 `expand_neighbors` 里"给候选补 seq"那条路径
+    #   （`enumerate` 出来的 0-based 下标）与邻居的 1-based 会**混在同一个列表里**，
+    #   于是相邻判断在**跨候选/邻居**处静默错位——只表现为"段切得碎了一点"。
+    "(ROW_NUMBER() OVER (PARTITION BY user_id, session_id"
+    " ORDER BY chunk_ordinal, local_index) - 1) AS seq"
+)
 
 
 def _to_pair(row: sqlite3.Row) -> QaPair:
@@ -542,10 +533,14 @@ def _to_pair(row: sqlite3.Row) -> QaPair:
         id=row["id"],
         user_id=row["user_id"],
         session_id=row["session_id"],
-        pair_idx=row["pair_idx"],
+        chunk_ordinal=row["chunk_ordinal"],
+        local_index=row["local_index"],
         question=row["question"],
         answer=row["answer"],
         status=status,
         event_time=row["event_time"],
         request_id=row["request_id"],
+        # `seq` 只有带 `_SEQ_COLUMN` 的查询才填得上（`fetch_pairs_by_ids` 就没带）。
+        # 其余查询留 `-1`：它**不是列**，谁都不该拿它当持久字段用。
+        seq=row["seq"] if "seq" in row.keys() else -1,  # noqa: SIM118 — Row 没有 __contains__
     )

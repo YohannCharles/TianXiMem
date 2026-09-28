@@ -419,7 +419,7 @@ def test_would_trigger_rate_is_none_not_zero_without_data() -> None:
 
 
 def test_checker_default_instrument_is_a_noop() -> None:
-    """不传记录出口时不得炸（与 ① 的 `NullPendingInstrument` 同一个模式）。"""
+    """不传记录出口时不得炸（`NullCheckerInstrument` 是默认值）。"""
     EvidenceChecker().decide(query="q")
 
 

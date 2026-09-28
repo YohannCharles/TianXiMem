@@ -50,8 +50,8 @@ def _segment(
         source_memory_ids=tuple(source) if source is not None else (anchor,),
         user_id="u1",
         session_id="s1",
-        start_pair_idx=0,
-        end_pair_idx=0,
+        start_seq=0,
+        end_seq=0,
         anchor_memory_id=anchor,
         best_rank=best_rank,
         anchor_event_time=event_time,
@@ -259,12 +259,19 @@ def test_response_item_has_exactly_the_contract_fields(counter: TokenCounter) ->
 
 
 def test_no_internal_fields_leak_into_the_item(counter: TokenCounter) -> None:
-    """`session_id` / `pair_idx` / `status` / `best_rank` 都不该出现在响应项里。"""
+    """`session_id` / 位置 / `status` / `best_rank` 都不该出现在响应项里。
+
+    ⚠ 位置自 **D25** 起是**两个**字段（`chunk_ordinal` + `local_index`）⇒ 两个都要挡；
+    只挡旧的 `pair_idx` 会**静默放行**它们（那个名字已经不存在了，断言永远为真）。
+    """
     seg = _segment(counter, anchor="m0", content="c")
     item = package([seg], top_k=5, counter=counter, max_tokens=1000).items[0]
     dumped = item.__dict__ if hasattr(item, "__dict__") else {}
     assert "session_id" not in dumped
-    assert "pair_idx" not in dumped
+    assert "pair_idx" not in dumped  # 旧名，D25 后不该再有人加回来
+    assert "chunk_ordinal" not in dumped
+    assert "local_index" not in dumped
+    assert "seq" not in dumped
     assert "status" not in dumped
     assert "best_rank" not in dumped
 

@@ -31,7 +31,7 @@ runs/              每次 run 的原始产出（**gitignored**，见下）
 | **模型** | embedder / LLM / reranker 各自的标识 | §12.1 R1 |
 | **阶段** | 属于哪个 Step | §16 |
 | **§14 指标** | Agent Trigger Rate · 平均轮数 / Rewrite 次数 · latency/query · embedding API 调用数 | §14 |
-| **§6.5 计数器** | `pending_created` / `pending_completed` / **`pending_orphaned`（拆成两个来源）** | §6.5 |
+| ~~**§6.5 计数器**~~ | ~~`pending_created` / `pending_completed` / `pending_orphaned`~~ ⛔ **D24 起这个量已不存在**（字段保留、恒为 `None`，只为旧记录读得回来） | §6.5 → **D24** |
 | **归档** | 该 run 的 SQLite 文件副本 | §15 |
 
 ### ⚠ 七个维度必须逐维记录
@@ -48,9 +48,15 @@ runs/              每次 run 的原始产出（**gitignored**，见下）
 
 > **第 4、7 两维要显式回应**（§3.2，映射见 [`../../../docs/architecture.md`](../../docs/architecture.md)）——**报告里这两维为空的 run，等于没测。**
 
-### ⚠ `pending_orphaned` 要拆成两个字段
+### ⛔ ~~`pending_orphaned` 要拆成两个字段~~（D24 已作废）
 
-**(i) 真·残缺**（正常）与 **(ii) 误判残留**（**是 bug**）必须分开统计——**定义与读法在 [`../../src/tianxi_am/observability/CLAUDE.md`](../../src/tianxi_am/observability/CLAUDE.md)（本目录不重复）。合成一个数，这条信号就废了。**
+**2026-09-27（D24）取消了 `pending` 概念**：块在写下那一刻就是最终形状，**不存在
+"被补全"这种归宿**，三个计数器**没有发射方**。⇒ 新 run record 的这四个键**恒为 `None`**，
+键本身保留只为**旧记录还读得回来**。**别再为它们写聚合代码。**
+
+> **D24 之后的替代信号**："切分有没有切坏 QA 对"**一次读库就能算**：
+> `SELECT count(*) FROM qa_pairs WHERE answer IS NULL`（只剩 question 的半块数），
+> 分母是总行数。不需要任何跨请求状态。
 
 ---
 
