@@ -59,6 +59,7 @@ __all__ = [
     "ENV_EMBED_BASE_URL",
     "ENV_EMBED_CACHE_DIR",
     "ENV_FILE",
+    "ENV_METRICS_PATH",
     "ENV_PROFILE",
     "ENV_QDRANT_URL",
     "ENV_RERANKER_API_KEY",
@@ -106,6 +107,14 @@ ENV_RERANKER_API_KEY: Final[str] = "TIANXI_RERANKER_API_KEY"
 ENV_RERANKER_MODEL: Final[str] = "TIANXI_RERANKER_MODEL"
 #: `.env` 文件的位置（默认 cwd 下的 `.env`）。⚠ 它**不是**一个配置项，是"去哪读环境"。
 ENV_FILE: Final[str] = "TIANXI_ENV_FILE"
+
+#: §14 指标快照的落点。**空 ⇒ 不写**（`NullMetricsSink`）——缺省不是错误。
+#:
+#: ⚠ 它**不是**"服务自己要看的东西"，是**给 harness 看的**：响应形状是契约、
+#: harness 又禁 import `src/` ⇒ 磁盘是两边唯一的公共面
+#: （[`../observability/`](../observability/) 的模块 docstring）。
+#: 两臂对照时**每个服务给一份**，否则两个进程的计数会互相盖掉。
+ENV_METRICS_PATH: Final[str] = "TIANXI_METRICS_PATH"
 
 DEFAULT_PROFILE: Final[str] = "default"
 DEFAULT_CONFIG_DIR: Final[str] = "configs"
@@ -389,6 +398,11 @@ class AppConfig:
     #: （`/data/…/Qwen3-Reranker-4B`）。保留它是因为①请求该带上自己声明的模型、
     #: ②它是 run record 里"这次用的哪个 reranker"的唯一来源。**不要拿它做路由或校验。**
     reranker_model: str = ""
+
+    #: §14 指标快照的落点（`TIANXI_METRICS_PATH`）。【路径归 env】
+    #:
+    #: 空 ⇒ `NullMetricsSink`（不写任何东西）——**缺省不是错误**，与 reranker 同一套口径。
+    metrics_path: str = ""
 
 
 # ── yaml 读取：**不认识的键一律报错** ────────────────────────────────────
@@ -846,5 +860,7 @@ def load_config(
             reranker_base_url=(src.get(ENV_RERANKER_BASE_URL) or "").strip(),
             reranker_api_key=(src.get(ENV_RERANKER_API_KEY) or "").strip(),
             reranker_model=(src.get(ENV_RERANKER_MODEL) or "").strip(),
+            # ⚠ 同样允许为空：空 ⇒ 不写指标快照（缺省不是错误，见字段的注释）
+            metrics_path=(src.get(ENV_METRICS_PATH) or "").strip(),
         )
     )

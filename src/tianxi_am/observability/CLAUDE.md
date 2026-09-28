@@ -2,13 +2,28 @@
 
 **PRD**：§14（监控指标）
 
-## 要写什么
+## 有什么
 
 ```text
-metrics.py     §14 五个指标的聚合与导出
+metrics.py     ✅ 已实现——§14 指标的**聚合与导出**（出口 = 一份 JSON 快照）
 ```
 
 **本目录是"指标怎么看"的唯一声明处。** 各业务层不重复描述读法，只发射。
+
+**今天接了哪些**（逐项，**别读成"§14 已完成"**）：
+
+| §14 指标 | 发射方 | 状态 |
+| --- | --- | --- |
+| latency/query | [`../service/`](../service/) 的请求边界 | ✅ |
+| rerank `calls` / `disabled` / `degraded` + 模型名 | [`../service/`](../service/)（计数住在 `SearchPipeline`） | ✅——**V12 要的那几个量** |
+| embedding 调用数 / 缓存命中率 | [`../embed/`](../embed/) | ⬜ 还没发 |
+| Agent Trigger Rate · 平均轮数 · Rewrite 次数 | [`../agent/`](../agent/) | ⬜ v2（D13） |
+
+**出口为什么是文件**：响应形状是契约（**一个字段都不能多**）、而 harness **禁 import `src/`**
+⇒ 磁盘是两边唯一的公共面。服务把**已聚合的快照**写到 `TIANXI_METRICS_PATH`（空 ⇒ 不写），
+runner 读进 run record 的 `metrics=`——**不是 `counters=`**，那份是 §6.5 的 pending 计数器，
+`schema.validate()` 要求它的键**恒在场**。聚合**只在本目录做一次**（eval 侧自己再算一遍
+就是两处会漂的判据）。
 
 ## 一条职责边界
 

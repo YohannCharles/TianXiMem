@@ -341,6 +341,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--llm", default="")
     parser.add_argument("--reranker", default=os.environ.get("TIANXI_RERANKER_MODEL", ""))
     parser.add_argument(
+        "--metrics",
+        default=None,
+        help=(
+            "服务写的 §14 指标快照路径（缺省取 `TIANXI_METRICS_PATH`）。"
+            "`rerank.degraded > 0` 会在这里被念出来——**端点是死是活只有这一条会说**（V12）"
+        ),
+    )
+    parser.add_argument(
         "--judge-timeout",
         type=float,
         default=None,
@@ -409,8 +417,55 @@ def _assemble_record(args, *, run_id: str, bench_dir: Path, samples, results, no
         ),
         switches=_parse_switches(args.switches),
         configs_dir=Path(args.configs_dir),
+        metrics=_read_service_metrics(args),
         notes=args.notes,
     )
+
+
+def _read_service_metrics(args) -> dict[str, Any]:
+    """读服务侧写的 §14 指标快照（`--metrics`，缺省取 `TIANXI_METRICS_PATH`）。
+
+    **它不是 `counters=`**：那份是 §6.5 的 pending 计数器，`schema.validate()` 要求
+    `pending_orphaned_*` 两个键**必须在场**（D24 之后恒为 `None`）。§14 的指标住
+    `metrics=`（[`../reports/CLAUDE.md`](../reports/CLAUDE.md) 的字段表就是这么分的）。
+
+    ⚠ **读不到就返回空 dict，并且说出来**：空 `metrics` 是**可见的**
+    （记录里没有 `rerank` 键），但它有两种来源——"服务侧没配 `TIANXI_METRICS_PATH`"
+    与"这一轮真的没精排"。不说出来，第二种会被读成第一种。
+    """
+    raw = args.metrics or os.environ.get("TIANXI_METRICS_PATH", "")
+    if not raw:
+        return {}
+    path = Path(raw)
+    if not path.exists():
+        print(
+            f"⚠ 指标快照不存在：{path}——服务侧没配 `TIANXI_METRICS_PATH`，"
+            "或那个进程这一轮没跑过 Search。这一轮的 metrics 为空。",
+            file=sys.stderr,
+        )
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _warn_about_rerank(metrics: dict[str, Any]) -> None:
+    """**V12**："精排到底有没有在跑"此前没有任何门禁看得见——降级后的响应与精排成功的
+    响应**逐字同样合法**，`contract-check` 的 14 条全部照样通过。
+
+    所以这一条要念出来。**它只警告，不让 run 失败**：端点挂了是**已实现的降级路径**（D12），
+    不是这一轮跑错了——但"这一轮的排序其实退回了 RRF 顺序"必须写在记录旁边。
+    """
+    rerank = metrics.get("rerank") or {}
+    searches = metrics.get("searches", 0)
+    if rerank.get("degraded"):
+        print(
+            f"\n⚠ 精排降级 {rerank['degraded']} 次（共 {searches} 次 Search）"
+            "——**这些请求的排序退回了 RRF 顺序**（D12 / V12）。"
+        )
+    elif rerank.get("disabled"):
+        print(
+            f"\n⚠ 这个 run 全程没走精排（`rerank.disabled={rerank['disabled']}`）"
+            "——排序是融合名次。是刻意的还是漏配了，看服务启动那几行。"
+        )
 
 
 def _print_result(record, path: Path) -> None:
@@ -421,6 +476,7 @@ def _print_result(record, path: Path) -> None:
     for category, entry in record.breakdown.items():
         print(f"  {category}: {entry}")
     print(f"\nrun record → {path}")
+    _warn_about_rerank(record.metrics)
     print("⚠ 数字只有 eval/reports/ 一个家：结论写进 ledger.md，不要复制别处。")
 
 

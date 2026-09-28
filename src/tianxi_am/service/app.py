@@ -36,6 +36,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import FastAPI
 
@@ -51,6 +52,7 @@ from tianxi_am.common.tokens import load_counter
 from tianxi_am.embed.base import CachingEmbedder, DiskVectorCache, EmbeddingCoordinate
 from tianxi_am.embed.query_instruction import QueryInstructionEmbedder
 from tianxi_am.embed.qwen3_embedding import Qwen3EmbeddingEmbedder
+from tianxi_am.observability import MetricsSink, NullMetricsSink, SnapshotMetricsSink
 from tianxi_am.rank import RemoteReranker
 from tianxi_am.retrieve import DenseArm, EvidenceChecker, HybridRetriever, make_hybrid_params
 from tianxi_am.service.errors import register_error_handlers
@@ -61,6 +63,7 @@ from tianxi_am.store.sqlite_store import SqliteStore
 
 __all__ = [
     "Services",
+    "build_metrics_sink",
     "build_reranker",
     "build_services",
     "create_app",
@@ -177,8 +180,24 @@ def build_services(config: AppConfig) -> Services:
             inject_abs_time=config.packaging.inject_abs_time,
             seed_placement=config.neighbor.seed_placement,
             annotate_relatives=config.packaging.annotate_relatives,
+            metrics=build_metrics_sink(config),
         ),
     )
+
+
+def build_metrics_sink(config: AppConfig) -> MetricsSink:
+    """按配置构造 §14 的指标出口。**该没有的时候就是 `NullMetricsSink`。**
+
+    与 reranker **同一套口径**：没配 `TIANXI_METRICS_PATH` 就是不记，**服务照常起**
+    ——缺省不是错误。这里没有"想用却没配全"那一档（一个路径不存在就是不存在），
+    所以也不需要 `build_reranker` 那样的 WARNING。
+
+    ⚠ **两臂对照时每个服务要各给一个路径**：两个进程写同一个文件会互相盖掉，
+    而症状只是"计数比预期少"，不报错。
+    """
+    if not config.metrics_path:
+        return NullMetricsSink()
+    return SnapshotMetricsSink(path=Path(config.metrics_path))
 
 
 def build_reranker(config: AppConfig) -> RemoteReranker | None:

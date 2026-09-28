@@ -42,6 +42,7 @@ __all__ = [
     "Question",
     "parse_locomo_time",
     "parse_lme_time",
+    "is_blank_content",
     "normalize_content",
     "to_epoch_ms",
 ]
@@ -178,12 +179,20 @@ def to_epoch_ms(moment: datetime) -> int:
 # ── 正文归一化 ─────────────────────────────────────────────────────────────
 
 
+def is_blank_content(raw: str) -> bool:
+    """`strip()` 后为空——**"空正文"的唯一定义**。
+
+    两边的用法**正相反**，所以定义只该有一份：归一化层拿它**拒绝**（§11.3），
+    加载层拿它**跳过并告警**（**V14**——`lme_s_cleaned.json` 里真有一条空的）。
+    """
+    return not raw.strip()
+
+
 def normalize_content(raw: str, *, where: str) -> str:
     """`strip()` 后校验非空——**AML 侧不报错，所以必须在这里报**。
 
     `where` 只用于把出错位置说清楚（数据集 + turn 定位）。
     """
-    text = raw.strip()
-    if not text:
+    if is_blank_content(raw):
         raise ValueError(f"{where}：content 为空（AML 只做 join、不插分隔符，空正文会污染拼接）")
-    return text
+    return raw.strip()

@@ -317,6 +317,24 @@ def test_lme_parallel_arrays_must_match(tmp_path):
         load_longmemeval(bench)
 
 
+def test_lme_skips_blank_turns_and_says_so(tmp_path, capsys):
+    """**V14**：`lme_s_cleaned.json` 里真有一条空正文的消息（`sharegpt_ADHo6Ob_0:9`）。
+
+    照旧抛 ⇒ **全量 500 题根本跑不起来**（Step 5 的大跑批直接崩）；
+    静默放行 ⇒ 空正文进 `join`、相邻两项粘连。⇒ **跳过 + 告警**。
+    """
+    bench = _write_lme(tmp_path, n_sessions=1)
+    entries = json.loads((bench / LME_JSON).read_text(encoding="utf-8"))
+    turns = entries[0]["haystack_sessions"][0]
+    turns.append({"role": "user", "content": ""})  # 空串
+    turns.append({"role": "assistant", "content": "   "})  # 纯空白——口径是 `strip()` 之后
+    (bench / LME_JSON).write_text(json.dumps(entries), encoding="utf-8")
+
+    messages = load_longmemeval(bench)[0].sessions[0].messages
+    assert [m.content for m in messages] == ["u00", "a00"]  # 两条空正文都被剔掉
+    assert capsys.readouterr().err.count("content 为空") == 2
+
+
 def test_lme_abstention_flag(tmp_path):
     """拒答题是**横切标记**（`question_id` 以 `_abs` 结尾），不是第 7 类（§12.2）。"""
     samples = load_longmemeval(_write_lme(tmp_path, n_questions=2))

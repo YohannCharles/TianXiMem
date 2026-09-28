@@ -30,6 +30,7 @@ turn 的键只有 `role` + `content`（可选 `has_answer`），时间在**与 `
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from .preprocess import (
@@ -37,6 +38,7 @@ from .preprocess import (
     Question,
     Sample,
     Session,
+    is_blank_content,
     normalize_content,
     parse_lme_time,
     to_epoch_ms,
@@ -73,18 +75,53 @@ def _sessions(entry: dict, *, source: Path) -> tuple[Session, ...]:
     # 也不要 zip 静默截断到最短**（那会丢掉 session 且不报错）。
     for session_id, date_str, turns in zip(ids, dates, sessions_raw, strict=True):
         ms = to_epoch_ms(parse_lme_time(date_str))
-        messages = tuple(
-            Message(
-                role=turn["role"],
-                content=normalize_content(
-                    turn["content"], where=f"{source.name}:{session_id}:{position}"
-                ),
-                timestamp_ms=ms,
-            )
-            for position, turn in enumerate(turns, start=1)
-        )
+        messages = _messages(turns, session_id=session_id, timestamp_ms=ms, source=source)
         sessions.append(Session(session_id=session_id, messages=messages))
     return tuple(sessions)
+
+
+def _messages(
+    turns: list[dict], *, session_id: str, timestamp_ms: int, source: Path
+) -> tuple[Message, ...]:
+    """缝一个 session 的 turn；**空正文的 turn 跳过并告警**（**V14**）。
+
+    ⚠ **为什么是跳过，而不是照旧抛**：归档那份里确实有空正文的消息——而且**比原先
+    记的多**：2026-09-28 实测**10 条唯一**（12 次出现，跨 5 个 session；同一 session
+    会被多道题的 haystack 复用，所以出现次数 > 唯一数）。而按 §11.3 的口径
+    **空正文必须拒绝**（AML 只做 `"\\n".join(...)`，空正文会让相邻两项粘在一起）。
+    两条都成立的唯一做法是**在评测层把它剔掉、并把剔掉这件事说出来**：
+
+    | 做法 | 后果 |
+    | --- | --- |
+    | 照旧抛 | **全量 500 题根本跑不起来**——Step 5 的大跑批直接崩（不是慢） |
+    | 静默放行 | 空正文进了 `join`，模型读到的两项粘连，**而没人知道** |
+    | **跳过 + 告警** | 全量可跑；剔掉的是**零信息量**的那一条，且每次都被念出来 |
+
+    ⚠ **代价要认**：剔掉之后该 session 后面的位置序号（`local_index`）各前移一位，
+    于是这些题的 `id` 与"不剔"的世界不同。但**同一份数据每次跑都剔同样那几条**，
+    所以两次 run 之间仍然可比（§13 要的正是这个）。
+
+    **验收**（2026-09-28，全量）：`load_longmemeval("benchmark_data")` ⇒ **500 题 /
+    246,738 条消息**（= 246,750 − 12），4.8 秒。
+    """
+    messages = []
+    for position, turn in enumerate(turns, start=1):
+        raw = turn["content"]
+        if is_blank_content(raw):
+            print(
+                f"⚠ {source.name}:{session_id}:{position} 的 content 为空——已跳过该条（V14）。"
+                "它零信息量，但**位置序号会前移一位**；照旧抛的话全量跑不起来。",
+                file=sys.stderr,
+            )
+            continue
+        messages.append(
+            Message(
+                role=turn["role"],
+                content=normalize_content(raw, where=f"{source.name}:{session_id}:{position}"),
+                timestamp_ms=timestamp_ms,
+            )
+        )
+    return tuple(messages)
 
 
 def load_longmemeval(

@@ -68,6 +68,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
+from time import monotonic
 
 from tianxi_am.common.config import (
     DEFAULT_CHUNK_ORDINAL_PATTERN,
@@ -76,6 +77,7 @@ from tianxi_am.common.config import (
 )
 from tianxi_am.common.render import render_pair
 from tianxi_am.common.tokens import TokenCounter
+from tianxi_am.observability import MetricsSink, NullMetricsSink, SearchObservation
 from tianxi_am.pairing import AddBatch, ApplyBatchResult, apply_batch
 from tianxi_am.rank import (
     PackagedResponse,
@@ -225,6 +227,7 @@ class SearchPipeline:
         inject_abs_time: bool = False,
         seed_placement: str = "keep",
         annotate_relatives: bool = False,
+        metrics: MetricsSink | None = None,
     ) -> None:
         self._store = store
         self._qdrant = qdrant
@@ -247,7 +250,13 @@ class SearchPipeline:
         #: 所以开它**不改 embedding 输入**（不用重建索引）。理由与实测见
         #: [`neighbor.py`](../rank/neighbor.py) 的 `_build_segment`。
         self._annotate_relatives = annotate_relatives
+        #: 观测值的出口（§14）。**没配就是 `Null`**——与 reranker 同一套口径：缺省不是错误。
+        self._metrics = metrics if metrics is not None else NullMetricsSink()
         #: 诊断计数（§14）。**不进响应**——响应的形状是契约，一个字段都不能多。
+        #:
+        #: ⚠ **它们是累计值**（`run()` 每次读前后差值发给 `_metrics`，见那里的注释），
+        #: 所以读的人拿到的总是"这个进程开到现在"。出口是
+        #: [`../observability/`](../observability/)——**别在响应里给它们找位置**。
         self.rerank_calls = 0
         self.rerank_degraded = 0
         self.rerank_disabled = 0
@@ -261,8 +270,42 @@ class SearchPipeline:
         """
         return self._reranker
 
+    @property
+    def metrics(self) -> MetricsSink:
+        """当前的指标出口（`NullMetricsSink` = 没配路径）。
+
+        与 `reranker` 同一个理由：**装配漏传是静默的**——出口没接上时 Search 照常工作、
+        计数照常累计，只是**永远不写文件**（又一条 V12）。
+        """
+        return self._metrics
+
     def run(self, *, user_id: str, query: str, top_k: int) -> PackagedResponse:
-        """跑完整条链，返回打包好的响应。
+        """跑完整条链，返回打包好的响应，并**把这一次的观测值发出去**（§14）。
+
+        ⚠ 三个 rerank 计数在实例上是**累计值**，而 `SearchObservation` 要的是**增量**
+        （[`../observability/metrics.py`](../observability/metrics.py) 的模块 docstring）
+        ⇒ 这里前后各取一次、相减。**直接把累计值发出去会让聚合端把它们加成
+        `1+2+3+…`——而那个数字只是"有点大"，不报错。**
+
+        ⚠ **失败的那一次不发**：耗时与计数只统计"真的返回了响应"的请求
+        （非 200 由 AML 重试，§15；把失败混进 latency 会让均值没有解释）。
+        """
+        started = monotonic()
+        calls, disabled, degraded = self.rerank_calls, self.rerank_disabled, self.rerank_degraded
+        response = self._search(user_id=user_id, query=query, top_k=top_k)
+        self._metrics.record(
+            SearchObservation(
+                latency_ms=round((monotonic() - started) * 1000.0, 3),
+                rerank_calls=self.rerank_calls - calls,
+                rerank_disabled=self.rerank_disabled - disabled,
+                rerank_degraded=self.rerank_degraded - degraded,
+                rerank_name=self._reranker.name if self._reranker is not None else None,
+            )
+        )
+        return response
+
+    def _search(self, *, user_id: str, query: str, top_k: int) -> PackagedResponse:
+        """链本身（顺序见类 docstring）。
 
         ⚠ **空库直接返回空结果**（`data: []` 是合法的，§2.1）：集合还不存在时
         Qdrant 会抛"collection not found"，而"没有数据"不是错误。

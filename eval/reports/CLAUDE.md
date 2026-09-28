@@ -33,6 +33,11 @@ runs/              每次 run 的原始产出（**gitignored**，见下）
 | **§14 指标** | Agent Trigger Rate · 平均轮数 / Rewrite 次数 · latency/query · embedding API 调用数 | §14 |
 | **归档** | 该 run 的 SQLite 文件副本 | §15 |
 
+> **§14 那一行今天只填了一半**：latency/query 与 rerank 的计数已接线（服务写
+> `TIANXI_METRICS_PATH` 的快照，runner 读进 `metrics=`）；embedding 调用数与
+> Agent Trigger Rate 的发射方还没接。**逐项状态见
+> [`../../src/tianxi_am/observability/CLAUDE.md`](../../src/tianxi_am/observability/CLAUDE.md)**——本文件不另列一份。
+
 ### ⚠ 七个维度必须逐维记录
 
 官方维度**逐字采用**（§3.2）：
