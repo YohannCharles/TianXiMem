@@ -109,7 +109,15 @@ class _StubQdrant:
     """假 Qdrant：只满足 `HybridRetriever` 的两个调用，**按给定顺序回候选**。
 
     ⚠ 顺序是**倒着给的**（最相关的排最后）——理由见模块 docstring。
+
+    ⚠ **分数必须两两不同**：给成同一个值会触发 V13 的并列 tie-break
+    （`(-score, memory_id)`），检索层于是**按 id 重排**、桩给的顺序不再等于
+    "RRF 顺序"——而探针下面还印着"RRF 给的顺序：[…]"。那是**探针自己的前提不成立**
+    （第一次实测就是这么发生的：关精排那一臂的顺序既不是桩序、也没报错）。
     """
+
+    #: 首名与末名的分数差——只要两两不同即可，量级无关（RRF 分数**不是**校准量）。
+    _STEP = 1e-6
 
     def __init__(self, memory_ids: list[str]) -> None:
         self._ids = list(memory_ids)
@@ -120,7 +128,10 @@ class _StubQdrant:
 
     def hybrid_search(self, *, user_id: str, query_text: str, dense_vector, top_k: int):  # noqa: ANN001, ANN201
         self.queries.append(query_text)
-        return [ScoredMemoryId(mid, 1.0) for mid in self._ids[:top_k]]
+        return [
+            ScoredMemoryId(mid, 1.0 - rank * self._STEP)
+            for rank, mid in enumerate(self._ids[:top_k])
+        ]
 
 
 # ── 探针 1：端点本身 ───────────────────────────────────────────────────

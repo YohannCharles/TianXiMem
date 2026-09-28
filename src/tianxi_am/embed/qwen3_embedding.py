@@ -26,7 +26,7 @@ __all__ = ["DEFAULT_MODEL", "Qwen3EmbeddingEmbedder"]
 #: 开发期模型名。⚠ 与 `common/config.py` 的 `ModelsConfig.embedder` 默认值是**同一个值**
 #: （那边是配置的默认，这里是直接构造这个类时的默认）。两处相等由
 #: `tests/test_config.py::test_model_default_is_the_same_in_both_places` 钉住。
-DEFAULT_MODEL: str = "Qwen/Qwen3-Embedding-8B"
+DEFAULT_MODEL: str = "qwen3-embedding-8b"
 
 
 class Qwen3EmbeddingEmbedder(OpenAICompatEmbedder):

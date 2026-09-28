@@ -1,7 +1,7 @@
 """A3 —— **Rerank 开 / 关**（§13 / §11.2）。
 
 ```text
-on    rerank.enabled = true    ← 精排（`Qwen3-Reranker-4B`，100 篇/题 5–12s）
+on    rerank.enabled = true    ← 精排（`qwen3-reranker-4b`，100 篇/题 5–12s）
 off   rerank.enabled = false   ← 直接用融合名次
 ```
 

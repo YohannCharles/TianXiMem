@@ -20,7 +20,7 @@ models:
   # 开发期用 Qwen3-Embedding-8B（自建网关，见 .env 的 AML_EMB_BASE_URL）。
   # Step 5 必须换成 text-embedding-v4（§2.3 规定，不可协商）——
   # ⚠ 换模型 = 换向量维度 ⇒ **整个 Qdrant 集合要重建**，且 embedding 缓存整体失效。
-  embedder: Qwen/Qwen3-Embedding-8B
+  embedder: qwen3-embedding-8b
 
 # ══ 存储（§6）═══════════════════════════════════════════════════════════
 storage:

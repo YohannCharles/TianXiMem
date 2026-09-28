@@ -6,40 +6,64 @@ Hybrid Retrieval → RRF → memory_id 稳定去重 → 【rerank（恰好一次
 ```
 
 * [`Reranker`][Reranker] —— 协议。**只收文本、只回分数**，不知道 `memory_id` / SQLite / Qdrant
-* [`RemoteReranker`][RemoteReranker] —— 主网关（`memory.021130.xyz`）的 HTTP 客户端
+* [`RemoteReranker`][RemoteReranker] —— 主网关（`memory3.021130.xyz`）的 HTTP 客户端
 * [`RerankUnavailable`][RerankUnavailable] —— "可降级"的唯一信号
 
 ## 线格式：**实测出来的，不是猜的**（可复现的探针：`tools/probe_reranker.py`）
 
+⛔ **2026-09-28 网关侧只改了 nginx.conf**：`/v1/rerank` 现在 **rewrite 到 vLLM 原生 `/v1/score`**
+⇒ **请求与响应两个信封同时换了**。变更前后都由真请求实测，不是照文档抄的：
+
+| 信封 | 我们发什么 | 响应容器 | 分数键 | 什么时候 / 在哪见过 |
+| --- | --- | --- | --- | --- |
+| A | `query`（字符串） | `results` | `score` | `memory.021130.xyz`（自研封装） |
+| B | `query`（字符串） | `results` | `relevance_score` | `memory3.…` 换 nginx 之前 |
+| **C（现在）** | **`queries: [...]`** | **`data`** | `score` | `memory3.…` 现在（vLLM 原生） |
+
+**请求（C）——只发这一种**：
+
 ```http
-POST {base_url}/rerank          # base_url 形如 https://memory.021130.xyz/v1
+POST {base_url}/rerank          # base_url 形如 https://memory3.021130.xyz/v1
 Authorization: Bearer <key>
 Content-Type: application/json
 
-{"model": "Qwen3-Reranker-4B", "query": "...", "documents": ["...", "..."]}
+{"model": "qwen3-reranker-4b", "queries": ["..."], "documents": ["...", "..."]}
 ```
 
+⚠ **`queries` 是数组、且名字不能写成 `query`**：发错名字拿到的是 **400**（服务端校验器同时索要
+`queries` / `items` / `data_1` / `text_1`，是 vLLM score 的**多形态联合体**）。
+⚠ **没有回退**：A/B 的请求形状在新路由上**已经被拒**，所以不做"猜两个名字各发一次"——
+那会让每次 Search 多付一个 400 往返，而错误方向（把坏形状当常态）比省一次往返贵得多。
+
+**响应：两个容器、两个分数键，`_parse` 四种组合都收**（A/B 共用 `results`）：
+
 ```json
-{
-  "model": "/data/…/Qwen3-Reranker-4B",
-  "results": [
-    {"index": 1, "score": 0.8359375, "text": "the train leaves at 09:42"},
-    {"index": 3, "score": 0.147,     "text": "the departure is at 09:42 …"}
-  ]
-}
+// 现在实际回的（C）
+{"id": "score-98439a73…", "object": "list", "created": 1790580559,
+ "model": "qwen3-reranker-4b",
+ "data": [{"index": 0, "object": "score", "score": 0.9989734888076782},
+          {"index": 1, "object": "score", "score": 7.25261861589388e-06}],
+ "usage": {"prompt_tokens": 177, "total_tokens": 177, "completion_tokens": 0}}
 ```
 
 | 观察 | 后果 |
 | --- | --- |
-| `results[].index` = **输入 `documents` 的下标** | 这是唯一能把结果映射回候选的东西 |
-| `results` **按 `score` 降序** | ⚠ **不依赖它**：`score()` 按**输入位置**对齐返回，排序在调用方 |
-| `score` **越大越相关** | 实测：相关句 0.836 / 无关句 1.4e-05 |
-| `model` 字段**被网关忽略** | 响应里回的是服务端路径。所以**不能拿它做路由或校验** |
+| `data[].index` = **输入 `documents` 的下标** | 唯一能把结果映射回候选的东西（A/B/C 都是） |
+| 响应顺序**不保证** | ⚠ 实测回**输入顺序**；而 `score()` 按输入位置对齐，排序在调用方 |
+| 分数**越大越相关** | 实测：相关句 **0.9989** / 无关句 **7.3e-06** |
+| `model` 字段**被校验** | 不认识 ⇒ **404**（`NotFoundError`）⇒ **必须填对** |
 | 不传 `top_n` ⇒ **返回全部** | ★ 所以**不传**——见下 |
-| 传 `top_n=k` ⇒ **只回 k 条** | ★ **这是一个静默丢候选的旋钮**（实测 `top_n=2` 只回 2 条） |
-| 100 篇 ≈ 2.2s、200 篇 ≈ 5.3s | 与 `top_k=100` 的规模匹配（默认超时 30s 有约 10 倍余量） |
+| 传 `top_n=k` ⇒ **只回 k 条** | ★ **静默丢候选的旋钮**（A 上实测 `top_n=2` 只回 2 条） |
+| 1 query × N docs ⇒ **N 条、index 齐全** | 实测 7 篇→7 条、**100 篇→100 条**，index 一个不缺 |
+| 100 篇 ≈ **4.4s**，7 篇 ≈ 1.3s | 与 `top_k=100` 的规模匹配（超时 30s ⇒ 约 **7 倍**余量） |
 | 空 `documents` ⇒ **400** | ⇒ 空输入**在本地短路**，不打网络 |
-| 坏 key ⇒ **403**；body 非法 ⇒ **422** | ⇒ "非 2xx ⇒ 降级"这一条覆盖了它们 |
+| 坏 key ⇒ 403；body 非法 ⇒ 422；**模型名不认识 ⇒ 404** | ⇒ "非 2xx ⇒ 降级"覆盖了它们 |
+
+> ### ⚠ 换服务端 ⇒ **分数不可比**
+>
+> 同一个"相关句"在三个信封上的分数是 0.836 / 0.165 / **0.9989**——**没有共同刻度，而三个都对**。
+> 所以**任何在另一版上标定过的阈值都不能带过来**——何况我们的 `score` 本来就是
+> 输出位置的倒数、与 rerank 原始分无关（`packaging.placeholder_score`）。
 
 > ### ⚠ `top_n` 是本文件的头号陷阱
 >
@@ -111,7 +135,11 @@ class Reranker(Protocol):
 
 
 class RemoteReranker:
-    """主网关上的 `Qwen3-Reranker-4B`（§11.2；选型见 D12，**提交时不得更换**）。
+    """主网关上的 Qwen3-Reranker-4B（§11.2；选型见 D12，**提交时不得更换**）。
+
+    ⚠ **模型 id 由 `.env` 的 `TIANXI_RERANKER_MODEL` 给**，而且**必须填对**：
+    旧 host（自研封装）忽略 `model` 字段，新 host（vllm 直服）**校验**它——
+    填成旧 id 会拿到 **404 并降级**（`memory.021130.xyz` → `memory3.021130.xyz`，2026-09-28）。
 
     ⚠ 它**只负责"文本 → 分数"**：取正文、映射回 `memory_id`、重排、重新编号
     全部在 [`../service/pipeline.py`](../service/pipeline.py)——
@@ -200,7 +228,9 @@ class RemoteReranker:
         """发一次请求并解出 JSON。**任何 HTTP 层问题都转成 `RerankUnavailable`。**"""
         payload: dict[str, object] = {
             "model": self._model,
-            "query": query,
+            # ⚠ **`queries` 是数组**（vLLM 原生 score 形状，见模块 docstring 的信封表）。
+            #    写成旧的 `query`（单数）⇒ 400 ⇒ **每次检索都降级，而服务不报错**。
+            "queries": [query],
             "documents": list(documents),
             # ⚠ **刻意不传 `top_n`**：传了会静默截断（见模块 docstring 的陷阱一节）。
             #    不传 ⇒ 端点返回全部候选 ⇒ `_parse` 的集合校验才有意义。
@@ -238,14 +268,26 @@ class RemoteReranker:
         | `index` 越界 | **未知 candidate** | 我们会拿着一个不存在的位次去取候选 |
         | 同一个 `index` 两次 | **重复 candidate** | 重复项会被排两次、占两个名额 |
         | 有 `index` 没出现 | **静默丢 candidate** | 少一条证据，**而响应看起来完全正常** |
-        | `results` 不是数组 / 项不是对象 / `score` 不是有限数 | 格式非法 | 崩在后面的算术里 |
+        | 容器不是数组 / 项不是对象 / 分数不是有限数 | 格式非法 | 崩在后面的算术里 |
 
-        ⚠ **多余的键一律忽略**（真实响应就带 `text` 与 `model`）——"严格"不等于
-        "拒绝我们不需要的字段"；把额外字段当错误会让实现**对着真端点反而失败**。
+        ⚠ **容器与分数键各收两个**（`results` / `data`，`score` / `relevance_score`）——
+        **四种组合都实测过**，信封表在模块 docstring。收两个不是"猜"，是**同一台网关上
+        已经换过两次信封**（迁到 `memory3` 一次、nginx 路由到 vLLM 原生 `/v1/score` 一次）；
+        `index` 集合校验把它们的**共同不变量**守住了，所以多认一个键**不会削弱任何检查**。
+
+        ⚠ **多余的键一律忽略**（真实响应就带 `object` / `created` / `usage` / `id` /
+        `document` / `text`）——"严格"不等于"拒绝我们不需要的字段"；
+        把额外字段当错误会让实现**对着真端点反而失败**。
         """
-        results = body.get("results") if isinstance(body, dict) else None
+        # ⚠ **容器名收两个**：`results`（自研封装）与 `data`（vLLM 原生 score 形状——
+        #   2026-09-28 的 nginx rewrite 之后走的就是它，见模块 docstring 的信封表）。
+        #   与分数键收两个同理：**共同的不变量由下面的 `index` 集合校验守住**，
+        #   多认一个容器名**不削弱任何检查**。
+        results = body.get("results", body.get("data")) if isinstance(body, dict) else None
         if not isinstance(results, list):
-            raise RerankUnavailable(f"响应形状不是 {{'results': [...]}}：{str(body)[:200]}")
+            raise RerankUnavailable(
+                f"响应形状既不是 {{'results': [...]}} 也不是 {{'data': [...]}}：{str(body)[:200]}"
+            )
 
         scores: list[float | None] = [None] * expected
         for item in results:
@@ -259,9 +301,11 @@ class RemoteReranker:
                 raise RerankUnavailable(
                     f"`index={index}` 越界（输入只有 {expected} 篇）——reranker 返回了**未知候选**"
                 )
-            raw_score = item.get("score")
+            raw_score = item.get("score", item.get("relevance_score"))
             if isinstance(raw_score, bool) or not isinstance(raw_score, int | float):
-                raise RerankUnavailable(f"`score` 必须是数字，收到 {raw_score!r}")
+                raise RerankUnavailable(
+                    f"`score` / `relevance_score` 必须是数字，收到 {raw_score!r}"
+                )
             if not math.isfinite(float(raw_score)):
                 raise RerankUnavailable(f"`score` 必须是有限数，收到 {raw_score!r}")  # NaN/Inf
             if scores[index] is not None:

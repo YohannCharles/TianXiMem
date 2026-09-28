@@ -67,6 +67,14 @@ configs/
 `runs/` 的用途：`docs/experiments.md` 要求记录**配置指纹**。让每个实验留下**冻结的配置副本**，而不是"当时的 local.yaml 大概是这样"——**后者在 Step 5 之后就无法重建了**。
 （跑某个 arm 用 `TIANXI_CONFIG_DIR=configs/runs/<arm>` 指向那份快照。）
 
+> ⛔ **2026-09-28 网关迁移后，这些快照里的 `models.embedder` 已经过期**
+> （`Qwen/Qwen3-Embedding-8B` → `qwen3-embedding-8b`，见
+> [`../docs/config-reference.md`](../docs/config-reference.md) §9）。
+> **故意不改**：它们是**历史记录**，改了就等于伪造"当时跑的是什么"。
+> ⇒ **重放任何 arm 之前必须先把 `models.embedder` 覆盖成当前 id**，否则第一步 embedding 就 404。
+> 另外**维度也从 1024 变成了 4096** ⇒ 那些 arm 产出的集合与缓存**全部作废**
+> （动作见 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4）。
+
 > ⚠ **`default.yaml` 只收"有代码消费方"的键**（③-d）。`checker.*` / `agent.*` 的落点已写在
 > [`../docs/config-reference.md`](../docs/config-reference.md)，但**没有搬进 yaml**——消费方还没接线，
 > 收进来等于预留字段。⇒ **`default.yaml` 不是"§15 七个消融项都在这里"。**

@@ -385,9 +385,19 @@ helper 自己 `commit()` 则让"半批"落库。**两种情况都不报错。**
 
 **决策**：`.env` 里这几个名字的语义**按本仓代码的读法定死**，不按网关文档的运维命名：
 
+> 📌 **2026-09-28 附记：主网关的 host 从 `memory.021130.xyz` 迁到 `memory3.021130.xyz`**
+> （embedding + rerank 两个服务一起搬）。**本条决定不受影响**——它管的是"**哪个变量名指哪个服务**"，
+> 与 host 叫什么无关，所以下表的语义**一字未改**、只换了 host 名。
+> ⚠ 但迁移**带了一件不是"改地址"的事**：embedding 维度 1024 → **4096** ⇒ 集合与缓存都要重建，
+> 见 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的"网关迁移"一节。
+> ⚠ 新 host 上 reranker **可用**，但 **id 换了**（`qwen3-reranker-4b`），而且**不在 `/v1/models` 里**；
+> 同一天网关侧**又只改了一次 nginx.conf**（`/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`）
+> ⇒ **请求与响应两个信封都换了**（`queries: [...]` / `data[].score`）。
+> 三版信封与逐条实测见 [`../src/tianxi_am/rank/reranker.py`](../src/tianxi_am/rank/reranker.py) 顶部的表。
+
 | 变量 | 指向 | 谁读它 |
 | --- | --- | --- |
-| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` | **主网关** `memory.021130.xyz`（**Embedding**） | [`common/config.py`](../src/tianxi_am/common/config.py) 的 `load_config()`（**全包唯一读环境变量的地方**，③-d） |
+| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` | **主网关** `memory3.021130.xyz`（**Embedding**） | [`common/config.py`](../src/tianxi_am/common/config.py) 的 `load_config()`（**全包唯一读环境变量的地方**，③-d） |
 | `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` | **memory2** `memory2.021130.xyz`（**LLM 对话**） | harness / 归档 pipeline（经 `api_config.py` 适配器） |
 | `TIANXI_RERANKER_BASE_URL` / `_API_KEY` / `_MODEL` | **主网关**（**Reranker**） | [`rank/reranker.py`](../src/tianxi_am/rank/reranker.py) 的 `RemoteReranker`（**已接线**，2026-09-24） |
 
@@ -408,6 +418,10 @@ helper 自己 `commit()` 则让"半批"落库。**两种情况都不报错。**
    ⇒ **404**（文档自己写着"调错域名只会拿到 404"），而**服务启动不会失败**——它只校验变量非空。
 3. **能力确实不重叠，已实测（2026-09-24）**：memory2 的 `/v1/models` 只列 `Qwen/Qwen3.5-9B`；
    主网关只列 `Qwen/Qwen3-Embedding-8B` 与 `Qwen/Qwen3-Reranker-4B`。
+   > ⚠ **2026-09-28 起这条观察过期**（host 已迁到 `memory3.021130.xyz`）：现在
+   > **memory2 仍只列 `Qwen/Qwen3.5-9B`**（结论不变），而新主网关**只列 `qwen3-embedding-8b`**
+   > ——**reranker 不在那份清单里，但 `/rerank` 可用**（实测 200，模型 `qwen3-reranker-4b`）。
+   > ⇒ "两个网关能力不重叠"**仍然成立**，它要证的那件事（填错会打到对话网关）不受影响。
 
 **纪律**：**两个网关的 base_url 与 key 都不同，不能混用**；调错域名拿到的是 404（不是鉴权失败）。
 
@@ -957,6 +971,18 @@ agent 才存在**，那是另一个 Step 的事。⇒ 把它标出 v1，免得 S
    而键是文本哈希。拿提交 profile 去连一个只服务 Qwen3 的端点 ⇒ Qwen3 的向量**挂在
    `text-embedding-v4` 这个坐标下** ⇒ 之后真的接上 v4 端点时**全部命中缓存**、根本不调它。
 2. **集合也会串**：同维度 ⇒ Qdrant 不拒绝，只表现为"检索质量差"。
+
+> 📌 **2026-09-28 附记：上面那条"同为 1024 维"的前提当天就变了。** 网关迁移
+> （`memory.021130.xyz` → `memory3.021130.xyz`）之后**开发期是 4096 维**
+> （`make check` 实测 `dim=4096 L2=1.000000`）⇒ "**维度一致 ⇒ 拦不住**"只剩
+> "**恰好又同维**"这一种情形（而 `text-embedding-v4` 的维度**可选**，别指望它
+> 永远不等于我们在用的那个）。**决定与纪律一字不变**，只是现在多半会
+> **响亮失败**（`embed/base.py` 的 `DimensionMismatchError`）而不是静默串——
+> **那是运气，不是保障**：门禁仍然没做。
+> ⚠ 顺带一条**部分解决**：`tools/check_env.py` 现在**不写死 id**，它向 `/v1/models`
+> 问并把用到的 id 打出来（`model=… dim=… L2=…`）⇒ "声明 vs 事实"从**看不见**变成
+> **人眼可核**；但**自动比对仍未做**（声明住在 `configs/*.yaml`，而这个工具刻意不读配置层）。
+> 那个不存在的变量名 `AML_EMB_MODEL` 也还在，只是如今退化成"想指定就指定"的可选项。
 
 **目前的处置只有纪律**（提交 profile 必须配 DashScope 端点；真要换端点就按
 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的 runbook 连缓存一起作废）。

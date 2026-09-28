@@ -99,7 +99,7 @@ ENV_WORKERS: Final[str] = "TIANXI_WORKERS"
 #: reranker 的三个变量。**名字沿用 `.env.example` 里那三个**（`.env.example` 是它们的家，
 #: 本表只是代码侧的引用点，两处由 `tests/test_config.py` 的静态断言钉住）。
 #:
-#: ⚠ **主网关**（`memory.021130.xyz`），不是 memory2——两个网关 host 与 key 都不同（D18）。
+#: ⚠ **主网关**（`memory3.021130.xyz`），不是 memory2——两个网关 host 与 key 都不同（D18）。
 #: ⚠ 它对服务**不是必需**的（D12）：缺了照常启动、走 `rerank_disabled` 路径
 #: ——**这与 embedding 的三个变量正相反**。
 ENV_RERANKER_BASE_URL: Final[str] = "TIANXI_RERANKER_BASE_URL"
@@ -230,7 +230,7 @@ class ModelsConfig:
     #: ⚠ **这里是模型名的家**，不是 `.env`：它是 profile 之间**唯一真正该变**的东西，
     #: 而 `local.yaml` / `submit.yaml` 存在的理由就是让"哪些量随模型变"能被看见
     #: （config-reference §9）。
-    embedder: str = "Qwen/Qwen3-Embedding-8B"
+    embedder: str = "qwen3-embedding-8b"
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,7 +395,7 @@ class AppConfig:
     #: 请求里声明的模型名（进 run record 的配置指纹；D12 要求提交时不得更换）。
     #:
     #: ⚠ 实测：**网关会忽略这个字段**，响应里 `model` 回的是服务端路径
-    #: （`/data/…/Qwen3-Reranker-4B`）。保留它是因为①请求该带上自己声明的模型、
+    #: （新 host 则**校验**它：不认识就 404）。保留它是因为①请求该带上自己声明的模型、
     #: ②它是 run record 里"这次用的哪个 reranker"的唯一来源。**不要拿它做路由或校验。**
     reranker_model: str = ""
 
@@ -585,7 +585,7 @@ def _storage(raw: object) -> StorageConfig:
 def _models(raw: object) -> ModelsConfig:
     g = _group(raw, where="models", allowed={"embedder"})
     return ModelsConfig(
-        embedder=_str(g.get("embedder"), where="models.embedder", default="Qwen/Qwen3-Embedding-8B")
+        embedder=_str(g.get("embedder"), where="models.embedder", default="qwen3-embedding-8b")
     )
 
 

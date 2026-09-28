@@ -17,12 +17,13 @@ Dockerfile      检索服务的镜像（多阶段；**上下文是仓库根**）
 >
 > `configs/submit.yaml` **已建**（2026-09-28，只换了模型名 `text-embedding-v4`），
 > 但它的取值要靠 `TIANXI_PROFILE=submit` 才生效；`.env.example` 里默认写的仍是 `default`
-> ——那一份的 `models.embedder` 是开发期的 `Qwen/Qwen3-Embedding-8B`。
+> ——那一份的 `models.embedder` 是开发期的 `qwen3-embedding-8b`。
 > ⇒ **镜像本身两种口径都能跑**，差别只在 profile 与 `AML_EMB_*` 指向哪。
 > ⬜ **Step 5 尚未完成**：由模型派生的阈值**还没重标定**，换模型后**整个集合要重建**
 > （§4 的 runbook），届时**同一份 compose 不用改**——变的是 `configs/`、`.env` 与集合。
 > ⛔ **别把现在这个镜像 + `default` 当成"可以发 Full 的版本"**；也**别用 `submit` 去连开发网关**
-> （会静默串缓存，见 [`../docs/decisions.md`](../docs/decisions.md) **D27**）。
+> （会串缓存坐标，见 [`../docs/decisions.md`](../docs/decisions.md) **D27**）。⚠ D27 那条
+> "两者同为 1024 维"的前提**已随 2026-09-28 网关迁移失效**（开发期现在 **4096** 维）。
 
 > ⚠ `compose.yaml` 里现在**有两个服务**，所以：
 > `qdrant-up` 用的是 `up -d qdrant`（**带服务名**），而 `qdrant-down` 是 `stop qdrant`
@@ -83,7 +84,7 @@ curl -s http://10.193.135.28:28088/health                      # 期望 {"status
 | 从别的机器 connection refused，**日志里什么都没有** | `TIANXI_BIND` 还是 `127.0.0.1` | 设 `0.0.0.0` |
 | `sqlite3.OperationalError: unable to open database file`，容器**启动即退** | 用了**绑定挂载**（`-v /宿主/路径:/data`）——容器以 `app`（**uid 10001**）运行，而那个目录属于宿主用户 | `chown -R 10001:10001 /宿主/路径`（或 `chmod 777`）。⚠ **命名卷不会有这个问题**——Docker 首次挂载时会继承镜像里 `/data` 的属主，所以 compose 默认那条路是好的 |
 | `Bind for 0.0.0.0:6333 failed: port is already allocated` | 老版本 compose 起的 Qdrant 容器还占着 0.0.0.0 | 先 `docker rm -f tianxi-qdrant`，或用 `TIANXI_QDRANT_PORT` 换端口 |
-| Add 报 4xx 且信息里有模型名 | `configs/default.yaml` 的 `models.embedder`（`Qwen/Qwen3-Embedding-8B`）与本机网关服务的不一致 | 网关忽略 `model` 字段就没事；校验的话得改 config（挂配置目录，见 §0.5） |
+| Add 报 4xx 且信息里有模型名 | `configs/default.yaml` 的 `models.embedder`（现在是 `qwen3-embedding-8b`）与本机网关服务的不一致 | ⚠ 网关（vLLM 直服）**会校验** `model`：必须与 `/v1/models` 列出的 id 逐字相同，否则 404（改 config 后重建镜像，或挂配置目录，见 §0.5） |
 | 服务起不来、日志说缺 `embed.base_url` | `deploy/.env` 没建或键名写错 | 见上面 ① |
 
 > ⚠ **compose 文件不能挪出 `deploy/`**：它的 `build.context` 是 `..`，**相对 compose 文件所在目录**。
@@ -280,6 +281,25 @@ docker compose up -d          # 注意：不要带 --build，否则它会想重�
 **第 3 步不能省**：缓存键不含模型标识 ⇒ 不主动作废就会**静默命中**旧向量（症状只是"检索结果很差"，**不报错**）。原因与可重建性对照表见 [`../var/CLAUDE.md`](../var/CLAUDE.md)。
 
 > **⚠ 一处 R1 类风险（§6.4）**：本地 qwen3.5-9b 的分词器与 `gpt-4o-mini` 不同，**本地量出的"单请求能装多少对"不能直接搬到线上**——**第 6 步之后必须重新量一次**（[`../docs/open-questions.md`](../docs/open-questions.md) E7）。
+
+### 同一套 runbook 的**另一个触发条件**：网关迁移（2026-09-28）
+
+**"换模型"不是唯一的触发条件——"同一个模型换了服务端"同样会换掉向量空间。**
+2026-09-28 embedding 与 rerank 从 `memory.021130.xyz` 迁到 `memory3.021130.xyz`：
+
+| 项 | 旧 host | 新 host |
+| --- | --- | --- |
+| embedding 维度 | 1024 | **4096** |
+| 服务实现 | 自研封装（`owned_by: aml`） | **vllm 直服** |
+| reranker | 有 | **有**（id 换成 `qwen3-reranker-4b`；网关当天又只改了 nginx.conf ⇒ `/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`，**请求/响应信封都换了**，见 `rank/reranker.py` 顶部的表） |
+
+⇒ **维度变了 ⇒ 旧集合与旧缓存全部作废**，动作与上面六步**逐条相同**（第 4 步的"新维度"
+不再是待定项，实测就是 4096）。⚠ **别把它当成"改个 base_url"**：跳过第 3 步的症状
+只是"检索结果很差"，**没有任何东西会报错**。
+
+> ⚠ **若只迁了 embedding、reranker 没跟上**：那是**允许的**——`RerankUnavailable`
+> 会把它降级成 RRF 顺序（D12），响应照旧合法。**唯一的要求是别不吭声**：
+> `make probe-reranker` 退出码 0 才算它可用，在那之前 `rerank.enabled` 保持 `false`。
 
 ---
 

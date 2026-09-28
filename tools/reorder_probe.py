@@ -99,7 +99,7 @@ def _rerank_order(segments: list[str], query: str) -> list[str]:
 
     base = os.environ.get("TIANXI_RERANKER_BASE_URL", "")
     key = os.environ.get("TIANXI_RERANKER_API_KEY", "")
-    model = os.environ.get("TIANXI_RERANKER_MODEL", "Qwen3-Reranker-4B")
+    model = os.environ.get("TIANXI_RERANKER_MODEL", "qwen3-reranker-4b")
     if not base or not key:
         raise SystemExit("重排臂要 `TIANXI_RERANKER_BASE_URL` / `_API_KEY`（.env 里有）")
     reranker = RemoteReranker(base_url=base, api_key=key, model=model, timeout=120.0)

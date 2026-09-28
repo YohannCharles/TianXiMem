@@ -24,7 +24,7 @@
 
 ```bash
 # 打已在跑的服务（`make serve`），跑全量 LoCoMo-Refined
-uv run python eval/experiments/run.py --dataset locomo-refined --embedder Qwen/Qwen3-Embedding-8B
+uv run python eval/experiments/run.py --dataset locomo-refined --embedder qwen3-embedding-8b
 
 # 冒烟：只跑 3 个 sample，且不重投已有语料
 uv run python eval/experiments/run.py --dataset longmemeval-s --limit 3 --skip-ingest

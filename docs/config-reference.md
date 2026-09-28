@@ -267,9 +267,9 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `packaging.score_mode` | `reciprocal_rank` | `1/(rank+1)`，**按输出位置**、**不是**原始 RRF 分数 |
 | `packaging.render_template` | `Q:/A:` | **"贵"消融项**：改它等于改变 embedding 输入，**整个向量索引要重建**。唯一实现是 `common/render.py` |
 | `packaging.role_prefix` | `[assistant]` 等标记 | 一个对里有多条非 user 消息时每条带 role 标记 |
-| `TIANXI_RERANKER_BASE_URL` | `https://memory.021130.xyz/v1` | **env**。主网关（**不是 memory2**，D18） |
+| `TIANXI_RERANKER_BASE_URL` | `https://memory3.021130.xyz/v1` | **env**。主网关（**不是 memory2**，D18） |
 | `TIANXI_RERANKER_API_KEY` | —— | **env**。与 `AML_EMB_*` 是同 host、不同 key |
-| `TIANXI_RERANKER_MODEL` | `Qwen3-Reranker-4B` | **env**。⚠ 端点是**忽略**它的（实测），它只进 run record 的指纹。**提交时不得更换**（D12） |
+| `TIANXI_RERANKER_MODEL` | `qwen3-reranker-4b` | **env**。⚠ **主网关会校验它**（vllm 直服，2026-09-28 迁移后）——填错就是 **404 ⇒ 每次检索都降级**，而服务**不报错**。旧 host（自研封装）是忽略它的。**提交时不得更换**（D12） |
 
 > ⚠ **`rerank.model` 这个键不存在**：模型名是**端点身份**、不是阈值，所以它住在 `.env` 的
 > `TIANXI_RERANKER_MODEL`（§1.2 的两层分工）。
@@ -321,10 +321,30 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | 配置项 | 提交期 | 开发期 | 住哪 | 说明 |
 | --- | --- | --- | --- | --- |
-| `models.embedder` | `text-embedding-v4` | Qwen3-Embedding-8B | **yaml** | **只能用前者**（§2.3） |
+| `models.embedder` | `text-embedding-v4` | **`qwen3-embedding-8b`** | **yaml** | **只能用前者**（§2.3）。⚠ 值是**服务端 id**，见下面那条迁移警告 |
 | `models.llm` | `gpt-4o-mini` | qwen3.5-9b | **env**（`AML_MODEL`） | **只能用前者**（§2.3） |
-| `TIANXI_RERANKER_MODEL` | **`Qwen3-Reranker-4B`** | 同左 | **env** | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12）。⚠ 端点忽略它，见 §7 |
+| `TIANXI_RERANKER_MODEL` | **`qwen3-reranker-4b`** | 同左 | **env** | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12）。⚠ 新网关**校验**它，填错 ⇒ 404 ⇒ 降级 |
 | `models.embed_dim` | **由接口提供** | —— | —— | **不能写死** |
+
+> ### ⛔ 2026-09-28：模型 id 随网关迁移**全变了**
+>
+> embedding 与 rerank 从 `memory.021130.xyz`（自研封装）迁到 `memory3.021130.xyz`（**vllm 直服**），
+> 两边的 id **不通用**——它们**是服务端的事**：
+>
+> | | 旧 host | 新 host |
+> | --- | --- | --- |
+> | embedding id | `Qwen/Qwen3-Embedding-8B` | **`qwen3-embedding-8b`** |
+> | reranker id | `Qwen3-Reranker-4B` | **`qwen3-reranker-4b`** |
+> | embedding **维度** | 1024 | **4096** |
+> | `/models` 列不列 reranker | 列 | **不列**（但 `/rerank` 可用） |
+> | `/rerank` 的请求/响应形状 | `query` → `results[]` | **`queries: [...]` → `data[].score`**（当天网关只改了 nginx.conf：`/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`。**客户端两个信封都收**，逐条实测见 [`../src/tianxi_am/rank/reranker.py`](../src/tianxi_am/rank/reranker.py) 顶部的表） |
+>
+> ⚠ **维度变了 ⇒ 集合与缓存都要重建**：动作清单在
+> [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的"网关迁移"一节。
+> ⚠ **`configs/runs/` 里那 13 份冻结快照带的是旧 id**——它们是**历史记录**，没改（改了就是伪造当时跑的东西）；
+> 但**重放任何 arm 之前必须先覆盖 `models.embedder`**，否则第一步 embedding 就 404。
+> ⚠ **`tools/check_env.py` 不再写死 id**：它向 `/v1/models` 问，并把用到的 id 打出来——
+> 写死会得到一个"永远红"的探针，而"永远红"最后会被人关掉。
 
 > ⚠ **embedding 走 yaml、另两个走 env，这不是笔误**：`models.embedder` 是 profile 之间
 > **唯一真正该变**的东西（`local.yaml` / `submit.yaml` 存在的理由就是让"哪些量随模型变"

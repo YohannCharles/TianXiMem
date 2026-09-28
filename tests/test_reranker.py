@@ -166,7 +166,11 @@ def _result(index: int, score: float) -> dict:
 
 
 def test_request_shape_is_the_one_the_endpoint_actually_accepts() -> None:
-    """请求体就是**实测出来的那个形状**：`{model, query, documents}`。
+    """请求体就是**实测出来的那个形状**：`{model, queries, documents}`。
+
+    ⚠ **`queries` 是数组**——2026-09-28 网关只改了 nginx.conf，把 `/v1/rerank`
+    **rewrite 到 vLLM 原生 `/v1/score`**，它要的就是这个形状。发旧的 `query`（单数）
+    拿到的是 **400**，而服务只会**降级**（D12）⇒ 这条断言是"精排到底有没有在跑"的第一道门。
 
     ⚠ **断言里没有 `top_n`**——它是个静默截断的旋钮：传了就只回前 k 条，
     于是 `_parse` 的集合校验会失败 ⇒ 每次 Search 都降级。
@@ -191,12 +195,61 @@ def test_request_shape_is_the_one_the_endpoint_actually_accepts() -> None:
     assert seen["auth"] == "Bearer k"
     body = seen["body"]
     assert isinstance(body, dict)
-    assert body["query"] == "几点开"
+    assert body["queries"] == ["几点开"]
+    assert "query" not in body, "旧名字（单数）在新路由上被 400 拒——见模块 docstring 的信封表"
     assert body["documents"] == ["A", "B"]
     assert body["model"] == "Qwen3-Reranker-4B"
     assert "top_n" not in body, "传 top_n 会静默截断候选（见模块 docstring）"
     # 分数**按输入位置**对齐（index 0 → 1.0，index 1 → 2.0），不是按响应顺序
     assert scores == [1.0, 2.0]
+
+
+def test_vllm_data_container_is_accepted() -> None:
+    """信封 C：`data[]` + `score`（vLLM 原生 score 形状）——**现在实际走的这条**。
+
+    ⚠ 它与下面那条 legacy 用例**成对存在**：`_parse` 收两个容器名是刻意的，
+    而"两个都收"这种声明**必须两条正向用例都钉住**——否则其中一条早断了也没人知道
+    （真断了的表现是"每次检索都降级"，而响应一切正常）。
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "score-98439a73",
+                "object": "list",
+                "created": 1790580559,
+                "model": "qwen3-reranker-4b",
+                # 顺序与输入**相反** ⇒ 断言的是"按输入位置对齐"，不是"照抄响应顺序"
+                "data": [
+                    {"index": 1, "object": "score", "score": 0.9},
+                    {"index": 0, "object": "score", "score": 0.1},
+                ],
+                "usage": {"prompt_tokens": 177, "total_tokens": 177},
+            },
+        )
+
+    reranker = _remote(handler)
+    assert reranker.score(query="q", documents=["first", "second"]) == [0.1, 0.9]
+
+
+def test_legacy_results_container_with_relevance_score_is_accepted() -> None:
+    """信封 B：`results[]` + `relevance_score`（换 nginx 之前那一版）——**仍然认**。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "qwen3-reranker-4b",
+                "results": [
+                    {"index": 0, "document": {"text": "A"}, "relevance_score": 0.2},
+                    {"index": 1, "document": {"text": "B"}, "relevance_score": 0.8},
+                ],
+            },
+        )
+
+    reranker = _remote(handler)
+    assert reranker.score(query="q", documents=["A", "B"]) == [0.2, 0.8]
 
 
 def test_scores_are_aligned_to_input_positions_even_when_results_are_sorted() -> None:
@@ -259,6 +312,7 @@ def test_missing_index_is_rejected() -> None:
     [
         ([], "形状"),
         ({"results": {}}, "形状"),
+        ({"data": {}}, "形状"),  # ⚠ 另一个容器名同样要守（信封 C）
         ({"results": ["not-a-dict"]}, "非对象"),
         ({"results": [{"index": "0", "score": 1.0}]}, "必须是整数"),
         ({"results": [{"index": True, "score": 1.0}]}, "必须是整数"),  # bool 是 int 的子类！
