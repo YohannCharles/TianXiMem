@@ -98,7 +98,7 @@ def test_retry_after_lost_response_does_not_reallocate_positions(
 
     断言两件事：
       1. 库里**没有新增行**
-      2. 既有行的**位置与内容不变**（D25 前这里写的是"`pair_idx` 不变"）
+      2. 既有行的**位置与内容不变**
 
     ⚠ **重放必须走一个全新的 store 实例**（模拟进程崩溃后重启）——
     否则一个内存里的去重（缓存、上一次的 `request_id` 变量）就能让测试通过，
@@ -148,11 +148,9 @@ def test_retry_after_a_later_batch_still_dedupes(store: SqliteStore) -> None:
 def test_without_a_guard_the_same_chunk_would_collide(store: SqliteStore) -> None:
     """**反证用例**：守卫缺失时，同一批重放会撞 `UNIQUE`——**响亮**，不是静默重复。
 
-    D25 之前这一条是"位置被重分配"（读-改-写 ⇒ 重放落到**新的** `pair_idx`，
-    落成重复记录**且不报错**）。位置改成请求的纯函数之后，同一批必然算出**同一位置** ⇒
+    位置是请求的纯函数 ⇒ 同一批必然算出**同一位置** ⇒
     重放撞 `UNIQUE(user_id, session_id, chunk_ordinal, local_index)`。
 
-    ⇒ **失败模式从"静默重复"变成了"响亮冲突"**，这是 D25 的附带好处之一。
     ⚠ 但守卫仍然必须留：AML 重试是**正常行为**（最多 32 次），
     每次都靠撞 UNIQUE 来失败会让整批重试 32 次、最终判定失败。
     """

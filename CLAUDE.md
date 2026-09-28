@@ -59,7 +59,7 @@
 | **Add 最多被重试 32 次**（`request_id` 与 payload 不变） | 必须幂等 | §2.2 |
 | **响应前必须持久化完成且立即可搜索** | 不允许异步建索引 | §2.1 |
 | **`Search` 不得生成最终答案**，也不得把答案伪装成记忆记录 | reranker 只重排证据 | §2.1 / §11.2 |
-| **Add 仍必须 `--workers 1`**（⛔ "按 `(user_id, session_id)` 串行化"那半条已被 **D25** 废除） | `BEGIN IMMEDIATE` 与 `applied_batches` 都在单进程内；多 worker 下是另一处未验证的偏离 | §15 / **D25** |
+| **Add 仍必须 `--workers 1`** | `BEGIN IMMEDIATE` 与 `applied_batches` 都在单进程内；**放开多 worker 需要的验证一件都没做**（并发写压力、`busy_timeout` 多进程争用、每进程各一份 Qdrant 客户端） | §15 / **D25** |
 | **单请求最长 30 分钟；Full run 连续跑 0.5–2 天** | 阻塞调用会互相饿死，问题直到 Full 才炸 | §2.2 / §15 |
 
 ### 三个静默出错的重灾区
@@ -81,16 +81,12 @@
 
 ### 时间处理：**content 里带日粒度会话日期，但绝不许出现秒级**（D21）
 
-> ⛔ **2026-09-25 起这条规则被 D21 推翻**（原文保留以存档当时的判断）：
-> ~~裁判 prompt 的 TIME 块有**两条独立规则**都会因此判负：**粒度变细**、**相对↔绝对互转**，
-> 所以加绝对时间戳**可能反而有害**（§11.3）。~~
->
-> **实测反例**（3 段 346 题，[`eval/reports/ledger.md`](eval/reports/ledger.md)）：日期**写在段首**毫无作用，
+> **实测依据**（3 段 346 题，[`eval/reports/ledger.md`](eval/reports/ledger.md)）：日期**写在段首**毫无作用，
 > 写到**每一对旁边**后 multi-hop +8.9pt、temporal +3.5pt，整体 0.601 → **0.633**。机制：LoCoMo-Refined
 > 的时间 gold 是**锚定式相对**形式（`The Friday before 22 October 2023`），模型只有把锚点放在那句话**旁边**
 > 才会接上去（答成 `Last Friday (relative to March 6, 2023)`）。
 >
-> **新规则（两条边界照旧）**：
+> **规则（两条边界照旧）**：
 >
 > 1. **粒度**：正文前缀**只给到日**（`[2023-10-22]`）——**秒级绝不许出现**（那正是「粒度变细」判负的来源；
 >    [`preflight`](eval/smoke/preflight.py) 有检查钉着，**不许放宽**）。

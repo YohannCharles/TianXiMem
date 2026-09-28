@@ -195,7 +195,8 @@ def render_memories(
     用 `"\\n"` 拼接而不是别的分隔符：归档的 `memory_text()` 对列表正是 `"\\n".join(...)`，
     所以"我们自己拼"与"把列表交给它拼"**逐字相同**。
 
-    `include_date=True` ⇒ 每条前面加 `[created_at] `；**默认 `False`**（理由见下）。
+    `date_mode` 决定日期怎么带——**逐档的口径都写在 `DATE_MODES` 上**（含每档的实测结论）；
+    默认 `"none"`（理由见下）。
 
     ## 为什么会有这个开关（2026-09-25）
 
@@ -288,14 +289,15 @@ def build_input_items(
         #   因为基线未必守预算（实测 ReFind 有一题返回 89.8 万字符）。详见常量的注释。
         text, cut = truncate_to_platform_prefix(text)
         if cut:
-            print(
-                f"  ⚠ {question.qid}：注入被截到平台前缀"
-                f"（{PLATFORM_TOKEN_PREFIX:,} token）",
-                flush=True,
-            )
+            _warn_truncated(question.qid)
         item[memory_field] = text
         items.append(item)
     return items
+
+
+def _warn_truncated(qid: str) -> None:
+    """注入被平台前缀截断——**两条注入路径共用这一行字**。"""
+    print(f"  ⚠ {qid}：注入被截到平台前缀（{PLATFORM_TOKEN_PREFIX:,} token）", flush=True)
 
 
 def _subprocess_env() -> dict[str, str]:
@@ -527,11 +529,7 @@ def _build_clbench_items(sample: Sample, hits_by_qid: dict[str, list[SearchHit]]
     for question in sample.questions:
         hits, cut = _prefix_within_budget(hits_by_qid.get(question.qid, []))
         if cut:
-            print(
-                f"  ⚠ {question.qid}：注入被截到平台前缀"
-                f"（{PLATFORM_TOKEN_PREFIX:,} token）",
-                flush=True,
-            )
+            _warn_truncated(question.qid)
         items.append(
             {
                 "idx": question.qid,

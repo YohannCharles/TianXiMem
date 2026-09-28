@@ -178,7 +178,7 @@ def _unavailable_counters() -> dict[str, Any]:
         "pending_completed": None,
         "pending_orphaned_real": None,
         "pending_orphaned_misjudged": None,
-        "note": "D24 起 pending 概念已取消（发射端已删除）——这个量**不存在**，不是 0",
+        "note": "D24 起 pending 概念已取消——这个量**不存在**，不是 0",
     }
 
 

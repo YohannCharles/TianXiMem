@@ -16,7 +16,6 @@ metrics.py     §14 五个指标的聚合与导出
 
 | 指标 | 发射方 | 为什么在那里 |
 | --- | --- | --- |
-| ⛔ ~~`pending_created` / `pending_completed` / `pending_orphaned`~~ | ~~[`../pairing/`](../pairing/)~~ | **D24 已取消 `pending` 概念** ⇒ 没有发射方，本行**不再适用** |
 | **embedding API 调用数 / 缓存命中率** | [`../embed/`](../embed/) | 它是**缓存键**的探针——**不下降说明缓存键写错了** |
 | **Agent Trigger Rate** · 平均轮数 · Rewrite 次数 | [`../agent/`](../agent/) | 只有 agent 循环知道被触发了几次 |
 | latency/query | [`../service/`](../service/) | 请求边界 |
@@ -41,24 +40,14 @@ metrics.py     §14 五个指标的聚合与导出
 
 ---
 
-## ~~§6.5：三个 `pending` 计数器~~ ⛔ **D24 已作废**
+## 切分是否切坏了 QA 对（D24 起）
 
-~~**这是判断 AML 切分是否频繁打断 QA 对的唯一手段**——持续偏高说明配对规则需要调整。~~
-~~### ⚠ `pending_orphaned` 有两种来源，必须分开统计~~
-~~| 来源 | 含义 | 该怎么办 |~~
-~~| --- | --- | --- |~~
-~~| **(i) 真·残缺** | session 就此结束，对里确实少了一半 | **非零的正常来源**，无需动作 |~~
-~~| **(ii) 误判残留** | 本批恰好命中上限、最后一对**其实已完整**，而下一批以 user 消息开头，按 3b 它本该被关掉 | **非零就说明续接逻辑漏了 3b——是 bug，不是数据问题** |~~
-~~**所以不要把 `pending_orphaned` 聚合成一个数**——**分成两个计数器**（或至少加一个可区分的标签）。~~
+**没有独立计数器**：一次 Add 的块在写下那一刻就是最终形状，**不存在"新建 / 补全 / 落单"三种归宿**
+⇒ 这件事**只体现在块形状里**——每次 Add 产出几个块、其中几个 `is_paired`（见
+[`../pairing/pairing.py`](../pairing/pairing.py) 的 `MemoryBlock.is_paired`），
+**一次读库就能算出来**（`SELECT count(*) ... WHERE answer IS NULL`），不需要任何跨请求状态。
 
-**2026-09-27（D24）起 `pending` 这个概念本身没了**：一次 Add 的块在写下那一刻就是最终形状，
-**不存在"新建 / 补全 / 落单"三种归宿**。这三个计数器因此**没有发射方**，本目录也不要再为它们
-预留聚合位。
-
-> **D24 之后的替代信号**："切分是否切坏了 QA 对"这件事现在**只体现在块形状里**——
-> 每次 Add 产出几个块、其中几个 `is_paired`（见 [`../pairing/pairing.py`](../pairing/pairing.py) 的
-> `MemoryBlock.is_paired`），**一次读库就能算出来**（`SELECT count(*) ... WHERE answer IS NULL`），
-> 不需要任何跨请求状态。这是 D24 换来的东西之一。
+> ⚠ **别为它加回一个计数器**：跨请求状态正是 D24 想消掉的东西。
 
 
 ---
@@ -67,10 +56,8 @@ metrics.py     §14 五个指标的聚合与导出
 
 > **本地复现不了词数那一路**（§6.5 / §12.3 第 5 条）：AML 按"20 条消息**或** 2,000 个 **Adapter 计数的词**"切分，而 **"Adapter" 官方从未定义**。本地只能按 20 条复现。
 
-**D24 之后这条不再影响任何指标**：`pending` 概念已取消，本目录不再有依赖切批口径的计数器。
-**但 S2 本身没清掉**——它仍然是 [`../../../docs/open-questions.md`](../../../docs/open-questions.md)
-里的一条未决事项，影响的是"**我们本地复现的批次形状与线上有多接近**"，而那现在是
-[`../../eval/harness/batching.py`](../../../eval/harness/batching.py) 的事（它已经声明只复现 20 条那一路）。
+**这只影响 [`../../eval/harness/batching.py`](../../../eval/harness/batching.py)**（它已声明只复现 20 条那一路）——
+本目录没有依赖切批口径的计数器。S2 本身仍是 [`../../../docs/open-questions.md`](../../../docs/open-questions.md) 里的一条未决事项。
 
 ---
 

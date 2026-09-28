@@ -281,7 +281,7 @@ class NeighborConfig:
     radius: int = DEFAULT_RADIUS
     #: 段内**种子放在哪**（§11.2 的"组内顺序"，明文列为可消融项）。
     #:
-    #: * `keep`（默认）：纯位置（读时稠密序 `seq`，D25 前叫 `pair_idx`）时间序，
+    #: * `keep`（默认）：纯位置（读时稠密序 `seq`）时间序，
     #:   种子在它本来的时间位置上
     #: * `front`：种子移到**段首**，其余照时间序 —— ⚠ **段内时间连续性会断**，
     #:   而"窗口是一段连续对话、按时间序读才成立"正是 §11.2 当初选时间序的理由
@@ -315,7 +315,7 @@ class PackagingConfig:
     #: 检索到的是哪一臂的向量**根本看不出来**。
     inject_abs_time: bool = True
 
-    #: `false` ⇒ `content` 逐字等于被索引的文本（旧口径，仍可作消融臂）。
+    #: `false` ⇒ `content` 逐字等于被索引的文本（**消融臂**）。
     #: `true`（**2026-09-26 起默认**）⇒ 把每对正文里的**相对时间就地注解**成绝对日期
     #: （`last Tues (July 18, 2023)`），原文一字不动——实现与口径见 [`annotate.py`](./annotate.py)。
     #:
@@ -734,11 +734,9 @@ def validate(cfg: AppConfig) -> AppConfig:
         raise ConfigError(
             f"`server.workers`（`{ENV_WORKERS}`）必须是 1，收到 {cfg.server.workers}。\n"
             "  §15 要求 `--workers 1`。\n"
-            "  ⚠ **D25 之后原因变了**：位置分配已不再依赖进程内状态（`SessionLocks` 已删），"
-            "所以「多 worker 会静默撞车」那条**不再成立**。\n"
-            "  但**放开多 worker 需要的验证没有做过**（并发写入压力、`busy_timeout` 争用、"
+            "  ⚠ **放开多 worker 需要的验证没有做过**（并发写入压力、`busy_timeout` 争用、"
             "多进程各自的 Qdrant 客户端）⇒ 在那之前保持这条约束，"
-            "**不要用「反正现在安全了」当理由把它去掉**。"
+            "**不要用「位置已经是请求的纯函数了」当理由把它去掉**。"
         )
 
     return replace(
@@ -770,7 +768,7 @@ def assert_single_process() -> None:
         return
     raise ConfigError(
         f"检测到本进程是多进程派生的 worker（pid={os.getpid()}，父进程 pid={parent.pid}）。\n"
-        "  §15 要求 `--workers 1`（D25 之后原因已变，见 validate() 里那条错误消息的说明）。\n"
+        "  §15 要求 `--workers 1`（理由见 validate() 里那条错误消息的说明）。\n"
         "  ⇒ 去掉 `--workers N`（N>1）。若你在用 `--reload`：本守卫无法把它与多 worker 区分"
         "（两者在子进程里形状相同），请改用 `make serve`。\n"
         "  ⚠ uvicorn 的 `--workers N` 监督进程会**反复重启**这些 worker，于是这条错误会反复刷——"

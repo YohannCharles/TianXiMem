@@ -94,8 +94,8 @@ WHERE user_id = ? AND session_id = ?
 ORDER BY chunk_ordinal, local_index;
 ```
 
-> ⚠ **D25 起邻域不再是一条 `BETWEEN`**：位置是 `(chunk_ordinal, local_index)`，
-> **chunk 序号可以跳号** ⇒ "整数差 r"不再等于"会话里前后各 r 个"。
+> ⚠ **位置是 `(chunk_ordinal, local_index)`（D25），而 chunk 序号可以跳号** ⇒
+> **"整数差 r"不等于"会话里前后各 r 个"**。
 > 相邻性由**读时现算的稠密序 `seq`**（`ROW_NUMBER() ... - 1`）给出，
 > 扩窗 = 在有序列表里按**下标**切 `[i-radius, i+radius]`。
 > ⚠ `ROW_NUMBER()` 是 **1-based**，**必须减 1**。
@@ -152,7 +152,7 @@ ORDER BY chunk_ordinal, local_index;
 ## 2.5 Context Segment Merge（§11.2 的"组"）
 
 **扩窗与合并不是两件事**：`merge_segments` 把"种子 + 它的邻域"变成**段**，
-段的定义就是**连续 `seq` 的最长游程**（D25 前是 `pair_idx`；顺序 ingest 下两者逐一相等）。
+段的定义就是**连续 `seq` 的最长游程**（D25）。
 
 ```text
 按 (user_id, session_id) 分组 → 组内按 seq 升序 → 一次线性扫描
@@ -213,9 +213,8 @@ ORDER BY chunk_ordinal, local_index;
 ### 渲染模板（**v1 定稿 + 日期前缀**）—— **本节是模板的唯一声明处**
 
 > 模板就是下面这两行，**每对前面加日粒度会话日期**（`[2023-10-22] `）。
-> ⛔ 2026-09-25 **D21** 推翻了旧结论「正文不含任何绝对时间戳」——依据是 346 题的反例
-> （[`../../../eval/reports/ledger.md`](../../../eval/reports/ledger.md)）；**秒级绝不许出现**
-> （那会踩裁判的「粒度变细」），原文的相对表述**原样保留**，日期只是**锚点**。
+> ⛔ **秒级绝不许出现**（那会踩裁判的「粒度变细」），原文的相对表述**原样保留**，日期只是**锚点**。
+> 这条的实测依据是 346 题的反例（[`../../../eval/reports/ledger.md`](../../../eval/reports/ledger.md)，**D21**）。
 > 实现是 [`../common/render.py`](../common/render.py) 的 `render()`；三个调用点
 > （索引侧 / 精排输入 / `content`）都走 **`render_pair()`**——它是"一个对 → 它的文本"的唯一入口，
 > 免得三处各拼一次日期口径（那正是不变式 I1 被撕开的开始）。

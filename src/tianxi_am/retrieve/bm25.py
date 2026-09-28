@@ -25,19 +25,13 @@ Analyzer 下 BM25 反超学出来的稀疏权重，XLM-R 下明显落败）。�
 
 from __future__ import annotations
 
-from typing import Final
-
 from tianxi_am.store.qdrant_store import BM25_MODEL, SPARSE_VECTOR
 
 __all__ = [
     "BM25_MODEL",
     "SPARSE_VECTOR",
-    "TOKENIZER_IS_UNVERIFIED",
     "lexical_query",
 ]
-
-#: 分词器行为**尚未实测**（V1）。清掉它之前，不要基于"BM25 更强"做取舍。
-TOKENIZER_IS_UNVERIFIED: Final[bool] = True
 
 
 def lexical_query(query: str) -> str:

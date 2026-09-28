@@ -486,24 +486,18 @@ def test_t1_arms_differ_only_in_the_switch_and_the_collection():
 
     差第三件事就说明这个对照同时在测别的——而**分数看起来完全正常**（§13 的纯度规则）。
     """
+    from eval.experiments import arms
     from eval.experiments import t1_timestamp as t1
 
     plain, dated = t1.ARM_PLAIN, t1.ARM_DATED
     assert plain.inject_abs_time is False and dated.inject_abs_time is True
     assert plain.collection != dated.collection  # 向量不同 ⇒ 必须分集合
-    assert _flatten(plain.overrides()) == {
+    assert arms.flatten(plain.overrides()) == {
         "storage.qdrant.collection": plain.collection,
         "packaging.inject_abs_time": False,
     }
-    assert t1._switches(dated) == {"packaging.inject_abs_time": True}
-
-
-def _flatten(d: dict, prefix: str = "") -> dict:
-    out = {}
-    for key, value in d.items():
-        path = f"{prefix}{key}"
-        out.update(_flatten(value, f"{path}.") if isinstance(value, dict) else {path: value})
-    return out
+    # `switches` 是**只记开关**的那一份：集合名不在里面（它不是这次对照的自变量）
+    assert dated.switches() == {"packaging.inject_abs_time": True}
 
 
 def test_t1_freeze_then_verify_round_trips(tmp_path, monkeypatch):
@@ -512,6 +506,7 @@ def test_t1_freeze_then_verify_round_trips(tmp_path, monkeypatch):
     快照掉队（比如两份都成了 `false`）是这个脚手架最危险的失败模式：你会**认真地跑完
     一次 T1、得到"两臂没有差别"**，而那个结论是假的。
     """
+    from eval.experiments import arms
     from eval.experiments import t1_timestamp as t1
 
     configs = tmp_path / "configs"
@@ -520,7 +515,7 @@ def test_t1_freeze_then_verify_round_trips(tmp_path, monkeypatch):
     (configs / "local.yaml").write_text(
         "storage:\n  qdrant:\n    collection: dev\n", encoding="utf-8"
     )
-    monkeypatch.setattr(t1, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(arms, "RUNS_DIR", tmp_path / "runs")
 
     for arm in t1.ARMS:
         t1.freeze(arm, configs_dir=configs)
@@ -542,12 +537,57 @@ def test_t1_freeze_then_verify_round_trips(tmp_path, monkeypatch):
     problems = t1.verify(t1.ARM_DATED)
     assert problems and "inject_abs_time" in problems[0]
 
+    # 集合名同样在核对范围内（它在 `overrides()` 里，就是"本臂该有的取值"）
+    local.write_text(
+        local.read_text(encoding="utf-8").replace(
+            "collection: memories_t1_dated", "collection: 别的集合"
+        ),
+        encoding="utf-8",
+    )
+    problems = t1.verify(t1.ARM_DATED)
+    assert problems and any("collection" in p for p in problems)
+
 
 def test_t1_verify_reports_missing_snapshot(tmp_path, monkeypatch):
+    from eval.experiments import arms
     from eval.experiments import t1_timestamp as t1
 
-    monkeypatch.setattr(t1, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(arms, "RUNS_DIR", tmp_path / "runs")
     assert "先跑 `--freeze`" in t1.verify(t1.ARM_PLAIN)[0]
+
+
+# ── A3：与 T1 共用同一套脚手架，但**每臂只动一个键**──
+def test_a3_freeze_then_verify_round_trips(tmp_path, monkeypatch):
+    """A3 与 T1 走同一个 `freeze`/`verify`，所以这里测的是**它自己的那半边**：
+
+    `overrides()` 只动 `rerank.enabled` ⇒ 校验也必须**只**盯这一个键。
+    判据从 `overrides()` 现算，所以这条断言同时钉住了"两臂不共用集合"这件事。
+    """
+    from eval.experiments import a3_rerank as a3
+    from eval.experiments import arms
+
+    configs = tmp_path / "configs"
+    configs.mkdir()
+    (configs / "default.yaml").write_text("models:\n  embedder: X\n", encoding="utf-8")
+    (configs / "local.yaml").write_text("rerank:\n  enabled: false\n", encoding="utf-8")
+    monkeypatch.setattr(arms, "RUNS_DIR", tmp_path / "runs")
+
+    assert arms.flatten(a3.ARM_ON.overrides()) == {"rerank.enabled": True}
+    assert a3.ARM_ON.switches() == {"rerank.enabled": True}
+    for arm in a3.ARMS:
+        a3.freeze(arm, configs_dir=configs)
+        assert a3.verify(arm) == []
+
+    # rerank 只改排名 ⇒ **两臂的集合相同**（与 T1 正相反，那边的 `overrides()` 里有集合）
+    assert "storage" not in a3.ARM_ON.overrides()
+
+    local = a3.ARM_ON.dir / "local.yaml"
+    local.write_text(
+        local.read_text(encoding="utf-8").replace("enabled: true", "enabled: false"),
+        encoding="utf-8",
+    )
+    problems = a3.verify(a3.ARM_ON)
+    assert problems and "rerank.enabled" in problems[0]
 
 
 # ── T2：机器半边出待填表，人那半边拒绝代填 ──

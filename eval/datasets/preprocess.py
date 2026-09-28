@@ -121,14 +121,14 @@ class Sample:
 # 两份数据各只有一种格式（在全量上枚举过，见 tests）。**不做宽松匹配**：
 # 解析失败就抛，别让它静默退化成 None（那会让 event_time 全 NULL 且不报错）。
 
-_LOCPOMO_TIME = re.compile(
+_LOCOMO_TIME = re.compile(
     r"^(?P<h>\d{1,2}):(?P<m>\d{2})\s*(?P<ap>am|pm)\s+on\s+(?P<d>\d{1,2})\s+(?P<mon>[A-Za-z]+),\s*(?P<y>\d{4})$"
 )
 _LME_TIME = re.compile(
     r"^(?P<y>\d{4})/(?P<mon>\d{2})/(?P<d>\d{2})\s*\([A-Za-z]{3}\)\s*(?P<h>\d{2}):(?P<m>\d{2})$"
 )
 
-_LOCPOMO_MONTHS = {
+_LOCOMO_MONTHS = {
     "january": 1,
     "february": 2,
     "march": 3,
@@ -146,13 +146,13 @@ _LOCPOMO_MONTHS = {
 
 def parse_locomo_time(value: str) -> datetime:
     """`'1:56 pm on 8 May, 2023'` → naive `datetime`（UTC 口径，见模块 docstring）。"""
-    m = _LOCPOMO_TIME.match(value.strip())
+    m = _LOCOMO_TIME.match(value.strip())
     if not m:
         raise ValueError(f"LoCoMo 时间串无法解析：{value!r}")
     hour = int(m["h"]) % 12
     if m["ap"] == "pm":
         hour += 12
-    month = _LOCPOMO_MONTHS.get(m["mon"].lower())
+    month = _LOCOMO_MONTHS.get(m["mon"].lower())
     if month is None:
         raise ValueError(f"LoCoMo 时间串月份无法解析：{value!r}")
     return datetime(int(m["y"]), month, int(m["d"]), hour, int(m["m"]), tzinfo=UTC)

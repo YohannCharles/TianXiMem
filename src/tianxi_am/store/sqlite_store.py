@@ -54,8 +54,6 @@ def _canonical(*parts: str) -> str:
 def make_pair_id(user_id: str, session_id: str, chunk_ordinal: int, local_index: int) -> str:
     """不变式 1：`id` **位置派生** = hash(user_id, session_id, chunk_ordinal, local_index)。
 
-    **D25 起位置是这两个数**（旧口径是 session 内连续的 `pair_idx`，由 `MAX+1` 现算）。
-
     ⚠ **绝不能用内容哈希。** 按内容算的 `id` 会在两段**内容相同**的记忆上撞车，
     而**重建索引**要求「同一行永远是同一个 point」——做不到就会在 Qdrant 里留下
     **孤儿 point**（旧的还在，新的也写进去，检索命中"不存在的那个版本"，**且不报错**）。
@@ -230,14 +228,11 @@ class SqliteStore:
 
         **`BEGIN IMMEDIATE` 而不是默认的 `BEGIN`**（**已实测，不是引文档**）：
 
-        * **升级写锁时 `busy_timeout` 不生效**（**这是 D25 之后剩下的那一条理由**）：
+        * **升级写锁时 `busy_timeout` 不生效**：
           写事务里**先读后写**（守卫 `SELECT` → `INSERT`）。deferred `BEGIN` 让事务
           以**读**身份开始，要写时得**升级**成写锁；若对方也持着读锁并同样想升级，
           SQLite **立刻**返回 `SQLITE_BUSY`（"database is locked"）
           ——它宁可立刻报错也不冒死锁的险，**不应用 `busy_timeout`**。
-        * ~~**读-改-写**：`pair_idx` 的分配是 `MAX(pair_idx)` → 写位置~~ ⛔ **D25 已取消**：
-          位置现在从 `request_id` 的 chunk 序号派生，**没有读-改-写**。
-          ⇒ 这条理由**不再成立**，但**上一条仍成立**，所以 `BEGIN IMMEDIATE` 照留。
 
         实测：把这一行换成 `BEGIN`，`tests/test_store.py` 的两条并发压力用例
         **双双失败**，报 `OperationalError('database is locked')` ×5——**而且跨 session
@@ -245,11 +240,11 @@ class SqliteStore:
 
         IMMEDIATE 在事务开头就拿写锁，让并发写事务退化成"排队"而不是"互锁"
         （完整论证见 D17）。**它是数据库级的写者串行**（键是整个库文件），
-        与"按 session 的业务顺序"**不是一件事**——后者是 D25 删掉的那把锁。
+        与"按 session 的业务顺序"**不是一件事**——后者不存在，位置是请求的纯函数。
 
-        ⚠ D25 之后**没有应用层的 session 锁了**：同 `(user_id, session_id)` 的 Add
-        可以并发进入本层，它们在**这里**排队（等待，而不是失败）。⇒ 本方法是
-        "并发安全"的**唯一**落点，`busy_timeout` 的取值（配置项）比过去更要紧。
+        ⚠ **这一层是并发安全的唯一落点**：同 `(user_id, session_id)` 的 Add 可以并发
+        进入本层，它们在**这里**排队（等待，而不是失败）
+        ⇒ `busy_timeout` 的取值（配置项）比过去更要紧。
 
         事务体里的**每一个 helper 都必须复用这里 yield 出去的 `conn`**——
         helper 自己 `connect()` 会落到另一个事务里（拿不到本事务的写锁、也看不到本事务
@@ -308,10 +303,9 @@ class SqliteStore:
             (request_id, user_id, session_id, _now_ms() if applied_at is None else applied_at),
         )
 
-    # ── 位置：D25 起**没有"分配"这一步** ────────────────────────────────
+    # ── 位置来自请求，**没有"分配"这一步**（D25）─────────────────────────
     #
-    # 旧口径是 `next_pair_idx() = MAX(pair_idx)+1`（读-改-写，必须靠 `SessionLocks` 串行化，
-    # 且顺序 = 到达顺序）。D25 把它换成 `(chunk_ordinal, local_index)`——**请求的纯函数**：
+    # 位置是 `(chunk_ordinal, local_index)`——**请求的纯函数**：
     #
     #   * `chunk_ordinal` 从 `request_id` 解析（`pairing.parse_chunk_ordinal`）
     #   * `local_index`   是这一批组合出的块的 0-based 序号（`compose_memory_blocks` 确定）
@@ -392,15 +386,13 @@ class SqliteStore:
     ) -> list[QaPair]:
         """该 session 的**全部块，按会话顺序**，并给每行填上 `seq`（D25）。
 
-        这是 §10 邻域扩展的数据来源——**取代**旧的 `fetch_pairs_by_idx_range`。
+        ## 为什么取整段，而不是按整数区间取窗口
 
-        ## 为什么改成"取整段"而不是"取 `BETWEEN` 窗口"
-
-        D25 把位置从"`session` 内连续整数"换成 `(chunk_ordinal, local_index)`：后者
+        位置是 `(chunk_ordinal, local_index)`：后者
         **可能有空洞**（某个 chunk 一批都没产出块、或 chunk 序号跳号），于是
-        `pair_idx BETWEEN k-r AND k+r` 那种**整数算术**不再等价于"会话里前后各 r 个"。
+        `pair_idx BETWEEN k-r AND k+r` 那种**整数算术**不等价于"会话里前后各 r 个"。
 
-        改成：一次取整个 session 的有序列表（session 很小，实测最长 ~40 块），
+        所以：一次取整个 session 的有序列表（session 很小，实测最长 ~40 块），
         在 Python 里按 `seq` 切窗口 ⇒ **"相邻"由列表位置给出，缺号不破坏相邻**
         （这正是"仍然能相邻片段扩展"的落点）。
 
@@ -413,8 +405,7 @@ class SqliteStore:
 
         ⚠ **排序键是 `(chunk_ordinal, local_index)`，不是 `event_time`**：`event_time`
         在 session 内**没有区分度**（时间戳是 session 级的，两个数据集都如此），
-        用它排序会让邻域产生抖动（§6.1）。**顺序来自请求里的 chunk 序号**
-        ——这是 D25 与旧口径在"顺序从哪来"上的唯一区别，但那是根本区别。
+        用它排序会让邻域产生抖动（§6.1）。**顺序来自请求里的 chunk 序号**（D25）。
 
         ⚠ 跨 session **永远看不到对方**（`WHERE` 里带着两个键），所以"禁止跨对话拼接"
         是结构性成立的，不靠调用方自觉（§2.2 的隔离契约 / §10）。

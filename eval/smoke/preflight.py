@@ -90,6 +90,9 @@ _ENV_EMBED_BASE_URL = "AML_EMB_BASE_URL"
 _ENV_EMBED_API_KEY = "AML_EMB_API_KEY"
 _ENV_CONFIG_DIR = "TIANXI_CONFIG_DIR"
 _ENV_PROFILE = "TIANXI_PROFILE"
+
+#: `TIANXI_QDRANT_URL` 没设时的回落值（与 `config.py` 的内置默认同值）。
+_DEFAULT_QDRANT_URL = "http://localhost:6333"
 _ENV_SQLITE_PATH = "TIANXI_SQLITE_PATH"
 _ENV_EMBED_CACHE_DIR = "TIANXI_EMBED_CACHE_DIR"
 _ENV_WORKERS = "TIANXI_WORKERS"
@@ -306,33 +309,41 @@ def _launch_service(*, timeout: float, verbose: bool) -> ServiceHandle:
     # `STARTF_USESTDHANDLES` 给的独立 handle），所以它照旧能写；而父进程不再占着文件
     # ⇒ 后面删临时目录时不会被自己挡住。（`_tail()` 按**路径**重读，不靠这个句柄。）
     handle = ServiceHandle(base_url=f"http://127.0.0.1:{port}", proc=proc, workdir=workdir)
+    _await_ready(handle, timeout=timeout, tail=_tail)
+    return handle
 
+
+def _await_ready(handle: ServiceHandle, *, timeout: float, tail: Callable[[], str]) -> None:
+    """轮询 `/openapi.json` 直到 200；**起不来时把服务日志的尾部一起带出去**。
+
+    ⚠ 两条失败路径都必须**先取日志再 `stop()`**：`stop()` 会把整个临时目录删掉，
+    而日志就在里面——顺序反了就永远读不到那句最有用的话。
+    """
     deadline = time.monotonic() + timeout
     last: str = "还没收到任何响应"
     while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            # ⚠ **先取日志再 stop()**：stop() 会把整个临时目录删掉，而日志就在里面
-            #   ——顺序反了就永远读不到那句最有用的话。
-            tail = _tail()
+        if handle.proc.poll() is not None:
+            exit_code = handle.proc.returncode
+            log_tail = tail()
             handle.stop()
             raise PreconditionError(
-                f"服务进程启动即退出（exit={proc.returncode}）。它自己说的是：\n"
-                f"----\n{tail}\n----\n"
+                f"服务进程启动即退出（exit={exit_code}）。它自己说的是：\n"
+                f"----\n{log_tail}\n----\n"
                 "（配置校验由 load_config() 负责，上面的报错就是它给的。）"
             )
         try:
             resp = httpx.get(f"{handle.base_url}/openapi.json", timeout=2.0)
             if resp.status_code == 200:
-                return handle
+                return
             last = f"HTTP {resp.status_code}"
         except httpx.HTTPError as exc:
             last = type(exc).__name__
         time.sleep(0.3)
 
-    tail = _tail()  # 同上：先取日志再删目录
+    log_tail = tail()  # 同上：先取日志再删目录
     handle.stop()
     raise PreconditionError(
-        f"服务在 {timeout:.0f}s 内没起来（最后一次：{last}）。日志尾部：\n{tail}"
+        f"服务在 {timeout:.0f}s 内没起来（最后一次：{last}）。日志尾部：\n{log_tail}"
     )
 
 
@@ -734,10 +745,9 @@ class Preflight:
         """§2.2：同一 `request_id` 重复 POST（payload 不变）⇒ **库里没有新增行**。
 
         **怎么在 HTTP 层看见"没有新增行"**：**两次检索返回的 id 集合与条数完全一致**。
-        ⚠ **D25 之前**这件事的机制是"重复写入会落到一个新的 `pair_idx` ⇒ 产生新 `id`"——
-        那条**已经不成立**（位置是请求的纯函数，重放算出同一位置）。现在**没有守卫时**
-        重放会撞 `UNIQUE` ⇒ 整批**非 200**（响亮），而不是静默多一行。
-        ⇒ 所以这条检查现在验的是**"守卫把正常重试从 500 里救回来"**，仍然必须测。
+        ⚠ 位置是请求的纯函数 ⇒ 重放算出同一位置 ⇒ **没有守卫时**重放会撞 `UNIQUE`、
+        整批**非 200**（响亮），而不是静默多一行。
+        ⇒ 所以这条检查验的是**"守卫把正常重试从 500 里救回来"**。
 
         ⚠ **另一半在段模型下才看得出来**：若有行被重复写入，新行与旧行在同一个 session 里
         **相邻** ⇒ 它们会被合并进**同一个** Context Segment。于是重复写入**不再表现为多一项**，
@@ -867,7 +877,7 @@ def _check_qdrant(env: dict[str, str]) -> None:
     （`load_config()` 是它唯一的实现，见 `_launch_service` 的说明）。
     预检需要 Qdrant 是因为**它自己要 drop 那个临时集合**，而不只是为了转述服务的问题。
     """
-    url = (env.get(_ENV_QDRANT_URL) or "http://localhost:6333").rstrip("/")
+    url = (env.get(_ENV_QDRANT_URL) or _DEFAULT_QDRANT_URL).rstrip("/")
     try:
         resp = httpx.get(f"{url}/collections", timeout=10.0)
     except httpx.HTTPError as exc:
@@ -920,7 +930,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n前置条件不满足，预检没有开始：\n{exc}\n")
             return EXIT_PRECONDITION_FAILED
 
-        qdrant_url = (os.environ.get(_ENV_QDRANT_URL) or "http://localhost:6333").rstrip("/")
+        qdrant_url = (os.environ.get(_ENV_QDRANT_URL) or _DEFAULT_QDRANT_URL).rstrip("/")
         print(f"Qdrant：{qdrant_url}")
         print(f"profile：{_PREFLIGHT_PROFILE}\n")
 
@@ -952,7 +962,7 @@ def main(argv: list[str] | None = None) -> int:
                 handle.stop()
             if not args.base_url:
                 _drop_collection(
-                    (os.environ.get(_ENV_QDRANT_URL) or "http://localhost:6333").rstrip("/")
+                    (os.environ.get(_ENV_QDRANT_URL) or _DEFAULT_QDRANT_URL).rstrip("/")
                 )
 
 

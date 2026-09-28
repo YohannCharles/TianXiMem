@@ -4,7 +4,8 @@
 > 各处文档提到分数时**一律指回这里**，不要复制数字。形状由 [`schema.py`](./schema.py) 定，
 > 每次 run 的原始产出在 `runs/`（**gitignored**）。
 
-**状态：还没有任何结论。** 表里每一行都要等一次真跑——**空表比填了假数的表安全**。
+**状态：已积累多轮结论**（最近一轮：2026-09-27 的 D25 行为保持 A/B）。
+**每一行都要追得到一次真跑**——预算里的数比填了假数的表安全。
 
 ---
 
@@ -523,7 +524,7 @@ conv-30 `0.5139` · conv-41 `0.5515`（B1）；我们对应 `0.7681` / `0.7361` 
 
 ## V13 修复：**并列分数的次序定死**（2026-09-26，3 段 346 题）—— 同一个分数、可复现了
 
-**改了什么**：[`retrieve/fusion.py`](../src/tianxi_am/retrieve/fusion.py) 在名次被 `enumerate`
+**改了什么**：[`retrieve/fusion.py`](../../src/tianxi_am/retrieve/fusion.py) 在名次被 `enumerate`
 定下来**之前**，按 **`(-score, memory_id)`** 排一遍（主键分数降序、次级键 id 升序）。
 分数**只用于排序**，排完照旧丢掉（它仍然不是校准量）。
 
@@ -672,7 +673,7 @@ conv-30 `0.5139` · conv-41 `0.5515`（B1）；我们对应 `0.7681` / `0.7361` 
 
 ## D24 复测：每 Add 独立组合 vs 跨批续接（2026-09-27，**干净 A/B**）—— **没有可测的精度影响**
 
-**背景**：[D24](../docs/decisions.md) 把组合边界从"整个 session"收窄成"一次 Add"，
+**背景**：[D24](../../docs/decisions.md) 把组合边界从"整个 session"收窄成"一次 Add"，
 推翻了 §6.2/§6.5 的字面与 D20 的落点。它必须回答"精度掉了没有"。
 
 ### 干净的背靠背 A/B（同一天、同配置、各自干净库与集合、唯一变量 = 组合规则）
@@ -718,7 +719,7 @@ tie-break 修复（2026-09-26）与若干 harness 提交，而那之前的同配
 
 ## D25：位置改成 `request_id` 派生 + 删同 session 锁（2026-09-27）—— **行为保持，且买到"乱序/并发安全"**
 
-**背景**：[D25](../docs/decisions.md) 把位置从"写时 `MAX(pair_idx)+1`"改成
+**背景**：[D25](../../docs/decisions.md) 把位置从"写时 `MAX(pair_idx)+1`"改成
 "`(chunk_ordinal, local_index)`，`chunk_ordinal` 从 `request_id` 解析"，
 于是位置是**请求的纯函数** ⇒ 删掉了 `SessionLocks`。**代价是每个 point 的 `id` 都变了**
 （`hash(user, session, chunk, local)` ≠ 旧值）⇒ 必须重跑一次干净 A/B。
@@ -793,7 +794,7 @@ tie-break 修复（2026-09-26）与若干 harness 提交，而那之前的同配
 | **B1** | `refind-3conv`（agent 模式） | 我们赢了吗 | ✅ **我们领先 +29.5pt**（0.7948 vs 0.5000，3 段 346 题）——详见上面那节。⚠ 两条保留：它返回的上下文量小一个量级（中位 2 项/2.9k 字符 vs 23 段/58.7k）；它自报的 58.2/93.2 与本行不可比 |
 | **A3** | `smoke-locomo-1`（on） / `a3-off`（off） | 排序值不值（§11 主线） | **开比关高 4.3pt**（0.5217 vs 0.4783，conv-26 的 138 题）；按类看：multi-hop +8.3 · single-hop +4.3 · open-domain +11（n=9）· temporal **0**。代价：单题 100 篇 **5–12s**，**整轮墙钟约 3×**（off 臂 ~10 分钟 vs on 臂 ~30 分钟）。⚠ **单段对话**，待全量确认 |
 | **A4** | `a4a-*` / `a4b-*` | Agentic Search 值不值 | ⬜ 未开始（**两臂都要**，否则分不清"agent 没用"与"Checker 卡太严"） |
-| **T1** | `t1-plain` / `t1-dated` | §11.3 那条约束对不对 | ⬜ 未开始（**两臂必须分集合**，见 [`../experiments/t1_timestamp.py`](../experiments/t1_timestamp.py)） |
+| **T1** | `t1-plain` / `t1-dated` | §11.3 那条约束对不对 | ⬜ **两臂 A/B 未跑**（**必须分集合**，见 [`../experiments/t1_timestamp.py`](../experiments/t1_timestamp.py)）——但**它要回答的问题已有答案**：`t1-dated` 单独跑过，见上面"T1 臂"那节 |
 | **T2** | ——（人工标注，无 run record） | 失败是"找不到"还是"留不下" | ⬜ 未开始（分布落本文件，标注产物在 [`../experiments/`](../experiments/)） |
 | **A0** | `a0-*` | §4 那条核心判断对不对 | ⬜ 未开始（成本≈零，做了不亏） |
 

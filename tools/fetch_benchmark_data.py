@@ -105,7 +105,7 @@ SCRIPTMEM_REV = "22ac7e7e70124280d8af6100262ee7f88fff3436"
 LME_DS = "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve"
 LME_REV = "98d7416c24c778c2fee6e6f3006e7a073259d48f"
 
-# ── 出处：全部逐字节对上（含原先标"出处未核"的那几份）────────────────────
+# ── 出处：全部逐字节对上 ─────────────────────────────────────────────
 CLBENCH_DS = "https://huggingface.co/datasets/tencent/CL-bench/resolve"
 CLBENCH_REV = "b28a5832a09b0d96c0cf4c22e90d7c60ede25b80"
 PM_V1_DS = "https://huggingface.co/datasets/bowen-upenn/PersonaMem-v1/resolve"
@@ -416,6 +416,69 @@ def _download(url: str, dest: Path) -> None:
     tmp.replace(dest)
 
 
+def _process_entry(entry: dict, *, root: Path, fetch: bool, patch: bool) -> bool:
+    """处理清单里的一项，**返回它是否有问题**（= `main` 里那个计数）。
+
+    分支多，但判据只有一条：**这一项最终是否与清单相符**。
+    """
+    path = root / entry["name"]
+    label = f"{entry['name']:<28}"
+    if path.exists() and patch and entry.get("local_patch"):
+        changed, what = apply_local_patch(entry, path)
+        print(f"  {'✎' if changed else '·'} {label} {what}")
+        actual = _sha256(path)
+        if actual != entry["sha256"]:
+            print(f"    ✗ 修订后仍与清单不符（{actual[:16]}…）")
+            return True
+        return False
+    if path.exists():
+        actual = _sha256(path)
+        if actual == entry["sha256"]:
+            marker = "（含本地修订）" if entry.get("local_patch") else ""
+            print(f"  ✓ {label} 一致{marker}")
+            return False
+        hint = ""
+        if entry.get("local_patch"):
+            hint = (
+                f"\n      它是 `local_patch={entry['local_patch']}` 的文件："
+                f"这份哈希是**打完补丁之后**的——对不上就用 `--patch` 重打（或 `--fetch` 重取）"
+            )
+        print(
+            f"  ✗ {label} **哈希不符**（本地 {actual[:16]}… ≠ 清单 {entry['sha256'][:16]}…）{hint}"
+        )
+        return True
+    if entry["url"] and fetch:
+        print(f"  ↓ {label} 取回 {entry['url'].rsplit('/', 1)[0].split('/')[-1]}…")
+        try:
+            _download(entry["url"], path)
+        except (urllib.error.URLError, TimeoutError) as exc:
+            print(f"    ✗ 下载失败：{exc}")
+            return True
+        actual = _sha256(path)
+        expected = entry.get("upstream_sha256", entry["sha256"])
+        if actual != expected:
+            print(f"    ✗ 取回的字节与清单不符（{actual[:16]}…）——上游可能被改过，**别用这份**")
+            return True
+        if entry.get("local_patch"):
+            changed, what = apply_local_patch(entry, path)
+            actual = _sha256(path)
+            if actual != entry["sha256"]:
+                print(f"    ✗ 修订后哈希不符（{actual[:16]}…）")
+                return True
+            print(f"    ✓ 取回 + {what}，与清单一致")
+            return False
+        print("    ✓ 取回并校验通过")
+        return False
+    if entry["url"]:
+        print(f"  · {label} 缺失（`--fetch` 可取回）")
+        return True
+    what = (
+        "取不回来（原始 URL 已失效）" if entry["tier"] == "archive-only" else "出处未核，无法取回"
+    )
+    print(f"  ? {label} {what}——需人工拷贝")
+    return entry["tier"] != "archive-only"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--fetch", action="store_true", help="取回缺失或不符的（默认只校验）")
@@ -446,72 +509,8 @@ def main() -> int:
     wanted = [e for e in MANIFEST if args.tier == "all" or e["tier"] == "required"]
     bad = 0
     for entry in wanted:
-        path = root / entry["name"]
-        label = f"{entry['name']:<28}"
-        if path.exists() and args.patch and entry.get("local_patch"):
-            changed, what = apply_local_patch(entry, path)
-            print(f"  {'✎' if changed else '·'} {label} {what}")
-            actual = _sha256(path)
-            if actual != entry["sha256"]:
-                print(f"    ✗ 修订后仍与清单不符（{actual[:16]}…）")
-                bad += 1
-            continue
-        if path.exists():
-            actual = _sha256(path)
-            if actual == entry["sha256"]:
-                marker = "（含本地修订）" if entry.get("local_patch") else ""
-                print(f"  ✓ {label} 一致{marker}")
-                continue
-            hint = ""
-            if entry.get("local_patch"):
-                hint = (
-                    f"\n      它是 `local_patch={entry['local_patch']}` 的文件："
-                    f"这份哈希是**打完补丁之后**的——对不上就用 `--patch` 重打（或 `--fetch` 重取）"
-                )
-            print(
-                f"  ✗ {label} **哈希不符**"
-                f"（本地 {actual[:16]}… ≠ 清单 {entry['sha256'][:16]}…）{hint}"
-            )
-        elif entry["url"] and args.fetch:
-            print(f"  ↓ {label} 取回 {entry['url'].rsplit('/', 1)[0].split('/')[-1]}…")
-            try:
-                _download(entry["url"], path)
-            except (urllib.error.URLError, TimeoutError) as exc:
-                print(f"    ✗ 下载失败：{exc}")
-                bad += 1
-                continue
-            actual = _sha256(path)
-            expected = entry.get("upstream_sha256", entry["sha256"])
-            if actual != expected:
-                print(f"    ✗ 取回的字节与清单不符（{actual[:16]}…）——上游可能被改过，**别用这份**")
-                bad += 1
-                continue
-            if entry.get("local_patch"):
-                changed, what = apply_local_patch(entry, path)
-                actual = _sha256(path)
-                if actual != entry["sha256"]:
-                    print(f"    ✗ 修订后哈希不符（{actual[:16]}…）")
-                    bad += 1
-                    continue
-                print(f"    ✓ 取回 + {what}，与清单一致")
-                continue
-            print("    ✓ 取回并校验通过")
-            continue
-        elif entry["url"]:
-            print(f"  · {label} 缺失（`--fetch` 可取回）")
+        if _process_entry(entry, root=root, fetch=args.fetch, patch=args.patch):
             bad += 1
-            continue
-        else:
-            what = (
-                "取不回来（原始 URL 已失效）"
-                if entry["tier"] == "archive-only"
-                else "出处未核，无法取回"
-            )
-            print(f"  ? {label} {what}——需人工拷贝")
-            if entry["tier"] != "archive-only":
-                bad += 1
-            continue
-        bad += 1
 
     print()
     if bad:

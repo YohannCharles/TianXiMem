@@ -83,8 +83,8 @@ class RunRecord:
     breakdown: dict[str, Any] = field(default_factory=dict)
     #: §14 的四个指标。**只留会触发动作的**——"看着有信息量但不改变下一步动作"的不记。
     metrics: dict[str, Any] = field(default_factory=dict)
-    #: §6.5 的三个计数器。**D24（2026-09-27）起这个量已不存在**（`pending` 概念被取消，
-    #: 发射端 `pairing/instrument.py` 已删除）⇒ 新记录的四个字段**恒为 `None`**。
+    #: §6.5 的三个计数器。**D24（2026-09-27）起这个量不存在**（`pending` 概念被取消）
+    #: ⇒ 新记录的四个字段**恒为 `None`**。
     #: 字段保留是为了**旧 run record 还读得回来**；校验也跟着保留，只是理由变了。
     counters: dict[str, Any] = field(default_factory=dict)
     #: 第 4/7 维的**机制证据在哪**（§3.2 要求显式回应，代理分数回应不了这两维）。

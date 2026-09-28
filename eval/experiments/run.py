@@ -36,7 +36,6 @@ uv run python eval/experiments/run.py --dataset longmemeval-s --limit 3 --skip-i
 `applied_batches` 的批次级幂等守卫会命中（§6.5）。但**换过渲染模板/配对规则后不行**
 ——`applied_batches` 会**直接放行而不改写**（同一 `request_id` 已应用过），
 于是你测的是**旧语料 + 新代码**，**静默**。⇒ 改了模板/配对规则就必须换干净的库与集合。
-（D25 之前这里的理由是"`pair_idx` 读-改-写会落到新位置"，那条已随 D25 消失；**结论没变**。）
 """
 
 from __future__ import annotations
@@ -307,8 +306,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=DATE_MODES,
         default="none",
         help=(
-            "注入时怎么带日期：none（默认）/ per-item（每条前缀）/ header（再在顶部写明）"
-            " / annotate（把句子里的相对表达就地注解成绝对日期——见 eval/harness/annotate.py）"
+            "注入时怎么带日期。**逐档的口径与实测结论写在 `harness/judge.py` 的 `DATE_MODES` 上**"
+            "（本处不复制一份，免得漂移）；默认 none，`annotate` 是目前最好的一档"
         ),
     )
     parser.add_argument(
@@ -350,6 +349,81 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _exit_for_error(error: Exception, *, base_url: str) -> int:
+    """把"跑一轮"里的三类失败映射成**退出码 + 一句可照做的提示**。
+
+    ⚠ **三类必须分开，混为一谈会把人引向错误的动作**：
+
+    | 类 | 含义 | 提示什么 |
+    | --- | --- | --- |
+    | `502/503/504` | 有的机器上意味着**服务根本没起**（WSL + Docker 把死端口接成 502） | 起服务 |
+    | 其余 5xx | **服务在跑，是这一步真的失败了**（比如网关抖了一下） | 看服务端日志 |
+    | 4xx | 服务在跑、但拒绝了我们的请求 ⇒ **runner 自己的 bug**，不是前置条件 | 改 runner |
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        if status in (502, 503, 504):
+            print(_unreachable_hint(base_url, error), file=sys.stderr)
+            return EXIT_PRECONDITION_FAILED
+        if status < 500:
+            print(f"服务拒绝了请求（{status}）：{error}", file=sys.stderr)
+            return EXIT_FAILED
+        body = (error.response.text or "").strip()[:400]
+        print(
+            f"服务内部错误（{status}）——**服务在跑，是这一步失败了**（看服务端日志）：\n"
+            f"  {error}\n  {body}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILED
+    if isinstance(error, httpx.TransportError):
+        print(_unreachable_hint(base_url, error), file=sys.stderr)
+        return EXIT_PRECONDITION_FAILED
+    # 剩下的只可能是 FileNotFoundError（调用点的 except 元组钉着）
+    print(
+        f"归档里缺文件：{error}\n先 `make fetch-data`（见 docs/benchmark-data.md）",
+        file=sys.stderr,
+    )
+    return EXIT_PRECONDITION_FAILED
+
+
+def _assemble_record(args, *, run_id: str, bench_dir: Path, samples, results, note: str):
+    """把这一轮的**配置指纹 + 数据指纹 + 结果**装成 run record（§13）。"""
+    return build_record(
+        run_id=run_id,
+        step=args.step,
+        profile=args.profile,
+        bench_dir=bench_dir,
+        samples=samples,
+        results=results,
+        data_fingerprint=data_fingerprint(
+            bench_dir,
+            args.dataset,
+            n_samples=len(samples),
+            n_questions=_count_questions(samples),
+            note=note,
+        ),
+        models=models_fingerprint(
+            embedder=args.embedder,
+            llm=args.llm or _default_llm(),
+            reranker=args.reranker,
+        ),
+        switches=_parse_switches(args.switches),
+        configs_dir=Path(args.configs_dir),
+        notes=args.notes,
+    )
+
+
+def _print_result(record, path: Path) -> None:
+    print(
+        f"\n{record.run_id}：overall={record.scores['overall']}"
+        f"（n={record.breakdown.get('abstention', {}).get('n', 0)} 道拒答另计）"
+    )
+    for category, entry in record.breakdown.items():
+        print(f"  {category}: {entry}")
+    print(f"\nrun record → {path}")
+    print("⚠ 数字只有 eval/reports/ 一个家：结论写进 ledger.md，不要复制别处。")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     bench_dir = benchmark_dir()
@@ -385,69 +459,13 @@ def main(argv: list[str] | None = None) -> int:
             spread=args.spread,
             fallback_base_url=args.fallback_base_url,
         )
-    except httpx.HTTPStatusError as error:
-        status = error.response.status_code
-        # ⚠ **502/503/504 与其余 5xx 是两件事**：前者在有的机器上意味着"服务根本没起"
-        #   （WSL + Docker Desktop 的转发把死端口接成 502），后者是**服务在跑、这一步真的失败了**
-        #   ——比如网关抖了一下。混为一谈会让人跑去重启一个好端端的服务。
-        if status in (502, 503, 504):
-            print(_unreachable_hint(args.base_url, error), file=sys.stderr)
-            return EXIT_PRECONDITION_FAILED
-        if status < 500:
-            # 4xx = 服务在跑、但拒绝了我们的请求 ⇒ **runner 自己的 bug**，不是前置条件。
-            print(f"服务拒绝了请求（{status}）：{error}", file=sys.stderr)
-            return EXIT_FAILED
-        body = (error.response.text or "").strip()[:400]
-        print(
-            f"服务内部错误（{status}）——**服务在跑，是这一步失败了**（看服务端日志）：\n"
-            f"  {error}\n  {body}",
-            file=sys.stderr,
-        )
-        return EXIT_FAILED
-    except httpx.TransportError as error:
-        print(_unreachable_hint(args.base_url, error), file=sys.stderr)
-        return EXIT_PRECONDITION_FAILED
-    except FileNotFoundError as error:
-        print(
-            f"归档里缺文件：{error}\n先 `make fetch-data`（见 docs/benchmark-data.md）",
-            file=sys.stderr,
-        )
-        return EXIT_PRECONDITION_FAILED
+    except (httpx.HTTPStatusError, httpx.TransportError, FileNotFoundError) as error:
+        return _exit_for_error(error, base_url=args.base_url)
 
-    record = build_record(
-        run_id=run_id,
-        step=args.step,
-        profile=args.profile,
-        bench_dir=bench_dir,
-        samples=samples,
-        results=results,
-        data_fingerprint=data_fingerprint(
-            bench_dir,
-            args.dataset,
-            n_samples=len(samples),
-            n_questions=_count_questions(samples),
-            note=note,
-        ),
-        models=models_fingerprint(
-            embedder=args.embedder,
-            llm=args.llm or _default_llm(),
-            reranker=args.reranker,
-        ),
-        switches=_parse_switches(args.switches),
-        configs_dir=Path(args.configs_dir),
-        notes=args.notes,
+    record = _assemble_record(
+        args, run_id=run_id, bench_dir=bench_dir, samples=samples, results=results, note=note
     )
-    path = write_record(record, reports_dir)
-
-    overall = record.scores["overall"]
-    print(
-        f"\n{run_id}：overall={overall}"
-        f"（n={record.breakdown.get('abstention', {}).get('n', 0)} 道拒答另计）"
-    )
-    for category, entry in record.breakdown.items():
-        print(f"  {category}: {entry}")
-    print(f"\nrun record → {path}")
-    print("⚠ 数字只有 eval/reports/ 一个家：结论写进 ledger.md，不要复制别处。")
+    _print_result(record, write_record(record, reports_dir))
     return EXIT_OK
 
 

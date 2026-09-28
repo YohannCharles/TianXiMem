@@ -42,6 +42,7 @@ from tianxi_am.store.qdrant_store import (
     BM25_MODEL,
     KEY_MEMORY_ID,
     KEY_SESSION_ID,
+    KEY_USER_ID,
     SPARSE_VECTOR,
     QdrantStore,
 )
@@ -83,7 +84,7 @@ def bm25_rankings(
         limit=depth,
         query_filter=models.Filter(
             must=[
-                models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id)),
+                models.FieldCondition(key=KEY_USER_ID, match=models.MatchValue(value=user_id)),
             ]
         ),
         with_payload=[KEY_MEMORY_ID, KEY_SESSION_ID],
@@ -106,10 +107,10 @@ def dump(*, collection: str, out_path: Path, depth: int, bench_dir: Path) -> int
         return EXIT_FAILED
 
     config = load_config()
+    # 与 `service/app.py` 的装配一致：本机 Qdrant 不带鉴权，**不传 `api_key`**。
     store = QdrantStore(
         url=config.storage.qdrant.url,
         collection=collection,
-        api_key=config.storage.qdrant.api_key,
     )
     if not store.exists():
         print(

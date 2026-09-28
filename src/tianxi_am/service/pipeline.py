@@ -50,7 +50,7 @@ canonical AddRequest
 `ApplyBatchResult.applied` 在**守卫命中时是 `False`**（`apply_batch` 里那行早返回），
 所以重放时拿不到"本批写了哪些行"。**但修复不需要那个列表**：`user_id` / `session_id`
 就在请求里，`fetch_session_ordered(conn, user_id, session_id)` 能拿到该 session
-的全部块（D25 之前是"按 `pair_idx` 取一段"，现在是"取整段"），于是：
+的全部块（**取整段**，不做整数区间的窗口查询），于是：
 
 * `point_id` 是位置派生的纯函数 ⇒ 同一对永远是同一个 point
 * `upsert` 幂等 ⇒ 已经写对的会被原样覆盖
@@ -100,8 +100,6 @@ class AddOutcome:
     """False = 幂等守卫命中（本批此前已应用过）。"""
 
     new_pair_count: int
-    indexed: int
-    """本次写进 Qdrant 的 point 数。"""
 
     repaired: bool
     """是否走了"按 session 幂等重建"的修复路径（即这是一次重试）。"""
@@ -130,12 +128,12 @@ class AddPipeline:
         self._inject_abs_time = inject_abs_time
 
     def apply(self, batch: AddBatch) -> AddOutcome:
-        """应用一批。**D25 起不再持 session 锁**。
+        """应用一批。**不持 session 锁**。
 
-        ⚠ **为什么现在可以并发**：位置 = `(chunk_ordinal, local_index)`，**两者都是请求的
+        ⚠ **为什么可以并发**：位置 = `(chunk_ordinal, local_index)`，**两者都是请求的
         纯函数** ⇒ 同一 session 的两个批次触碰**互不相交**的位置，不会撞 `UNIQUE`；
         而"已提交、Qdrant 还没写完"那个窗口对并发方也安全（各自的 `id` 不同，
-        重试走 per-id 幂等 upsert）。**旧的 `SessionLocks` 已删**（见 D25）。
+        重试走 per-id 幂等 upsert）。
 
         ⚠ **任何一步失败都直接抛**：SQLite 未提交 ⇒ 整批可重试；
         SQLite 已提交而 Qdrant 失败 ⇒ 抛出去（客户端重试时会走修复路径）。
@@ -145,19 +143,16 @@ class AddPipeline:
             self._store, batch, chunk_ordinal_pattern=self._chunk_ordinal_pattern
         )
         pairs, repaired = self._pairs_to_index(batch, result)
-        indexed = (
+        # ⚠ **这一步有副作用**（真的写 Qdrant），不是"算一个计数"——别因为它没有返回值就删掉。
+        if pairs:
             self._qdrant.index_pairs(
                 pairs,
                 self._embedder,
                 renderer=partial(render_pair, inject_abs_time=self._inject_abs_time),
             )
-            if pairs
-            else 0
-        )
         return AddOutcome(
             applied=result.applied,
             new_pair_count=result.new_pair_count,
-            indexed=indexed,
             repaired=repaired,
         )
 
@@ -203,7 +198,7 @@ class SearchPipeline:
     ③ Evidence Checker（v1 恒"充足"）   每轮判定都记账（D13）
     ④ rerank（**恰好一次**）            `RemoteReranker`；不可用 ⇒ 降级回 RRF 顺序（D12）
     ⑤ Neighbor Expansion               全部候选保留；只对前 N 条扩 ±radius
-    ⑥ Context Segment Merge            连续 pair_idx 合成段（段内会话序，段间 best_rank 序）
+    ⑥ Context Segment Merge            连续块（`seq`）合成段（段内会话序，段间 best_rank 序）
     ⑦ Token Budget + Final Packaging   段是原子单位；`<= top_k` 的计数在这里收口
     ```
 

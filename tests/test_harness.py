@@ -384,8 +384,8 @@ def test_build_record_validates_and_states_why_dimensions_are_empty(tmp_path):
     assert all(record.scores[d] is None for d in DIMENSIONS)
     # **空值必须带理由**——否则与"跑了但没分"无法区分（§3.2）
     assert record.scores["by_dimension_note"].startswith("代理评测的七个维度子分")
-    # ⚠ D24 起这个量已不存在 ⇒ 理由从"聚合端未实现"变成"概念已取消"，
-    #   但**仍然必须显式说明**：`None` 不能光秃秃地出现（否则读的人以为是漏填）。
+    # ⚠ 这个量**已不存在**（D24）⇒ `None` 必须**显式说明**理由，
+    #   否则读的人会以为是漏填。
     assert "D24" in record.counters["note"]
     assert record.counters["pending_orphaned_real"] is None
     # 第 4/7 维的证据指向机制与单测，不是一个编出来的数

@@ -32,16 +32,14 @@ logger = logging.getLogger(__name__)
 class RetryableError(RuntimeError):
     """暂时性失败——**客户端重试是对的**（例如依赖短暂不可用）。
 
-    ⚠ D25 起不再有"同 session 正忙"这一路来源（`SessionLocks` 已删），
-    但 embedding / Qdrant 的短暂故障仍在 ⇒ 这个基类与它的 5xx 映射照留。
+    来源是 embedding / Qdrant 的短暂故障 ⇒ 这个基类与它的 5xx 映射照留。
     """
 
 
 def register_error_handlers(app: FastAPI) -> None:
     """把可重试失败与未处理异常映射成明确的 5xx，并**记日志**。
 
-    ⚠ D25 删掉了 `SessionLockTimeout` 那个 handler（连同 `SessionLocks`）——
-    **但"非 200 一律按可重试处理"这条契约没变**，下面两个 handler 是它的落点。
+    ⚠ **"非 200 一律按可重试处理"这条契约的落点就是下面两个 handler**。
     """
 
     @app.exception_handler(RetryableError)

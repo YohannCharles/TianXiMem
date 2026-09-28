@@ -10,10 +10,10 @@
 
 | 阶段 | 交付 | 状态 |
 | ---- | ---- | ---- |
-| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | 🟡 加载层 + harness + 契约预检 + `experiments/run.py` 已就位；**还没真跑过一轮** |
+| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | 🟡 加载层 + harness + 契约预检 + `experiments/run.py` 已就位，**链路已跑通多轮**；剩 S1–S3 三个真-Smoke 探针 |
 | Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） | 🟡 `src/` 已落；**T2 脚手架就位、人工标注未做** |
 | Step 2 | **Neighbor Expansion + 双预算截断** | ✅ 已完成 |
-| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 rerank 已接 + 打包已落地 + 渲染模板定稿；**T1 脚手架就位、两臂未跑** |
+| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 rerank 已接 + 打包已落地 + 渲染模板定稿；**T1 的问题已回答**（`t1-dated` 0.633），**干净的两臂 A/B 未跑** |
 | Step 4 | Conditional Agentic Search | ⬜ |
 | **Step 5** | **切换到提交模型**，重标定全部阈值，重跑 T2 | ⬜ |
 | Step 6 | 对照实验（§13）+ Smoke 验证 + Full 定稿 | ⬜ |
@@ -77,7 +77,7 @@
       - **答案字段名以 pipeline 代码为准**：规范字段是 **`generated_answer`**（CL-Bench 写 `model_output`）。**readme 写的 `predicted_answer` / `hypothesis` 没有 pipeline 读**
 - [x] **LongMemEval 用 `lme_s_cleaned.json`**（加载器只认这一个文件名），**不要用 `lme_test.json`**——`test` 有 1,230 个 0-turn session，`s_cleaned` 有 0 个。**空 session 会污染按"20 条消息"切批的埋点逻辑**（§6.5）
 - [x] **给 LongMemEval 合成 per-message `timestamp`**（`longmemeval._sessions`）——它的 turn **只有 `role`+`content`**，时间在 **session 级**的 `haystack_dates` 里。不合成则 `event_time` 全 NULL、`created_at` 只能发 `""`
-      > **副作用是有价值的**：同一 session 内所有消息拿到同一日期 ⇒ **实证了 §6.1 的判断**——`event_time` 保证不了 session 内顺序，**位置才是唯一能保证邻域稳定的东西**（当时是 `pair_idx`，**D25 起是读时稠密序 `seq`**）
+      > **副作用是有价值的**：同一 session 内所有消息拿到同一日期 ⇒ **实证了 §6.1 的判断**——`event_time` 保证不了 session 内顺序，**位置才是唯一能保证邻域稳定的东西**（D25 起 = 读时稠密序 `seq`）
 - [x] **切批模拟**：本地只能按 20 条复现词数那一路（§12.3 第 5 条）——[`../eval/harness/batching.py`](../eval/harness/batching.py)
       **量级已测（全量两份数据）**：LoCoMo 单条消息**最长 87 词**（中位 20），**从不触到 2,000 词上限** ⇒ 两条路径在它上面**完全重合**；
       LongMemEval 中位 75 / 均值 159 / **最长 11,661 词**，**60 条消息超 2,000 词**，且**40%（9,528/23,867）的 session 首批是被词数上限切开的**。
@@ -110,7 +110,6 @@
 - [ ] **跑 T2 实验**（§13，半天工作量）：133 道 multi-session 题（12 道拒答题单列）人工分三类
       🟡 **脚手架已就位**：`make t2-dump` 出待填表（纯 BM25 直查 Qdrant），**人填 `label`**，`make t2` 汇总分布与判读。
       **这一项没做完就等于没做**——表填不完，结论不许出（半张表的分布看起来像个结果）
-- [x] ~~三个 `pending` 计数器埋点（§6.5）~~ ⛔ **D24（2026-09-27）取消了 `pending` 概念** ⇒ 发射端 `pairing/instrument.py` 已删除，这一项**不再需要**
 
 ### 独立后续切片：Checker 的两路分离查询（**已登记，未实现；不阻塞 Step 1**）
 
@@ -129,7 +128,7 @@
 - [x] Neighbor Expansion：种子 `neighbor.expansion_seed_limit`（**v1 取 30**，PRD §10 的 20 只是示例算术）、窗口 `radius = ±1`（§10）
 - [x] **全部 rerank 候选一条不删**，只对前 N 条扩窗；新扩出来的邻居 `rerank_rank = None`
 - [x] 同 `(user_id, session_id)` 才扩；**禁止跨 session**
-- [x] **Context Segment Merge**：连续 `pair_idx` 合成段，段内会话序、段间 `best_rank` 序（§11.2）——**D25 后判据改读时稠密序 `seq`**，顺序 ingest 下与旧行为逐字相同
+- [x] **Context Segment Merge**：连续块合成段，段内会话序、段间 `best_rank` 序（§11.2）——连续性判据 = **读时稠密序 `seq`**（D25）
 - [x] 双预算截断：**段数（`top_k`）+ token 数**（§6.4）——段是**原子单位**，装不下就停
 - [x] `common/tokens.py`：`o200k_base` 计数，对**最终拼好的字符串**数
 - [x] `rank/reranker.py` 的**接缝**（协议 + 降级）——远端实现已接，见 Step 3
@@ -148,12 +147,12 @@
       **线格式是实测的**（`top_n` 会静默截断、`model` 被忽略、响应按分数降序——三条都写在该文件顶部）。
       连通性与"它在链上真的起作用"用 `make probe-reranker` 验（真网关，**不消耗 Smoke 配额**）。
       ⚠ 端点**部署**仍不在本项目范围内（D12）；端点挂了 ⇒ 降级回 RRF 顺序并记 `rerank_degraded`。
-- [x] **渲染模板定稿为 `v1`**：`Q: {q}` / `A: {a}`，**正文不含任何绝对时间戳**（§11.3）。
+- [x] **渲染模板定稿为 `v1`**：`Q: {q}` / `A: {a}`，**正文带日粒度日期锚点**（D21，见下一条）。
       声明处是 [`../src/tianxi_am/rank/CLAUDE.md`](../src/tianxi_am/rank/CLAUDE.md) §4；实现是 [`../src/tianxi_am/common/render.py`](../src/tianxi_am/common/render.py)。
       ⚠ **「定稿」不等于「不可推翻」**：推翻它要付「重建索引」的钱，而 T1 就是那笔钱的用途
 - [x] **跑 T1 实验**（§13），与 `created_at` 粒度那条同批测（§11.3）—— ✅ **2026-09-25 已跑**
       结论：日期写**段首**无效、写**每一对旁边**有效（multi-hop +8.9pt / temporal +3.5pt，整体 0.601 → **0.633**）
-      ⇒ **`packaging.inject_abs_time` 默认改为 `true`**（**D21**，推翻 §11.3 的「不加」），代价是**索引重建**（`tools/reindex.py`）。
+      ⇒ **`packaging.inject_abs_time` 默认为 `true`**（**D21**），代价是**索引重建**（`tools/reindex.py`）。
       明细见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)；两臂快照 `configs/runs/t1-{plain,dated}/`
       （`make t1`：不加参数只打印计划，`--freeze` 冻结、`--execute` 开跑、`--compare` 比结果）
 - [x] `created_at` 只给日粒度；`event_time` 为 NULL 时发 `""`（§11.3）——固定 UTC，无旋钮
@@ -199,5 +198,5 @@
 
 | 项 | 说明 |
 | --- | --- |
-| ~~**B1 包装 ReFind**~~ | ✅ **已估（2026-09-26）：不用包装**——ReFind 自带 AML 兼容的 `/add` `/search` ⇒ 起它、把 `--base-url` 指过去即可。**剩余成本是它的 agentic 检索**（每 query ≈ 6 秒） |
+| **B1 包装 ReFind** | ✅ **不用包装**——ReFind 自带 AML 兼容的 `/add` `/search` ⇒ 起它、把 `--base-url` 指过去即可。**实际成本是它的 agentic 检索**（每 query ≈ 6 秒） |
 | **Step 0 的 schema 预处理层** | 数据集与 pipeline 之间存在落差，**不是"读个 JSON 就能跑"**（§12.3 第 9 条） |

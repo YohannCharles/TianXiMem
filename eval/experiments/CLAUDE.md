@@ -6,11 +6,17 @@
 
 ```text
 run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告      ✅
-t1_timestamp.py       T1 时间戳前缀 带/不带（两臂冻结快照）        ✅（**两臂未跑**）
+arms.py           两臂脚手架的**唯一实现**：冻结快照 / 核对 / 驱动 / 比较  ✅
+t1_timestamp.py       T1 时间戳前缀 带/不带（两臂冻结快照）        ✅ 问题已答（`t1-dated` 0.633）；**干净的两臂 A/B 未跑**
 t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）  🟡 汇总半边已就位；标注待人工
 a3_rerank.py          A3 Rerank 开/关                            ✅（首组对照见 ../reports/ledger.md）
 a4_agent.py           A4a 门控 / A4b always-on                    ⬜（v1 没有 agent，见 D13）
 ```
+
+> **加一个新对照 = 加一个 arm 脚本，不用碰脚手架**：定义一条 `arms.Arm` 子类
+> （字段 + `overrides()` + `switches()`）、一个 `arms.Spec`（标签、快照头部那句人话、
+> CLI 文字），再 `ARMS = (...)`。**`verify()` 的判据从 `overrides()` 现算**，
+> 所以"这个臂该改什么"与"怎么核对它"不可能漂移——那正是这条检查要防的东西。
 
 **跑一轮**（runner 打 HTTP，服务得先起着）：
 

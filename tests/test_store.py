@@ -151,10 +151,9 @@ def test_session_ordered_returns_the_whole_session_in_order(store: SqliteStore) 
 def test_session_ordered_seq_is_dense_even_when_chunk_ordinals_have_holes(
     store: SqliteStore,
 ) -> None:
-    """**chunk 序号跳号不破坏 `seq` 的稠密性**——这是 D25 让"缺号不断相邻"成立的地方。
+    """**chunk 序号跳号不破坏 `seq` 的稠密性**——这是"缺号不断相邻"成立的地方。
 
-    旧的整数口径下，`pair_idx` 有空洞意味着邻域**静默消失**；现在空洞只出现在
-    `chunk_ordinal` 上，而相邻性看的是现算的 `seq`（必然 0..n-1 连续）。
+    空洞只出现在 `chunk_ordinal` 上，而相邻性看的是现算的 `seq`（必然 0..n-1 连续）。
     """
     _seed(store, [(i, f"Q{i}", None) for i in (0, 1, 7, 8)])
 
@@ -384,9 +383,9 @@ def test_concurrent_write_transactions_across_sessions(store: SqliteStore) -> No
     断言四件事：无异常（含 `database is locked` / `cannot start a transaction within
     a transaction`）· 无数据丢失 · **每个 session 内位置与写的内容一一对上** · session 之间无污染。
 
-    ⚠ D25 之后**没有"分配位置"这一步**了：位置由调用方给定（这里用 `i` 当 `chunk_ordinal`）。
-    这条用例测的东西因此**变窄了**——它现在只测"并发写事务在 SQLite 处排队而不是失败"，
-    不再测"读-改-写有没有被插进来"（那个问题连同 `next_pair_idx` 一起消失了）。
+    ⚠ **位置由调用方给定**（这里用 `i` 当 `chunk_ordinal`），所以这条用例测的是
+    "并发写事务在 SQLite 处排队而不是失败"——**不测"读-改-写有没有被插进来"**
+    （那需要一个"分配位置"的步骤，而它不存在）。
     """
     n_sessions = 6
     rounds = 3
@@ -435,10 +434,10 @@ def test_same_session_concurrent_writers_do_not_collide(store: SqliteStore) -> N
     与上一条的分工：那一条的线程**各写各的 session**（UNIQUE 键各不相同），
     它证明不了"同 session 并发是安全的"。这一条才是。
 
-    **D25 之前**这条必须靠应用层的 `SessionLocks` 串行化，因为位置是 `MAX+1` 读-改-写；
-    **D25 之后**位置由调用方给定（`(chunk, local)`），所以：
+    **位置由调用方给定**（`(chunk, local)`），所以：
 
-    * 每一批写**自己的**位置 ⇒ 不撞 `UNIQUE`；
+    * 每一批写**自己的**位置 ⇒ 不撞 `UNIQUE`；（若位置来自"读当前最大值再 +1"，
+      这里就必须靠应用层串行化——而那个步骤不存在。）
     * 也不再需要 `BEGIN IMMEDIATE` 来挡"两个事务读到同一个 MAX"——那是**位置**的问题，
       而位置的读-改-写已经没有了。
 

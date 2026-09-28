@@ -21,10 +21,9 @@
 uvicorn tianxi_am.service.app:create_app_from_env --factory --workers 1
 ```
 
-**必须 `--workers 1`**（§15）：⚠ **D25 之后原因变了**——"进程内锁会静默失效"那条不再成立
-（`SessionLocks` 已删，位置是请求的纯函数）。保留它是因为**放开多 worker 需要的验证没做过**
+**必须 `--workers 1`**（§15）：**放开多 worker 需要的验证没做过**
 （并发写压力、`busy_timeout` 争用、多进程各自的 Qdrant 客户端）
-——**别用"反正现在安全了"当理由去掉它**。
+——**别用"位置已经是请求的纯函数了"当理由去掉它**。
 `assert_single_process()` 拦下配置与命令行两条路上的违规（`common/config.py`）。
 
 刻意**没有**模块级 `app = ...`：那会让"导入本模块"就要求环境变量齐备，测试没法只导入
@@ -246,10 +245,9 @@ def create_app(services: Services) -> FastAPI:
 def create_app_from_env() -> FastAPI:
     """`uvicorn --factory` 的入口：**校验进程形态** → 读配置 → 装配 → 建 app。
 
-    ⚠ `assert_single_process()` 保留（D25 之后它守的是**别的东西**）：位置分配已不再
-    依赖进程内状态，但 `--workers N` 仍然是 **§15 的偏离**，而多进程会各自持一个
+    ⚠ `assert_single_process()` 守的是：`--workers N` 是 **§15 的偏离**，而多进程会各自持一个
     SQLite 连接池、把 `busy_timeout` 的争用放大。⇒ 放开 worker 是**单列的后续**，
-    不在 D25 范围内；在那之前这道守卫不许绕。
+    **在那之前这道守卫不许绕**。
     """
     assert_single_process()
     return create_app(build_services(load_config()))

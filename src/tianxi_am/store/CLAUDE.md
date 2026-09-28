@@ -65,8 +65,8 @@ applied_batches(
 )
 ```
 
-> ⚠ **`pair_idx` 已被 D25 拆成 `chunk_ordinal` + `local_index`**。
-> **相邻性不再由它们表达**（chunk 序号可以跳号），而由一条读时现算的稠密序：
+> ⚠ **位置列是 `chunk_ordinal` + `local_index`**，而**相邻性不由它们表达**
+> （chunk 序号可以跳号），由一条读时现算的稠密序：
 > `ROW_NUMBER() OVER (PARTITION BY user_id, session_id ORDER BY chunk_ordinal, local_index) - 1`。
 > ⚠ `ROW_NUMBER()` 是 **1-based**，**必须减 1**——忘了会在该列上混基，直接破坏相邻判定。
 > 落点：`sqlite_store._SEQ_COLUMN`，入口 `fetch_session_ordered()`。
@@ -86,7 +86,7 @@ applied_batches(
 | # | 不变式 | 为什么 |
 | --- | --- | --- |
 | **1** | `id` **位置派生** `hash(user_id, session_id, chunk_ordinal, local_index)`（D25） | 用内容哈希会在内容变时变 `id`，留下**孤儿 point** |
-| **2** | ~~`pair_idx` **session 内连续**~~ ⛔ **D25 已作废** → 邻域由**读时稠密序** `seq` 现算 | 旧理由（有空洞则邻域**静默消失**）已随 `pair_idx` 一起消失：chunk 跳号不再破坏相邻，而"中间真的少了一块"仍被抓住。✅ **旧理由里仍然成立的那半条**：`event_time` 保证不了 session 内顺序 ⇒ 稠密序必须**按位置**算，不能按时间 |
+| **2** | 邻域由**读时稠密序** `seq` 现算（D25）：chunk 序号跳号**不破坏相邻**，而"中间真的少了一块"仍被抓住 | `event_time` 保证不了 session 内顺序 ⇒ 稠密序必须**按位置**算，**不能按时间** |
 | **3** | `applied_batches` **只增不改**，应用成功时**在同一事务里插入** | AML 重试是**正常行为**；没有它，正常重试就得靠撞 `UNIQUE` 兜（D25 之后撞得响，但那会把重试变成 500） |
 | **4** | `UNIQUE(user_id, session_id, chunk_ordinal, local_index)` **既保唯一、又是 `ORDER BY` 的键** | 唯一性防同一位置被写两次；`ORDER BY` 决定 `seq`，进而决定**谁跟谁相邻** |
 | **5** | 缓存键 = **渲染后文本的哈希**（实现在 [`../embed/`](../embed/)） | **不能用 `id`**——同一位置的内容若变了而 `id` 不变，用 `id` 会拿到**陈旧向量** |
@@ -96,15 +96,14 @@ applied_batches(
 **幂等一律查 `applied_batches`**——`qa_pairs.request_id` **不承担幂等职责**（§6.1）。它记的是"哪一批写下了这一行"，而守卫要回答的是"这批被应用过吗"——两件事。旁表是唯一记着后者的地方，还带着 `user_id` / `session_id` / `applied_at`。
 
 **位置不能与既有行撞车**：`id` 是位置派生的，而写入是 upsert ⇒ **同一位置被写两次会静默覆盖**。
-⚠ **D25 之后这条的含义变了**：位置不再是"服务端从 0 起的计数器"（那个"重开"的动作已经不存在），
-而是**请求里带来的 `(chunk_ordinal, local_index)`**——所以真正的风险变成
+位置是**请求里带来的** `(chunk_ordinal, local_index)`（D25）——所以风险是
 **"两个不同的 Add 声称同一个 chunk 序号"**（重复投递一批、或平台侧序号错乱）。
 那种情况下 UPSERT 会覆盖，**而 `applied_batches` 只能挡住完全相同的 `request_id`**。
-⚠ **D24 之后这条依旧成立，而且更容易被误读**：组合的边界是**一次 Add**，位置的作用域仍是**整个 session**——两者不是一回事。
+⚠ **容易误读的一点**：组合的边界是**一次 Add**（D24），位置的作用域仍是**整个 session**——两者不是一回事。
 
-> **D24（2026-09-27）之后 `status` 恒为 `'complete'`**：块在写下那一刻就是最终形状，
+> **`status` 恒为 `'complete'`**（D24）：块在写下那一刻就是最终形状，
 > 没有 pending、没有 repair、**没有任何后台任务会回头改这些行**。`'pending'` 仍在取值域里
-> 只是因为按旧规则写过的库还能读。⇒ 下面那节"补全 pending 对"描述的流程**已不存在**。
+> 只是为了让**按旧规则写过的库**还能读回来。
 
 ---
 
@@ -124,9 +123,9 @@ applied_batches(
 
 > **但这一切的前提是 `BEGIN IMMEDIATE`**（已实测）：默认的 `BEGIN` 会让两条并发压力用例双双报 `database is locked`——**连"各写各的 session"那条也失败**，因为**升级写锁时 `busy_timeout` 不生效**（SQLite 宁可立刻报错也不冒死锁的险）。**不要把它当成"只是个位置分配优化"。**
 
-> ⚠ **D25 起这里只剩一条职责**：SQLite 的 writer 串行化（键是整个库文件）。
-> ~~"按 session 的业务顺序不在这里，属 `service/` 的 `SessionLocks`"~~——**那把锁已删**
-> （位置成为请求的纯函数之后不再需要业务串行化）。职责沿革见 D17 → D25。
+> **这里只有一条职责**：SQLite 的 writer 串行化（键是整个库文件）。
+> 按 session 的业务串行化**不在这里、也不需要**（D25）——位置是请求的纯函数。
+> 职责沿革见 D17 → D25。
 
 **为什么是短生命周期，而不是 thread-local 长连接 / 单一共享连接**：见 [D17](../../../docs/decisions.md)。一句话是"**连接与线程的约束不该泄漏到任何上层**"，而 FastAPI 的 `def` 路由**就跑在线程池里**。
 
@@ -144,18 +143,14 @@ applied_batches(
 
 ---
 
-## ~~补全 `pending` 对时必须做两件事（§6.5）~~ ⛔ **D24 已作废**
+## Qdrant 与 SQLite 不一致时**不报错**（§6.5）
 
-~~1. **重算该对的 embedding 并 upsert 覆盖原 Qdrant point。** `id` 不变——**这正是 `id` 必须位置派生的原因**。
-2. **埋点**：`pending_created` / `pending_completed` / `pending_orphaned`。
+**一次 Add 的块在写下那一刻就是最终形状**（D24）：`apply_batch` 在同一个事务里把正文写死，
+**此后再没有任何改写路径**——没有 pending、也没有"补全"这一步。
 
-若不重算，Qdrant 里留下的是**残缺文本的向量**——检索仍会命中它，但命中的是"不存在的那个版本"，而且**不会报错**。~~
-
-**2026-09-27（D24）起没有 `pending` 对可补**：一次 Add 的块在写下那一刻就是最终形状，
-`apply_batch` 在同一个事务里把正文写死，**此后再没有任何改写路径**。
-
-> **但这一段的反面教训仍然有效，只是换了落点**：Qdrant 与 SQLite 一旦不一致，
-> 检索命中的就是"不存在的那个版本"而**不报错**。D24 之后这条风险只剩一个来源——
-> **`index_pairs` 失败**（SQLite 已提交、Qdrant 没写）。它对冲在
+> **风险只剩一个来源**：**`index_pairs` 失败**（SQLite 已提交、Qdrant 没写）。
+> 此时检索命中的是"不存在的那个版本"而**不报错**。它对冲在
 > [`../service/pipeline.py`](../service/pipeline.py) 的修复路径（重放时按 session 幂等重建），
 > 由 [`../service/CLAUDE.md`](../service/CLAUDE.md) 那一节的失败窗口描述。
+>
+> ⚠ **任何"后台回头改这些行"的方案都要按 D24 重新论证**——它引入的正是这里要防的那种不一致。

@@ -474,11 +474,9 @@ def test_model_default_is_the_same_in_both_places() -> None:
 def test_workers_must_be_one(config_dir: Path) -> None:
     """**`workers != 1` 拒绝启动**（§15）。
 
-    ⚠ **D25 之后原因变了**（结论没变）：旧理由是"`SessionLocks` 是进程内锁，
-    多 worker 下每个 worker 各有各的锁 ⇒ 静默失效"。`SessionLocks` 已删，
-    那条不再成立；现在拒的是**"放开多 worker 需要的验证一件都没做"**
-    （并发写压力、`busy_timeout` 争用、多进程各自的 Qdrant 客户端）。
-    ⇒ 这条不能只是文档警告，因为**去掉它的诱惑比从前更大了**。
+    ⚠ 拒的是**"放开多 worker 需要的验证一件都没做"**（并发写压力、`busy_timeout` 争用、
+    多进程各自的 Qdrant 客户端）——**不是**"多 worker 会静默撞车"（位置是请求的纯函数，
+    那个风险不存在）。⇒ 这条不能只是文档警告，因为**去掉它的诱惑很大**。
     """
     with pytest.raises(ConfigError, match="server.workers"):
         _load(config_dir, **{ENV_WORKERS: "4"})

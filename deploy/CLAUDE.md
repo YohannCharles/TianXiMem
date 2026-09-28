@@ -232,7 +232,7 @@ docker compose up -d          # 注意：不要带 --build，否则它会想重�
 
 | 检查项 | 出处 | 容器里由谁落地 |
 | --- | --- | --- |
-| ~~`--workers 1`（按 session 的锁是**进程内**的）~~ ⛔ **理由已被 D25 推翻**，**约束仍在** | §15 → **D25** | `ENTRYPOINT` 写死 + `TIANXI_WORKERS=1`；`--workers N` 仍被 `assert_single_process()` 拦（**已在容器里实测拦下**） |
+| `--workers 1`（**理由见 [`../src/tianxi_am/service/CLAUDE.md`](../src/tianxi_am/service/CLAUDE.md)**："放开多 worker 需要的验证一件都没做"） | §15 → **D25** | `ENTRYPOINT` 写死 + `TIANXI_WORKERS=1`；`--workers N` 仍被 `assert_single_process()` 拦（**已在容器里实测拦下**） |
 | Qdrant 与 SQLite 的文件都在**持久卷**上——SQLite **随 run 归档** | §15 | `qdrant_storage`（可重建，**不是备份对象**）/ `tianxi_data:/data`（**唯一备份对象**） |
 | `latency/query` 有观测——**接近 30 分钟上限就削减 agent 轮数** | §14 | ——（v1 没有 agent；见 §17.1 的 S8） |
 | 单请求最长 30 分钟，**预算充足但不是无限** | §2.2 | `stop_grace_period: 60s`——**默认 10s 会拦腰砍断在途请求** |
