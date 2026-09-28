@@ -806,7 +806,7 @@ message。组合规则只剩三步：
 > —— `chunk_ordinal` 从 `request_id` 解析，`local_index` 是这一批组合出的块的 0-based 序号。
 
 ⇒ 同一 `(user_id, session_id)` 的 Add **不再需要串行化**：删掉
-[`../src/tianxi_am/service/locks.py`](../src/tianxi_am/service/locks.py) 的 `SessionLocks`。
+`src/tianxi_am/service/locks.py` 的 `SessionLocks`（**该文件已随本条删除**，所以这里是字面路径、不是链接）。
 
 ### 它推翻了什么
 
@@ -887,6 +887,49 @@ ROW_NUMBER() OVER (PARTITION BY user_id, session_id ORDER BY chunk_ordinal, loca
 
 > ⚠ 两点别读过头：① 精度结论**只到 conv-26 一段**（乱序一致性是结构性的、不依赖数据集，精度不是）；
 > ② **`--workers 1` 没放开**——位置虽已进程无关，但多进程的并发写压力一件都没验证过。
+
+---
+
+## D26 · **A4 移出 v1**（它要 agent 真的存在，而 v1 不做 agentic）（2026-09-28）
+
+**决定（由项目负责人做出）**：§13 的 **A4「agent 值不值」不在 v1 的交付里**。
+
+**它只是一处排序，不是一次推翻**：D13 已经定了 v1 不做 agentic，而 A4 的两种读法
+（**A4a** 受 Checker 门控 / **A4b** always-on，见 [`experiments.md`](./experiments.md)）
+**都要 agent 真的在跑**才成立 ⇒ **A4 在 v1 里跑不了**。但三份文档此前默认它在
+（`roadmap.md` 的 Step 6 写着"还剩 A0/A4/T2"），所以这条要把口径固定下来。
+
+| 项 | 处置 |
+| --- | --- |
+| **arm 定义** | **留着**（`experiments.md` 的 A4a / A4b 两条读法逐字不动）——Step 4 落地时直接用 |
+| **v1 的那条核心 claim** | **不得引用 A4 的分数**（D13 已经这么要求）。v1 里 §3.1「只有证据不足才触发多轮搜索」是**平凡成立**的——因为根本没有 agentic |
+| **Step 6 的对照清单** | v1 只剩 **A0 / T2**（B1 已跑） |
+
+### 它与 D13 的一处出入（**记在这里，别让它消失**）
+
+D13 说 Checker 的空实现能"**免费拿到反事实分布**"，从而"在 Step 4 之前就能用数据回答 A4"。
+**那份分布现在恒为 `None`**：判据要的是 `(bm25-only 名次, dense-only 名次)`，而
+[`roadmap.md`](./roadmap.md) 的"Checker 的两路分离查询"一节记着——`QdrantStore.hybrid_search`
+**只做融合**，两路排名算完就丢，所以 v1 的调用方不传。**该切片已登记为"不阻塞、现在不做"。**
+
+⇒ 准确的表述是：**D13 的接缝是对的，但它的收益还没通**。A4 的提前回答要等那条切片，
+而 A4 本身要等 Step 4。**两者都不在 v1。**
+
+### 代价（要认）
+
+**v1 没有任何机制检验"agent 值不值"**，而这是风险最高的一次对照。缓解只有一条：
+**Step 4 到来时 A4a/A4b 的定义是现成的**（它们已经写清楚了"只做 A4a 无法区分
+『agent 没用』与『Checker 卡太严』"），不用临场设计。
+
+### 为什么现在定
+
+`experiments.md` 的 A4 小节写着"**做之前先在 `eval/experiments/` 里把 arm 定死**"——
+而 v1 的 arm 脚手架（[`../eval/experiments/arms.py`](../eval/experiments/arms.py)）是
+"**两臂 = 两份冻结配置 + 两个服务**"的形状，A4 的两种读法都能塞进去；**但 A4 还需要一个
+agent 才存在**，那是另一个 Step 的事。⇒ 把它标出 v1，免得 Step 6 的清单上挂着一个做不了的项。
+
+> ⛔ **别据此推进 `checker.enabled` 的接线或单路查询**：前者仍按 §15 的要求可配
+> （消费方未接，见 [`config-reference.md`](./config-reference.md) §2），后者仍**不做**。
 
 ---
 ## 待决事项（尚无决策）

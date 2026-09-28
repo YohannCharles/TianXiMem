@@ -35,7 +35,7 @@
 | `src/tianxi_am/<模块>/` 下任何代码 | 该目录的 `CLAUDE.md`（要写什么、边界在哪、本层的坑） |
 | 契约层（service、Add/Search 形状） | [`docs/contract.md`](docs/contract.md) |
 | 任何阈值 / 权重 / 开关 | [`docs/config-reference.md`](docs/config-reference.md)（**开关的唯一声明处**）+ [`configs/CLAUDE.md`](configs/CLAUDE.md)（**每个键住在 `.env` 还是 yaml**）。**全包只有 [`common/config.py`](src/tianxi_am/common/config.py) 读环境变量**——有静态测试钉住 |
-| 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（D1–D20 + 待决事项） |
+| 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（逐条 `Dn` + 待决事项——**编号别在这里列范围，它会过期**） |
 | 跑对照实验 | [`docs/experiments.md`](docs/experiments.md)（协议）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（怎么跑） |
 | 数据集加载 / harness | [`docs/benchmark-data.md`](docs/benchmark-data.md) + [`eval/datasets/CLAUDE.md`](eval/datasets/CLAUDE.md) |
 | 读参考实现（InvMem / ReFind 的代码——**代码在哪、什么别学**） | [`docs/reference-implementations.md`](docs/reference-implementations.md) |

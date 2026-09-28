@@ -187,7 +187,7 @@
 
 ## Step 6 — 对照实验 + Smoke + Full 定稿
 
-- [ ] 跑完 §13 全部对照（**B1 已跑**：agent 模式 3 段 346 题，我们领先 +29.5pt；**v1 还剩 A0/T2**——**A4 不在 v1**：它要 agent 真的存在，而 v1 不做 agentic（D13），arm 定义留在 [`experiments.md`](./experiments.md)）
+- [ ] 跑完 §13 全部对照（**B1 已跑**：agent 模式 3 段 346 题，我们领先 +29.5pt；**v1 还剩 A0/T2**——**A4 不在 v1**（**D26**）：它要 agent 真的存在，而 v1 不做 agentic（D13），arm 定义留在 [`experiments.md`](./experiments.md)）
 - [ ] **Smoke 验证契约合规**
 - [ ] **Smoke 跑通后第一件事：设计 S1 的判别实验**（§17.1）
 - [ ] **Full 定稿**——每 Key 每轨道 **2 次**，第二次隔 30 天；**一旦接受即版本冻结**

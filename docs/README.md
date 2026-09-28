@@ -30,7 +30,7 @@
 | [experiments.md](./experiments.md) | 要做哪些对照、每个对照决定什么、现在什么状态 | 每跑完一组对照 |
 | [open-questions.md](./open-questions.md) | 还有哪些没清掉的未知、谁负责消除、什么时候会阻塞 | 每个 Step 开始前 |
 | [roadmap.md](./roadmap.md) | Step 0–6 各自要交付什么、当前进度 | 每个 Step 开始/结束时 |
-| [decisions.md](./decisions.md) | 哪些决策被推翻过、为什么、影响哪些节（**D1–D20 + 待决事项**） | 想改一个"已锁定"的决定之前 |
+| [decisions.md](./decisions.md) | 哪些决策被推翻过、为什么、影响哪些节（**逐条 `Dn` + 待决事项**） | 想改一个"已锁定"的决定之前 |
 | [submission.md](./submission.md) | Smoke/Full 还剩几次、版本冻结在哪、S 未知清了没有 | 每次发 Smoke / Full 之前 |
 | [benchmark-data.md](./benchmark-data.md) | 归档里哪些文件是真数据、schema 落差在哪、许可证什么情况 | 写 harness / 加载器时 |
 | [reference-implementations.md](./reference-implementations.md) | 榜单前两名（InvMem / ReFind）的代码里有什么可学、什么别学、代码在哪（含 commit） | 想"看别人怎么解同一道题"时 |

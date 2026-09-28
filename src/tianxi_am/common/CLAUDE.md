@@ -30,7 +30,7 @@ tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 
 **渲染规则（模板、role 标记、自定界）的唯一声明处是 [`../rank/CLAUDE.md`](../rank/CLAUDE.md) §4**——本文件不重复，避免两处规则描述漂移（**同样的理由**）。
 
-**⚠ 「贵」消融项**：改渲染模板 = 改变 embedding 输入 = **整个向量索引要重建**（[`../../tools/reindex.py`](../../tools/reindex.py)）。模板现为 `v1` + **日粒度日期前缀**（**D21**，2026-09-25）——**推翻它要付重建索引的钱**。
+**⚠ 「贵」消融项**：改渲染模板 = 改变 embedding 输入 = **整个向量索引要重建**（[`../../../tools/reindex.py`](../../../tools/reindex.py)）。模板现为 `v1` + **日粒度日期前缀**（**D21**，2026-09-25）——**推翻它要付重建索引的钱**。
 
 **三个入口都在本模块**（一个对 → 它的文本只该有一条路）：
 
@@ -52,7 +52,7 @@ tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 >
 > **例外到哪为止**：`content` = 被索引的文本 **+ 一层纯函数注解**，剥掉后**逐字相同**。
 > 别把它读成"以后可以往 `content` 里加任何东西"——每加一层都要重新回答
-> "它进不进索引、缓存坐标要不要动"（[`../../docs/architecture.md`](../../docs/architecture.md) §4）。
+> "它进不进索引、缓存坐标要不要动"（[`../../../docs/architecture.md`](../../../docs/architecture.md) §4）。
 >
 > ⚠ **[`eval/harness/annotate.py`](../../../eval/harness/annotate.py) 是同一套逻辑的第二份**
 > （harness 不许 import `src/`，而那次实验是在 harness 侧跑的）——**两份都对**，
