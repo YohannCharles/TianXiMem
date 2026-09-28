@@ -1,0 +1,22 @@
+# 提交期覆盖（`TIANXI_PROFILE=submit`）
+#
+# ⚠ **只写真正与基线不同的键。** 这份文件存在的意义就是让"提交期与基线差在哪"一眼可见
+#    （configs/CLAUDE.md）——重述默认值等于把那个信息淹掉。
+#    **基线本身已经是提交口径**：集合名 `memories`、`rerank.enabled: true` 都在 default.yaml 里；
+#    开发期那两处差别（`memories_dev`、关精排）由 `local.yaml` 覆盖。
+
+models:
+  # C —— profile 之间**唯一真正该变**的东西；取值由 §2.3 规定，**不可协商**。
+  # 装配按这个值挑实现（`service/app.py` 的 `build_embedder`）：换名字就换类，
+  # 批大小跟着模型走——v4 的端点单请求至多 10 条。
+  # ⚠ **端点与密钥不在这里**：它们在 `.env` 的 `AML_EMB_*`（提交期填 DashScope 的兼容端点，
+  #   `https://dashscope.aliyuncs.com/compatible-mode/v1`）。⚠ 别拿开发网关来跑这一份
+  #   （它会忽略 `model` 字段，而两者同为 1024 维）——机制见 docs/decisions.md **D27**。
+  # ⚠ 换它 = 换向量维度 ⇒ **集合要按新维度重建**（runbook：deploy/CLAUDE.md §4）。
+  #   embedding 缓存不用手动删：坐标系含模型名，会自己换一个文件。
+  embedder: text-embedding-v4
+
+# ⬜ **Step 5 还没做完**：模型名先落地，**由模型派生的那几项还没重标定**——
+#    向量维度（由 §7.4 的接口给，不进配置）、单请求实测 token 预算、以及检索 / 扩窗 /
+#    打包 / 精排的全部阈值与权重（§12.1 R1 对冲 3）。重标定完**往本文件里补**，
+#    **别去改 default.yaml**（那一份是基线，改了就没有对照物了）。

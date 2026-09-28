@@ -17,15 +17,19 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | 文件 | 用途 | 模型 | 状态 |
 | --- | --- | --- | --- |
 | `configs/default.yaml` | 基线值，所有 profile 的父级 | Qwen3-Embedding-8B（**开发期唯一有活端点的**） | ✅ |
-| `configs/local.yaml` | **开发期**：代理评测、迭代、消融 | 同上 | ✅（**只覆盖集合名**） |
-| `configs/submit.yaml` | **提交期**：Full 定稿 | `text-embedding-v4` + `gpt-4o-mini` | ⬜ Step 5 |
+| `configs/local.yaml` | **开发期**：代理评测、迭代、消融 | 同上 | ✅（**覆盖集合名 + `rerank.enabled`**） |
+| `configs/submit.yaml` | **提交期**：Full 定稿 | `text-embedding-v4` + `gpt-4o-mini` | 🟡 **已建**（2026-09-28，**只换了模型名**；由模型派生的阈值待 Step 5 重标定） |
 
 `local.yaml` 与 `submit.yaml` 只覆盖**模型与由模型派生的量**（向量维度、token 预算实测量、全部标定阈值），其余继承 `default.yaml`。
 
-> ⚠ **`local.yaml` 只有一项**：`storage.qdrant.collection: memories_dev`——开发期的集合与提交期分开，
-> 避免 §6.3 的 upsert 把上一套实验的 point **静默留给下一套**（`open-questions.md` 的 **V9**）。
-> **基线放的是开发期模型**（唯一有活端点的那个）；Step 5 建 `submit.yaml` 时再覆盖它。
-> **profile 之间真正的差异要等到那时才出现**——现在硬凑一份"两套完整配置"只会让差异看不出来。
+> ⚠ **`local.yaml` 只有两项**：`storage.qdrant.collection: memories_dev`（开发期的集合与提交期分开，
+> 避免 §6.3 的 upsert 把上一套实验的 point **静默留给下一套**（`open-questions.md` 的 **V9**））
+> 与 `rerank.enabled: false`（开发期不花那份墙钟）。
+> **基线放的是开发期模型**（唯一有活端点的那个）；`submit.yaml` 覆盖它（2026-09-28 起只有 `models.embedder` 一行）。
+> ⚠ **它不是"两套完整配置"**——`local.yaml` 只有两项、`submit.yaml` 现在只有一项，
+> 差异一眼可见正是这两份文件存在的理由。
+> ⛔ `submit.yaml` 里**别写 `storage.qdrant.collection`**（提交期就是基线那个 `memories`；
+> 覆盖它的是 `local.yaml`）。有回归位：`tests/test_config.py::test_submit_profile_changes_only_the_embedder`。
 
 **选 profile 用 `TIANXI_PROFILE`**（默认 `default`）；**指向另一份配置目录用 `TIANXI_CONFIG_DIR`**（arm 快照就靠它，见 `configs/CLAUDE.md` 的 `runs/`）。
 
@@ -52,7 +56,8 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 > ⚠ **只收"有代码消费方"的键。** 本文件里 `checker.*` / `agent.*` 与部分消融开关的**落点已经声明**，
 > 但它们**还没有进 `configs/*.yaml`**——消费方未接线时收进配置等于预留字段（§6.1 对 DDL 的同一条纪律）。
-> 仍然**待接线**的是 `checker.*` 与 `agent.*`。
+> **v2 再接**的是 `checker.*` 与 `agent.*`（**D26** / D13——理由见 §2 那句"共用一个死锁"），
+> `rrf` 与 `dense` 则是**无下游依赖**（D15）：它们仍在表里，但**不要**当成待办。
 
 ---
 
@@ -78,26 +83,38 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 2. 消融开关（§15）—— ⬜ **待接线**
+## 2. 消融开关（§15）—— **逐行看"接线"列**
 
 **这是开关的唯一声明处**——其它文档提到开关时一律指回这里，不要各自列一份。
 
 | 开关 | 关掉它意味着 | 依赖谁 | **关掉时不得改变什么** | 出处 | 接线 |
 | --- | --- | --- | --- | --- | --- |
-| `dense` | 检索退化为 BM25-only | —— | —— | §7.2 | ⬜ |
-| `checker` | 一律进 Agentic Search | —— | —— | §8 | ⬜ |
-| `rrf` | 不融合，只用单路 | —— | —— | §7.3 | ⬜ |
+| `dense` | 检索退化为 BM25-only | —— | —— | §7.2 | ⛔ **无下游依赖**（D15：混合检索无条件跑） |
+| `checker` | 一律进 Agentic Search | —— | —— | §8 | ⛔ **v2 再接**（D26 / D13——见下） |
+| `rrf` | 不融合，只用单路 | —— | —— | §7.3 | ⛔ **无下游依赖**（D15 删掉了 A1/A2 ⇒ **没有实验需要它**） |
 | `neighbor` | 不扩窗 | —— | **种子集合不变** | §10 | ⬜（只能关 `radius`） |
 | `rerank` | 直接用融合名次 | —— | **候选数量不变**（只是顺序变了） | §11.2 | ✅ `rerank.enabled` |
 | `packaging` | 不做打包策略 | —— | —— | §11.3 |
 | **T1** | 正文**不带**日期前缀（消融臂） | —— | **名次 / 段数 / `created_at` / `score` 全不变**（只有 `content` 多一段 `[YYYY-MM-DD] `） | §11.3 / **D21** | ✅ `packaging.inject_abs_time`（**默认 `true`**） |
 | **相对时间注解** | 正文里的相对表达**照原样**留着（`last Tues`） | —— | **名次 / 段数 / `id` / `created_at` / `score` / token 口径全不变**（只有 `content` 多出括号注）；**embedding 输入也不变**（它只走 `content` 这一条路） | D21 的延伸（原文保留、日期是**额外锚点**） | ✅ `packaging.annotate_relatives`（**默认 `true`**——`configs/default.yaml` 里写死；⚠ **加载器对"键缺失"取 `false`**，与 `inject_abs_time` 的缺失约定**相反**，所以 D22 之前冻结的快照仍按"无注解"跑） |
-| `agent` | 一律不走 Agentic Search | `checker`（门控时） | **打包顺序不变**（只是候选少了 agent 补的那部分） | §9 |
+| `agent` | 一律不走 Agentic Search | `checker`（门控时） | **打包顺序不变**（只是候选少了 agent 补的那部分） | §9 | ⛔ **v2 再接**（`agent/` 还没有代码，D13） |
 
 > **最后一列是 §13 的纯度规则**：**开关必须只影响它命名的那一件事。** 否则对照不成立——**而结果看起来完全正常，只是结论错了**。
 > 对应测试见 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) §5——**那组测试很便宜，而它保护的是整个 §13 实验计划。**
 
-**`checker.enabled` 必须可配**（§15 的开关清单里漏了它）——§13 的 A4 要关它做对照。
+> ### ⚠ `checker` / `agent` 为什么标成"**v2 再接**"而不是"待接线"（2026-09-28）
+>
+> 两者**共用一个死锁**：`checker` 关掉的意思是"**一律进 Agentic Search**"，而
+> [`../src/tianxi_am/agent/`](../src/tianxi_am/agent/) **只有 `CLAUDE.md`、没有任何代码**
+> ⇒ 那个"关"分支**无处可去**（`EvidenceChecker.decide()` 的返回值此刻在
+> `service/pipeline.py` 里被丢弃，那是 D13 的**刻意**形态）。
+>
+> 而**接线的唯一理由本来是 A4**（§13 要关掉 checker 做对照），**A4 已移出 v1**（**D26**）
+> ⇒ 在 Step 4 之前，这两个开关接了也没有消费者，而接它们要**跨层**（配置管道 + 让
+> `pipeline` 真的按判定分支 + 给 `store/` 加单路查询）。**故 v1 不接。**
+>
+> **`checker.enabled` 仍必须可配**（§15 的开关清单里漏了它）——但那是 v2 落地时的事，
+> 落点与三个判据阈值见 §4。
 
 **两个不在 §15 清单里、但同样要可配的对照项**：T1 的时间戳前缀渲染变体（§11.3，已接线）与 A0 的 recency-only（§13）。
 
@@ -147,7 +164,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 4. Evidence Checker（§8）—— ⬜ **待接线**
+## 4. Evidence Checker（§8）—— ⛔ **v2 再接**（D26 / D13）
 
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
@@ -163,7 +180,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 5. Agentic Search（§9）—— ⬜ **待接线**
+## 5. Agentic Search（§9）—— ⛔ **v2 再接**（D13：`agent/` 还没有代码）
 
 **参数沿用 ReFind 的形状**——这套参数是在真实评测上跑出来的，**改它需要理由**。
 
@@ -239,7 +256,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
-| `rerank.enabled` | **`false`** | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。⚠ **默认关掉是团队决定**：100 篇/题 5–12s 且抖动大，而本地跑题是串行的 ⇒ 直接影响迭代速度。**它值不值是 A3 要回答的**（两臂快照 `configs/runs/a3-{on,off}/`），**别拿默认值当结论** |
+| `rerank.enabled` | **`true`** | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。**`true` 是提交口径**（2026-09-28）：D8 把排序定为主线，默认关着等于放弃它（A3 在 conv-26 上 +4.3pt）。⚠ 开发期在 `configs/local.yaml` 里**显式关掉**（墙钟约 3×，直接决定迭代速度）——**那是覆盖，不是默认值**。**它值不值是 A3 要回答的**（两臂快照 `configs/runs/a3-{on,off}/`），**别拿默认值当结论** |
 | `rerank.timeout_seconds` | **30.0** | **C 类**。实测 100 篇 ≈ 2.2s、200 篇 ≈ 5.3s ⇒ 约 10 倍余量。**太紧 ⇒ 伪降级**（网关排队被报成"reranker 坏了"）；**太松 ⇒ Search 被拖住** |
 | `packaging.inject_abs_time` | **`true`**（2026-09-25，**D21**） | ✅ §2 表里 **T1** 的开关。`true` ⇒ 每对正文前加 `[YYYY-MM-DD] `（与 `created_at` **同一口径、同一 `event_time`**）。⚠ **「贵」消融项**：正文改了 embedding 输入也改 ⇒ **改它要重建索引**、两臂必须分集合 |
 | `packaging.annotate_relatives` | **`true`**（2026-09-26） | ✅ **只改 `content`、不碰 embedding**（不变式 **I1 的一个声明式例外**）：`true` ⇒ 正文里的相对时间**就地注解**成绝对日期（`last Tues (July 18, 2023)`），原文一字不动。⇒ **不用重建索引、不用换集合**，随时可开关。实现与"推不出就不动"那条硬纪律在 [`../src/tianxi_am/common/annotate.py`](../src/tianxi_am/common/annotate.py)；开关买到的东西见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。⚠ **C 类**：任何调整都要有 ablation 数据 |

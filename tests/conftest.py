@@ -29,6 +29,7 @@ from tianxi_am.common.config import (
     CacheConfig,
     EmbedCacheConfig,
     QdrantConfig,
+    RerankConfig,
     SqliteConfig,
     StorageConfig,
 )
@@ -358,6 +359,11 @@ def _wire(tmp_path, *, inject_abs_time: bool, annotate_relatives: bool = False) 
         cache=CacheConfig(embed=EmbedCacheConfig(dir=str(tmp_path / "cache"))),
         embed_base_url="http://unused/v1",
         embed_api_key="k",
+        # ⚠ **显式关掉精排**：这份装配造出来的 `search` 下面会被换成不带 reranker 的那条，
+        # 而 `default.yaml` 的默认值是 `true`（提交口径）⇒ 不写这一行就会走
+        # "打算精排、但端点为空"那条路，在**每个**用本夹具的用例里留下一条 WARNING。
+        # 那不是这些用例要测的东西，而它看起来像"漏配了"。
+        rerank=RerankConfig(enabled=False),
     )
     services = build_services(config)
     qdrant = FakeQdrantSearch()

@@ -49,9 +49,20 @@ from tianxi_am.common.config import (
 )
 from tianxi_am.common.render import template_version
 from tianxi_am.common.tokens import load_counter
-from tianxi_am.embed.base import CachingEmbedder, DiskVectorCache, EmbeddingCoordinate
+from tianxi_am.embed.base import (
+    CachingEmbedder,
+    DiskVectorCache,
+    EmbeddingCoordinate,
+    OpenAICompatEmbedder,
+)
 from tianxi_am.embed.query_instruction import QueryInstructionEmbedder
 from tianxi_am.embed.qwen3_embedding import Qwen3EmbeddingEmbedder
+from tianxi_am.embed.text_embedding_v4 import (
+    DEFAULT_MODEL as TEXT_EMBEDDING_V4_MODEL,
+)
+from tianxi_am.embed.text_embedding_v4 import (
+    TextEmbeddingV4Embedder,
+)
 from tianxi_am.observability import MetricsSink, NullMetricsSink, SnapshotMetricsSink
 from tianxi_am.rank import RemoteReranker
 from tianxi_am.retrieve import DenseArm, EvidenceChecker, HybridRetriever, make_hybrid_params
@@ -63,6 +74,7 @@ from tianxi_am.store.sqlite_store import SqliteStore
 
 __all__ = [
     "Services",
+    "build_embedder",
     "build_metrics_sink",
     "build_reranker",
     "build_services",
@@ -125,11 +137,7 @@ def build_services(config: AppConfig) -> Services:
         ),
     )
 
-    inner = Qwen3EmbeddingEmbedder(
-        base_url=config.embed_base_url,
-        api_key=config.embed_api_key,
-        model=config.models.embedder,
-    )
+    inner = build_embedder(config)
     # ⚠ 坐标系取【解析后】的模型名（见模块 docstring 第 2 条），**外加模板变体**：
     #   T1 的"带日期"臂改了正文 ⇒ 它的坐标必须与"不带"臂不同，否则两臂的向量会
     #   互相静默复用（`common/render.py` 的 `template_version`）。
@@ -243,6 +251,34 @@ def build_reranker(config: AppConfig) -> RemoteReranker | None:
         api_key=config.reranker_api_key,
         model=config.reranker_model,
         timeout=config.rerank.timeout_seconds,
+    )
+
+
+def build_embedder(config: AppConfig) -> OpenAICompatEmbedder:
+    """按 `models.embedder` 挑实现。**两个实现只差模型名与批大小。**
+
+    | `models.embedder` | 类 | 批大小 |
+    | --- | --- | --- |
+    | `text-embedding-v4`（提交期，§2.3） | `TextEmbeddingV4Embedder` | **10**（端点硬限） |
+    | 其他（开发期的 `Qwen3-Embedding-8B`） | `Qwen3EmbeddingEmbedder` | 64 |
+
+    ⚠ **判据是模型名本身，不是另开一个配置键**：批大小是这个模型的 **API 事实**，
+    让它能与模型名各说各话（`provider: dashscope` + `model: Qwen/…`）只会造出一种
+    **配得出、跑不通**的状态。漏掉这一步的表现是：yaml 写了 `text-embedding-v4`，
+    服务仍用开发期的类 ⇒ **提交期第一批 `Add` 就 400**，而本地代理评测看不出来。
+
+    ⚠ 端点与密钥**不参与**这个判断——它们在 `.env` 的 `AML_EMB_*`（那是"embedding 端点"
+    这个位置的名字，**值随部署而变**：开发期 = 自建主网关，提交期 = DashScope）。
+    """
+
+    if config.models.embedder == TEXT_EMBEDDING_V4_MODEL:
+        return TextEmbeddingV4Embedder(
+            base_url=config.embed_base_url, api_key=config.embed_api_key
+        )
+    return Qwen3EmbeddingEmbedder(
+        base_url=config.embed_base_url,
+        api_key=config.embed_api_key,
+        model=config.models.embedder,
     )
 
 

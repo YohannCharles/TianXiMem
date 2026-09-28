@@ -932,6 +932,44 @@ agent 才存在**，那是另一个 Step 的事。⇒ 把它标出 v1，免得 S
 > （消费方未接，见 [`config-reference.md`](./config-reference.md) §2），后者仍**不做**。
 
 ---
+
+## D27 · 提交期**不设专用的环境变量对**：`AML_EMB_*` 就是 embedding 端点，值随部署变（2026-09-28）
+
+**决定**：删掉 `.env.example` 里骨架期留下的两组"提交期专用"变量（`TIANXI_EMBED_API_KEY` /
+`TIANXI_EMBED_BASE_URL`、`TIANXI_LLM_API_KEY` / `TIANXI_LLM_BASE_URL`）。
+**embedding 的端点与密钥只有一个家**：`AML_EMB_*`——那两个名字是**"embedding 端点"这个位置**的名字，
+**值随部署而变**（开发期 = 自建主网关，提交期 = DashScope 的 OpenAI 兼容端点）；**模型名**仍住
+`configs/submit.yaml`（D18 的既定口径）。
+
+**为什么是删，而不是把它们接上**：
+
+| # | 理由 |
+| --- | --- |
+| 1 | **同一个东西能两处设 ⇒ 填错的那一处不报错。** 填了 `TIANXI_*` 而忘了 `AML_EMB_*`，服务照旧连开发网关、**跑得好好的**——"我明明填的是 DashScope"要到很后面才以别的形状暴露。这正是 [`configs/CLAUDE.md`](../configs/CLAUDE.md) 点名要避免的那类歧义 |
+| 2 | **它们从来没有消费方**：09-23 的骨架提交就把它们写进 `.env.example` 了，**早于 D18 锁定 `AML_EMB_*`**。是"收一个没有消费方的键等于预留字段"那条纪律的现成反例 |
+| 3 | `TIANXI_LLM_*` 更没有存在理由：**v1 没有 LLM 调用点**（`Add` 侧完全不调用；`Search` 只在 `agent/` 里调用，而 v1 不做 agentic，**D13**）|
+
+**⚠ 由此暴露的一条静默风险（要认，还没对冲）**：`AML_EMB_BASE_URL` 一换，**声明与事实就可能不符**——
+`text-embedding-v4` 与开发期的 Qwen3-Embedding-8B **同为 1024 维**（前者是官方默认值，
+后者是 `make check` 每次实测的那个范数），**维度一致 ⇒ 换错端点不会被任何一层拦住**：
+
+1. **缓存会串**：缓存坐标是"**配置里的模型名** + 渲染模板版本"（`embed/base.py`），
+   而键是文本哈希。拿提交 profile 去连一个只服务 Qwen3 的端点 ⇒ Qwen3 的向量**挂在
+   `text-embedding-v4` 这个坐标下** ⇒ 之后真的接上 v4 端点时**全部命中缓存**、根本不调它。
+2. **集合也会串**：同维度 ⇒ Qdrant 不拒绝，只表现为"检索质量差"。
+
+**目前的处置只有纪律**（提交 profile 必须配 DashScope 端点；真要换端点就按
+[`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的 runbook 连缓存一起作废）。
+⛔ **门禁还没做**：`tools/check_env.py` 的 embedding 探针验的是"端点可达 + L2 范数"，
+**不核对"端点在服务的模型是不是我们声明的那一个"**（它还传着一个不存在的变量名 `AML_EMB_MODEL`）。
+⇒ **这条是未办事项**，等 v4 端点到位、能看到真实响应形状时再定怎么做（`GET /models` 比对？
+还是让服务启动时核对？）。**在那之前别把"`make check` 过了"读成"端点对了"。**
+
+**为什么现在定**：`configs/submit.yaml` 与 `embed/text_embedding_v4.py` 在这一天落地（Step 5 的前半），
+而"提交期端点填哪儿"是它们绕不开的问题。**留着两组可填的变量，等于把 Step 5 唯一要评审的那处差异
+（`submit.yaml` + `.env`）藏进一个没有消费方的名字里。**
+
+---
 ## 待决事项（尚无决策）
 
 | # | 事项 | 何时必须定 |

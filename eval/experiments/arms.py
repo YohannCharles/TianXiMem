@@ -36,6 +36,17 @@ EXIT_PRECONDITION_FAILED: Final[int] = 2
 RUNS_DIR: Final[Path] = Path("configs/runs")
 
 #: 基线配置（两份都要**原样**进快照，否则臂跑的是内置默认值而不是今天的值）。
+#:
+#: ⚠ **快照冻的是"冻结那天"的基线** ⇒ 一条臂若*没有显式覆盖*某个键，它跑的就是**那天**的值。
+#: ⇒ **基线的默认值一改，"重新冻结"出来的同一条臂就是另一个实验。**
+#: `base_drift()` 会给提示，但**只比 `default.yaml` 一份**、而且只是提示不是错误——
+#: **`local.yaml` 里改了什么它看不见。**
+#:
+#: 实例（2026-09-28）：`rerank.enabled` 的默认值 09-25 翻成 `false`、09-28 又翻回 `true`，
+#: 而"开发期关掉精排"挪进了 `configs/local.yaml`。已冻的快照各自钉着**当时**的值
+#: （`t1-{plain,dated}` 的 `default.yaml` 是 `true` ⇒ **T1 那轮是开着精排跑的**；
+#: `a3-{on,off}` 两臂各自在 `local.yaml` 里显式覆盖那个键 ⇒ 不受基线变化影响）。
+#: ⇒ **重新冻结任何一条臂之前，先 diff 一遍基线**。
 BASE_FILES: Final[tuple[str, ...]] = ("default.yaml", "local.yaml")
 
 

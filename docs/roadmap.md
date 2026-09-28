@@ -176,7 +176,11 @@
 
 > **本阶段只做一件事：换模型 + 重标定。不与任何设计改动合并。**
 
-- [ ] 切到 `text-embedding-v4` + `gpt-4o-mini`（§2.3）
+- [ ] 切到 `text-embedding-v4` + `gpt-4o-mini`（§2.3）—— 🟡 **embedder 一侧已落地**（2026-09-28：
+      [`../src/tianxi_am/embed/text_embedding_v4.py`](../src/tianxi_am/embed/text_embedding_v4.py) +
+      [`../configs/submit.yaml`](../configs/submit.yaml) + 装配按模型名挑实现），**剩下的只是把
+      `AML_EMB_*` 指到真端点**（端点尚未到位）。⚠ **`gpt-4o-mini` 在 v1 里没有调用点**
+      （`Add` 侧不调用、`Search` 只在 `agent/` 里调用，而 v1 不做 agentic，D13）⇒ 无需接线。
 - [ ] **按新维度重建向量集合**（§2.3 / §16）——embedding 缓存整体失效（§7.2）
 - [ ] **重标定全部阈值与权重**（§12.1 R1）
 - [ ] **重跑 T2**，确认切换没引入系统性偏移——**它对外部模型依赖最小（纯 BM25 检索 + 人工判读，不调用任何模型），先用它确认，再去信其他实验**（§12.1 R1 对冲 2）

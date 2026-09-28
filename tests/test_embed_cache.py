@@ -23,6 +23,7 @@ from tianxi_am.embed.base import (
     OpenAICompatEmbedder,
 )
 from tianxi_am.embed.qwen3_embedding import DEFAULT_MODEL, Qwen3EmbeddingEmbedder
+from tianxi_am.embed.text_embedding_v4 import DEFAULT_BATCH_SIZE, TextEmbeddingV4Embedder
 
 COORD = EmbeddingCoordinate(model="Qwen/Qwen3-Embedding-8B")
 
@@ -352,6 +353,56 @@ def test_empty_base_url_or_key_rejected() -> None:
         OpenAICompatEmbedder(base_url="http://x", api_key="", model="m")
 
 
+# ── text-embedding-v4（提交口径）的构造入口 ────────────────────────────
+
+
+def test_v4_model_default_is_the_submission_model() -> None:
+    """直接构造时有默认模型名，且**就是 §2.3 那个名字**。"""
+    emb = TextEmbeddingV4Embedder(base_url="http://x/v1", api_key="k")
+    assert emb.model == "text-embedding-v4"
+
+
+def test_v4_splits_requests_at_ten_inputs() -> None:
+    """**单请求至多 10 条输入**——提供方的硬限，超了是 HTTP 400，不是"变慢"。
+
+    ⚠ 基类默认批大小是 64（开发网关吃得下），照抄到 v4 上会让**提交期第一批 `Add` 就全线 400**，
+    而本地代理评测用的还是开发网关 ⇒ **看不出来**。
+    所以这里断言的是"请求真的被切开了"，而不只是"那个常量等于 10"。
+    """
+    client = _SizedStubClient()
+    emb = TextEmbeddingV4Embedder(base_url="http://x/v1", api_key="k", client=client)
+
+    vectors = emb.encode([f"t{i}" for i in range(25)])
+
+    assert client.batch_sizes == [10, 10, 5]
+    assert len(vectors) == 25  # 每条文本恰好一个向量，顺序与输入一致
+    assert DEFAULT_BATCH_SIZE == 10  # 常量与行为是同一件事，两处一起钉
+
+
+def test_assembly_picks_the_client_by_model_name() -> None:
+    """**装配按模型名挑实现**——批大小跟着模型走，不跟着人记性走。
+
+    漏掉这一步的表现：yaml 写了 `text-embedding-v4`，服务仍用开发期的类（批大小 64）
+    ⇒ 只在**提交期**炸，本地代理评测一律正常。
+    """
+    from tianxi_am.common.config import AppConfig, ModelsConfig
+    from tianxi_am.service.app import build_embedder
+
+    dev = build_embedder(AppConfig(embed_base_url="http://x/v1", embed_api_key="k"))
+    assert isinstance(dev, Qwen3EmbeddingEmbedder)  # 默认模型名 = 开发期那个
+    assert dev._batch_size == 64  # noqa: SLF001 — 这条正是"批大小跟着类走"的断言
+
+    submit = build_embedder(
+        AppConfig(
+            models=ModelsConfig(embedder="text-embedding-v4"),
+            embed_base_url="http://x/v1",
+            embed_api_key="k",
+        )
+    )
+    assert isinstance(submit, TextEmbeddingV4Embedder)
+    assert submit._batch_size == DEFAULT_BATCH_SIZE  # noqa: SLF001
+
+
 # ── 桩 ─────────────────────────────────────────────────────────────────
 
 
@@ -391,6 +442,26 @@ class _StubClient:
     def post(self, url, json=None, headers=None):  # noqa: ANN001, ANN201
         self.calls.append({"url": url, "json": json, "headers": headers or {}})
         return _Resp(self.body, self.status)
+
+    def close(self) -> None:
+        pass
+
+
+class _SizedStubClient:
+    """按**请求里 `input` 的条数**回相应条数的向量，并记下每次的条数。
+
+    `_StubClient` 对每次请求回同一个 body，够用来钉响应形状；**钉不了切批**——
+    "请求被切开了几段"只能从这个桩里看出来。
+    """
+
+    def __init__(self, dim: int = 4) -> None:
+        self._dim = dim
+        self.batch_sizes: list[int] = []
+
+    def post(self, url, json=None, headers=None):  # noqa: ANN001, ANN201
+        n = len(json["input"])
+        self.batch_sizes.append(n)
+        return _Resp(_ok_body(self._dim, n), 200)
 
     def close(self) -> None:
         pass

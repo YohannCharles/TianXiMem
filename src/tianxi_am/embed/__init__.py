@@ -25,12 +25,14 @@ from tianxi_am.embed.query_instruction import (
     apply_query_instruction,
 )
 from tianxi_am.embed.qwen3_embedding import Qwen3EmbeddingEmbedder
+from tianxi_am.embed.text_embedding_v4 import TextEmbeddingV4Embedder
 
 __all__ = [
     "DEFAULT_TASK",
     "DEFAULT_TEMPLATE",
     "Qwen3EmbeddingEmbedder",
     "QueryInstructionEmbedder",
+    "TextEmbeddingV4Embedder",
     "apply_query_instruction",
     "CachingEmbedder",
     "DimNotKnownError",

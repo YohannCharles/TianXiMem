@@ -55,7 +55,7 @@ def config_dir(tmp_path: Path) -> Path:
     又测的是**仓库里那份真的 yaml**——而不是一个只在这个测试里存在的假配置。
     """
     real = _REPO / "configs"
-    for name in ("default.yaml", "local.yaml"):
+    for name in ("default.yaml", "local.yaml", "submit.yaml"):
         (tmp_path / name).write_text((real / name).read_text(encoding="utf-8"), encoding="utf-8")
     return tmp_path
 
@@ -352,10 +352,11 @@ def test_missing_default_yaml_fails_loudly(tmp_path: Path) -> None:
 def test_unknown_profile_fails_loudly(config_dir: Path) -> None:
     """选了一个不存在的 profile ⇒ 报错，**不静默回退到 default**。
 
-    静默回退会让"我明明选了 submit"变成一个查不出来的问题。
+    静默回退会让"我明明选了另一个口径"变成一个查不出来的问题。
+    ⚠ 反例**不能用真实存在的 profile 名**（`local` / `submit`）——那样测的就是别的路径了。
     """
     with pytest.raises(ConfigError, match="配置文件不存在"):
-        _load(config_dir, **{ENV_PROFILE: "submit"})
+        _load(config_dir, **{ENV_PROFILE: "nonexistent"})
 
 
 # ── 3. profile 叠加 ────────────────────────────────────────────────────
@@ -376,6 +377,38 @@ def test_profile_overlays_only_what_it_names(config_dir: Path) -> None:
     assert local.retrieval.rrf.weights == base.retrieval.rrf.weights
     assert local.retrieval.prefetch_limit == base.retrieval.prefetch_limit
     assert local.models.embedder == base.models.embedder
+
+
+def test_submit_profile_changes_only_the_embedder(config_dir: Path) -> None:
+    """`submit.yaml` **只换模型**——这是 Step 5 能归因的前提（§12.1 R1 对冲 4）。
+
+    ⚠ 它同时是"提交口径没被悄悄改过"的回归位：**基线本来就是提交口径**
+    （集合 `memories`、`rerank.enabled: true`），submit 只该在上面加模型名，
+    以及将来重标定出来的那几个量。集合名尤其不能在这儿改——覆盖它的是 `local.yaml`。
+    """
+    base = _load(config_dir)
+    submit = _load(config_dir, **{ENV_PROFILE: "submit"})
+
+    assert submit.profile == "submit"
+    assert submit.models.embedder == "text-embedding-v4"
+
+    # 其余一律继承基线
+    assert submit.storage.qdrant.collection == base.storage.qdrant.collection == "memories"
+    assert submit.rerank.enabled is True
+    assert submit.budget.max_tokens == base.budget.max_tokens
+    assert submit.retrieval.prefetch_limit == base.retrieval.prefetch_limit
+
+
+def test_submit_model_name_matches_the_v4_client_default(config_dir: Path) -> None:
+    """`submit.yaml` 的模型名与 `TextEmbeddingV4Embedder.DEFAULT_MODEL` **必须相等**。
+
+    装配按**这个字符串**挑实现（`service/app.py::build_embedder`）——两处一旦不一致
+    **不会报错**：服务退回开发期的类（批大小 64），只在**提交期第一次 `Add`** 时才 400。
+    与 `test_model_default_is_the_same_in_both_places`（开发期那一对）是同一条理由。
+    """
+    from tianxi_am.embed.text_embedding_v4 import DEFAULT_MODEL
+
+    assert _load(config_dir, **{ENV_PROFILE: "submit"}).models.embedder == DEFAULT_MODEL
 
 
 # ── 4. 环境变量覆盖 ────────────────────────────────────────────────────

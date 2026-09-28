@@ -5,7 +5,8 @@
 > **`runs/` 已建**：`configs/runs/{t1-plain,t1-dated,a3-on,a3-off}/` 是各对照臂的冻结快照（由
 > [`../eval/experiments/t1_timestamp.py`](../eval/experiments/t1_timestamp.py) 与
 > [`a3_rerank.py`](../eval/experiments/a3_rerank.py) 的 `--freeze` 生成）。
-> `submit.yaml` **待建**（Step 5 产出）。
+> `submit.yaml` **已建**（2026-09-28）——**现在只有 `models.embedder` 一项**
+> （`text-embedding-v4`）；**由模型派生的量（token 预算实测量、全部标定阈值）待 Step 5 重标定后往这里补**。
 > **完整配置项清单见 [`../docs/config-reference.md`](../docs/config-reference.md)**（每个配置项、默认值、出处 §）。本文件只说**为什么这么组织**。
 
 ---
@@ -37,8 +38,9 @@
 > 重述默认值等于把那个信息淹掉。`local.yaml` / `submit.yaml` **只覆盖模型与由模型派生的量**
 > （向量维度、实测 token 预算、全部标定阈值），其余继承 `default.yaml`——全部复制一遍，
 > Step 5 切换时**没人知道该重标定哪些**（R1 对冲 3）。
-> **`local.yaml` 只覆盖一项**：`storage.qdrant.collection`——开发期用单独的集合，避免 §6.3 的 upsert
-> 把上一套实验的 point **静默留给下一套**（V9）。
+> **`local.yaml` 覆盖两项**：`storage.qdrant.collection`（开发期用单独的集合，避免 §6.3 的 upsert
+> 把上一套实验的 point **静默留给下一套**，V9）与 `rerank.enabled: false`（开发期不花那份墙钟——
+> 基线里是 `true`，那是提交口径）。**`submit.yaml` 现在只覆盖一项**：`models.embedder`。
 
 **两个 profile 之外的加载细节**（实现在 [`../src/tianxi_am/common/config.py`](../src/tianxi_am/common/config.py)）：
 
@@ -58,7 +60,7 @@
 configs/
 ├── default.yaml     # 基线：全部有消费方的阈值与模型名（§15 的七个消融项接完后才齐）
 ├── local.yaml       # 开发期覆盖（**只写与基线不同的键**）
-├── submit.yaml      # 提交期覆盖（⬜ Step 5 产出）
+├── submit.yaml      # 提交期覆盖（🟡 已建：模型名；阈值待 Step 5 重标定）
 └── runs/            # 每次对照实验的配置快照（哪个实验、什么时候、哪套模型）✅ T1 两臂 + A3 两臂已建
 ```
 

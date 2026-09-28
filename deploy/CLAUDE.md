@@ -13,14 +13,16 @@ Dockerfile      检索服务的镜像（多阶段；**上下文是仓库根**）
 **这个目录最要紧的两件事**：① 把 **Qdrant 的版本**钉死；② 把**服务做成单进程容器**。
 其余都是围绕这两条的说明。
 
-> ### ⚠ 这套容器**还不是提交口径**
+> ### ⚠ 跑哪一套由 `TIANXI_PROFILE` 决定，而 **default 不是提交口径**
 >
-> `configs/submit.yaml` **尚未存在**（见根 `CLAUDE.md` 的状态表），`default.yaml` 的
-> `models.embedder` 仍是开发期的 `Qwen/Qwen3-Embedding-8B`。
-> ⇒ **这个镜像的用途是"服务能起来、能连通、契约合规"**，不是"这就是提交时跑的那一套"。
-> Step 5 换模型 ⇒ **换向量维度 ⇒ 整个集合重建**（§4 的 runbook），
-> 届时**同一份 compose 不用改**——变的是 `configs/`、`.env` 与集合。
-> ⛔ **别把现在这个镜像当成"可以发 Full 的版本"**。
+> `configs/submit.yaml` **已建**（2026-09-28，只换了模型名 `text-embedding-v4`），
+> 但它的取值要靠 `TIANXI_PROFILE=submit` 才生效；`.env.example` 里默认写的仍是 `default`
+> ——那一份的 `models.embedder` 是开发期的 `Qwen/Qwen3-Embedding-8B`。
+> ⇒ **镜像本身两种口径都能跑**，差别只在 profile 与 `AML_EMB_*` 指向哪。
+> ⬜ **Step 5 尚未完成**：由模型派生的阈值**还没重标定**，换模型后**整个集合要重建**
+> （§4 的 runbook），届时**同一份 compose 不用改**——变的是 `configs/`、`.env` 与集合。
+> ⛔ **别把现在这个镜像 + `default` 当成"可以发 Full 的版本"**；也**别用 `submit` 去连开发网关**
+> （会静默串缓存，见 [`../docs/decisions.md`](../docs/decisions.md) **D27**）。
 
 > ⚠ `compose.yaml` 里现在**有两个服务**，所以：
 > `qdrant-up` 用的是 `up -d qdrant`（**带服务名**），而 `qdrant-down` 是 `stop qdrant`
@@ -79,13 +81,68 @@ curl -s http://10.193.135.28:28088/health                      # 期望 {"status
 | --- | --- | --- |
 | Add 报 500 / connection refused | `.env` 里写了 `127.0.0.1:9002` | 改 `host.docker.internal:9002` |
 | 从别的机器 connection refused，**日志里什么都没有** | `TIANXI_BIND` 还是 `127.0.0.1` | 设 `0.0.0.0` |
+| `sqlite3.OperationalError: unable to open database file`，容器**启动即退** | 用了**绑定挂载**（`-v /宿主/路径:/data`）——容器以 `app`（**uid 10001**）运行，而那个目录属于宿主用户 | `chown -R 10001:10001 /宿主/路径`（或 `chmod 777`）。⚠ **命名卷不会有这个问题**——Docker 首次挂载时会继承镜像里 `/data` 的属主，所以 compose 默认那条路是好的 |
 | `Bind for 0.0.0.0:6333 failed: port is already allocated` | 老版本 compose 起的 Qdrant 容器还占着 0.0.0.0 | 先 `docker rm -f tianxi-qdrant`，或用 `TIANXI_QDRANT_PORT` 换端口 |
-| Add 报 4xx 且信息里有模型名 | `configs/default.yaml` 的 `models.embedder`（`Qwen/Qwen3-Embedding-8B`）与本机网关服务的不一致 | 网关忽略 `model` 字段就没事；校验的话得改 config（重建镜像） |
+| Add 报 4xx 且信息里有模型名 | `configs/default.yaml` 的 `models.embedder`（`Qwen/Qwen3-Embedding-8B`）与本机网关服务的不一致 | 网关忽略 `model` 字段就没事；校验的话得改 config（挂配置目录，见 §0.5） |
 | 服务起不来、日志说缺 `embed.base_url` | `deploy/.env` 没建或键名写错 | 见上面 ① |
 
 > ⚠ **compose 文件不能挪出 `deploy/`**：它的 `build.context` 是 `..`，**相对 compose 文件所在目录**。
 > 拷到别处会报 `lstat .../var/deploy: no such file or directory`。要换位置就连 `Dockerfile` 与
 > 仓库根一起拷（或者改 `context`）。
+
+### 0.5 不改镜像改配置：挂一个 `TIANXI_CONFIG_DIR`
+
+**阈值 / 权重 / 开关都在 `configs/*.yaml` 里，而它们是烘进镜像的**（有意为之：配置文件是被评审、
+被 diff 的产物，不是运行时输入）。要在**不重建镜像**的前提下改一项，挂一个配置目录：
+
+```bash
+# ① 把整个 configs/ 拷出来，改你要改的那一项（**必须整个拷**：加载器读
+#    <dir>/default.yaml + <dir>/<profile>.yaml，两个文件都得在）
+cp -r configs/ /srv/tianxi/configs/
+vim /srv/tianxi/configs/default.yaml        # 例如 rerank.enabled: true
+
+# ② compose 里加两行（或写进 override 文件）
+#    volumes:  - /srv/tianxi/configs:/cfg:ro
+#    environment:  TIANXI_CONFIG_DIR: /cfg
+```
+
+> ⚠ **挂载后 `configs/` 就与镜像里那份脱钩了**——镜像升级不会带上新的配置，
+> 而**没有人会发现**（服务照常起来、只是跑的是旧阈值）。⇒ 要么把这份目录纳入版本管理、
+> 要么只在临时排查时用。**别让它变成一个没人记得的隐式偏离。**
+>
+> ⚠ `configs/` 里的键**不认识的会被拒绝**（拼错不会静默忽略），所以改坏了会在启动时响亮失败。
+
+#### 具体例：**改 rerank 开关**
+
+`rerank.enabled` 在**基线**里是 `true`（`configs/default.yaml`，2026-09-28 起——D8 把排序定为主线），
+开发期由 `configs/local.yaml` 覆盖成 `false`（单题 100 篇要 5–12s、本地串行跑题 ⇒ 整轮墙钟约 3×）。
+⇒ **在部署机上想临时改它**：按 §0.5 挂一份配置目录，改对应的那一份 `yaml`。
+⚠ 打开它**两处都得配**，只改 yaml 或只配 `.env` 都不生效：
+
+```bash
+# ① 配置：`<profile>.yaml` 里 rerank.enabled（按 §0.5 挂目录，或重建镜像）
+#    ⚠ 挂的是哪个 profile 就改哪个文件：default → default.yaml，submit → submit.yaml
+# ② .env 加三行：
+TIANXI_RERANKER_BASE_URL=http://host.docker.internal:9002/v1   # ⚠ 同 embedding 那条规矩：不是 127.0.0.1
+TIANXI_RERANKER_API_KEY=<key>
+TIANXI_RERANKER_MODEL=Qwen3-Reranker-4B                        # 只进 run record，端点忽略它
+```
+
+**怎么确认真的生效**（三层，从便宜到贵）：
+
+| 检查 | 期望 |
+| --- | --- |
+| `docker compose logs app \| grep -i rerank` | 配全了**没有** WARNING；`rerank.enabled=false` 会打一条 info |
+| 打一次 `/search`，看网关那侧有没有收到 `POST /v1/rerank` | 收到 ⇒ 开关通了 |
+| 线格式 | 请求 `{"model","query","documents"}` → 响应 `{"results":[{"index","score","text"}]}` |
+
+> ✅ **2026-09-28 实测过整条路**：容器 + 挂载配置（`rerank.enabled: true`）+ 假 reranker，
+> RRF 原始顺序 `[问题1, 问题0]`、假 reranker 给 `问题0` 更高分 ⇒ **Search 返回 `[问题0, 问题1]`**，
+> 顺序确实被重排。同一轮还验出：**绑定挂载要 `chown 10001:10001`**（见上面那张坑表）。
+>
+> ⚠ **reranker 是本项目里唯一不限模型的组件、也是唯一"敢花算力"的地方**（§2.3）——
+> 打开它是个**质量取舍**，代价是每题 5–12s（100 篇）。`rerank.timeout_seconds` 默认 30s，
+> 超时会**降级回 RRF 顺序**（不报错）。这条对照是 §13 的 **A3**，两臂见 `configs/runs/a3-{on,off}/`。
 
 ### 把镜像弄到服务器上（两条路）
 
