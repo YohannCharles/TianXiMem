@@ -90,7 +90,7 @@ class RerankUnavailable(RuntimeError):
 class Reranker(Protocol):
     """给候选重新打分/排序的东西。
 
-    ⚠ **协议刻意只收文本、只回分数**——它不知道 `memory_id`、不知道 `pair_idx`、
+    ⚠ **协议刻意只收文本、只回分数**——它不知道 `memory_id`、不知道位置、
     不知道 Qdrant。换一个 reranker 实现（远端 HTTP / 本地 cross-encoder）不需要
     改本包任何其它文件。
     """

@@ -5,7 +5,7 @@
 `memory_id` 回 SQLite 批量取正文。
 
 本模块**不认识任何数据集**：它只接受 canonical 的 `memory_id` / `user_id` /
-`session_id` / `pair_idx` / `event_time` 与**已渲染好的文本**。渲染由
+`session_id` / `chunk_ordinal` / `local_index` / `event_time` 与**已渲染好的文本**。渲染由
 [`../common/render.py`](../common/render.py) 负责，本模块不拼字符串。
 
 ## 两路向量从哪来（这是 §7.1 的硬规定）
@@ -56,14 +56,16 @@ BM25_MODEL: Final[str] = "qdrant/bm25"
 KEY_MEMORY_ID: Final[str] = "memory_id"
 KEY_USER_ID: Final[str] = "user_id"
 KEY_SESSION_ID: Final[str] = "session_id"
-KEY_PAIR_IDX: Final[str] = "pair_idx"
+KEY_CHUNK_ORDINAL: Final[str] = "chunk_ordinal"
+KEY_LOCAL_INDEX: Final[str] = "local_index"
 KEY_EVENT_TIME: Final[str] = "event_time"
 
 _PAYLOAD_KEYS: Final[tuple[str, ...]] = (
     KEY_MEMORY_ID,
     KEY_USER_ID,
     KEY_SESSION_ID,
-    KEY_PAIR_IDX,
+    KEY_CHUNK_ORDINAL,
+    KEY_LOCAL_INDEX,
     KEY_EVENT_TIME,
 )
 
@@ -72,7 +74,8 @@ def point_id_for(memory_id: str) -> str:
     """SQLite 的 `memory_id`（64 位十六进制）→ Qdrant 接受的 **UUID 字符串**。
 
     ⚠ **Qdrant 的 point id 只接受 uint64 或 UUID**，而 §6.1 的 `id` 是
-    `hash(user_id, session_id, pair_idx)` 的十六进制串——两者形状不同，所以需要这一层映射。
+    `hash(user_id, session_id, chunk_ordinal, local_index)` 的十六进制串——两者形状不同，
+    所以需要这一层映射。
 
     取哈希的**前 128 位**当 UUID：128 位对十万级的点而言碰撞概率可忽略，
     且映射是**纯函数**——同一个 `memory_id` 永远得到同一个 point id，
@@ -127,7 +130,10 @@ class MemoryRecord:
     memory_id: str
     user_id: str
     session_id: str
-    pair_idx: int
+    #: 位置的两半（D25）——**只用于溯源与调试**，检索不按它们排序或过滤
+    #: （排序是 Qdrant 的相似度、筛选只按 `user_id`；"会话顺序"是 SQLite 那边的事）。
+    chunk_ordinal: int
+    local_index: int
     event_time: int | None
     text: str
 
@@ -309,7 +315,8 @@ class QdrantStore:
                     KEY_MEMORY_ID: r.memory_id,
                     KEY_USER_ID: r.user_id,
                     KEY_SESSION_ID: r.session_id,
-                    KEY_PAIR_IDX: r.pair_idx,
+                    KEY_CHUNK_ORDINAL: r.chunk_ordinal,
+                    KEY_LOCAL_INDEX: r.local_index,
                     KEY_EVENT_TIME: r.event_time,
                 },
             )
@@ -328,8 +335,8 @@ class QdrantStore:
     ) -> int:
         """**从 SQLite 全量重建**这条路（§6.3：Qdrant 是派生读存储）。
 
-        `pairs` 用**鸭子类型**取字段（`id` / `user_id` / `session_id` / `pair_idx` /
-        `event_time` / `question` / `answer`），所以本模块**不必 import `store`**：
+        `pairs` 用**鸭子类型**取字段（`id` / `user_id` / `session_id` / `chunk_ordinal` /
+        `local_index` / `event_time` / `question` / `answer`），所以本模块**不必 import `store`**：
         它只要求"像 QA 对一样可读"，不要求那是哪一类对象。
 
         文本用 `renderer` 生成——**同一个渲染函数**既是 embedding 的输入，
@@ -351,7 +358,8 @@ class QdrantStore:
                     memory_id=pair.id,
                     user_id=pair.user_id,
                     session_id=pair.session_id,
-                    pair_idx=pair.pair_idx,
+                    chunk_ordinal=pair.chunk_ordinal,
+                    local_index=pair.local_index,
                     event_time=pair.event_time,
                     text=renderer(pair),
                 )

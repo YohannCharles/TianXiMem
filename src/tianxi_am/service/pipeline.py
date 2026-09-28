@@ -26,12 +26,19 @@ User Query → DenseArm（每 query 恰好 1 次）
 
 ```text
 canonical AddRequest
-  → session 锁（按 (user_id, session_id)）
-  → pairing / continuation  ──── SQLite 事务提交（真源）
-  → 取出"本批应索引的 QaPair"
+  → apply_batch：解析 chunk 序号 → 幂等守卫 → compose_memory_blocks
+                 → SQLite 事务提交（真源，位置 = (chunk_ordinal, local_index)）
+  → 取出本批写下的行（按 id）
   → render → dense embedding → Qdrant upsert(wait=True)
   → 响应
 ```
+
+**D24 起组合只看本批**（`compose_memory_blocks` 是纯函数、无跨 Add 状态），
+所以这一段没有"跨批续接"带来的额外分支：本批触碰的行**恰好**是它自己新写的那几行。
+
+**D25 起没有 session 锁**：位置由请求派生（不是 `MAX+1`）⇒ **同 `(user_id, session_id)`
+的 Add 可以并发**，它们在 `store.transaction()` 的 `BEGIN IMMEDIATE` 处排队（数据库级
+写者串行），而不是在应用层互斥。乱序到达也不再翻转会话顺序。
 
 **失败窗口**：SQLite 事务**已提交** → Qdrant 的 embedding/upsert **失败** → 客户端重试
 **同一个 `request_id`**。此时 `applied_batches` 里**已经有这一批**，幂等守卫会命中 ⇒
@@ -40,10 +47,10 @@ canonical AddRequest
 
 ### 修复路径：按 session 幂等重建（不动 `pairing/`）
 
-`ApplyBatchResult.plan` 在**守卫命中时是 `None`**（`pairing/` 的 `apply_batch` 里那行早返回），
-所以重放时拿不到"本批触碰了哪些 pair"。**但修复不需要那个列表**：`user_id` / `session_id`
-就在请求里，`fetch_pairs_by_idx_range(conn, user_id, session_id, 0, MAX)` 能拿到该 session
-的全部对，于是：
+`ApplyBatchResult.applied` 在**守卫命中时是 `False`**（`apply_batch` 里那行早返回），
+所以重放时拿不到"本批写了哪些行"。**但修复不需要那个列表**：`user_id` / `session_id`
+就在请求里，`fetch_session_ordered(conn, user_id, session_id)` 能拿到该 session
+的全部块（D25 之前是"按 `pair_idx` 取一段"，现在是"取整段"），于是：
 
 * `point_id` 是位置派生的纯函数 ⇒ 同一对永远是同一个 point
 * `upsert` 幂等 ⇒ 已经写对的会被原样覆盖
@@ -54,7 +61,7 @@ canonical AddRequest
 
 > **代价**：重放要 upsert 该 session 的全部对，而不是只有本批那几条。这是**刻意的**——
 > 换取了"不改 `applied_batches` 的表结构"。要精确到批就得加一列记触碰的 `pair_id`s
-> （那要改 `pairing/` 里的 DDL，**本模块没有做**）。
+> （那要改 `pairing/` 的 DDL，**本模块没有做**）。
 """
 
 from __future__ import annotations
@@ -62,11 +69,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
 
-from tianxi_am.common.config import DEFAULT_EXPANSION_SEED_LIMIT, DEFAULT_RADIUS
+from tianxi_am.common.config import (
+    DEFAULT_CHUNK_ORDINAL_PATTERN,
+    DEFAULT_EXPANSION_SEED_LIMIT,
+    DEFAULT_RADIUS,
+)
 from tianxi_am.common.render import render_pair
 from tianxi_am.common.tokens import TokenCounter
 from tianxi_am.pairing import AddBatch, ApplyBatchResult, apply_batch
-from tianxi_am.pairing.pairing import BatchLimits
 from tianxi_am.rank import (
     PackagedResponse,
     Reranker,
@@ -77,15 +87,10 @@ from tianxi_am.rank import (
 )
 from tianxi_am.retrieve import EvidenceChecker, HybridRetriever, dedup_candidates
 from tianxi_am.retrieve.fusion import Candidate
-from tianxi_am.service.locks import SessionLocks
 from tianxi_am.store.qdrant_store import QdrantStore
-from tianxi_am.store.sqlite_store import QaPair, SqliteStore, make_pair_id
+from tianxi_am.store.sqlite_store import QaPair, SqliteStore
 
 __all__ = ["AddOutcome", "AddPipeline", "SearchPipeline"]
-
-#: `fetch_pairs_by_idx_range` 的上界。取 int64 的极大值 ⇒ "该 session 的全部对"。
-_MAX_PAIR_IDX: int = 2**63 - 1
-
 
 @dataclass(frozen=True, slots=True)
 class AddOutcome:
@@ -111,42 +116,44 @@ class AddPipeline:
         store: SqliteStore,
         qdrant: QdrantStore,
         embedder: object,
-        locks: SessionLocks,
-        limits: BatchLimits | None = None,
         inject_abs_time: bool = False,
+        chunk_ordinal_pattern: str = DEFAULT_CHUNK_ORDINAL_PATTERN,
     ) -> None:
         self._store = store
         self._qdrant = qdrant
         self._embedder = embedder
-        self._locks = locks
-        self._limits = limits
+        #: D25：位置由 `request_id` 里的 chunk 序号派生 ⇒ 这个正则是**落库的前提**。
+        #: 取不到就非 200（`pairing.parse_chunk_ordinal`），**没有回退**。
+        self._chunk_ordinal_pattern = chunk_ordinal_pattern
         #: T1 的渲染变体（`packaging.inject_abs_time`）——**索引侧也要用它**：
         #: 正文一变，embedding 输入就变（§7.2 的"同一份渲染"）。
         self._inject_abs_time = inject_abs_time
 
     def apply(self, batch: AddBatch) -> AddOutcome:
-        """应用一批；**持锁直到 Qdrant 写完**。
+        """应用一批。**D25 起不再持 session 锁**。
 
-        ⚠ 锁覆盖到 upsert 结束（不只是 SQLite 事务）——否则同一 session 的下一个批次
-        可能在"真源已提交、索引还没写完"的窗口里插进来，让重放的范围与顺序变得难判。
-        代价是同 session 的 Add 完全串行（那是 §15 本来就要的）。
+        ⚠ **为什么现在可以并发**：位置 = `(chunk_ordinal, local_index)`，**两者都是请求的
+        纯函数** ⇒ 同一 session 的两个批次触碰**互不相交**的位置，不会撞 `UNIQUE`；
+        而"已提交、Qdrant 还没写完"那个窗口对并发方也安全（各自的 `id` 不同，
+        重试走 per-id 幂等 upsert）。**旧的 `SessionLocks` 已删**（见 D25）。
 
         ⚠ **任何一步失败都直接抛**：SQLite 未提交 ⇒ 整批可重试；
         SQLite 已提交而 Qdrant 失败 ⇒ 抛出去（客户端重试时会走修复路径）。
         **不要在这里 catch 后返回成功**——那会让那批记忆永远检索不到。
         """
-        with self._locks.hold(batch.user_id, batch.session_id):
-            result = apply_batch(self._store, batch, limits=self._limits)
-            pairs, repaired = self._pairs_to_index(batch, result)
-            indexed = (
-                self._qdrant.index_pairs(
-                    pairs,
-                    self._embedder,
-                    renderer=partial(render_pair, inject_abs_time=self._inject_abs_time),
-                )
-                if pairs
-                else 0
+        result = apply_batch(
+            self._store, batch, chunk_ordinal_pattern=self._chunk_ordinal_pattern
+        )
+        pairs, repaired = self._pairs_to_index(batch, result)
+        indexed = (
+            self._qdrant.index_pairs(
+                pairs,
+                self._embedder,
+                renderer=partial(render_pair, inject_abs_time=self._inject_abs_time),
             )
+            if pairs
+            else 0
+        )
         return AddOutcome(
             applied=result.applied,
             new_pair_count=result.new_pair_count,
@@ -160,28 +167,29 @@ class AddPipeline:
         self, batch: AddBatch, result: ApplyBatchResult
     ) -> tuple[list[QaPair], bool]:
         """返回 `(要索引的对, 是否走了修复路径)`。"""
-        plan = result.plan
-        if not result.applied or plan is None:
-            # 守卫命中（重试）或状态不明 ⇒ **按 session 幂等重建**
+        if not result.applied:
+            # 守卫命中（重试）⇒ **按 session 幂等重建**
             return self._session_pairs(batch.user_id, batch.session_id), True
 
-        # 正常路径：精确到本批【触碰过】的对——新建的 + 被续接/关闭的那个 pending
-        ids = [make_pair_id(batch.user_id, batch.session_id, d.pair_idx) for d in plan.new_pairs]
-        if plan.resume is not None:
-            ids.append(plan.resume.open_pair_id)
-        # 去重但保序（`dict.fromkeys`）：本批可能既新建又关闭，id 不会重合，但别依赖这一点
-        ids = list(dict.fromkeys(ids))
+        # 正常路径：本批写下的**全部**行（D24 之后没有"被续接/被关闭的既有对"——
+        # 一次 Add 触碰的恰好是它自己新写的那几行，不多不少）
+        ids = list(result.new_pair_ids)
         if not ids:
             return [], False
-        # ⚠ 正文**从 SQLite 读**，不用 plan 里的草稿——索引的内容必须与真源逐字一致。
+        # ⚠ 正文**从 SQLite 读**，不用 `result.blocks` 里的文本——索引的内容必须与真源逐字一致。
         # 这是一次**独立的只读操作**（SQLite 事务已经提交），所以自己开一个短生命周期连接。
         with self._store.read() as conn:
             return self._store.fetch_pairs_by_ids(conn, ids), False
 
     def _session_pairs(self, user_id: str, session_id: str) -> list[QaPair]:
-        """该 session 的全部对（真源）——修复路径的输入。"""
+        """该 session 的**全部块**（真源）——修复路径的输入。
+
+        ⚠ D25 起是"取整段"（`fetch_session_ordered`）而不是"按位置取一段"：
+        位置模型换了之后没有 `BETWEEN` 可用（`(chunk_ordinal, local_index)` 有空洞），
+        而修复路径本来就要**全部**——它正是"这个 session 有没有漏索引"的兜底。
+        """
         with self._store.read() as conn:
-            return self._store.fetch_pairs_by_idx_range(conn, user_id, session_id, 0, _MAX_PAIR_IDX)
+            return self._store.fetch_session_ordered(conn, user_id, session_id)
 
 
 class SearchPipeline:

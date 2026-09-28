@@ -21,7 +21,12 @@ ENV_FILE ?= .env
 # 跑评测时的数据集（`make eval`）。**只有两个计分数据集有加载器**（§12.4）。
 DATASET ?= locomo-refined
 
+# `make order-probe` 的 B 臂用几个**独立进程**（见那个目标的说明）。
+# 默认 1 = 测 D25 本身；`PROCESSES=4` = 测「多 worker 到底安不安全」。
+PROCESSES ?= 1
+
 .PHONY: help sync check fmt lint typecheck test qdrant-up qdrant-down serve contract-check probe-reranker \
+        order-probe image-build up down deploy-check \
         eval t1 t2 t2-dump smoke clean \
         fetch-data data-check data-patch
 
@@ -70,18 +75,51 @@ check:  ## 环境自检：Qdrant 可达 / 三段模型端点可用 / 密钥已�
 # 与 `contract-check` 的分工：本项只看"环境通不通"，不打契约。
 
 qdrant-up:  ## 起 Qdrant server（必须 server 模式；单分片）
-	docker compose -f deploy/compose.yaml up -d
+	docker compose -f deploy/compose.yaml up -d qdrant
+# ⚠ **带服务名 `qdrant`**：compose 里现在还有 `app`（容器形态的那一套，见 `up`），
+#    不带服务名会把检索服务也一并起起来，和 `make serve` 抢 8000。
 # ⚠ daemon 在 **Windows 侧**（Docker Desktop，D12）：WSL 里 docker CLI 可能因 socket
 #    权限用不了，那就去 **Windows 侧 Git Bash** 跑同一条命令（见 deploy/CLAUDE.md）。
 #    端口是转发过来的，所以 WSL 里访问 localhost:6333 照样成立。
 # ⚠ 报 `502 Bad Gateway` 而不是「拒绝连接」= 转发在、**容器没起**——正是该跑这条命令的时候。
 
 qdrant-down:  ## 停 Qdrant
+	docker compose -f deploy/compose.yaml stop qdrant
+# ⚠ `stop` 而不是 `down`：`down` 是**按项目**拆的，会把 `app` 一起拆掉
+#    （哪怕你只是想停一下 Qdrant）。要整栈下线用 `make down`。
+
+# ── 容器形态：整栈（检索服务 + Qdrant）───────────────────────────────────
+# 与上面两条的分工：`qdrant-up` 只起库、`serve` 在本机跑服务（**开发环路**）；
+# 下面三条把**服务本身**也放进容器（**部署环路**，见 deploy/CLAUDE.md）。
+
+image-build:  ## 构建检索服务镜像（上下文是仓库根，不是 deploy/）
+	docker build -f deploy/Dockerfile -t tianxi-am:local .
+# ⚠ `-f deploy/Dockerfile .` 的最后那个 `.` **不能省**：Dockerfile 要 pyproject.toml /
+#    uv.lock / src/ / configs/，所以上下文必须是仓库根（deploy/.dockerignore 在根上）。
+# ⚠ 镜像里【不装 [local] extra】（torch 那几个 G）——提交链路的三个模型全在远端网关。
+
+up:  ## 起整栈（检索服务 + Qdrant，**容器形态**）
+	@test -f deploy/.env || { echo "缺 deploy/.env —— 先 cp deploy/.env.example deploy/.env 并填值"; exit 1; }
+	docker compose -f deploy/compose.yaml up -d --build
+# ⚠ 前置检查是**故意**的：compose 自己的报错是 `env file ... not found`，
+#    它不会告诉你"该从哪拷"。而缺 .env 时 compose 仍可能起容器 ⇒ 服务在容器里
+#    因缺 embedding 密钥响亮失败、restart 策略再把它反复拉起来——看着像崩溃循环。
+
+down:  ## 停整栈（**保留卷**；加 `-v` 才会删真源）
 	docker compose -f deploy/compose.yaml down
+# ⚠ **默认不删卷**：`tianxi_data` 里是 SQLite 真源，删了不可恢复（Qdrant 那份才可重建）。
+
+deploy-check:  ## 对**已部署的容器**跑契约预检（真 HTTP，不消耗 Smoke 配额）
+	docker compose -f deploy/compose.yaml exec -T app python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
+# ⚠ 预检跑在**容器里**而不是本机：它要打 `http://127.0.0.1:8000`（容器自己的网卡）。
+#    从本机打是 `make contract-check` 那条路（`--base-url http://127.0.0.1:<宿主端口>`）。
 
 serve:  ## 起 Add/Search 服务（FastAPI + uvicorn，单进程）
 	uv run uvicorn tianxi_am.service.app:create_app_from_env --factory --workers 1
-# ⚠ 必须 --workers 1：§15 的按 session 串行化用的是进程内锁，多 worker 会**静默失效**。
+# ⚠ 必须 --workers 1。⚠ **D25 之后原因变了**：旧理由是"按 session 串行化用的是进程内锁，
+#    多 worker 会静默失效"——`SessionLocks` 已删，那条不再成立。现在拒的是
+#    **"放开多 worker 需要的验证一件都没做"**（并发写压力 / busy_timeout 多进程争用 /
+#    各自的 Qdrant 客户端）。⇒ **不要用"反正现在安全了"当理由把它去掉。**
 #    两条防线都会拦：`--workers N`（N>1）被 assert_single_process() 拦下，
 #    TIANXI_WORKERS != 1 被配置校验拦下（见 src/tianxi_am/common/config.py）。
 # ⚠ 用 --factory 而不是模块级 app：模块级 app 会让"导入本模块"就要求环境变量齐备，
@@ -108,6 +146,17 @@ probe-reranker:  ## 精排探针：打真网关，验连通性 + 它在链上真
 # 退出码：0 端点与线格式都正常 · 1 端点不可用或线格式不符 · 2 没配 reranker。
 # ⚠ **顺序有没有变不影响退出码**——那是信息，不是判据（一个诚实但保守的 reranker
 #    完全可能给出与 RRF 相同的顺序）。
+
+order-probe:  ## D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言真源**逐字一致**
+	uv run python tools/order_probe.py --processes $(PROCESSES)
+# ⚠ **它会花掉真实的 embedding 调用**（conv-26 全量 ≈ 216 块）⇒ 不进 `make test`。
+# ⚠ 需要 8131 与 8140..8140+N-1 这些端口空着；它自己起干净服务、各自一个集合，跑完关掉。
+# ⚠ `PROCESSES=4`（默认 1）让 B 臂用 **4 个独立进程**共享同一套存储
+#    ⇒ 那一条回答的是「`uvicorn --workers N` 安不安全」——与 `--workers 1` 那条约束直接相关。
+#    默认 1 时它测的是 D25 本身（乱序/并发 vs 顺序）。
+# ⚠ 跑完**不会自动清库**：`var/order-a/` `var/order-b/` 留着供比对（都在 gitignore 里）。
+#    Qdrant 里那两个 `memories_ab_order_*` 集合也是——要清就手动 drop。
+# 判据与 D25 的关系见 eval/reports/ledger.md 的「D25」一节。
 
 eval:  ## 跑一轮代理评测（§13）：DATASET / ARGS 可覆盖
 	uv run --env-file $(ENV_FILE) python -m eval.experiments.run --dataset $(DATASET) $(ARGS)

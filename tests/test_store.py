@@ -16,11 +16,9 @@ import time
 import pytest
 from tests.conftest import rd, run_parallel
 
-from tianxi_am.pairing.continuation import AddBatch, apply_batch
-from tianxi_am.pairing.pairing import BatchLimits, Message
+from tianxi_am.pairing import AddBatch, Message, apply_batch
 from tianxi_am.store.sqlite_store import (
     STATUS_COMPLETE,
-    STATUS_PENDING,
     SqliteStore,
     make_pair_id,
 )
@@ -30,22 +28,23 @@ def _msg(role: str, content: str) -> Message:
     return Message(role=role, content=content)
 
 
-def _one(store: SqliteStore, pair_idx: int):
+def _one(store: SqliteStore, ordinal: int):
     """按位置取一行（`u1` / `s1`）。"""
-    rows = rd(store, store.fetch_pairs_by_ids, [make_pair_id("u1", "s1", pair_idx)])
-    assert rows, f"pair_idx={pair_idx} 不存在"
+    rows = rd(store, store.fetch_pairs_by_ids, [make_pair_id("u1", "s1", ordinal, 0)])
+    assert rows, f"chunk_ordinal={ordinal} 不存在"
     return rows[0]
 
 
 def _seed(store: SqliteStore, contents: list[tuple[int, str, str | None]]) -> None:
     """直接落几行，便于只测存储层（不经过 continuation）。"""
     with store.transaction() as conn:
-        for pair_idx, question, answer in contents:
+        for ordinal, question, answer in contents:
             store.insert_pair(
                 conn,
                 user_id="u1",
                 session_id="s1",
-                pair_idx=pair_idx,
+                chunk_ordinal=ordinal,
+                local_index=0,
                 question=question,
                 answer=answer,
                 status=STATUS_COMPLETE,
@@ -58,57 +57,54 @@ def _seed(store: SqliteStore, contents: list[tuple[int, str, str | None]]) -> No
 
 
 def test_pair_id_is_position_derived_not_content_hash() -> None:
-    """`id` 只由 (user_id, session_id, pair_idx) 决定——**与内容无关**。
+    """`id` 只由位置 `(user_id, session_id, chunk_ordinal, local_index)` 决定——**与内容无关**。
 
     这是不变式 1：用内容哈希会在**补全**时变 `id`，留下**孤儿 point**。
     """
-    a = make_pair_id("u1", "s1", 0)
-    assert a == make_pair_id("u1", "s1", 0)  # 确定性
+    a = make_pair_id("u1", "s1", 0, 0)
+    assert a == make_pair_id("u1", "s1", 0, 0)  # 确定性
     # 位置不同 ⇒ id 不同
-    assert a != make_pair_id("u1", "s1", 1)
-    assert a != make_pair_id("u1", "s2", 0)
-    assert a != make_pair_id("u2", "s1", 0)
+    assert a != make_pair_id("u1", "s1", 1, 0)
+    assert a != make_pair_id("u1", "s2", 0, 0)
+    assert a != make_pair_id("u2", "s1", 0, 0)
     # 形状上就是"位置派生"：函数签名里根本没有内容参数
     assert len(a) == 64
 
 
 def test_pair_id_does_not_collide_across_field_boundaries() -> None:
     """分隔符防止字段粘连：("a","b\\x1fc") 与 ("a\\x1fb","c") 不得撞。"""
-    assert make_pair_id("a", "b\x1fc", 0) != make_pair_id("a\x1fb", "c", 0)
+    assert make_pair_id("a", "b\x1fc", 0, 0) != make_pair_id("a\x1fb", "c", 0, 0)
 
 
-def test_id_is_stable_across_completion(store: SqliteStore) -> None:
-    """**补全前后 `id` 不变**——这正是位置派生的目的。
+def test_id_is_position_derived_not_content_derived(store: SqliteStore) -> None:
+    """**`id` 只由位置 `(user_id, session_id, chunk_ordinal, local_index)` 决定，与内容无关。**
 
-    用内容哈希时，pending → complete 会改 `answer` ⇒ `id` 变 ⇒
-    Qdrant 里旧的 point 成了孤儿（还在，但再也不会被正确更新）。
+    用内容哈希时，两段**内容相同**的记忆会拿到同一个 `id`（这里的两行就是），
+    而且**任何一次内容改写**都会让 `id` 变 ⇒ Qdrant 里旧 point 成孤儿
+    （还在，但再也不会被正确更新）。
+
+    ⚠ D24 之后没有"补全时改写内容"的路径了，但**这条不变式仍然不能松**：
+    重建索引（`tools/reindex.py`）靠的正是"同一行永远是同一个 point"。
     """
-    limits = BatchLimits(max_messages=2, max_words=1000)
-    apply_batch(
-        store,
-        AddBatch("r1", "u1", "s1", (_msg("user", "Q1"), _msg("assistant", "A1"))),
-        limits=limits,
-    )
-    before = _one(store, 0)
-    assert before.status == STATUS_PENDING
+    _seed(store, [(0, "同一段问题", "[assistant] 同一段回答")])
+    _seed(store, [(1, "同一段问题", "[assistant] 同一段回答")])
+    first, second = _one(store, 0), _one(store, 1)
 
-    apply_batch(
-        store,
-        AddBatch("r2", "u1", "s1", (_msg("assistant", "A2"),)),
-        limits=limits,
-    )
-    after = _one(store, 0)
-
-    assert after.id == before.id  # ← 关键
-    assert after.answer != before.answer  # 内容确实变了
-    assert after.status == STATUS_COMPLETE
+    assert first.question == second.question  # 内容逐字相同…
+    assert first.id != second.id  # …而 id 不同（内容哈希在这里就会撞）
+    assert first.id == make_pair_id("u1", "s1", 0, 0)
+    assert second.id == make_pair_id("u1", "s1", 1, 0)
 
 
-# ── 不变式 2：pair_idx 连续（此处只测存储侧的约束）─────────────────────
+# ── 不变式 2（D25 重塑）：位置 = (chunk_ordinal, local_index)，唯一 ──────
 
 
-def test_unique_constraint_rejects_duplicate_pair_idx(store: SqliteStore) -> None:
-    """`UNIQUE(user_id, session_id, pair_idx)` 必须真的拦住重复位置。"""
+def test_unique_constraint_rejects_a_duplicate_position(store: SqliteStore) -> None:
+    """`UNIQUE(user_id, session_id, chunk_ordinal, local_index)` 必须真的拦住重复位置。
+
+    ⚠ D25 之后**并发**不再靠应用层锁来避免撞车——位置由请求派生，各批写各自的
+    `(chunk, local)`。所以这条约束守的是"**同一批被写两次**"（守卫该拦住的），
+    以及调用方算错位置的情形。"""
     _seed(store, [(0, "Q", None)])
     with pytest.raises(sqlite3.IntegrityError), store.transaction() as conn:
         # 故意给一个不同的 id，绕过 PRIMARY KEY，验证 UNIQUE 本身有效
@@ -116,7 +112,8 @@ def test_unique_constraint_rejects_duplicate_pair_idx(store: SqliteStore) -> Non
             conn,
             user_id="u1",
             session_id="s1",
-            pair_idx=0,
+            chunk_ordinal=0,
+            local_index=0,
             question="Q'",
             answer=None,
             status=STATUS_COMPLETE,
@@ -126,42 +123,56 @@ def test_unique_constraint_rejects_duplicate_pair_idx(store: SqliteStore) -> Non
         )
 
 
-# ── 不变式 4：UNIQUE 索引正好是邻域查询的键 ─────────────────────────────
+# ── 不变式 4（D25 重塑）：UNIQUE 索引正好是会话有序查询的键 ─────────────
 
 
-def test_neighbor_range_query_uses_an_index(store: SqliteStore) -> None:
-    """邻域查询**不得扫全表**——它必须命中 UNIQUE 建出的索引。
+def test_session_ordered_query_uses_an_index(store: SqliteStore) -> None:
+    """会话有序查询**不得扫全表**，也不该额外排序——它必须命中 UNIQUE 建出的索引。
 
-    `pair_idx` 有空洞则邻域**静默消失**，所以这条查询的正确性直接决定扩窗是否可靠。
+    这才是 §10 扩窗的数据来源（D25 起按会话取整段，不再按整数窗口取）。
     """
     _seed(store, [(i, f"Q{i}", None) for i in range(5)])
 
-    plan = rd(store, store.explain_idx_range, "u1", "s1", 1, 3)
+    plan = rd(store, store.explain_session_ordered, "u1", "s1")
     assert "USING INDEX" in plan or "USING COVERING INDEX" in plan, plan
     assert "SCAN qa_pairs" not in plan, plan
+    assert "TEMP B-TREE" not in plan, plan  # ← 不该额外排序
 
 
-def test_neighbor_range_returns_contiguous_window(store: SqliteStore) -> None:
-    """±1 扩窗：种子 `pair_idx = 2` ⇒ 返回 1、2、3，按 `pair_idx` 排序。"""
+def test_session_ordered_returns_the_whole_session_in_order(store: SqliteStore) -> None:
+    """整段取回：**按 `(chunk_ordinal, local_index)` 排**，且每行带上稠密序 `seq`。"""
     _seed(store, [(i, f"Q{i}", None) for i in range(5)])
 
-    got = rd(store, store.fetch_pairs_by_idx_range, "u1", "s1", 1, 3)
-    assert [p.pair_idx for p in got] == [1, 2, 3]
-
-    # 扩窗从 ±1 改成 ±2 只需改界，不动 schema
-    got2 = rd(store, store.fetch_pairs_by_idx_range, "u1", "s1", 0, 4)
-    assert [p.pair_idx for p in got2] == [0, 1, 2, 3, 4]
+    got = rd(store, store.fetch_session_ordered, "u1", "s1")
+    assert [p.chunk_ordinal for p in got] == [0, 1, 2, 3, 4]
+    assert [p.seq for p in got] == [0, 1, 2, 3, 4]
 
 
-def test_neighbor_range_never_crosses_user_or_session(store: SqliteStore) -> None:
-    """邻域是 SQL 查询，**最容易忘记带 `user_id` 条件**——漏了就是跨 user 泄漏。"""
+def test_session_ordered_seq_is_dense_even_when_chunk_ordinals_have_holes(
+    store: SqliteStore,
+) -> None:
+    """**chunk 序号跳号不破坏 `seq` 的稠密性**——这是 D25 让"缺号不断相邻"成立的地方。
+
+    旧的整数口径下，`pair_idx` 有空洞意味着邻域**静默消失**；现在空洞只出现在
+    `chunk_ordinal` 上，而相邻性看的是现算的 `seq`（必然 0..n-1 连续）。
+    """
+    _seed(store, [(i, f"Q{i}", None) for i in (0, 1, 7, 8)])
+
+    got = rd(store, store.fetch_session_ordered, "u1", "s1")
+    assert [p.chunk_ordinal for p in got] == [0, 1, 7, 8]
+    assert [p.seq for p in got] == [0, 1, 2, 3]  # ← 稠密
+
+
+def test_session_ordered_never_crosses_user_or_session(store: SqliteStore) -> None:
+    """会话有序查询是 SQL，**最容易忘记带 `user_id` 条件**——漏了就是跨 user 泄漏。"""
     _seed(store, [(0, "u1-Q", None), (1, "u1-Q1", None)])
     with store.transaction() as conn:
         store.insert_pair(
             conn,
             user_id="u2",
             session_id="s1",
-            pair_idx=0,
+            chunk_ordinal=0,
+            local_index=0,
             question="u2-Q",
             answer=None,
             status=STATUS_COMPLETE,
@@ -172,7 +183,8 @@ def test_neighbor_range_never_crosses_user_or_session(store: SqliteStore) -> Non
             conn,
             user_id="u1",
             session_id="s2",
-            pair_idx=0,
+            chunk_ordinal=0,
+            local_index=0,
             question="u1-s2-Q",
             answer=None,
             status=STATUS_COMPLETE,
@@ -180,84 +192,8 @@ def test_neighbor_range_never_crosses_user_or_session(store: SqliteStore) -> Non
             request_id="seed",
         )
 
-    got = rd(store, store.fetch_pairs_by_idx_range, "u1", "s1", 0, 5)
+    got = rd(store, store.fetch_session_ordered, "u1", "s1")
     assert [p.question for p in got] == ["u1-Q", "u1-Q1"]
-
-
-# ── §6.5 写入规则：填空 + 追加，绝不覆盖 ────────────────────────────────
-
-
-def test_append_answer_fills_then_appends(store: SqliteStore) -> None:
-    """`answer` 原值为空则填入，否则**追加**（append-only）。"""
-    _seed(store, [(0, "Q", None)])
-    pid = make_pair_id("u1", "s1", 0)
-
-    with store.transaction() as conn:
-        assert store.append_answer(conn, pid, "[assistant] a") is True
-    assert _one(store, 0).answer == "[assistant] a"
-
-    with store.transaction() as conn:
-        assert store.append_answer(conn, pid, "[assistant] b") is True
-    # 追加用单个换行连接 ⇒ 渲染成 A: 块时就是 §11.3 示例的形状
-    assert _one(store, 0).answer == "[assistant] a\n[assistant] b"
-
-
-def test_append_answer_ignores_empty_text(store: SqliteStore) -> None:
-    _seed(store, [(0, "Q", None)])
-    pid = make_pair_id("u1", "s1", 0)
-    with store.transaction() as conn:
-        assert store.append_answer(conn, pid, "") is False
-    assert _one(store, 0).answer is None
-
-
-def test_append_question_fills_then_appends(store: SqliteStore) -> None:
-    """`question` 是 **填空 + 追加**（append-only）——与 `answer` 同一个写模式。
-
-    ⚠ 不能只在 NULL 时写入："一个 `question` 恰好来自一条 user 消息"这个前提被 D20 修正了
-    ——连续 user 消息（AML 拆超长 message 的产物）并进**同一个** `question`，
-    而它们可能落在不同批次里 ⇒ 必须允许追加。
-    """
-    _seed(store, [(0, None, None)])  # 无问的对
-    pid = make_pair_id("u1", "s1", 0)
-
-    with store.transaction() as conn:
-        assert store.append_question(conn, pid, "第一段") is True
-    assert _one(store, 0).question == "第一段"
-
-    with store.transaction() as conn:
-        assert store.append_question(conn, pid, "第二段") is True
-    # 与 append_answer 一样用单个换行连接（§11.3：AML 只做 "\n".join，不插分隔符）
-    assert _one(store, 0).question == "第一段\n第二段"
-
-
-def test_append_question_ignores_empty_text(store: SqliteStore) -> None:
-    _seed(store, [(0, None, None)])
-    pid = make_pair_id("u1", "s1", 0)
-    with store.transaction() as conn:
-        assert store.append_question(conn, pid, "") is False
-    assert _one(store, 0).question is None
-
-
-# ── 单向状态 ───────────────────────────────────────────────────────────
-
-
-def test_mark_complete_is_one_way(store: SqliteStore) -> None:
-    """`status` **只允许 pending → complete**；对已 complete 的行调用是空操作。
-
-    反向是**做不到**的：`mark_complete` 带 `WHERE status = 'pending'`，
-    而且**没有任何方法**能把状态写回 pending。
-    """
-    _seed(store, [(0, "Q", "[assistant] A")])
-    pid = make_pair_id("u1", "s1", 0)
-
-    with store.transaction() as conn:
-        assert store.mark_complete(conn, pid) is False  # 已经是 complete，空操作
-    assert _one(store, 0).status == STATUS_COMPLETE
-
-    # 反向不可达：store 的公开方法里没有 set_status/set_pending
-    public = {n for n in dir(store) if not n.startswith("_")}
-    assert "mark_pending" not in public
-    assert "set_status" not in public
 
 
 def test_insert_rejects_illegal_status(store: SqliteStore) -> None:
@@ -266,7 +202,8 @@ def test_insert_rejects_illegal_status(store: SqliteStore) -> None:
             conn,
             user_id="u1",
             session_id="s1",
-            pair_idx=0,
+            chunk_ordinal=0,
+            local_index=0,
             question="Q",
             answer=None,
             status="half-done",  # type: ignore[arg-type]
@@ -286,13 +223,12 @@ def test_batch_write_rolls_back_entirely_on_error(
     contract.md §6：内部异常应让本批保持"可重试"（事务未提交），
     而不是返回一个"部分成功"。
     """
-    limits = BatchLimits(max_messages=99, max_words=1000)
     original = store.insert_pair
     calls = {"n": 0}
 
     def flaky(conn, **kwargs):
         calls["n"] += 1
-        if calls["n"] == 2:  # 第二个对落库时炸
+        if calls["n"] == 2:  # 第二个块落库时炸
             raise RuntimeError("模拟中途失败")
         return original(conn, **kwargs)
 
@@ -302,10 +238,12 @@ def test_batch_write_rolls_back_entirely_on_error(
         apply_batch(
             store,
             AddBatch(
-                "r1",
+                # ⚠ request_id 必须**取得出 chunk 序号**（D25）——这一条用的是
+                #   本仓 harness 的形态（`<user>|<session>|<n>`）。
+                "u1|s1|0",
                 "u1",
                 "s1",
-                # ⚠ 必须产出**两个**对，否则 `insert_pair` 只被调一次、第二轮永远不炸
+                # ⚠ 必须产出**两个**块，否则 `insert_pair` 只被调一次、第二轮永远不炸
                 #    （连续 user 消息会并成一个 question，所以这里刻意用交替形状）
                 (
                     _msg("user", "Q1"),
@@ -314,24 +252,26 @@ def test_batch_write_rolls_back_entirely_on_error(
                     _msg("assistant", "A2"),
                 ),
             ),
-            limits=limits,
         )
 
-    # 一个对都没留下，守卫也没记 —— 整批仍然"可重试"
+    # 一个块都没留下，守卫也没记 —— 整批仍然"可重试"
     assert rd(store, store.assert_isolation, "u1") == []
-    assert rd(store, store.is_batch_applied, "r1") is False
+    assert rd(store, store.is_batch_applied, "u1|s1|0") is False
 
 
 # ── 读：按 id 批量取正文 / 隔离 ────────────────────────────────────────
 
 
 def test_fetch_pairs_by_ids_preserves_caller_order(store: SqliteStore) -> None:
-    """按 id 批量取正文时**保持调用方给来的顺序**（那是检索名次顺序）。"""
+    """按 id 批量取正文时**保持调用方给来的顺序**（那是检索名次顺序）。
+
+    ⚠ 回来的行 `seq` 是 `-1`（按主键取没有会话上下文）——`rank/neighbor.py` 会补上它。
+    """
     _seed(store, [(i, f"Q{i}", None) for i in range(4)])
-    ids = [make_pair_id("u1", "s1", i) for i in (3, 0, 2)]
+    ids = [make_pair_id("u1", "s1", i, 0) for i in (3, 0, 2)]
 
     got = rd(store, store.fetch_pairs_by_ids, ids)
-    assert [p.pair_idx for p in got] == [3, 0, 2]
+    assert [p.chunk_ordinal for p in got] == [3, 0, 2]
     assert rd(store, store.fetch_pairs_by_ids, []) == []
     assert rd(store, store.fetch_pairs_by_ids, ["不存在"]) == []
 
@@ -344,7 +284,8 @@ def test_isolation_by_user_id(store: SqliteStore) -> None:
             conn,
             user_id="u2",
             session_id="s1",
-            pair_idx=0,
+            chunk_ordinal=0,
+            local_index=0,
             question="u2-Q",
             answer=None,
             status=STATUS_COMPLETE,
@@ -385,7 +326,8 @@ def test_store_is_usable_from_another_thread(store: SqliteStore) -> None:
                 conn,
                 user_id="u1",
                 session_id="s2",
-                pair_idx=0,
+                chunk_ordinal=0,
+                local_index=0,
                 question="Q-s2",
                 answer="A-s2",
                 status=STATUS_COMPLETE,
@@ -414,7 +356,8 @@ def test_transaction_rolls_back_and_closes_on_exception(store: SqliteStore) -> N
             conn,
             user_id="u1",
             session_id="s1",
-            pair_idx=0,
+            chunk_ordinal=0,
+            local_index=0,
             question="半批",
             answer=None,
             status=STATUS_COMPLETE,
@@ -439,7 +382,11 @@ def test_concurrent_write_transactions_across_sessions(store: SqliteStore) -> No
     输的那一方**等待**，而不是抛 `SQLITE_BUSY`。
 
     断言四件事：无异常（含 `database is locked` / `cannot start a transaction within
-    a transaction`）· 无数据丢失 · **每个 session 内 `pair_idx` 连续** · session 之间无污染。
+    a transaction`）· 无数据丢失 · **每个 session 内位置与写的内容一一对上** · session 之间无污染。
+
+    ⚠ D25 之后**没有"分配位置"这一步**了：位置由调用方给定（这里用 `i` 当 `chunk_ordinal`）。
+    这条用例测的东西因此**变窄了**——它现在只测"并发写事务在 SQLite 处排队而不是失败"，
+    不再测"读-改-写有没有被插进来"（那个问题连同 `next_pair_idx` 一起消失了）。
     """
     n_sessions = 6
     rounds = 3
@@ -450,12 +397,12 @@ def test_concurrent_write_transactions_across_sessions(store: SqliteStore) -> No
         start.wait()  # 所有线程同时出发，最大化撞锁概率
         for i in range(rounds):
             with store.transaction() as conn:
-                idx = store.next_pair_idx(conn, "u1", session)
                 store.insert_pair(
                     conn,
                     user_id="u1",
                     session_id=session,
-                    pair_idx=idx,
+                    chunk_ordinal=i,
+                    local_index=0,
                     question=f"{session}-Q{i}",
                     answer=f"{session}-A{i}",
                     status=STATUS_COMPLETE,
@@ -473,49 +420,61 @@ def test_concurrent_write_transactions_across_sessions(store: SqliteStore) -> No
     for j in range(n_sessions):
         session = f"s{j}"
         mine = [p for p in all_pairs if p.session_id == session]
-        # 该 session 内连续、从 0 起、无重复——读-改-写没有被任何别的线程插进来
-        assert [p.pair_idx for p in mine] == list(range(rounds))
+        # 该 session 内的位置恰好是 0..rounds-1，且每一号都对上它自己的内容
+        assert sorted(p.chunk_ordinal for p in mine) == list(range(rounds))
+        assert {p.chunk_ordinal: p.question for p in mine} == {
+            i: f"{session}-Q{i}" for i in range(rounds)
+        }
         # 无跨 session 污染：每一行的内容都属于它自己的 session
         assert sorted(p.question for p in mine) == sorted(f"{session}-Q{i}" for i in range(rounds))
 
 
-def test_same_session_concurrent_writers_never_take_the_same_pair_idx(store: SqliteStore) -> None:
-    """**同一个 `(user_id, session_id)`** 的多个写事务并发 ⇒ `pair_idx` 不得撞车。
+def test_same_session_concurrent_writers_do_not_collide(store: SqliteStore) -> None:
+    """**同一个 `(user_id, session_id)`** 的多个写事务并发 ⇒ 各行落位**互不相交**。
 
-    上一条用例的线程**各写各的 session**（UNIQUE 键各不相同），所以它**证明不了**
-    `BEGIN IMMEDIATE` 的必要性——把 IMMEDIATE 降成默认的 deferred `BEGIN`，它照样会过。
-    这一条才是那个决定的**必要性用例**：
+    与上一条的分工：那一条的线程**各写各的 session**（UNIQUE 键各不相同），
+    它证明不了"同 session 并发是安全的"。这一条才是。
 
-    * `next_pair_idx` 是**读-改-写**。deferred `BEGIN` 下两个事务会读到**同一个**
-      `MAX(pair_idx)` ⇒ 插入同一个位置 ⇒ 撞 `UNIQUE(user_id, session_id, pair_idx)`；
-    * 或者：读锁升级写锁时对方正持写锁 ⇒ **立刻** `SQLITE_BUSY`（SQLite **不对锁升级
-      应用 `busy_timeout`**，它宁可立刻报错也不冒死锁的险）。
+    **D25 之前**这条必须靠应用层的 `SessionLocks` 串行化，因为位置是 `MAX+1` 读-改-写；
+    **D25 之后**位置由调用方给定（`(chunk, local)`），所以：
 
-    两条路都会让 `errors` 非空。`BEGIN IMMEDIATE` 在事务开头就拿写锁，把读-改-写整体串行化。
+    * 每一批写**自己的**位置 ⇒ 不撞 `UNIQUE`；
+    * 也不再需要 `BEGIN IMMEDIATE` 来挡"两个事务读到同一个 MAX"——那是**位置**的问题，
+      而位置的读-改-写已经没有了。
+
+    ⚠ **但 `BEGIN IMMEDIATE` 仍然必须保留**，理由是另一条：写事务**先读后写**
+    （守卫 `SELECT` → `INSERT`），deferred `BEGIN` 下两方都要把读锁**升级**成写锁，
+    SQLite 会**立刻**返回 `SQLITE_BUSY`（不对锁升级应用 `busy_timeout`）。
+    `test_batch_write_rolls_back_entirely_on_error` 与上面那条跨 session 用例一起钉着它。
     """
     n_writers = 6
     rounds = 3
     start = threading.Barrier(n_writers, timeout=20)
 
-    def writer(tag: str) -> None:
+    def writer(tag: str, base: int) -> None:
         start.wait()
         for i in range(rounds):
             with store.transaction() as conn:
-                idx = store.next_pair_idx(conn, "u1", "shared")
+                # 每个 writer 占**自己那一段** chunk 序号 —— 位置互不相交
                 store.insert_pair(
                     conn,
                     user_id="u1",
                     session_id="shared",
-                    pair_idx=idx,
+                    chunk_ordinal=base + i,
+                    local_index=0,
                     question=f"{tag}-Q{i}",
                     answer=None,
                     status=STATUS_COMPLETE,
                     event_time=None,
                     request_id=f"{tag}-{i}",
                 )
-                time.sleep(0.01)  # 拉长读-改-写的窗口
+                time.sleep(0.01)  # 拉长写窗口，逼出排队/升级争用
 
-    assert run_parallel([(lambda t=f"w{j}": writer(t)) for j in range(n_writers)]) == []
+    errors = run_parallel(
+        [(lambda t=f"w{j}", b=j * rounds: writer(t, b)) for j in range(n_writers)]
+    )
+    assert errors == []  # ← 无 SQLITE_BUSY、无 UNIQUE 冲突
 
-    idxs = [p.pair_idx for p in rd(store, store.assert_isolation, "u1")]
-    assert idxs == list(range(n_writers * rounds))  # 连续、无重复、无空洞
+    pairs = rd(store, store.assert_isolation, "u1")
+    # 一共 n_writers*rounds 行，chunk 序号恰好是 0..n-1（无重复、无丢失）
+    assert sorted(p.chunk_ordinal for p in pairs) == list(range(n_writers * rounds))

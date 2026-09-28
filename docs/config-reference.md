@@ -40,7 +40,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | 层 | 拥有哪些键 | 例子 |
 | --- | --- | --- |
 | **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXI_SQLITE_PATH`、`TIANXI_QDRANT_URL`、`TIANXI_EMBED_CACHE_DIR`、`TIANXI_WORKERS` |
-| **`configs/<profile>.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.*`、`pairing.*`、`models.embedder`、`storage.qdrant.collection`、`storage.sqlite.busy_timeout_ms` |
+| **`configs/<profile>.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.*`、`neighbor.*`、`models.embedder`、`storage.qdrant.collection`、`storage.sqlite.busy_timeout_ms` |
 
 **每个键只有一个家，两边不重叠也不许重叠。** 在 yaml 里写一个 env 拥有的键会**直接报错**
 （反之亦然）——两处都能设的值，最终会变成"跑出来的结果和 yaml 里写的不一样，而没人知道为什么"。
@@ -91,7 +91,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `rerank` | 直接用融合名次 | —— | **候选数量不变**（只是顺序变了） | §11.2 | ✅ `rerank.enabled` |
 | `packaging` | 不做打包策略 | —— | —— | §11.3 |
 | **T1** | 正文**不带**日期前缀（旧口径，仍可作消融） | —— | **名次 / 段数 / `created_at` / `score` 全不变**（只有 `content` 多一段 `[YYYY-MM-DD] `） | §11.3 / **D21** | ✅ `packaging.inject_abs_time`（**2026-09-25 起默认 `true`**） |
-| **相对时间注解** | 正文里的相对表达**照原样**留着（`last Tues`） | —— | **名次 / 段数 / `id` / `created_at` / `score` / token 口径全不变**（只有 `content` 多出括号注）；**embedding 输入也不变**（它只走 `content` 这一条路） | D21 的延伸（原文保留、日期是**额外锚点**） | ✅ `packaging.annotate_relatives`（**默认 `false`**） |
+| **相对时间注解** | 正文里的相对表达**照原样**留着（`last Tues`） | —— | **名次 / 段数 / `id` / `created_at` / `score` / token 口径全不变**（只有 `content` 多出括号注）；**embedding 输入也不变**（它只走 `content` 这一条路） | D21 的延伸（原文保留、日期是**额外锚点**） | ✅ `packaging.annotate_relatives`（**默认 `true`**——`configs/default.yaml` 里写死；⚠ **加载器对"键缺失"取 `false`**，与 `inject_abs_time` 的缺失约定**相反**，所以 D22 之前冻结的快照仍按"无注解"跑） |
 | `agent` | 一律不走 Agentic Search | `checker`（门控时） | **打包顺序不变**（只是候选少了 agent 补的那部分） | §9 |
 
 > **最后一列是 §13 的纯度规则**：**开关必须只影响它命名的那一件事。** 否则对照不成立——**而结果看起来完全正常，只是结论错了**。
@@ -184,13 +184,29 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
+## 5.5 接入口径（D25）—— ✅ **已落地**
+
+| 配置项 | 初值 | 类 | 说明 |
+| --- | --- | --- | --- |
+| `ingest.chunk_ordinal_pattern` | `(?:chunk-\|\|)(\d+)\s*$` | **A** | 从 `request_id` 里**取 chunk 序号**的正则（`re.search`，恰好 1 个捕获组）。D25 把位置改成 `(chunk_ordinal, local_index)`，**chunk 序号只能从这个 id 里取** ⇒ 取不到就**非 200**（没有回退，见 [`../src/tianxi_am/pairing/pairing.py`](../src/tianxi_am/pairing/pairing.py) 的 `parse_chunk_ordinal`） |
+
+> ⚠ **格式假设的来源是团队告知，不是一手文档**（D25 的"关键依据"一节）——
+> 与 S2/S5 同类。**做成配置项**是为了让"平台换了个形状"不必改代码；
+> **响亮失败**是为了让"我们猜错了"立刻暴露，而不是安静地跑完一整场。
+>
+> 默认值同时认两种形态（`re.search`）：
+> 平台实发 `eval:<run_id>:locomo_refined:conv-0:chunk-3` · 本仓 harness `<user>|<session>|3`
+> ——[`../eval/harness/batching.py`](../eval/harness/batching.py) 的 `request_id_for()` 就是后者。
+
+---
+
 ## 6. Neighbor Expansion + 段合并（§10 / §11.2）—— ✅ **已落地**
 
 | 配置项 | 初值 | 类 | 说明 |
 | --- | --- | --- | --- |
 | `neighbor.expansion_seed_limit` | **1000**（= 全部候选） | C | 只对**名次前 N 位**的候选主动扩窗；其余候选**仍保留，只是不扩展**。✅ 2026-09-25 由 30 提到 1000：3 段 346 题的 A/B **+3.5pt 且三段无倒退**（[`../eval/reports/ledger.md`](../eval/reports/ledger.md) 的 N1） |
 | `neighbor.seed_placement` | **`keep`** | C | **段内顺序**（§11.2 的组内顺序，明文可消融）：`keep`（纯时间序）/ `front`（种子提到段首，⚠ **断时序**）/ `echo`（段首重复种子，时间序块原样保留）。✅ 2026-09-25 加，**三档正在对照中** |
-| `neighbor.radius` | **2** | C | 扩窗半径，**单位是 QA 对**——`±2` 拿回前后各**两整对**（最多 8 条消息），不是各一条消息。✅ 同日 1 → 2（同一条证据链） |
+| `neighbor.radius` | **2** | C | 扩窗半径，**单位是记忆块**（D24 前叫 QA 对）——`±2` 拿回会话里前后各**两整块**（最多 8 条消息），不是各一条消息。✅ 同日 1 → 2（同一条证据链） |
 
 > ⚠ **PRD §10 的"20 种子 / 60 槽位"是一道示例算术**（用来演示预算怎么算），
 > 与这里的实际取值**不是一回事**，别互相替换。
@@ -198,7 +214,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > ——比如 PRD 的示例口径——服务照常启动、行为一点不变。）
 
 **`top_k` 约束的是段数，不是 raw memory 数**：100 个候选 + 40 个邻居
-= 140 条 raw，连续 `pair_idx` 合并之后可能只剩 60 段。⇒ **`top_k` 只能在合并之后生效**。
+= 140 条 raw，**相邻块合并**之后可能只剩 60 段。⇒ **`top_k` 只能在合并之后生效**。
 
 **预算怎么算**：**真正先撞上的限制是 token 而不是段数**（§6.4）——一对的文本量约为单条消息的两倍，117,760 token 的答案窗口可能比 100 个段更早用尽。
 
@@ -207,11 +223,14 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > conv-26 一段上看着是 +5.8pt，三段 346 题上只有 **+3.5pt**（对话之间的方差自己就有 ±5pt）。
 > ⚠ 代价：每题上下文 ~34k → ~57k 字符 ⇒ **判分侧 token 涨约 60%**。
 
-**窗口从 ±1 改 ±2 只需改 `BETWEEN` 的界**（§10）——`UNIQUE(user_id, session_id, pair_idx)` 建出的索引**正好就是这个查询的键**。
+**窗口从 ±1 改 ±2 只需改 `neighbor.radius`**（§10）——扩窗自 **D25** 起是
+**每 session 取一次整段有序列表、在 Python 里切 `[i-radius, i+radius]`**（不再是一条 `BETWEEN` SQL），
+所以改半径只动这一个键、不牵动查询。⚠ 它**同时是邻域判据的输入**：
+同一 session 内相邻块会被并进同一段，**半径越大、能并进来的一串越长**。
 
 > **`neighbor.enabled` / `neighbor.order` 这两个键没有落地**，而且是**有意的**：
 > 前者是 §15 的消融开关（**待接线**，见 §2），后者在 v1 里**不是旋钮**——
-> 段内顺序（`pair_idx` 升序）与段间顺序（`best_rank` 升序）都是 §11.2 的规格，
+> 段内顺序（**`seq` 升序**，D25 前叫 `pair_idx`）与段间顺序（`best_rank` 升序）都是 §11.2 的规格，
 > 不是可以各调各的初值。
 
 ---
@@ -242,11 +261,11 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > ⚠ **"想用却没配全"会打一条 WARNING**：否则它会表现成"每次检索都静默不精排"。
 
 > **`packaging.group_inner_order` / `packaging.group_outer_order` 不是配置项**：
-> 它们是 §11.2 的**规格**（段内 `pair_idx` 升序、段间 `best_rank` 升序），
+> 它们是 §11.2 的**规格**（段内 **`seq` 升序**、段间 `best_rank` 升序），
 > 住在 `rank/neighbor.merge_segments` 里，**不是可以各写各的初值**。
 > §11.2 说它们是"可消融项"——真要消融时**改那一个函数**，别先立一个没人读的键。
 
-**组内顺序**（§11.2）：**窗口内部按 `pair_idx` 时间序输出，不把种子提到最前。** 窗口是一段连续对话，按时间序读才成立；把种子抽到最前会把一段话拦腰截断。而答案阶段按前缀截断——**窗口整体连续，意味着截断点落在窗口边界上**，不会切出半个窗口。
+**组内顺序**（§11.2）：**窗口内部按 `seq` 时间序输出，不把种子提到最前。** 窗口是一段连续对话，按时间序读才成立；把种子抽到最前会把一段话拦腰截断。而答案阶段按前缀截断——**窗口整体连续，意味着截断点落在窗口边界上**，不会切出半个窗口。
 
 **组间顺序 = 种子名次序**（§11.2）：最终 `data` 数组是"按种子名次依次排列的各窗口"。名次最高的种子及其邻域**必须排在最前**——预算不足时被牺牲的是名次最低的种子，而不是随机某一个。重叠窗口在去重后归属**名次更靠前的那个种子**。
 
@@ -269,7 +288,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `storage.qdrant.shard_number` | **1** | 根级融合跨分片合并，**分片数变化会改变排名**——为可复现必须单分片 |
 | `storage.qdrant.named_vectors` | `dense` + `bm25` | 稀疏向量的距离固定为 Dot |
 | `storage.qdrant.payload_indexes` | `user_id`(**keyword** + `is_tenant`) / `session_id`(keyword) / `event_time`(integer) | **必须在写入数据前建**，否则 HNSW 需要重建才有过滤感知 |
-| `storage.qdrant.payload_fields` | `user_id` / `session_id` / `pair_idx` / `event_time` | **不含正文** |
+| `storage.qdrant.payload_fields` | `user_id` / `session_id` / `chunk_ordinal` / `local_index` / `event_time` | **不含正文**。⚠ **D25** 把 `pair_idx` 拆成了后两个（payload 里没有消费方，只是溯源；过滤只按 `user_id`，扩窗读 SQLite） |
 | `storage.qdrant.wait` | **`true`** | 契约要求"响应前立即可搜"；默认异步不保证 |
 | `storage.sqlite.path` | `var/tianxi.db`（`.env`） | 真源，文件随 run 归档。⚠ 是 `var/` 不是 `data/`——后者与只读归档 `benchmark_data/` 容易混（见 [`../var/CLAUDE.md`](../var/CLAUDE.md)） |
 | `cache.embed.dir` | `var/embed_cache`（`.env`） | **必须落盘** |
@@ -301,16 +320,19 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 10. 数据侧常量（§6.2 / §6.5）—— ✅ **已落地**
+## 10. 数据侧常量（§6.2）—— ⛔ **D24 起本组配置项已删除**
 
-| 配置项 | 值 | 说明 |
-| --- | --- | --- |
-| `pairing.batch_max_messages` | **20** | AML 的切批上限之一 |
-| `pairing.batch_max_words` | **2000** | **本地复现不了**——"Adapter 计数的词"官方从未定义 |
+**曾在此的两个键**（`pairing.batch_max_messages` = 20、`pairing.batch_max_words` = 2000）
+**随 D24（2026-09-27）一起删掉了**——它们唯一的消费方是"本批是否命中上限 ⇒ 最后一对标
+`pending`"那个判定，而 `pending` 概念已取消。
 
-> **本地复现不了词数那一路**（§6.5 / §12.3 第 5 条）：本地只能按 20 条复现，因此**本地测出的 `pending` 埋点数与线上必然对不上**，解读那三个计数器时必须记住。
+> ⚠ **"AML 按 20 条消息或 2,000 个 Adapter 计数的词切批"这个事实没有变**，它仍然写在
+> [`contract.md`](./contract.md) 里，也仍然由
+> [`../eval/harness/batching.py`](../eval/harness/batching.py) 的 `MAX_MESSAGES_PER_BATCH = 20`
+> 复现（那是**测试侧自造的切批口径**，从来不是服务端配置）。
+> **"Adapter 计数的词"官方从未定义**（S2）这条也仍然未清。
 
-**配对判据只做一种判断**（§6.2）：这条消息的 `role` 是不是 `user`。**实现里不要枚举 role 白名单**——AML 传入的取值域没有文档，白名单会在遇到没见过的 role 时**静默丢消息**。
+**组合判据只做一种判断**（§6.2）：这条消息的 `role` 是不是 `user`。**实现里不要枚举 role 白名单**——AML 传入的取值域没有文档，白名单会在遇到没见过的 role 时**静默丢消息**。
 
 ---
 

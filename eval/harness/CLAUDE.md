@@ -129,9 +129,9 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 
 ## 切批模拟（§6.5 / §12.3 第 5 条）
 
-**本地只能按 20 条复现**——原因**与"本地数字不能用来判断配对质量"这条推论**见 [`../../src/tianxi_am/observability/CLAUDE.md`](../../src/tianxi_am/observability/CLAUDE.md)（本目录不重复）。
+**本地只能按 20 条复现**——原因见 [`../datasets/CLAUDE.md`](../datasets/CLAUDE.md) 与 §12.3 第 5 条（本目录不重复）。
 
-**harness 的切批必须与 §6.5 的续接逻辑配套测**：喂进去的批次边界是**我们自己造的**，而线上是 AML 造的——**所以"续接逻辑自洽"能在本地验证，"切批会不会打断对"不能。**
+**为什么这件事 D24 之后仍然重要**：组合的边界是**一次 Add**，所以**批界落在哪里直接决定有多少 QA 对被切成两个半块**（实测 LoCoMo 全量 63/3,075）。而批界**线上是 AML 造的、本地是我们造的** ⇒ "切批会不会打断对"**只能在 Smoke 上用真实的 20 条复现**，本地测不出来。
 
 ---
 

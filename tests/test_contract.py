@@ -18,11 +18,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Final
 
 import pytest
 from pydantic import ValidationError
-from tests.conftest import FUSED_SCORE, Wired
+from tests.conftest import FUSED_SCORE, Wired, seed_line, seed_pair_in
 
+from tianxi_am.common.config import DEFAULT_RADIUS
 from tianxi_am.common.render import render
 from tianxi_am.service.schemas import (
     AddMessage,
@@ -44,18 +46,36 @@ def _as_wire(packed) -> dict:  # noqa: ANN001
     ).model_dump()
 
 
-def _idx(i: int) -> int:
-    """第 `i` 个候选的 `pair_idx`：**隔一个**（0, 2, 4, …）。
+#: 候选之间的间隔，**由扩窗半径推出**：必须 **> 2 × radius + 1**。
+#:
+#: ⚠ 三个量要同时满足，少一个都会让"N 个候选 ⇒ N 个返回项"塌成一段：
+#:
+#: 1. **间隔 ≥ 2**：相邻两个块会被合并成同一个 Context Segment；
+#: 2. **间隔 > 2 × radius**：否则两个种子的窗口**重叠**，把候选互相拉进对方的段；
+#: 3. **间隔 > 2 × radius + 1**：否则两个窗口**首尾相接**（如 radius=2、间隔 5 时
+#:    `[0,2]` 与 `[3,7]` 紧挨着）——中间那块被前一个种子扩出来、又被后一个接上，
+#:    于是整条链子连成一段。**这一条最容易漏**：它不报错，只是段数少了。
+#:
+#: ⇒ 写成 `2 × DEFAULT_RADIUS + 3`（而不是硬编码一个数）：默认半径若改，这里跟着对。
+_SPACING: Final[int] = 2 * DEFAULT_RADIUS + 3
 
-    ⚠ **为什么必须隔开**：`pair_idx` 相邻的两个对会被合并成**同一个** Context Segment，
-    而扩窗（±1）也会把它们互相拉进来。本文件测的是**契约形状与计数**，需要
-    "N 个候选 ⇒ N 个返回项"这种最干净的情形；隔开之后中间那格是空的，
-    既没有相邻可合并、也没有可扩的邻居 ⇒ 一个候选恰好一段。
+
+def _idx(i: int) -> int:
+    """第 `i` 个候选的**会话位置**：**隔 `_SPACING` 格**（默认半径下是 0, 7, 14, …）。
+
+    ⚠ **为什么必须隔开**：位置相邻的两个块会被合并成**同一个** Context Segment，
+    而扩窗（±radius）也会把它们互相拉进来。本文件测的是**契约形状与计数**，需要
+    "N 个候选 ⇒ N 个返回项"这种最干净的情形；隔开之后中间那些块**存在但没被选中**
+    ⇒ 既没有相邻可合并、也没有可扩的邻居 ⇒ 一个候选恰好一段。
+
+    ⚠ **D25**：光落 0、7、14 这几行是不够的——`seq` 在**已有的行**上现算，
+    它们会挨着。所以落库要走 `seed_line`（把 `0..max` 落满），
+    它只**返回**这几个位置的 `id`。
 
     **合并与扩窗本身的行为在 [`test_neighbor.py`](./test_neighbor.py) 里测**
     （那里才是它们的主场），两处刻意不重叠。
     """
-    return i * 2
+    return i * _SPACING
 
 
 # ── Search 响应形状（§2.1）──────────────────────────────────────────────
@@ -64,7 +84,8 @@ def _idx(i: int) -> int:
 def test_search_response_has_exactly_the_contract_fields(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"[assistant] a{i}") for i in range(3)]
+    ids = seed_line(wired.store, [_idx(i) for i in range(3)],
+                    qa=lambda i: (f"q{i}", f"[assistant] a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     body = _as_wire(wired.search(top_k=5))
@@ -76,7 +97,8 @@ def test_search_response_has_exactly_the_contract_fields(
 
 
 def test_search_preserves_retrieval_order(wired: Wired, seed_pair: Callable[..., str]) -> None:
-    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(3)]
+    ids = seed_line(wired.store, [_idx(i) for i in range(3)],
+                    qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     assert [i["id"] for i in _as_wire(wired.search(top_k=3))["data"]] == ids
@@ -87,7 +109,8 @@ def test_search_never_exceeds_top_k(
     wired: Wired, seed_pair: Callable[..., str], top_k: int
 ) -> None:
     """**精确计数**（§2.2 第一条）——返回超过 `top_k` 是契约错误，不会被静默截断。"""
-    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(5)]
+    ids = seed_line(wired.store, [_idx(i) for i in range(5)],
+                    qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     data = _as_wire(wired.search(top_k=top_k))["data"]
@@ -105,7 +128,8 @@ def test_empty_result_is_a_list_not_null(wired: Wired) -> None:
 def test_result_shorter_than_top_k_when_fewer_pairs(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(2)]
+    ids = seed_line(wired.store, [_idx(i) for i in range(2)],
+                    qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     assert len(_as_wire(wired.search(top_k=10))["data"]) == 2  # 不补造、不复制
@@ -118,7 +142,9 @@ def test_content_comes_from_sqlite_through_common_render(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
     """**正文只从 SQLite 取**，且走 `common/render` 的同一份渲染（不变式 I1）。"""
-    mid = seed_pair(wired.store, 0, "火车几点开？", "[assistant] 09:42。")
+    mid = seed_line(
+        wired.store, [0], qa=lambda _i: ("火车几点开？", "[assistant] 09:42。")
+    )[0]
     wired.qdrant.by_user["u1"] = [mid]
 
     item = _as_wire(wired.search(top_k=1))["data"][0]
@@ -130,9 +156,13 @@ def test_created_at_is_day_granularity_or_empty(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
     """`created_at` **始终存在**：日粒度或 `""`（§11.3）。"""
-    with_time = seed_pair(wired.store, 0, "q0", "a0", event_time=1683525360000)
-    # ⚠ 第二个对的 `pair_idx` 是 2 而不是 1：相邻会被合并成一段（见 `_idx` 的说明）
-    without = seed_pair(wired.store, 2, "q1", "a1", event_time=None)
+    with_time = seed_pair_in(wired.store, 0, "q0", "a0", event_time=1683525360000)
+    # ⚠ 两条的间隔走 `_SPACING`（由扩窗半径推出，见那里的说明）：位置挨着会被合并成一段
+    # ⚠ **中间那些位置要落满**（`seed_line` 的同一道理）：不落的话它们的 `seq` 会挨着，
+    #   照样并进一段
+    for pos in range(1, _SPACING):
+        seed_pair_in(wired.store, pos)
+    without = seed_pair_in(wired.store, _SPACING, "q1", "a1", event_time=None)
     wired.qdrant.by_user["u1"] = [with_time, without]
 
     data = _as_wire(wired.search(top_k=2))["data"]
@@ -143,7 +173,8 @@ def test_created_at_is_day_granularity_or_empty(
 
 def test_score_is_monotonic_placeholder(wired: Wired, seed_pair: Callable[..., str]) -> None:
     """`score` = `1/(rank+1)`，严格递减。"""
-    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(3)]
+    ids = seed_line(wired.store, [_idx(i) for i in range(3)],
+                    qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     scores = [i["score"] for i in _as_wire(wired.search(top_k=3))["data"]]
@@ -159,7 +190,8 @@ def test_fused_score_never_leaks_into_the_response(
     而 `Candidate` 里**根本没有**该字段（见
     `tests/test_retrieve.py::test_candidate_carries_no_score_field`）⇒ 结构上漏不出来。
     """
-    ids = [seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(3)]
+    ids = seed_line(wired.store, [_idx(i) for i in range(3)],
+                    qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     body = _as_wire(wired.search(top_k=3))
@@ -178,9 +210,9 @@ def test_dense_embedding_called_exactly_once_per_query(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
     """**每查询恰好 1 次** embedding 调用（§7.2）。"""
-    wired.qdrant.by_user["u1"] = [
-        seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(2)
-    ]
+    wired.qdrant.by_user["u1"] = seed_line(
+        wired.store, [_idx(i) for i in range(2)], qa=lambda i: (f"q{i}", f"a{i}")
+    )
 
     wired.search(query="火车几点开？", top_k=2)
 
@@ -204,9 +236,9 @@ def test_pipeline_order_hybrid_then_checker_then_packaging(
 
     checker 与 packaging 都不是 `hybrid` 能触发的——两者都跑到就说明顺序没被跳过。
     """
-    wired.qdrant.by_user["u1"] = [
-        seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(2)
-    ]
+    wired.qdrant.by_user["u1"] = seed_line(
+        wired.store, [_idx(i) for i in range(2)], qa=lambda i: (f"q{i}", f"a{i}")
+    )
 
     data = _as_wire(wired.search(top_k=2))["data"]
 
@@ -324,7 +356,9 @@ def test_http_add_round_trip_echoes_fields(wired: Wired) -> None:
     from tianxi_am.service import create_app
 
     payload = {
-        "request_id": "req-1",
+        # ⚠ `request_id` **必须取得出 chunk 序号**（D25 的位置来源）——
+        #    这里用本仓 harness 的形态；平台实发的是 `...:chunk-<n>`，默认正则两个都认。
+        "request_id": "u1|s1|0",
         "user_id": "u1",
         "session_id": "s1",
         "messages": [{"role": "user", "content": "Q1"}],
@@ -332,7 +366,7 @@ def test_http_add_round_trip_echoes_fields(wired: Wired) -> None:
     with TestClient(create_app(wired.services)) as client:
         resp = client.post("/add", json=payload)
     assert resp.status_code == 200
-    assert resp.json()["request_id"] == "req-1"
+    assert resp.json()["request_id"] == "u1|s1|0"  # 原样回显（§2.1）
 
 
 def test_http_rejects_illegal_request_at_the_boundary(wired: Wired) -> None:

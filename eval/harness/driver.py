@@ -141,7 +141,8 @@ class ServiceClient:
     def ingest(self, sample: Sample) -> int:
         """按 session 逐批投喂，返回批次数。
 
-        **消息顺序不重排**：`pair_idx` 由到达顺序决定，重排会静默改变邻域（§6.1）。
+        **消息顺序不重排**：批**边界**是源序切出来的，`batches()` 的序号就是 `request_id` 里的
+        chunk 序号（**D25** 的位置来源）⇒ 重排会让同一 `request_id` 对应另一批消息。
         """
         count = 0
         for session in sample.sessions:

@@ -83,8 +83,9 @@ class RunRecord:
     breakdown: dict[str, Any] = field(default_factory=dict)
     #: §14 的四个指标。**只留会触发动作的**——"看着有信息量但不改变下一步动作"的不记。
     metrics: dict[str, Any] = field(default_factory=dict)
-    #: §6.5 的三个计数器。**`pending_orphaned` 必须拆成两个来源**——
-    #: 合成一个数，这条信号就废了（见 `observability/CLAUDE.md`）。
+    #: §6.5 的三个计数器。**D24（2026-09-27）起这个量已不存在**（`pending` 概念被取消，
+    #: 发射端 `pairing/instrument.py` 已删除）⇒ 新记录的四个字段**恒为 `None`**。
+    #: 字段保留是为了**旧 run record 还读得回来**；校验也跟着保留，只是理由变了。
     counters: dict[str, Any] = field(default_factory=dict)
     #: 第 4/7 维的**机制证据在哪**（§3.2 要求显式回应，代理分数回应不了这两维）。
     dimension_mechanism: dict[str, str] = field(default_factory=lambda: dict(DIMENSION_MECHANISM))
@@ -120,9 +121,11 @@ class RunRecord:
             )
         for orphaned in ("pending_orphaned_real", "pending_orphaned_misjudged"):
             if orphaned not in self.counters:
+                # D24 之后这两个字段**恒为 None**（量已不存在），但键必须在场：
+                # 少了它，新记录与旧记录的形状就对不上，读的人分不清「没写」与「没有这个量」。
                 raise ValueError(
-                    f"counters 缺 `{orphaned}`——`pending_orphaned` 的两种来源必须分开统计，"
-                    "合成一个数这条信号就废了（§6.5）"
+                    f"counters 缺 `{orphaned}`——D24 之后这个量已不存在，"
+                    "但**键仍必须显式为 None**（写 `0` 会被读成「没有 pending」）"
                 )
 
     def to_json(self) -> str:

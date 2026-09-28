@@ -88,14 +88,20 @@ Hybrid Retrieval
 **顺序：本步骤在 Rerank 之后执行**，理由见 §11.2。它是"**排序 → 扩窗 → 打包**"三连里的第二环，**不是"扩窗 → 排序"**。
 
 ```sql
+-- 每个 (user, session) 取一次整段（session 很小），在 Python 里对每个种子切窗口
 SELECT * FROM qa_pairs
-WHERE user_id = ? AND session_id = ? AND pair_idx BETWEEN ? - 1 AND ? + 1
-ORDER BY pair_idx;
+WHERE user_id = ? AND session_id = ?
+ORDER BY chunk_ordinal, local_index;
 ```
 
-`UNIQUE(user_id, session_id, pair_idx)` 建出的索引**正好就是这个查询的键**。窗口从 ±1 改 ±2 **只需改 `BETWEEN` 的界**（§10）。
+> ⚠ **D25 起邻域不再是一条 `BETWEEN`**：位置是 `(chunk_ordinal, local_index)`，
+> **chunk 序号可以跳号** ⇒ "整数差 r"不再等于"会话里前后各 r 个"。
+> 相邻性由**读时现算的稠密序 `seq`**（`ROW_NUMBER() ... - 1`）给出，
+> 扩窗 = 在有序列表里按**下标**切 `[i-radius, i+radius]`。
+> ⚠ `ROW_NUMBER()` 是 **1-based**，**必须减 1**。
+> ⇒ 好处：跳号不破坏相邻；"中间真的少了一块"仍被抓住。
 
-> SQL 本身在 [`../store/`](../store/)；本目录负责**调度与预算**。
+> SQL 本身在 [`../store/`](../store/)（`fetch_session_ordered`）；本目录负责**调度与预算**。
 
 **实现流程**（`neighbor.expand_neighbors`，**一步不多**）：
 
@@ -146,12 +152,12 @@ ORDER BY pair_idx;
 ## 2.5 Context Segment Merge（§11.2 的"组"）
 
 **扩窗与合并不是两件事**：`merge_segments` 把"种子 + 它的邻域"变成**段**，
-段的定义就是**连续 `pair_idx` 的最长游程**。
+段的定义就是**连续 `seq` 的最长游程**（D25 前是 `pair_idx`；顺序 ingest 下两者逐一相等）。
 
 ```text
-按 (user_id, session_id) 分组 → 组内按 pair_idx 升序 → 一次线性扫描
-    current.pair_idx == 当前段.end + 1  →  **直接延长，不新建**
-    否则                                →  收尾当前段，新建一段
+按 (user_id, session_id) 分组 → 组内按 seq 升序 → 一次线性扫描
+    current.seq == 当前段.end + 1  →  **直接延长，不新建**
+    否则                            →  收尾当前段，新建一段
 ```
 
 | 规则 | 例子 |
@@ -170,7 +176,7 @@ ORDER BY pair_idx;
 
 ## 3. 顺序（§11.2 的两条规则）
 
-### 组内顺序：按 `pair_idx` 时间序，**不把种子提到最前**
+### 组内顺序：按 `seq` 时间序，**不把种子提到最前**
 
 理由：窗口是一段连续对话，**按时间序读才成立**；把种子抽到最前会把一段话**拦腰截断**。而答案阶段按前缀截断——**窗口整体连续，意味着截断点落在窗口边界上**，不会切出半个窗口。
 
@@ -222,7 +228,7 @@ A: {answer}
 ```
 
 - `question` 为空的对（§6.2 的"批次以 assistant 开头"）**只输出 `A:` 那一行**
-- `answer` 暂缺的 `pending` 对**只输出 `Q:` 那一行**
+- `answer` 暂缺的块**只输出 `Q:` 那一行**
 - **模板本身是"贵"消融项**：改模板就等于改变 embedding 输入，**整个向量索引要重建**——**推翻它要付重建索引的钱**
 
 **一个对里有多条非 user 消息时，每条带 role 标记**（示意）：

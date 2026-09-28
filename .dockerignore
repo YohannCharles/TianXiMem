@@ -1,0 +1,40 @@
+# Docker 构建上下文排除表（**构建上下文 = 仓库根**，见 deploy/compose.yaml 的 `context: ..`）
+#
+# ⚠ 这份文件存在的理由不是"构建快一点"——是**别把不该进镜像的东西送进去**：
+#   · `benchmark_data/`（370M，**只读归档，许可证受限**）——服务根本不读它（D16）
+#   · `var/`（真源 SQLite + 向量缓存 + 实验残留）——**真源不得烘进镜像**
+#   · `.env`（密钥）——**绝不进镜像层**，运行时由 compose 注入
+#   · `eval/reports/runs/`、`eval/baselines/`（几百 M 的实验产出与第三方代码）
+
+# ── 版本控制与本地环境 ───────────────────────────────────────────────
+.git
+.gitignore
+.venv
+.python-version
+
+# ── Python 缓存 ──────────────────────────────────────────────────────
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# ── 密钥（**最重要的一条**）─────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── 大块只读/运行产物 ────────────────────────────────────────────────
+benchmark_data
+var
+eval/reports/runs
+eval/baselines
+eval/experiments
+eval/datasets
+eval/harness
+
+# ── 编辑器/系统 ──────────────────────────────────────────────────────
+.vscode
+.idea
+*.swp
+.DS_Store

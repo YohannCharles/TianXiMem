@@ -110,7 +110,8 @@ class CheckerInstrument(Protocol):
     """判定记录的出口。
 
     聚合在 [`../observability/`](../observability/)（§14），本层只负责发——
-    与 `pairing/instrument.py` 的 `pending` 三计数器同一个模式。
+    与 `rank/reranker.py` 的 `rerank_calls` / `rerank_degraded` 同一套"发射在各自层、
+    聚合在 observability"的分工。
     """
 
     def record(self, decision: CheckerDecision) -> None: ...

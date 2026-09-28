@@ -17,8 +17,8 @@
 turn 的键只有 `role` + `content`（可选 `has_answer`），时间在**与 `haystack_sessions`
 按下标平行**的 `haystack_dates` 里（形如 `"2023/05/20 (Sat) 02:21"`）。
 不合成则 `event_time` 全 NULL、`created_at` 只能发 `""`——
-**而同一个 session 内所有消息拿到同一个日期，所以 `pair_idx` 是唯一能保证
-邻域稳定的东西**（§6.1）。
+**而同一个 session 内所有消息拿到同一个日期，所以位置是唯一能保证
+邻域稳定的东西**（§6.1；D25 之后位置 = `(chunk_ordinal, local_index)`）。
 
 ## 归档里 `question_date` / `has_answer` / `answer_session_ids` **都没有 pipeline 读它们**
 

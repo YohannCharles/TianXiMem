@@ -18,8 +18,9 @@
 
 两个数据集都**没有** per-turn 时间戳（LoCoMo 是 session 级、LongMemEval 在
 `haystack_dates` 里）⇒ 同一 session 内所有消息拿到**同一个时间**
-⇒ `event_time` 在 session 内必然没有区分度，**`pair_idx` 才是唯一能保证
-±1 邻域稳定的东西**（§6.1）。这不是近似，是数据集的真实属性。
+⇒ `event_time` 在 session 内必然没有区分度，**位置才是唯一能保证
+±1 邻域稳定的东西**（§6.1；D25 之后位置 = `(chunk_ordinal, local_index)`，
+邻域用读时稠密序 `seq` 现算）。这不是近似，是数据集的真实属性。
 
 **时区口径**：两份数据的时间串都是无时区的本地时间。这里按 **UTC** 解释
 （不做任何偏移）。理由：§11.3 只让 `created_at` 发到**日粒度**，±时区偏移最坏

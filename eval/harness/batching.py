@@ -18,9 +18,9 @@
 ⇒ **LoCoMo 上两条路径完全重合**（消息太短，永远先撞 20 条）；**LongMemEval 上不重合**。
 **别用 LoCoMo 的"完全重合"外推 LongMemEval。**
 
-**后果必须记住**：本地测出的 `pending` 埋点数与**线上必然对不上**——那三个计数器只能验证
-**续接逻辑自身是否自洽**，**不能用来判断配对质量**
-（[`../../src/tianxi_am/observability/CLAUDE.md`](../../src/tianxi_am/observability/CLAUDE.md)）。
+**后果必须记住**：本地复现的批次形状与线上**不保证一致**。D24（2026-09-27）取消了跨 Add
+合并之后，这条不再影响任何指标（`pending` 计数器已删），但它仍然影响**组合结果本身**：
+批界落在哪里，决定了有多少 QA 对被切成两个半块。⇒ 拿本地分数比线上时，**这条要算进不确定性**。
 
 > **切批口径是常量、不是旋钮**——它记录在数据指纹里（`registry.BATCHING_LOCAL`）。
 > 做成可调会立刻产生一个诱人的错误：拿不同的切法比分数。
@@ -44,7 +44,11 @@ MAX_MESSAGES_PER_BATCH = 20
 def batches(
     messages: Sequence[Message], *, max_messages: int = MAX_MESSAGES_PER_BATCH
 ) -> list[tuple[Message, ...]]:
-    """按**源序**切批——消息顺序就是 `pair_idx` 的最终依据，**绝不重排**。
+    """按**源序**切批——批序号就是 `request_id` 里的 chunk 序号，**绝不重排**。
+
+    ⚠ **D25 起批序号是"声明"的，不是"到达顺序"推断的**：`request_id_for(user, session, index)`
+    把序号写进 id，服务端据此定位置。⇒ 重排调用顺序**不再**翻转会话顺序，
+    但**重排会让同一 `request_id` 对应另一批消息**——那才是现在要防的。
 
     **切批只在 session 内发生**（跨 session 的边界由 `session_id` 隔开，
     而每个 session 单独投喂）——沿用 §6.5 的形状。

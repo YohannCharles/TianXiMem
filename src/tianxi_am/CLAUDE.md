@@ -10,8 +10,8 @@
 
 | 目录 | 负责什么 | PRD |
 | --- | --- | --- |
-| [`service/`](./service/) | HTTP 层：两个业务端点 + `/health` 探活、请求/响应模型、按 `(user_id, session_id)` 串行化 | §2.1、§15 |
-| [`pairing/`](./pairing/) | QA 对配对判据；批次续接三步；`pending` 判定 | §6.2、§6.5、§15 |
+| [`service/`](./service/) | HTTP 层：两个业务端点 + `/health` 探活、请求/响应模型、Add/Search 编排（~~按 `(user_id, session_id)` 串行化~~ ⛔ **D25 已删**） | §2.1、§15 → **D25** |
+| [`pairing/`](./pairing/) | **记忆块组合（一次 Add = 唯一边界，D24）**；**位置取自 `request_id`（D25）** + 幂等守卫 + 落库 | §6.2、§6.5（D24 后的口径）、§15 → **D25** |
 | [`store/`](./store/) | SQLite 真源 + Qdrant 派生索引 + 邻域查询的 SQL | §6.1、§6.3 |
 | [`embed/`](./embed/) | `Embedder` 协议 + 两个实现 + **落盘向量缓存** | §7.4、§7.2 |
 | [`retrieve/`](./retrieve/) | BM25；dense；**混合检索的策略与参数所有权**；Evidence Checker（**到 rerank 为止**） | §7.1–§7.3、§8 |
@@ -19,7 +19,7 @@
 | [`agent/`](./agent/) | Conditional Agentic Search 循环与工具（**v1 不实现**，D13） | §9 |
 | [`llm/`](./llm/) | LLM 后端抽象 | §2.3、§12.1 |
 | [`common/`](./common/) | **渲染模板的唯一实现**；token 计数；配置加载 + **开关校验** | §11.3、§6.4、§15 |
-| [`observability/`](./observability/) | §14 指标 + §6.5 三个 `pending` 计数器的**聚合**（发射在各自层） | §14、§6.5 |
+| [`observability/`](./observability/) | §14 指标（**各层发射、本层聚合**；~~三个 `pending` 计数器~~ ⛔ **D24 已作废**） | §14 |
 
 **逐目录的依赖方向与不变式见 [`../../docs/architecture.md`](../../docs/architecture.md)。**
 

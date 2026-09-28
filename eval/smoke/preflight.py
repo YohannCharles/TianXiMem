@@ -412,16 +412,21 @@ class Preflight:
         也不会命中开发期残留的数据。
 
         ⚠ **`separate_sessions=True` 时每个 tag 各占一个 `session_id`**。
-        这不是洁癖：`pair_idx` 相邻的记忆会被合并成**同一个 Context Segment**，
+        这不是洁癖：位置相邻的记忆会被合并成**同一个 Context Segment**，
         于是响应里**只有一项**——凡是"要多条才能验"的检查（`score` 的单调性、
         `top_k` 真的会截断）都必须让它们分属不同 session，**否则检查会静默变空过**。
+
+        ⚠ **`request_id` 必须带 `chunk-<n>`**（D25）：服务端的位置模型
+        `(chunk_ordinal, local_index)` **只能**从这个 id 里取 chunk 序号，
+        取不到就**非 200**（没有回退）。每个 tag 给一个不同的序号 ⇒ 各占一个位置，
+        顺便也让"同一 session 里多条"这件事的**顺序**由序号而不是到达顺序决定。
         """
         made: list[tuple[str, str]] = []
-        for tag in tags:
+        for ordinal, tag in enumerate(tags):
             question = f"{self._nonce} {tag} question"
             answer = f"{self._nonce} {tag} answer"
             resp = self._add(
-                request_id=f"{self._nonce}-{user_id}-{tag}",
+                request_id=f"{self._nonce}-{user_id}-{tag}-chunk-{ordinal}",
                 user_id=user_id,
                 session_id=f"{session_id}-{tag}" if separate_sessions else session_id,
                 messages=[
@@ -440,7 +445,7 @@ class Preflight:
 
     def check_add_echoes_the_three_fields(self) -> None:
         """§2.1：`200` + `success: true` + 三个字段**逐字原样回显**。"""
-        rid, uid, sid = f"{self._nonce}-echo", f"{self._nonce}-u-echo", "s-echo-中文-ü"
+        rid, uid, sid = f"{self._nonce}-echo-chunk-0", f"{self._nonce}-u-echo", "s-echo-中文-ü"
         resp = self._add(
             request_id=rid,
             user_id=uid,
@@ -537,7 +542,7 @@ class Preflight:
         # 另一侧：**带了** timestamp 的记忆必须给出日粒度日期
         user_ts = f"{self._nonce}-u-createdat-ts"
         resp = self._add(
-            request_id=f"{self._nonce}-ts",
+            request_id=f"{self._nonce}-ts-chunk-0",
             user_id=user_ts,
             session_id="s-ts",
             messages=[
@@ -599,7 +604,7 @@ class Preflight:
     def check_score_is_rank_derived(self) -> None:
         """§11.3：`score` **单调递减**、`rank=0` 就是 `1.0`，且**不是**原始 RRF 分数。
 
-        ⚠ 三条记忆**分属三个 session**：同一个 session 里 `pair_idx` 相邻的记忆会被
+        ⚠ 三条记忆**分属三个 session**：同一个 session 里位置相邻的记忆会被
         合并成**一个** Context Segment，那样响应里只有一项，单调性就**没东西可验**了
         （检查会静默空过——它只说"≥ 2 条"，不够，得真的拿到多条）。
         """
@@ -728,11 +733,14 @@ class Preflight:
     def check_replay_does_not_write_again(self) -> None:
         """§2.2：同一 `request_id` 重复 POST（payload 不变）⇒ **库里没有新增行**。
 
-        **怎么在 HTTP 层看见"没有新增行"**：重复写入会落到一个新的 `pair_idx` ⇒
-        产生一个**新的 `id`**。所以"检索到的 id 集合与次数完全一致"是那个断言的一半。
+        **怎么在 HTTP 层看见"没有新增行"**：**两次检索返回的 id 集合与条数完全一致**。
+        ⚠ **D25 之前**这件事的机制是"重复写入会落到一个新的 `pair_idx` ⇒ 产生新 `id`"——
+        那条**已经不成立**（位置是请求的纯函数，重放算出同一位置）。现在**没有守卫时**
+        重放会撞 `UNIQUE` ⇒ 整批**非 200**（响亮），而不是静默多一行。
+        ⇒ 所以这条检查现在验的是**"守卫把正常重试从 500 里救回来"**，仍然必须测。
 
-        ⚠ **另一半在段模型下才看得出来**：新行与旧行在同一个 session 里**相邻**
-        ⇒ 它们会被合并进**同一个** Context Segment。于是重复写入**不再表现为多一项**，
+        ⚠ **另一半在段模型下才看得出来**：若有行被重复写入，新行与旧行在同一个 session 里
+        **相邻** ⇒ 它们会被合并进**同一个** Context Segment。于是重复写入**不再表现为多一项**，
         而是**同一段变宽**（同样的问答在 `content` 里出现两次）。
         所以只比 `id` 与条数会**漏掉**它——必须连 `content` 一起比。
         """
@@ -740,7 +748,7 @@ class Preflight:
         question = f"{self._nonce} replay question"
         answer = f"{self._nonce} replay answer"
         payload = {
-            "request_id": f"{self._nonce}-replay",
+            "request_id": f"{self._nonce}-replay-chunk-0",
             "user_id": user,
             "session_id": "s-replay",
             "messages": [

@@ -23,12 +23,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import Final
 
 import httpx
 import pytest
-from tests.conftest import Wired
+from tests.conftest import Wired, seed_line
 from tests.conftest import seed_pair_in as _seed
 
+from tianxi_am.common.config import DEFAULT_RADIUS
 from tianxi_am.common.render import render
 from tianxi_am.rank import RemoteReranker, RerankUnavailable
 from tianxi_am.retrieve import EvidenceChecker
@@ -74,12 +76,24 @@ class FakeReranker:
         return [float(len(documents) - rank_of[i]) for i in range(len(documents))]
 
 
-def _ids(store: SqliteStore, count: int, *, step: int = 2, session_id: str = "s1") -> list[str]:
-    """`count` 个**互不相邻**的候选（`pair_idx` 隔一个）⇒ 一候选一段、彼此不扩窗。"""
-    return [
-        _seed(store, i * step, session_id=session_id, question=f"q{i}", answer=f"a{i}")
-        for i in range(count)
-    ]
+#: 候选之间的间隔，**由扩窗半径推出**：必须 **> 2 × radius + 1**（理由见
+#: `test_contract.py` 同名常量的注释——尤其第 3 条"窗口首尾相接"）。
+_STEP: Final[int] = 2 * DEFAULT_RADIUS + 3
+
+
+def _ids(store: SqliteStore, count: int, *, step: int = _STEP, session_id: str = "s1") -> list[str]:
+    """`count` 个**互不相邻**的候选 ⇒ 一候选一段、彼此不扩窗。
+
+    ⚠ **D25**：落库走 `seed_line`（把 `0..max` 落满）——`seq` 在**已有的行**上现算，
+    只落 0,5,10 的话它们会挨着（= 这段对话里就这三块），那就该合并成一段了。
+    落满之后中间那些是"**存在但没被选中**"，缺口才是真的。
+    """
+    return seed_line(
+        store,
+        [i * step for i in range(count)],
+        session_id=session_id,
+        qa=lambda i: (f"q{i}", f"a{i}"),
+    )
 
 
 def _wire(
@@ -534,7 +548,10 @@ def test_rerank_input_is_the_query_plus_every_candidate_text(wired: Wired) -> No
     wired.search(query="火车几点开", top_k=3)
 
     assert fake.queries == ["火车几点开"]
-    assert fake.documents == [[render(f"q{i}", f"a{i}") for i in range(3)]]
+    # 候选落在会话位置 0 / _STEP / 2*_STEP 上（`_ids` 的约定）⇒ 期望文本按同一约定拼
+    assert fake.documents == [
+        [render(f"q{i * _STEP}", f"a{i * _STEP}") for i in range(3)]
+    ]
     # 正文确实从真源来（不是从候选里带的）——渲染里带着库里的事实
     assert fake.documents[0][0] == "Q: q0\nA: a0"
 
@@ -817,12 +834,19 @@ def test_rerank_does_not_change_content_or_created_at(wired: Wired) -> None:
     import datetime as dt
 
     ids = _ids(wired.store, 3)
-    a = _seed(wired.store, 100, question="Q100", answer="A100")
+    # ⚠ 中间那些位置要**落满**：`seq` 在已有的行上现算，不落的话 `a` 的 `seq`
+    #   会正好排在 ids[2] 的下一格 ⇒ 两者相邻 ⇒ 并进同一段（与 `_ids` 里那条同一个道理）
+    far = 4 * _STEP
+    for pos in range(3 * _STEP + 1, far):
+        _seed(wired.store, pos)
+    a = _seed(wired.store, far, question="Q100", answer="A100")
     wired.qdrant.by_user["u1"] = [*ids, a]
     stamp = int(dt.datetime(2023, 5, 8, 23, 30, tzinfo=dt.UTC).timestamp() * 1000)
     with wired.store.transaction() as conn:
         conn.execute("UPDATE qa_pairs SET event_time = ? WHERE id = ?", (stamp, a))
-    _wire(wired, FakeReranker(want=[3, 0, 1, 2]))
+    # `radius=0`：本用例的主题是"**精排只动顺序**"——扩窗会往段里塞邻居，
+    #   那是另一个变量（`test_neighbors_do_not_change_segment_priority` 管那个）。
+    _wire(wired, FakeReranker(want=[3, 0, 1, 2]), radius=0)
 
     got = wired.search(top_k=4)
     by_id = {item.id: item for item in got.items}
@@ -880,11 +904,12 @@ def test_rerank_uses_the_same_render_as_indexing_and_output(wired: Wired) -> Non
     ids = _ids(wired.store, 2)
     wired.qdrant.by_user["u1"] = ids
     fake = FakeReranker()
-    _wire(wired, fake)
+    # `radius=0`：本用例要的是"送出去的 = 返回的"，扩窗会往段里塞邻居、把两者拉开
+    _wire(wired, fake, radius=0)
 
     got = wired.search(top_k=2)
 
-    # 送出去的两篇 = 两段 content（候选互不相邻 ⇒ 一段一对，所以能逐字对上）
+    # 送出去的两篇 = 两段 content（关掉扩窗 ⇒ 一段恰好一对，所以能逐字对上）
     assert fake.documents == [[item.content for item in got.items]]
 
 

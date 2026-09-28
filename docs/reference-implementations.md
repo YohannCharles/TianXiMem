@@ -64,9 +64,9 @@ rerank_candidates=200 · reranker_max_length=512 · result_window=1 · seed_k=20
 
 | 维度 | 我们 | ReFind | InvMem 候选 |
 | --- | --- | --- | --- |
-| **配对时机** | **Add 时**（`pair_idx` 落库） | **Search 时**（每次从原始消息重构） | Add 时按 message 切块，**不再配对** |
-| 配对粒度 | QA 对；连续 user 并入同一 question（D20） | 相邻 2 turn，**不看 role** | 320 token 块（可切碎一条消息） |
-| 记录 id | 位置派生 `hash(user,session,pair_idx)` | 位置派生 `hash(user,session,源位置)` | 位置派生 `hash(request_id:msg:chunk)` |
+| **配对时机** | **Add 时**，且**只看本批**（D24） | **Search 时**（每次从原始消息重构） | Add 时按 message 切块，**不再配对** |
+| 配对粒度 | 记忆块；连续 user 并入同一 question（D20） | 相邻 2 turn，**不看 role** | 320 token 块（可切碎一条消息） |
+| 记录 id | 位置派生 `hash(user,session,chunk_ordinal,local_index)`（**D25**） | 位置派生 `hash(user,session,源位置)` | 位置派生 `hash(request_id:msg:chunk)` |
 | 检索后端 | Qdrant 内 RRF 融合 **dense + BM25** | **纯 BM25**（两种粒度） | dense + BM25，**加权** RRF |
 | RRF `k` | **61**（Qdrant 0-based，D5） | 代码 `1/(60+rank)` 但 **rank 从 1 起** = `1/(61+rank₀)` | `1/(60+rank+1)`，**同样等价于 61** |
 | 融合的是谁 | dense 名次 × BM25 名次 | **对话级名次 × 会话级名次**（会话分 = 组内 BM25 **求和**） | dense 名次 × 词法名次（词法侧乘权重） |
@@ -162,9 +162,21 @@ rerank_candidates=200 · reranker_max_length=512 · result_window=1 · seed_k=20
 
 ReFind 与候选仓库都**从数据里重建顺序**：先按源时间戳，再按 **`request_id` 里解析出来的 chunk 序号**（正则见 `store.py:50-58`），插入顺序只是最后兜底。ReFind 的示例 `request_id` 是 `eval:run:dataset:conv-0:chunk-0`——**序号确实在 id 里**。
 
-**我们依赖到达顺序**：`pair_idx` 是"来一批分配一批"，配对判据吃的是**消息到达的先后**。我们的 `(user_id, session_id)` 串行锁防的是**并发**，不防**乱序**——串行化只保证"一次一个"，顺序仍是 AML 给的顺序。
+**我们曾经依赖到达顺序**：`pair_idx` 是"来一批分配一批"，配对判据吃的是**消息到达的先后**。当时的 `(user_id, session_id)` 串行锁防的是**并发**，不防**乱序**——串行化只保证"一次一个"，顺序仍是 AML 给的顺序。
 
-**风险等级未测**（ReFind 申报的建议并发 16 说明平台会并行投喂）。⇒ **已登记为 [S6](./open-questions.md)**（2026-09-25）：**本次只登记、不动代码**——加探测要动 `pairing/` 或 `service/`，而 ledger 里的 A3 / `mem-date` / `cov-wide` / `n1-best` 全建立在**同一套配对**之上，风险没验证前先保住可比性。**清除路径与"若会乱序"的修法都写在 S6 里。**
+> ### ✅ **2026-09-27（D25）：我们改成了他们的做法。**
+>
+> **这一节的推理正是 D25 的依据**——上面那句"序号确实在 id 里"来自两个跑过真平台的实现，
+> 比我们自己猜可信。D25 于是：
+>
+> 1. 位置改为 `(chunk_ordinal, local_index)`，`chunk_ordinal` **从 `request_id` 解析**；
+> 2. **删掉 `SessionLocks`**——位置不再是读-改-写 ⇒ 并发与乱序都安全；
+> 3. 解析不到序号 ⇒ **响亮失败**（不回退到"按到达顺序"，那会把旧 bug 带回来）。
+>
+> ⇒ [S6](./open-questions.md) 随之**消除**，收敛成一个更小、且 **fail-loud** 的新未知：
+> **平台上那个 `<n>` 是不是真的批次序号**。
+>
+> 当时的登记记录（**已作废**）：**本次只登记、不动代码**——加探测要动 `pairing/` 或 `service/`，而 ledger 里的 A3 / `mem-date` / `cov-wide` / `n1-best` 全建立在**同一套配对**之上，风险没验证前先保住可比性。
 
 ### L5 · 平台可能把整个样本塞进一个 `session_id`
 
@@ -172,9 +184,9 @@ ReFind 的改编说明第 3 条（`METHOD_CARD.md`）**逐字**：
 
 > The paper's seen-session filter is applied at chunk level here. **The platform may assign one `session_id` to all chunks for a sample**; excluding that whole session after the first search would incorrectly hide the remaining memory.
 
-**这是一条平台行为观察，我们没法本地验证。** 对我们的影响面：`session_id` 是我们的**配对作用域**（连续 user 判定、跨批续接）、**扩窗作用域**（同 session 才扩）与**段合并分组键**。如果平台上"一个样本 = 一个 session_id"，那么这些机制全都还在跑，但"session"不再等于"一段对话"——**扩窗与段合并的语义会漂**。
+**这是一条平台行为观察，我们没法本地验证。** 对我们的影响面：`session_id` 是我们的**组合分组键**（连续同 role 判定）、**位置作用域**（D24 起组合只看一次 Add，但**位置**仍按 session 有序；**D25** 起这个序是读时稠密序 `seq`）、**扩窗作用域**（同 session 才扩）与**段合并分组键**。如果平台上"一个样本 = 一个 session_id"，那么这些机制全都还在跑，但"session"不再等于"一段对话"——**扩窗与段合并的语义会漂**。
 
-> 好消息是**不致命**：三处都只要求"同一个 session 内 `pair_idx` 有序"，这个不变量不会因粒度变粗而破。⇒ **已登记为 [S7](./open-questions.md)**（2026-09-25）。
+> 好消息是**不致命**：三处都只要求"同一个 session 内位置有序"，这个不变量不会因粒度变粗而破。⇒ **已登记为 [S7](./open-questions.md)**（2026-09-25）。
 
 ### L6 · 提交申报表的字段清单（可照抄）
 

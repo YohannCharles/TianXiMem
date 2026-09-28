@@ -1,43 +1,34 @@
-"""配对与批次续接（§6.2 / §6.5）。
+"""记忆块组合（D24）。
 
-**全项目逻辑最绕的一层，也是最容易静默出错的一层**——出错的表现是
-"某些记忆永远检索不到"，而**不会有任何报错**。
+**一次 `Add` = 组合的唯一边界**：`Add` 内连续同 role 合并、相邻 UserBlock + 非UserBlock
+配对、配不上的独立成块；**不同 `Add` 永不拼接**。
+
+组合规则见 [`pairing.py`](./pairing.py)（纯函数、无跨 Add 状态），落库见
+[`apply.py`](./apply.py)。
 """
 
-from tianxi_am.pairing.continuation import AddBatch, ApplyBatchResult, apply_batch
-from tianxi_am.pairing.instrument import (
-    InMemoryPendingInstrument,
-    NullPendingInstrument,
-    PendingCounters,
-    PendingInstrument,
-)
+from tianxi_am.pairing.apply import AddBatch, ApplyBatchResult, apply_batch
 from tianxi_am.pairing.pairing import (
-    BatchLimits,
-    BatchPlan,
+    MemoryBlock,
     Message,
-    NewPairDraft,
-    ResumeActions,
+    RoleBlock,
+    compose_memory_blocks,
     encode_answer,
     is_user,
     join_question,
-    plan_batch,
+    parse_chunk_ordinal,
 )
 
 __all__ = [
     "AddBatch",
     "ApplyBatchResult",
-    "BatchLimits",
-    "BatchPlan",
-    "InMemoryPendingInstrument",
+    "MemoryBlock",
     "Message",
-    "NewPairDraft",
-    "NullPendingInstrument",
-    "PendingCounters",
-    "PendingInstrument",
-    "ResumeActions",
+    "RoleBlock",
     "apply_batch",
+    "compose_memory_blocks",
     "encode_answer",
     "is_user",
     "join_question",
-    "plan_batch",
+    "parse_chunk_ordinal",
 ]

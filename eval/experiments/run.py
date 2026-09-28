@@ -34,7 +34,9 @@ uv run python eval/experiments/run.py --dataset longmemeval-s --limit 3 --skip-i
 **看起来一样**，不写下来就会有人拿它们比（§13）。
 ⚠ **重跑是安全的**：`request_id` 由 `(user_id, session_id, 批序号)` 确定性派生，
 `applied_batches` 的批次级幂等守卫会命中（§6.5）。但**换过渲染模板/配对规则后不行**
-——那会改变 `pair_idx` 的分配，旧行不会被覆盖（`pair_idx` 是读-改-写）。
+——`applied_batches` 会**直接放行而不改写**（同一 `request_id` 已应用过），
+于是你测的是**旧语料 + 新代码**，**静默**。⇒ 改了模板/配对规则就必须换干净的库与集合。
+（D25 之前这里的理由是"`pair_idx` 读-改-写会落到新位置"，那条已随 D25 消失；**结论没变**。）
 """
 
 from __future__ import annotations
