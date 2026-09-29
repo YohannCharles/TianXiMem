@@ -201,19 +201,20 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 5.5 接入口径（D25）—— ✅ **已落地**
+## 5.5 接入口径 —— ⛔ **整个 `ingest` 配置段已删除（D28，2026-09-29）**
 
-| 配置项 | 初值 | 类 | 说明 |
-| --- | --- | --- | --- |
-| `ingest.chunk_ordinal_pattern` | `(?:chunk-\|\|)(\d+)\s*$` | **A** | 从 `request_id` 里**取 chunk 序号**的正则（`re.search`，恰好 1 个捕获组）。D25 把位置改成 `(chunk_ordinal, local_index)`，**chunk 序号只能从这个 id 里取** ⇒ 取不到就**非 200**（没有回退，见 [`../src/tianxi_am/pairing/pairing.py`](../src/tianxi_am/pairing/pairing.py) 的 `parse_chunk_ordinal`） |
+这里曾经只有一项：`ingest.chunk_ordinal_pattern`（从 `request_id` 里正则取 chunk 序号，D25）。
+**它连同那条解析逻辑一起删掉了**——理由不是"用不上"，是**它在真实流量上 100% 失败**：
 
-> ⚠ **格式假设的来源是团队告知，不是一手文档**（D25 的"关键依据"一节）——
-> 与 S2/S5 同类。**做成配置项**是为了让"平台换了个形状"不必改代码；
-> **响亮失败**是为了让"我们猜错了"立刻暴露，而不是安静地跑完一整场。
->
-> 默认值同时认两种形态（`re.search`）：
-> 平台实发 `eval:<run_id>:locomo_refined:conv-0:chunk-3` · 本仓 harness `<user>|<session>|3`
-> ——[`../eval/harness/batching.py`](../eval/harness/batching.py) 的 `request_id_for()` 就是后者。
+> 平台实发的是 `r_31156f4174b24abe83ad2c09a486cc5f398ddc819b4ca9e33b9c94bb1e2caab8`
+> 这种**不透明 id**（2026-09-29 用请求原文采集抓到的**真实外部请求**，那条请求
+> `error=ValueError`、服务回 500）。D25 的假设（"id 一定以 `chunk-<n>` 结尾"）
+> 来自团队转述 + 参考实现的示例，**没有一手出处**，而现实是 **Add 全挂**。
+
+⇒ **`request_id` 现在是 opaque string**：只做幂等键 / 溯源 / 原样回显，
+位置改成 `(request_id, local_index)`。**不要再加回任何"解析 `request_id`"的配置项**——
+`common/config.py` 在原处留了一行墓碑注释防止有人加回来。完整论证见
+[`decisions.md`](./decisions.md) 的 **D28**。
 
 ---
 
@@ -305,7 +306,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `storage.qdrant.shard_number` | **1** | 根级融合跨分片合并，**分片数变化会改变排名**——为可复现必须单分片 |
 | `storage.qdrant.named_vectors` | `dense` + `bm25` | 稀疏向量的距离固定为 Dot |
 | `storage.qdrant.payload_indexes` | `user_id`(**keyword** + `is_tenant`) / `session_id`(keyword) / `event_time`(integer) | **必须在写入数据前建**，否则 HNSW 需要重建才有过滤感知 |
-| `storage.qdrant.payload_fields` | `user_id` / `session_id` / `chunk_ordinal` / `local_index` / `event_time` | **不含正文**。⚠ **D25** 把 `pair_idx` 拆成了后两个（payload 里没有消费方，只是溯源；过滤只按 `user_id`，扩窗读 SQLite） |
+| `storage.qdrant.payload_fields` | `memory_id` / `user_id` / `session_id` / `local_index` / `event_time` | **不含正文**。⚠ **D28** 起 `chunk_ordinal` 已从 payload 里删掉（那个列本身也没了）——payload 里这些都**没有消费方**，只是溯源；过滤只按 `user_id`，扩窗读 SQLite |
 | `storage.qdrant.wait` | **`true`** | 契约要求"响应前立即可搜"；默认异步不保证 |
 | `storage.sqlite.path` | `var/tianxi.db`（`.env`） | 真源，文件随 run 归档。⚠ 是 `var/` 不是 `data/`——后者与只读归档 `benchmark_data/` 容易混（见 [`../var/CLAUDE.md`](../var/CLAUDE.md)） |
 | `cache.embed.dir` | `var/embed_cache`（`.env`） | **必须落盘** |
@@ -387,7 +388,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | 配置项 | 初值 | 类 | 说明 |
 | --- | --- | --- | --- |
 | `capture.enabled` | `false` | **—** | 开关。`false` ⇒ **连中间件都不装**（零开销、零行为差异） |
-| `capture.max_bytes` | `67108864` | **—** | **护栏**（不是阈值）：写满就写一行 `truncated` 标记并**停止记录** |
+| `capture.max_bytes` | `52428800` | **—** | **每份文件**的上限（50 MiB）：写满就换下一份（`<name>.part2.jsonl`…）。⚠ 它是**切分粒度，不是总量上限** |
 
 > ⚠ **`—` 不是漏标**：§1.5 的 A / B / C 三类说的都是**影响结果的量**，而本项不改任何行为
 > （它的"关"分支与"没有这个功能"逐字等价）。所以它既不是契约常量、也不是阈值、
@@ -397,11 +398,17 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > `rerank.enabled` + `TIANXI_RERANKER_*` 同一个拆法。容器形态是
 > `/data/capture/requests.jsonl`（在卷里，`docker cp` 取得走）。
 
+**为什么会有多个文件**：一轮 Full 的请求原文按 **~1.5 GB** 估（§2.2 的 0.5–2 天），
+而**单个 1.5 GB 的 JSONL 打不开**——诊断产物打不开就等于没记 ⇒ 按 `capture.max_bytes`
+切成 ~30 份（每份 50 MiB，`requests.jsonl` / `requests.part2.jsonl` / …，每份的 `meta` 里带
+`file_seq`）。**没有总量上限**：忘了关就是把盘记满，跑完记得关回去。
+
 **为什么要有它**：**S6** —— 平台的 `request_id` 到底长什么样（是否真带 `chunk-<n>`、
 序号在不在末尾）我们**从没见过**，而 D25 的位置模型整个押在这个假设上
 （[`open-questions.md`](./open-questions.md) 的 S6 记着"来源是团队告知、不是一手文档"）。
-每一行都记下 `request_id` 与 `chunk_ordinal`——**后者为 `null` 就是"服务当前解析不出来"**，
-那正是 2026-09-29 那次冒烟失败的形状。
+每一行都记下收到的原文与里面的 `request_id`——**它已经回答过一次事故**（S6：官方发的是
+不透明 id，而 D25 那条解析在真实流量上 100% 失败），现在它的用途是核验官方请求的**形状**
+（字段、`timestamp` 单位、未知字段）。⚠ **D28 起它不再解析 `request_id`**。
 
 **四条纪律 + 一行记录里有什么**，一处声明在
 [`../src/tianxi_am/service/capture.py`](../src/tianxi_am/service/capture.py)：

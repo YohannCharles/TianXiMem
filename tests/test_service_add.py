@@ -111,13 +111,13 @@ def pipeline(store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder):
 
 
 def _rid(ordinal: int, *, user_id: str = "u1", session_id: str = "s1") -> str:
-    """造一个 **符合 `ingest.chunk_ordinal_pattern`** 的 `request_id`（D25）。
+    """一个**不透明**的 `request_id`（D28）。
 
-    ⚠ 不再是随便一个字符串：位置由它派生，**取不到 chunk 序号就响亮失败**。
-    这里用本仓 harness 的形态（`<user>|<session>|<n>`，见 `eval/harness/batching.py`
-    的 `request_id_for`）——默认正则同时认它和平台实发的 `...:chunk-<n>`。
+    ⚠ 形状**完全不重要**：位置 = `(request_id, local_index)`，一个字节都不解析。
+    这里刻意用**平台实发的那种**（`r_<hex>`）——它在 D25 的正则下会 500。
     """
-    return f"{user_id}|{session_id}|{ordinal}"
+    suffix = "" if (user_id, session_id) == ("u1", "s1") else f"-{user_id}-{session_id}"
+    return f"r_{ordinal:04d}{suffix}"
 
 
 def _batch(
@@ -168,22 +168,24 @@ def test_add_indexes_only_what_the_batch_touched(
     assert all(len(call) == 1 for call in qdrant.upsert_calls)  # 每次只索引 1 条
 
 
-def test_positions_come_from_the_chunk_ordinal(pipeline: AddPipeline, store: SqliteStore) -> None:
-    """**位置由 `request_id` 的 chunk 序号派生**（D25）——不是到达顺序。
+def test_positions_come_from_the_request_not_from_arrival_order(
+    pipeline: AddPipeline, store: SqliteStore
+) -> None:
+    """**位置只由请求决定**（D28）——不是到达顺序，也不是"上一个 Add 写到哪了"。
 
-    ⚠ 这里刻意**先发 chunk 2 再发 chunk 1**：旧口径（`MAX+1`）下它们会按到达顺序
-    拿到 0 与 1，**把会话顺序读反**；现在它们各自拿自己的序号。
+    ⚠ 这里刻意**先发 `r_0002` 再发 `r_0001`**：两个 Add 各自拿到自己的位置
+    （`(r_0002, 0)` 与 `(r_0001, 0)`），**互不接续**——这正是"跨 Add 没有顺序"的落点。
     """
     pipeline.apply(_batch(_rid(2), "Q2", "A2"))
     pipeline.apply(_batch(_rid(1), "Q1", "A1"))
 
-    assert sorted(p.chunk_ordinal for p in _pairs(store)) == [1, 2]
-    assert [p.question for p in sorted(_pairs(store), key=lambda x: x.chunk_ordinal)] == [
-        "Q1",
-        "Q2",
+    assert sorted((p.request_id, p.local_index) for p in _pairs(store)) == [
+        ("r_0001", 0),
+        ("r_0002", 0),
     ]
-    # 会话顺序（`seq`）由 chunk 序号给出，与到达顺序无关
-    assert [p.seq for p in sorted(_pairs(store), key=lambda x: x.seq)] == [0, 1]
+    assert {p.question for p in _pairs(store)} == {"Q1", "Q2"}
+    # 两条都完整，但**不在同一条链上**（各自的 prev/next 都是 None）
+    assert all(p.prev_memory_id is None and p.next_memory_id is None for p in _pairs(store))
 
 
 # ── 幂等：两层 ─────────────────────────────────────────────────────────
@@ -194,12 +196,12 @@ def test_same_request_id_does_not_create_new_rows(
 ) -> None:
     """**batch 层幂等**：`applied_batches` 命中 ⇒ 不产生新的行。"""
     pipeline.apply(_batch(_rid(1), "Q1", "A1"))
-    before = [(p.id, p.chunk_ordinal, p.local_index) for p in _pairs(store)]
+    before = [(p.id, p.request_id, p.local_index) for p in _pairs(store)]
 
     outcome = pipeline.apply(_batch(_rid(1), "Q1", "A1"))
 
     assert outcome.applied is False
-    assert [(p.id, p.chunk_ordinal, p.local_index) for p in _pairs(store)] == before
+    assert [(p.id, p.request_id, p.local_index) for p in _pairs(store)] == before
 
 
 def test_same_request_id_does_not_duplicate_points(
@@ -313,9 +315,8 @@ def test_same_session_adds_run_concurrently_and_do_not_collide(
     assert qdrant.overlap.peak > 1  # ← **真的并发了**（旧锁下恒为 1）
 
     pairs = _pairs(store)
-    assert sorted((p.chunk_ordinal, p.local_index) for p in pairs) == [
-        (0, 0), (1, 0), (2, 0), (3, 0)
-    ]
+    assert sorted(p.request_id for p in pairs) == [f"r_{i:04d}" for i in range(4)]
+    assert {p.local_index for p in pairs} == {0}  # 每个 Add 各一块
     assert len({p.id for p in pairs}) == 4
 
 
@@ -427,6 +428,8 @@ def test_different_sessions_write_to_sqlite_concurrently(
         mine = [p for p in pairs if p.session_id == f"s{i}"]
         # 每个 session 内：chunk 序号恰好是 0..rounds-1，且每批各落一块
         # （两批**互不相交** ⇒ 位置不会撞车，这正是 D25 让并发安全的原因）
-        assert sorted(p.chunk_ordinal for p in mine) == list(range(rounds))
+        assert sorted(p.request_id for p in mine) == sorted(
+            _rid(k, session_id=f"s{i}") for k in range(rounds)
+        )
         assert [p.local_index for p in mine] == [0] * rounds
     assert len(qdrant.points) == n_sessions * rounds  # 派生索引也齐了

@@ -44,6 +44,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -182,6 +183,7 @@ def run_round(
     date_mode: str = "none",
     annotate_mark: str = "paren",
     spread: bool = False,
+    max_questions: int | None = None,
     fallback_base_url: str | None = None,
     client: ServiceClient | None = None,
 ) -> tuple[list[Sample], list]:
@@ -208,14 +210,38 @@ def run_round(
         for index, sample in enumerate(samples, start=1):
             if not skip_ingest:
                 client.ingest(sample)
+            # ⚠ **下面的 ③④ 两步是最慢的一段，而它们不在本进程里**——裁判是**子进程**，
+            #   直连网关、不碰我们的服务 ⇒ 那段时间里只有**文件**在动
+            #   （`<out>/<user>/answers.jsonl` 与 `labels.jsonl`，逐题 flush）。
+            #   ⇒ 这两行是给"现在到哪一步了"的最低限度交代，**别删**：
+            #   没有它们，一轮 346 题的 run 会有几个小时零输出。
+            n = len(sample.questions) if max_questions is None else min(
+                max_questions, len(sample.questions)
+            )
+            print(
+                f"  [{index}/{len(samples)}] {sample.user_id}：语料已投喂，开始检索 {n} 题"
+                "（进度看 <out>/<user>/answers.jsonl 与 labels.jsonl 的行数）",
+                flush=True,
+            )
+            # ⚠ `--max-questions` **只裁题目、不裁语料**：Add 那一侧照常把整个 sample
+            #   喂进去（否则检索没有素材，题目会全答不上来——那是**假绿灯/假红灯**）。
+            questions = (
+                sample.questions if max_questions is None else sample.questions[:max_questions]
+            )
             hits_by_qid = {
                 question.qid: client.search(
                     user_id=sample.user_id, query=question.question, top_k=top_k
                 )
-                for question in sample.questions
+                for question in questions
             }
+            # ⚠ 交给 `build_input_items` 的必须是**裁过的那个 sample**：
+            #   它按 `sample.questions` 迭代（而不是按 `hits_by_qid`），
+            #   传原件会让没检索过的题也进裁判——那些题会以"没有记忆"的形状被评一次。
+            scoped = (
+                sample if questions is sample.questions else replace(sample, questions=questions)
+            )
             items = build_input_items(
-                sample, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
+                scoped, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
             )
             results += run_judge(
                 pipeline_for(bench_dir, dataset),
@@ -247,21 +273,31 @@ def _parse_switches(raw: str | None) -> dict[str, Any]:
     return parsed
 
 
-def truncation_note(limit: int | None, *, spread: bool = False) -> str:
+def truncation_note(
+    limit: int | None, *, max_questions: int | None = None, spread: bool = False
+) -> str:
     """`--limit` 的警示语——写进数据指纹的 `note`（§13）。
 
     **这是本文件唯一一处"截断是否发生过"的判断**：跑了一小撮与跑完了的数字
     **在 run record 里长得一模一样**，不写下来就会有人拿它们比。
     ⚠ **抽样方式也要写**：`spread` 时取的是**跨类**的题，不写就成了"另一种前 N 题"。
     """
-    if limit is None:
-        return ""
-    if spread:
-        return (
-            f"⚠ **截断跑（分层抽样）**：按 `question_type` 按比例取了约 {limit} 题"
-            "（**不是前 N 题**）——不可与全量比"
+    head = ""
+    if limit is not None:
+        if spread:
+            head = (
+                f"⚠ **截断跑（分层抽样）**：按 `question_type` 按比例取了约 {limit} 题"
+                "（**不是前 N 题**）——不可与全量比"
+            )
+        else:
+            head = f"⚠ **截断跑**：只加载了前 {limit} 个 sample——不可与全量比"
+    if max_questions is not None:
+        tail = (
+            f"⚠ **题目截断**：每个 sample 只判了前 {max_questions} 题"
+            "（语料是整份）——不可与全量比"
         )
-    return f"⚠ **截断跑**：只加载了前 {limit} 个 sample——不可与全量比"
+        return f"{head}\n{tail}" if head else tail
+    return head
 
 
 def _unreachable_hint(base_url: str, error: Exception) -> str:
@@ -291,6 +327,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="只跑前 N 个 sample（**会写进数据指纹的 note**——截断过的数字不可与全量比）",
+    )
+    parser.add_argument(
+        "--max-questions",
+        type=int,
+        default=None,
+        help=(
+            "每个 sample **最多判几道题**（冒烟用）。⚠ 语料照常整份 Add——只裁题目不裁语料，"
+            "否则检索没有素材，答案与分数全是假的。会写进数据指纹的 note"
+        ),
     )
     parser.add_argument("--skip-ingest", action="store_true", help="跳过 Add，复用已有语料")
     parser.add_argument(
@@ -487,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:
     run_id = args.run_id or derive_run_id(args.dataset)
     out_dir = reports_dir / "runs" / run_id
 
-    note = truncation_note(args.limit, spread=args.spread)
+    note = truncation_note(args.limit, max_questions=args.max_questions, spread=args.spread)
 
     missing = judge_preconditions()
     if missing:
@@ -509,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
             out_dir=out_dir,
             top_k=args.top_k,
             limit=args.limit,
+            max_questions=args.max_questions,
             skip_ingest=args.skip_ingest,
             date_mode=args.memory_date,
             annotate_mark=args.annotate_mark,

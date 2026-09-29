@@ -209,6 +209,36 @@ def test_limit_is_recorded_as_a_truncated_run():
     """**截断过的数字与全量看起来一样** ⇒ 数据指纹的 `note` 必须写下来（§13）。"""
     assert runner.truncation_note(None) == ""
     assert "截断" in runner.truncation_note(3)
+    # 两种截断维度是**分开**写的：只截 sample 与只截题目是两回事
+    note = runner.truncation_note(1, max_questions=10)
+    assert "sample" in note and "题目截断" in note
+    assert "题目截断" in runner.truncation_note(None, max_questions=10)
+
+
+def test_max_questions_only_trims_the_questions_not_the_corpus(bench_dir, tmp_path, monkeypatch):
+    """`--max-questions` **只裁题目**：语料照常整份 Add。
+
+    ⚠ 若连语料一起裁，检索就没有素材、分数全是假的——而它在报告里看起来只是"分低"。
+    """
+    recorder = _Recorder()
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
+    sample = _sample()
+
+    _, results = runner.run_round(
+        dataset="locomo-refined",
+        base_url="http://stub",
+        bench_dir=bench_dir,
+        out_dir=tmp_path / "runs" / "r1",
+        max_questions=1,
+        client=recorder.client(),
+    )
+
+    # 只判了 1 题（`_sample()` 有 2 题）
+    assert len(results) == 1
+    # 而 Add 一条都没少：语料是整份喂进去的
+    added = [body for path, body in recorder.requests if path == "/add"]
+    assert len(added) == 1
+    assert len(added[0]["messages"]) == len(sample.sessions[0].messages)
 
 
 def _exploding_client(*_args, **_kwargs):

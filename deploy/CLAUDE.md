@@ -230,13 +230,13 @@ docker compose up -d          # 注意：不要带 --build，否则它会想重�
 | **①** | 拿到带这一层的代码 | **路 A**（服务器能出网）：`git pull` 到含 `src/tianxi_am/service/capture.py` 的 commit（`git log --oneline -- src/tianxi_am/service/capture.py` 查得到）· **路 B**（内网）：本地 `make image-build` → `docker save` → `scp` → `docker load`（见上一节） |
 | **②** | 打开开关 | **路 A**：在**服务器**的仓库里就地改 `configs/default.yaml` → `capture: enabled: true`。**别提交它**——它是个临时诊断开关，一提交下次 `git pull` 就撞冲突（未提交状态反而会在 pull 时**拦住你**，这是好事）。**路 B**：改**本地**那份再 `make image-build`（yaml 是烘进镜像的） |
 | **③** | 重建 + 起 | **路 A**：`docker compose -f deploy/compose.yaml up -d --build` · **路 B**：`docker load` 新镜像后 `up -d`（**不要带 `--build`**）。`ps` 期望 `app (healthy)` |
-| **④** | **核对采集真的开了** | `docker compose -f deploy/compose.yaml logs app \| grep 请求采集` ⇒ 期望 `请求采集已开启：…/data/capture/requests.jsonl（上限 … 字节，写满即停）`。⚠ 若看到 **ERROR「打不开文件」**：采集已**自动关闭**，服务照常跑——去查 `TIANXI_CAPTURE_PATH` 与 `/data` 卷属主（坑表里那条 `chown 10001:10001`） |
+| **④** | **核对采集真的开了** | `docker compose -f deploy/compose.yaml logs app \| grep 请求采集` ⇒ 期望 `请求采集已开启：…/data/capture/requests.jsonl（每份 … 字节，写满自动换下一份）`。⚠ 若看到 **ERROR「打不开文件」**：采集已**自动关闭**，服务照常跑——去查 `TIANXI_CAPTURE_PATH` 与 `/data` 卷属主（坑表里那条 `chown 10001:10001`） |
 | **⑤** | 跑你要跑的（冒烟一次 / 一轮 Smoke） | 见 [`../docs/submission.md`](../docs/submission.md) §1 |
-| **⑥** | 取文件 | `docker compose -f deploy/compose.yaml cp app:/data/capture/requests.jsonl ./requests.jsonl` |
+| **⑥** | 取文件 | **可能有好几份**（每 50 MiB 一份）：`docker compose -f deploy/compose.yaml exec -T app sh -c 'ls -la /data/capture/'`，再逐份 `docker compose -f deploy/compose.yaml cp app:/data/capture/requests.jsonl ./`、`…/requests.part2.jsonl ./` … |
 | **⑦** | 读它（下表） | |
 | **⑧** | **关回去** | 路 A：`git checkout -- configs/default.yaml` → `up -d --build`；路 B：本地改回 `false` 再走一遍镜像。⛔ **别用 `down -v`**：那个卷同时装着唯一不可重建的 `tianxi.db` |
 
-**⑦ 怎么读**——一行一次请求，`chunk_ordinal` 就是"服务用**当前**正则解析 `request_id` 的结果"：
+**⑦ 怎么读**——一行一次请求，看的是**官方原样发来的那个字符串**：
 
 ```bash
 python -c "
@@ -244,18 +244,22 @@ import json
 for line in open('requests.jsonl', encoding='utf-8'):
     e = json.loads(line)
     if e.get('kind') == 'req':
-        print(e['path'], e['status'], e['chunk_ordinal'], e.get('request_id'))"
+        print(e['path'], e['status'], e.get('request_id'), list(e.get('body', {}) or {}))"
 ```
 
 | 看到什么 | 说明什么 | 下一步 |
 | --- | --- | --- |
-| 每一行的 `chunk_ordinal` 都是数字 | 官方 id 确实带 `chunk-<n>`，我们的正则认得 | **S6 收口**：D25 的现状是对的，什么都不用改 |
-| 有行是 `null`，而那个 `request_id` 尾部**确实多了一段** | 我们的正则**太窄**（锚定末尾） | 放宽 `ingest.chunk_ordinal_pattern`（**配置项，不必改代码**）——但**先把样本留档**再动 |
-| 有行的 `request_id` 里**根本没有 chunk 序号** | D25 的立论基础没了 | ⛔ **停下来**：那是**决定**不是**实现**（见 [`../docs/open-questions.md`](../docs/open-questions.md) 的 S6） |
+| `request_id` 是 `r_3115…` 这种**不透明字符串** | **这就是 2026-09-29 抓到的实况**——官方**不**在 id 里带任何业务语义 | ✅ 已经收敛到 **D28**：`request_id` 只做幂等键 / 溯源 / 回显，**一个字节都不解析** |
+| `messages[]` 里有**我们没见过的字段**，或 `timestamp` 不是毫秒 | 官方契约与我们的假设有落差 | 那是**加载层/契约层**的事，改之前先留档并回 [`../docs/contract.md`](../docs/contract.md) 对照 |
+| `/add` 的 `user_id` / `session_id` 形状与本地 harness 差很远 | 影响的是 §6.1 的"邻域稳定"这类**语义**判断（S2 / S5 / S7） | 留档 + 回 [`../docs/open-questions.md`](../docs/open-questions.md) 对应条目 |
+
+> ⚠ **采集层已经干过一次活**：S6 就是它查明的（官方发的是不透明 id，而 D25 那条解析
+> 在真实流量上 100% 失败 ⇒ Add 全挂 ⇒ **D28**）。所以**别只在出事时才开它**。
 
 > ⚠ 三条别踩的：① `/health` **刻意不记**（平台探活会刷屏，且它零核验价值）；
 > ② `authorization` **只记"在不在"、绝不记值**；③ 文件里是**官方评测原文**
-> ⇒ **不进 git、不传第三方**；`capture.max_bytes`（默认 64 MiB）写满即停，**别指望它记一整场 Full**。
+> ⇒ **不进 git、不传第三方**。`capture.max_bytes`（默认 50 MiB）是**每份**的大小——
+> 一轮 Full 会有**几十份**，写满自动换，**没有总量上限**（跑完记得关）。
 
 ---
 

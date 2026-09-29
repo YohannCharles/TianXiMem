@@ -60,14 +60,14 @@
 | **Add 最多被重试 32 次**（`request_id` 与 payload 不变） | 必须幂等 | §2.2 |
 | **响应前必须持久化完成且立即可搜索** | 不允许异步建索引 | §2.1 |
 | **`Search` 不得生成最终答案**，也不得把答案伪装成记忆记录 | reranker 只重排证据 | §2.1 / §11.2 |
-| **Add 仍必须 `--workers 1`** | `BEGIN IMMEDIATE` 与 `applied_batches` 都在单进程内；**放开多 worker 需要的验证一件都没做**（并发写压力、`busy_timeout` 多进程争用、每进程各一份 Qdrant 客户端） | §15 / **D25** |
+| **Add 仍必须 `--workers 1`** | `BEGIN IMMEDIATE` 与 `applied_batches` 都在单进程内；**放开多 worker 需要的验证一件都没做**（并发写压力、`busy_timeout` 多进程争用、每进程各一份 Qdrant 客户端） | §15 / **D28** |
 | **单请求最长 30 分钟；Full run 连续跑 0.5–2 天** | 阻塞调用会互相饿死，问题直到 Full 才炸 | §2.2 / §15 |
 
 ### 三个静默出错的重灾区
 
 | 陷阱 | 为什么静默 | 在本文件之外 |
 | --- | --- | --- |
-| **幂等现在是纯内容层的**：块写下即最终形状（D24），位置是**请求的纯函数**（D25）⇒ 重试必然算出**同一位置**。但**批次级仍必须查 `applied_batches` 旁表**：AML 的重试是正常行为，不能每次靠撞 `UNIQUE` 来兜（那会让正常重试变成 500） | 写入是 upsert；且 D25 之后撞 `UNIQUE` 已**不再静默** | [`pairing/CLAUDE.md`](src/tianxi_am/pairing/CLAUDE.md) |
+| **幂等现在是纯内容层的**：块写下即最终形状（D24），位置是**请求的纯函数**（D28）⇒ 重试必然算出**同一位置**。但**批次级仍必须查 `applied_batches` 旁表**：AML 的重试是正常行为，不能每次靠撞 `UNIQUE` 来兜（那会让正常重试变成 500）。⚠ **D28 起它还要比对 payload 指纹**：同 `request_id` **不同 payload** ⇒ **409**（那不是重试；静默挑一份落库 = 另一份记忆凭空消失） | 写入是 upsert；D28 之后撞 `UNIQUE` **不再静默**，而"同 id 不同 payload"**响亮冲突** | [`pairing/CLAUDE.md`](src/tianxi_am/pairing/CLAUDE.md) |
 | **Qdrant RRF 的 `k` 默认是 `2`**，不是文献里的 60。**必须显式设 `k=61`**（Qdrant 秩 0-based：`1/(0+61) = 1/(1+60)`） | 不设会得到一个与所有参考实现都不同的融合行为，极难排查 | [`docs/decisions.md`](docs/decisions.md) D5 |
 | **Qdrant local 模式会静默丢弃 payload 索引**（`create_payload_index` 只打一行警告就返回） | 而 `user_id` / `session_id` / `event_time` 三个筛选**全依赖**它 | [`deploy/CLAUDE.md`](deploy/CLAUDE.md) |
 
@@ -75,7 +75,7 @@
 
 | 用途 | 键 | 理由 |
 | --- | --- | --- |
-| 记录 `id` | **位置派生** `hash(user_id, session_id, chunk_ordinal, local_index)`（D25） | 用内容哈希会在内容变时变 `id`，留下**孤儿 point** |
+| 记录 `id` | **位置派生** `hash(user_id, session_id, request_id, local_index)`（D28，`request_id` 整体参与、**不解析**） | 用内容哈希会在内容变时变 `id`，留下**孤儿 point** |
 | embedding 缓存键 | **渲染后文本的哈希**，**不能用 `id`** | 同一位置的内容若变了而 `id` 不变，用 `id` 会拿到**陈旧向量** |
 
 **两者互换都会静默出错。** 缓存**必须落盘**，且要能在 Step 5 切模型时整体失效（§7.2 / §12.1 R1）。

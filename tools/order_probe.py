@@ -1,20 +1,22 @@
-"""D25 的**性质探针**：**乱序 + 并发投喂**与**顺序投喂**得到逐字相同的真源。
+"""位置模型的**性质探针**：**乱序 + 并发投喂**与**顺序投喂**得到逐字相同的真源。
 
-这是 D25 真正要买的东西，也是 [`../../eval/reports/ledger.md`](../../eval/reports/ledger.md)
-的「D25」一节里那条结论的**唯一复现路径**。两条臂各起一个干净服务（各自的库与集合）：
+这是"位置是请求的纯函数"这条性质真正要买的东西（D25 起，**D28 之后更强**：
+位置里连"顺序"这个概念都不再有了，跨 Add 既不比较先后、也不建立邻接）。
+两条臂各起一个干净服务（各自的库与集合）：
 
   A. 顺序：harness 的 driver 按源序逐批 Add（= 线上正常情况下 AML 的形态）
   B. 乱序 + 并发：同一批 Add 打乱顺序、多线程同时打
 
 ⚠ **它要花掉真实的 embedding 调用**（conv-26 全量 ≈ 216 块），所以不进 `make test`——
-`tests/test_apply.py` 已经在单元层盖住了同一条性质（乱序与顺序的位置/`id`/`seq` 一致）。
+`tests/test_apply.py::test_arrival_order_does_not_change_the_truth_source` 已经在单元层
+盖住了同一条性质（乱序与顺序的位置 / `id` / 邻接逐字一致）。
 本探针盖的是**单元测试盖不到的那一段**：真 HTTP、真并发、真 Qdrant、真 embedding。
 
 判据（逐字，不是"大概一致"）：
-  1. `(chunk_ordinal, local_index)` 的集合相同
+  1. `(request_id, local_index)` 的集合相同
   2. 每个位置的 `(question, answer, event_time)` 逐字相同
   3. **`id` 集合相同**（位置派生 ⇒ 位置一致就该 id 一致）
-  4. 按 `(chunk_ordinal, local_index)` 排出来的 `seq` 序列相同
+  4. **`prev` / `next` 指针逐字相同**（邻接只由请求决定，与到达顺序无关——D28）
 
 跑法：`make order-probe`（= `uv run python tools/order_probe.py`）
       `make order-probe PROCESSES=4` —— B 臂起 **4 个独立进程**共享同一套存储，
@@ -148,10 +150,9 @@ def _sqlite_rows(db: Path) -> list[tuple]:
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         return conn.execute(
-            "SELECT id, chunk_ordinal, local_index, question, answer, event_time,"
-            " ROW_NUMBER() OVER (PARTITION BY user_id, session_id"
-            "   ORDER BY chunk_ordinal, local_index) - 1 AS seq"
-            " FROM qa_pairs ORDER BY session_id, chunk_ordinal, local_index"
+            "SELECT id, request_id, local_index, question, answer, event_time,"
+            " prev_memory_id, next_memory_id"
+            " FROM qa_pairs ORDER BY session_id, request_id, local_index"
         ).fetchall()
     finally:
         conn.close()
@@ -254,7 +255,7 @@ def main(processes: int = 1) -> int:
             print("❌ 行数不同")
             return 1
 
-        pos_a = {(r[1], r[2]): r for r in a}
+        pos_a = {(r[1], r[2]): r for r in a}  # 键 = (request_id, local_index)
         pos_b = {(r[1], r[2]): r for r in b}
         print(f"位置集合相同：{set(pos_a) == set(pos_b)}")
         print(f"id 集合相同  ：{ {r[0] for r in a} == {r[0] for r in b} }")
@@ -266,12 +267,12 @@ def main(processes: int = 1) -> int:
                 bad += 1
                 if bad <= 3:
                     print(f"  ❌ {key}\n     A={ra}\n     B={rb}")
-        print(f"\n逐行（含 id / 正文 / event_time / seq）不同的行数：{bad}")
+        print(f"\n逐行（含 id / 正文 / event_time / prev / next）不同的行数：{bad}")
 
-        seq_a = [r[6] for r in a]
-        seq_b = [r[6] for r in b]
-        print(f"seq 序列相同：{seq_a == seq_b}（长度 {len(seq_a)}）")
-        ok = bad == 0 and set(pos_a) == set(pos_b) and seq_a == seq_b
+        links_a = [(r[6], r[7]) for r in a]
+        links_b = [(r[6], r[7]) for r in b]
+        print(f"邻接指针逐字相同：{links_a == links_b}（长度 {len(links_a)}）")
+        ok = bad == 0 and set(pos_a) == set(pos_b) and links_a == links_b
         head = "✅ 乱序+并发与顺序**逐字一致**"
         if processes > 1:
             head = f"✅ {processes} 个进程乱序并发，真源与顺序投喂**逐字一致**"
@@ -283,7 +284,7 @@ def main(processes: int = 1) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="D25 性质探针：乱序/并发投喂 vs 顺序投喂")
+    parser = argparse.ArgumentParser(description="位置模型探针：乱序/并发投喂 vs 顺序投喂")
     parser.add_argument(
         "--processes", type=int, default=1, metavar="N",
         help="B 臂起 N 个**独立进程**共享同一套存储（默认 1）。"

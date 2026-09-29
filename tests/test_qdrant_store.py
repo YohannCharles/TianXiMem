@@ -72,7 +72,6 @@ def _rec(memory_id: str, user_id: str, text: str, **over) -> MemoryRecord:
         "memory_id": memory_id,
         "user_id": user_id,
         "session_id": "s1",
-        "chunk_ordinal": 0,
         "local_index": 0,
         "event_time": 1_700_000_000_000,
         "text": text,
@@ -173,7 +172,6 @@ def test_payload_carries_identity_fields(qdrant_store: QdrantStore, emb: FakeEmb
                 "u1",
                 "Q: a\nA: b",
                 session_id="s9",
-                chunk_ordinal=7,
                 local_index=3,
                 event_time=123,
             )
@@ -184,8 +182,9 @@ def test_payload_carries_identity_fields(qdrant_store: QdrantStore, emb: FakeEmb
     assert payload["memory_id"] == mid
     assert payload["user_id"] == "u1"
     assert payload["session_id"] == "s9"
-    # D25：位置的两半都在 payload 里（**只用于溯源**，检索不按它们过滤/排序）
-    assert payload["chunk_ordinal"] == 7
+    # D28：位置里只剩 `local_index`（**只用于溯源**，检索不按它过滤/排序）
+    # ⚠ `chunk_ordinal` **已经不在了**——它随 D28 整个删掉（那时它来自解析 request_id）
+    assert "chunk_ordinal" not in payload
     assert payload["local_index"] == 3
     assert payload["event_time"] == 123
     # 正文不进 payload（§6.3）

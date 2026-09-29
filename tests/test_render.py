@@ -174,13 +174,14 @@ def _dress(chain, *, inject_abs_time: bool) -> list[str]:
                 conn,
                 user_id="u1",
                 session_id="s1",
-                chunk_ordinal=ordinal,
+                request_id=f"r-render-{ordinal}",
                 local_index=0,
+                prev_memory_id=None,
+                next_memory_id=None,
                 question=f"Q{ordinal}",
                 answer=f"A{ordinal}",
                 status="complete",
                 event_time=_MAY_8_2023_MS,
-                request_id="seed",
             )
         ids.append(pair.id)
         pairs.append(pair)

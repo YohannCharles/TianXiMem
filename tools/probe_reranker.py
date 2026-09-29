@@ -50,7 +50,10 @@ from tianxi_am.retrieve import DenseArm, EvidenceChecker, HybridRetriever
 from tianxi_am.service.app import build_reranker
 from tianxi_am.service.pipeline import SearchPipeline
 from tianxi_am.store.qdrant_store import ScoredMemoryId
-from tianxi_am.store.sqlite_store import SqliteStore
+from tianxi_am.store.sqlite_store import SqliteStore, make_pair_id
+
+#: 本探针全部数据都落在这个 user 下（隔离字段，不影响别的数据）。
+_USER: Final[str] = "probe-u"
 
 EXIT_OK = 0
 EXIT_PROBE_FAILED = 1
@@ -205,11 +208,11 @@ def probe_pipeline(reranker: RemoteReranker, *, top_k: int, radius: int) -> bool
         print(f"只有扩窗够得到的那条：{context_id[:6]}（它在 ★ 的同一个 session 里）")
 
         baseline = _build_pipeline(store=store, qdrant=qdrant, reranker=None)
-        without = baseline.run(user_id="probe-u", query=QUERY, top_k=top_k)
+        without = baseline.run(user_id=_USER, query=QUERY, top_k=top_k)
         _show("关精排", without, note=f"rerank_disabled={baseline.rerank_disabled}")
 
         probe = _build_pipeline(store=store, qdrant=qdrant, reranker=reranker)
-        with_rerank = probe.run(user_id="probe-u", query=QUERY, top_k=top_k)
+        with_rerank = probe.run(user_id=_USER, query=QUERY, top_k=top_k)
         _show(
             "开精排",
             with_rerank,
@@ -270,48 +273,59 @@ def _seed_corpus(store: SqliteStore) -> tuple[str, str, list[str]]:
     ```
 
     ⚠ 干扰项的 id **在这里收集**，不去按 session 前缀回查：它们的 `session_id` 是
-    `s-distract-<i>`，用一个共同前缀去 `fetch_session_ordered` 查**查不到任何东西**
-    （那个查询要求 session 相等），于是"候选 7 条"实际只有 1 条，两遍输出一模一样
+    `s-distract-<i>`，拿一个共同前缀去查**查不到任何东西**（那些查询要求 session 相等），
+    于是"候选 7 条"实际只有 1 条，两遍输出一模一样
     ——**探针自己把自己测成了空过的**。
+
+    ⚠ **★ 与 context 必须在同一次 Add 内相邻**（D28）：扩窗只沿 `prev` / `next` 走，
+    分两次 Add 的话 context **永远扩不到**——那会让本探针测不到"扩窗把 ★ 提前"。
     """
+    match_id = make_pair_id(_USER, "s-match", "probe-match", 0)
+    context_id = make_pair_id(_USER, "s-match", "probe-match", 1)
     with store.transaction() as conn:
         match = store.insert_pair(
             conn,
-            user_id="probe-u",
+            user_id=_USER,
             session_id="s-match",
-            chunk_ordinal=0,
+            request_id="probe-match",
             local_index=0,
+            prev_memory_id=None,
+            next_memory_id=context_id,
             question=MATCH_QUESTION,
             answer=MATCH_ANSWER,
             status="complete",
             event_time=None,
-            request_id="probe-match",
+            pair_id=match_id,
         )
         context = store.insert_pair(
             conn,
-            user_id="probe-u",
+            user_id=_USER,
             session_id="s-match",
-            chunk_ordinal=1,
-            local_index=0,
+            request_id="probe-match",
+            local_index=1,
+            prev_memory_id=match_id,
+            next_memory_id=None,
             question=CONTEXT_QUESTION,
             answer=CONTEXT_ANSWER,
             status="complete",
             event_time=None,
-            request_id="probe-context",
+            pair_id=context_id,
         )
         distractors: list[str] = []
         for idx, (question, answer) in enumerate(DISTRACTORS):
+            # 干扰项**各占一次 Add**（各一块）——它们之间不需要任何邻接
             pair = store.insert_pair(
                 conn,
-                user_id="probe-u",
+                user_id=_USER,
                 session_id=f"s-distract-{idx}",
-                chunk_ordinal=0,
+                request_id=f"probe-d{idx}",
                 local_index=0,
+                prev_memory_id=None,
+                next_memory_id=None,
                 question=question,
                 answer=answer,
                 status="complete",
                 event_time=None,
-                request_id=f"probe-d{idx}",
             )
             distractors.append(pair.id)
     return match.id, context.id, distractors

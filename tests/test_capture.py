@@ -2,8 +2,9 @@
 
 本文件保护的是两件事，都不是功能：
 
-* **S6**：平台的 `request_id` 到底长什么样——`chunk_ordinal` 记的就是"服务此刻能不能
-  从它里面解析出序号"，而 `null` 正是要看的那一眼（`docs/open-questions.md` 的 S6）。
+* **S6**：平台的 `request_id` 到底长什么样——**它已经答过一次**（官方发的是 `r_3115…`
+  这种不透明 id，而 D25 那条解析在真实流量上 100% 失败 ⇒ **D28**）。
+  现在它记的是**官方原样发来的正文**，用来核验请求形状（字段 / `timestamp` 单位 / 未知字段）。
 * **它绝不改变行为**：抄一份原文，不改变下游看到的 body、不吞异常、写盘失败不影响响应。
 
 ⚠ **HTTP 那几条用例走真 `create_app` + `TestClient`**（与 `test_contract.py` 同一套 `wired`
@@ -29,8 +30,8 @@ from tianxi_am.service.capture import CAPTURED_PATHS, CaptureMiddleware, Request
 _MIN_ENV = {"AML_EMB_BASE_URL": "http://unused/v1", "AML_EMB_API_KEY": "k"}
 
 _ADD_PAYLOAD: dict[str, Any] = {
-    # ⚠ 用本仓 harness 的形态（`<user>|<session>|<n>`）：默认正则两个形态都认，
-    #   而"平台实发的是哪一种"正是 S6 未决的那件事。
+    # ⚠ 形状**随便**（D28：服务端一个字节都不解析它）——这里用本仓 harness 的形态，
+    #   只是为了让日志读起来眼熟。
     "request_id": "u1|s1|0",
     "user_id": "u1",
     "session_id": "s1",
@@ -89,7 +90,7 @@ def test_capture_is_off_by_default(tmp_path: Path) -> None:
     """默认关——它按设计只在"要看清官方发了什么"时打开（S6）。"""
     cfg = _load(tmp_path)
     assert cfg.capture.enabled is False
-    assert cfg.capture.max_bytes == 64 * 1024 * 1024
+    assert cfg.capture.max_bytes == 50 * 1024 * 1024  # 每份 50 MiB，写满就换下一份
     assert cfg.capture.path == "var/capture/requests.jsonl"
     # 关 ⇒ 连中间件都不装（`build_capture` 返回 None，`create_app` 里那一段不会执行）
     assert build_capture(cfg) is None
@@ -146,10 +147,8 @@ def test_non_positive_max_bytes_is_rejected(tmp_path: Path, value: int) -> None:
 # ── 2. 一行记录里有什么 ────────────────────────────────────────────────
 
 
-def test_record_carries_the_raw_body_and_the_parsed_chunk_ordinal(
-    capture: RequestCapture,
-) -> None:
-    """`body` = 原样收到的对象；派生列给出 `request_id` 与**解析出的 chunk 序号**。"""
+def test_record_carries_the_raw_body_and_the_request_id(capture: RequestCapture) -> None:
+    """`body` = 原样收到的对象；派生列只多给一个 `request_id`（**不解析它**，D28）。"""
     payload = {
         "request_id": "eval:run1:locomo_refined:conv-0:chunk-3",
         "user_id": "u1",
@@ -164,7 +163,8 @@ def test_record_carries_the_raw_body_and_the_parsed_chunk_ordinal(
     assert entry["body"] == payload  # 逐字段原样（含中文）
     assert entry["body_bytes"] == len(body)
     assert entry["request_id"] == payload["request_id"]
-    assert entry["chunk_ordinal"] == 3  # ← S6 要看的那一列
+    # ⚠ D28 起**没有** `chunk_ordinal` 这一列——那个解析器已经删了
+    assert "chunk_ordinal" not in entry
     assert entry["status"] == 200
     assert entry["kind"] == "req"
 
@@ -173,30 +173,29 @@ def test_meta_line_describes_the_file(capture: RequestCapture) -> None:
     """第一行是 `meta`：文件要能自己说明自己（几个月后打开它的人不必翻代码）。"""
     meta = _lines(capture)[0]
     assert meta["kind"] == "meta"
-    assert "chunk_ordinal" in meta["note"]
+    assert meta["file_seq"] == 1  # ← 第几份
+    assert "request_id" in meta["note"]
 
 
-def test_unparsable_chunk_ordinal_is_recorded_as_null(capture: RequestCapture) -> None:
-    """**取不出序号 ⇒ 记 `null`，而不是抛异常。**
+def test_an_opaque_request_id_is_recorded_verbatim(capture: RequestCapture) -> None:
+    """**形状怪异的 `request_id` 照样原样记下来**（D28）。
 
-    这正是那次冒烟失败的形状（`...:chunk-0-1790669310`）：id 后面多粘了一段，
-    服务端解析不出来 ⇒ 500。采集必须**照样把它记下来**，否则要核验的东西就没了。
+    这正是那次冒烟失败的形状（`...:chunk-0-1790669310`）——**当时**服务端解析不出来 ⇒
+    500；现在它只是个字符串，既不解析、也不影响落库，但**记录里要能看见它**。
     """
-    payload = {**_ADD_PAYLOAD, "request_id": "u1|s1|0-1790669310"}
+    payload = {**_ADD_PAYLOAD, "request_id": "r_31156f4174b24abe83ad2c09a486cc5f"}
 
     capture.record(
         method="POST",
         path="/add",
         body=json.dumps(payload).encode("utf-8"),
-        status=None,
+        status=200,
         latency_ms=1.0,
-        error="ValueError",
     )
 
     (entry,) = _requests(capture)
-    assert entry["request_id"] == "u1|s1|0-1790669310"
-    assert entry["chunk_ordinal"] is None
-    assert entry["error"] == "ValueError"
+    assert entry["request_id"] == "r_31156f4174b24abe83ad2c09a486cc5f"
+    assert entry["body"] == payload
 
 
 def test_non_json_body_is_kept_verbatim(capture: RequestCapture) -> None:
@@ -226,22 +225,45 @@ def test_authorization_value_never_lands_in_the_file(capture: RequestCapture) ->
     assert "secret" not in text.lower()
 
 
-def test_max_bytes_stops_recording_with_a_marker(tmp_path: Path) -> None:
-    """写满 ⇒ 一行 `truncated` 标记 + **停止记录**——"忘了关"的代价必须有界。"""
+def test_a_full_file_rotates_instead_of_stopping(tmp_path: Path) -> None:
+    """**写满一份就换下一份**（2026-09-29 起）——不许停，也不许把一份写成 1.5 GB。
+
+    ⚠ 单个 1.5 GB 的 JSONL（一轮 Full 的量级）**打不开**，所以按 `max_bytes` 切开。
+    """
     cap = RequestCapture(path=tmp_path / "r.jsonl", max_bytes=2000)
     assert cap.open() is True
 
     for _ in range(50):
         cap.record(method="POST", path="/add", body=b"x" * 200, status=200, latency_ms=1.0)
 
-    kinds = [entry["kind"] for entry in _lines(cap)]
-    assert kinds.count("truncated") == 1  # 标记只有一行
-    assert kinds[-1] == "truncated"  # 而且是**最后一行**
-    assert 0 < kinds.count("req") < 50  # 记了一些，但远不是全部
-    # 标记之后一个字节都不再写（否则"停止记录"只是句话）
-    assert kinds.index("truncated") == len(kinds) - 1
-    assert _lines(cap)[-1]["written_bytes"] <= 2000
-    assert cap.enabled is False
+    # ⚠ **别按文件名排序**：`part10` 会排到 `part2` 前面。按 `file_seq` 排。
+    files = sorted(tmp_path.glob("r*.jsonl"))
+    names = {path.name for path in files}
+    assert len(files) > 1  # **真的转过**
+    assert "r.jsonl" in names  # 第 1 份就是配置里那个路径
+    assert "r.part2.jsonl" in names
+    def _seq(path: Path) -> int:
+        head = path.read_text(encoding="utf-8").splitlines()[0]
+        return int(json.loads(head)["file_seq"])
+
+    files = sorted(files, key=_seq)
+    assert [_seq(path) for path in files] == list(range(1, len(files) + 1))
+
+    # 每一份都不超上限（+ 一行 meta / 一条记录的容差），且每行都是完整 JSON
+    total_reqs = 0
+    for path in files:
+        entries = [
+            json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line
+        ]
+        assert entries[0]["kind"] == "meta"
+        assert path.stat().st_size <= 2000 + 1200  # 上限 + 一条记录的容差
+        total_reqs += sum(1 for e in entries if e["kind"] == "req")
+        assert not any(e["kind"] == "truncated" for e in entries)  # 轮转**不是**停止
+
+    assert total_reqs == 50  # 一条都没丢
+    assert cap.enabled is True  # 还在记
+    assert cap.files_written == len(files)
+    assert cap.current_path == files[-1]
     cap.close()
 
 
@@ -283,7 +305,7 @@ def test_add_request_is_recorded_verbatim(capture: RequestCapture, wired: Wired)
     assert entry["status"] == 200
     assert entry["content_type"] == "application/json"
     assert entry["body"] == _ADD_PAYLOAD
-    assert entry["chunk_ordinal"] == 0
+    assert entry["request_id"] == _ADD_PAYLOAD["request_id"]
 
 
 def test_boundary_422_is_recorded_before_the_route(capture: RequestCapture, wired: Wired) -> None:
@@ -318,7 +340,7 @@ def test_unhandled_exception_is_recorded_with_its_type(
     }
 
     def _boom(_batch: object) -> None:
-        raise ValueError("模拟 pairing.parse_chunk_ordinal 取不到序号")
+        raise ValueError("模拟 Add 链路里的一次未处理异常")
 
     monkeypatch.setattr(wired.services.add, "apply", _boom)  # type: ignore[attr-defined]
 
@@ -334,7 +356,6 @@ def test_unhandled_exception_is_recorded_with_its_type(
     assert entry["error"] == "ValueError"
     assert entry["status"] is None
     assert entry["request_id"] == bad["request_id"]
-    assert entry["chunk_ordinal"] is None
 
 
 def test_health_is_not_recorded(capture: RequestCapture, wired: Wired) -> None:

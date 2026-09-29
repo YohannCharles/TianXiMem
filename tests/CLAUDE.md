@@ -51,11 +51,12 @@ test_idempotency.py  批次级守卫
 | 来源元数据 | `source_idxs` 合起来是 `0..n-1` 的**排列**（无丢失、无重复） | `test_pairing.py` |
 | **跨 Add 不拼接** | `Add0=[U A U]` + `Add1=[A U A]` ⇒ **不出现 U(Add0)+A(Add1)** | `test_apply.py`（**Test 7**） |
 | **连续 assistant 跨 Add** | 不合并成 `AAA` | `test_apply.py`（**Test 8**） |
-| **乱序 Add / 同 session 并发** | **D25 起是性质级断言**：乱序 + 多线程投喂的最终 `{位置集合, 每块正文, `id` 集合, `seq` 序}` 与顺序投喂**逐字一致**（不是"每个 Add 各自对"） | `test_apply.py`（**Test 9**） |
+| **乱序 Add / 同 session 并发** | **性质级断言**（D28）：乱序 + 多线程投喂的最终 `{位置集合, 每块正文, id 集合, prev/next 指针}` 与顺序投喂**逐字一致**（不是"每个 Add 各自对"） | `test_apply.py::test_arrival_order_does_not_change_the_truth_source` |
 | 同一 `request_id` 重试 | 不重复落库 / 不重复 embedding | `test_idempotency.py`（**Test 10**） |
-| `(chunk_ordinal, local_index)` 不重号 | 同 session 并发时**互不相交**（D25）；重放撞 `UNIQUE` 而**不是**静默重复 | `test_apply.py`、`test_store.py` |
+| `(request_id, local_index)` 不重号 | 不同 Add 并发时**互不相交**（D28）；重放撞 `UNIQUE` 而**不是**静默重复 | `test_apply.py`、`test_store.py` |
 | 空批次 | **响亮失败**，不静默 no-op | `test_apply.py` |
-| `request_id` 取不出 chunk 序号 | **响亮失败**（非 200），**不许回退到"按到达顺序分配"** | `test_apply.py`、`test_contract.py` |
+| **`request_id` 是 opaque string** | 任意形状（`abc` / `foo:bar` / `xxx:chunk-0-extra` / UUID）都必须能正常 Add（D28）——**不许有格式要求** | `test_apply.py::test_request_id_is_opaque_and_any_shape_works` |
+| **邻接只在一次 Add 内** | 同 user / 同 session 的两次 Add **绝不互为邻居**（`M2.next is None`、`M3.prev is None`） | `test_apply.py`、`test_neighbor.py` |
 
 > ⛔ **不要再写这几类的用例**（**实现不存在，写了也无处落**）：
 > 跨批续接三步 `3a′/3a/3b/3d`、`pending` 判定与三个计数器、`open_pair` /
@@ -102,9 +103,9 @@ test_idempotency.py  批次级守卫
 
 | 陷阱 | 会空过的假设 | 现在怎么造用例 |
 | --- | --- | --- |
-| **一个候选 ≠ 一项** | "落 N 条记忆 ⇒ 返回 N 项" | 想要 N 项就**把位置隔开**（`0,2,4…`，见 `test_contract._idx`），或者**分属 N 个 session**。⚠ **D25 起光隔开位置不够**——`seq` 在**已有的行**上现算，跳号的行照样挨着 ⇒ 要落满中间那些位置（`conftest.seed_line`） |
-| **相邻会被扩进来** | "只落了 1 条 ⇒ 只返回那 1 条" | 落单条时它会把 `±1` 的邻居**一起带回来**（`test_neighbor` 的那几条整链用例） |
-| **重复写入 ≠ 多一项** | "重复 POST ⇒ 检索里多一条" | 多出来的行与旧行**相邻 ⇒ 合进同一段**、只是**段变宽**。**必须比 `content`、不能只比 `id` 与条数**（`preflight.check_replay_does_not_write_again` 的两个新断言） |
+| **一个候选 ≠ 一项** | "落 N 条记忆 ⇒ 返回 N 项" | 想要 N 项就让它们**各自成一次 Add**（`conftest.seed_pair_in`，D28 起不同 Add 永不合并），或者**分属 N 个 session**。⚠ 反过来想要"一段"就得用 `conftest.seed_line`（**同一次 Add 内**连着落几条） |
+| **相邻会被扩进来** | "落了 1 条 ⇒ 只返回那 1 条" | 它会把 `prev` / `next` 指着的邻居**一起带回来**（`test_neighbor` 的那几条整链用例） |
+| **重复写入 ≠ 多一项** | "重复 POST ⇒ 检索里多一条" | 同一批重放**根本不写**（`applied_batches` 守卫），所以要比的是"行数没变"而不是"结果条数"。**必须比 `content`、不能只比 `id` 与条数**（`preflight.check_replay_does_not_write_again`） |
 | **`score` 数的是段的位置** | "`score = 1/(rerank 名次+1)`" | 是 `1/(**输出位置**+1)`——预算跳段时照抄名次会出现空洞，而"还是单调递减" |
 
 > **这就是"一个永远不会 FAIL 的检查等于没有检查"的又一次具体教训**：
@@ -199,9 +200,9 @@ test_idempotency.py  批次级守卫
 
 | 断言 | 说明 |
 | --- | --- |
-| `UNIQUE(user_id, session_id, chunk_ordinal, local_index)` 上的 `ORDER BY` 决定 `seq` | **D25**：它既保唯一、又是 `seq` 的排序键（`ROW_NUMBER() ... - 1`） |
-| **`seq` 稠密且连续** | 有空洞则邻域**静默消失**。⚠ "空洞"指的是**库里真缺行**，不是 chunk 序号跳号（跳号由 `ORDER BY` 吸收） |
-| **`id` 位置派生**；同一位置重放得到**同一个 `id`** | 内容哈希会留下**孤儿 point**；D25 之后 `id` 由 `(chunk_ordinal, local_index)` 决定 |
+| `UNIQUE(user_id, session_id, request_id, local_index)` 是「取一次 Add」的排序键 | **D28**：既保唯一，又给 `fetch_by_request` 提供顺序（`ORDER BY local_index`） |
+| **链上缺一块就断开** | `prev` / `next` 指着的是一个**不存在的 id** ⇒ 扩窗走到头就停、合并各自成段（**不许**按 `local_index` 硬推） |
+| **`id` 位置派生**；同一位置重放得到**同一个 `id`** | 内容哈希会留下**孤儿 point**；D28 之后 `id` 由 `(request_id, local_index)` 决定（`request_id` 不解析） |
 | **`index_pairs` 失败会留下"SQLite 有、Qdrant 没有"的行** | 检索命中的是**不存在的那个版本**而**不报错**——要测的是这条路径能被修复 |
 | **配的向量维度来自接口，不是常量** | §2.3 / §7.4——写死会在 Step 5 静默错 |
 | **能仅凭 SQLite 全量重建 Qdrant** | §6.3 的"派生读存储"就是这条的意思 |

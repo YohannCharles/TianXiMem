@@ -11,21 +11,24 @@
 ### Add 路径（§15 的六步，顺序不可换）
 
 ```text
-1. 幂等守卫         查 applied_batches；命中 → 直接 200，不写任何东西
-2. 取位置           chunk_ordinal = parse_chunk_ordinal(request_id)   ← 来自请求（**D25**）
-3. 组合             compose_memory_blocks(messages)   ← 只看本批，无跨 Add 状态（**D24**）
-4. 同一事务         INSERT qa_pairs（每块一行、`(chunk_ordinal, local_index=i)`、status 恒为 complete）
-                    + 向 applied_batches 插入本批记录
+1. payload 指纹      canonical(user_id, session_id, messages) → sha256（**D28**）
+2. 幂等守卫         查 applied_batches；命中且指纹相同 → 直接 200，不写任何东西
+                                 命中但指纹不同 → **409**（同 id 不同 payload，不是重放）
+3. 组合 + 连链       compose_memory_blocks(messages)   ← 只看本批，无跨 Add 状态（**D24**）
+                    link_blocks(blocks)               ← Add 内邻接，只连完整 QA（**D28**）
+4. 同一事务         INSERT qa_pairs（每块一行、`(request_id, local_index=i)`、`prev` / `next`、status 恒为 complete）
+                    + 向 applied_batches 插入本批记录（含指纹）
 5. 同步 upsert      Qdrant（wait=true）
 6. 返回 200
 ```
 
-**第 3 步没有跨批分支**——组合的边界是一次 Add（D24）。
-**第 2 步不读库**——位置是**请求的纯函数**（D25）：`chunk_ordinal` 从 `request_id` 解析，
+**第 3 步没有跨批分支**——组合与邻接的边界都是**一次 Add**（D24 / D28）。
+**第 2 步不读库**——位置是**请求的纯函数**（D28）：`request_id` 原样（**不解析**）、
 `local_index` 是本批块序号，所以既没有读-改-写，也没有业务锁；同 session 的 Add 可以并发，
-**乱序到达也不会翻转会话顺序**。⚠ 解析不到 chunk 序号 ⇒ **响亮失败**（非 200），不回退。
+而"到达顺序"**根本没有被表达过**（跨 Add 不存在顺序，也不建立邻接）。
 **第 1 步不能省**：位置虽然幂等了，但 AML 的重试是**正常行为**，不能每次都靠撞 `UNIQUE` 兜
-（那会把正常重试变成 500）。
+（那会把正常重试变成 500）；而"同 id 不同 payload"**不是重试**，它必须响亮地冲突
+（静默挑一份落库 = 另一份记忆凭空消失）。
 
 **第 4 步与第 5 步的边界**：SQLite 是事务的，Qdrant 不是。因此第 4 步先落真源、第 5 步再同步派生索引；若第 5 步失败，Qdrant 可以从 SQLite 重建（它是派生读存储），而反过来不行。
 
@@ -53,9 +56,10 @@ query → BM25 ┐
 > **`top_k` 数的是段、不是 raw memory**：扩窗会把 raw 条数抬到 `top_k` 之上，
 > 而相邻块的合并又把它降回来 ⇒ **截断只能在合并之后做**。
 
-> ⚠ **"相邻"是读时稠密序 `seq`**（D25），不是存储列：
-> `ROW_NUMBER() OVER (PARTITION BY user_id, session_id ORDER BY chunk_ordinal, local_index) - 1`。
-> ⇒ chunk 序号**跳号不破坏相邻**，而"中间真的少了一块"仍然被抓住。
+> ⚠ **"相邻"是存储里的显式指针 `prev_memory_id` / `next_memory_id`**（D28），
+> 不是算出来的下标：扩窗**沿链跳**，合并**看指针相接**。
+> ⇒ 跨 Add **结构上不可能**相邻（指针只在一次 Add 内连过），
+> 而链上缺一块也**不会**被"下一块"顶上来。
 
 **"合并而非替换"**（§9）：Agent 的产出与初始候选按 `id` 去重后一起进 Rerank。理由——初始那一路往往已经有正确答案，Agent 的价值是**补上它找不到的那部分**，而不是推翻它。
 
@@ -163,7 +167,7 @@ pairing  retrieve   rank      agent
 | I1 | `content` 与 embedding 输入来自**同一次渲染调用**（**一个声明式例外**：只改 `content` 的确定性注解，见下） | §7.2 / §11.3 |
 | I2 | 任何返回值都精确 ≤ `top_k`，且**同时按槽位数与 token 数双预算截断** | §2.2 / §6.4 |
 | I3 | 一个 `request_id` 至多被应用一次——守卫查 `applied_batches`，**不是查 `qa_pairs.request_id`** | §6.5 |
-| I4 | 相邻性走**读时稠密序** `seq`：chunk 序号跳号**不破坏邻域**，而"中间真的少了一块"仍被抓住 | §6.1 → **D25** |
+| I4 | 相邻性走**存储里的显式指针** `prev` / `next`（只在一次 Add 内连过）；链上缺一块就断开，**不会被顶上来** | §6.1 → **D28** |
 | I5 | `id` 位置派生；缓存键内容哈希。**两者不能互换** | §6.1 / §7.2 |
 | I6 | **`index_pairs` 失败会留下「SQLite 有、Qdrant 没有」的行，而检索不报错**——修复路径见 `service/pipeline.py` | §6.5 → **D24** |
 | I7 | `Search` 不生成答案、不把答案伪装成记忆记录；reranker 只重排证据 | §2.1 / §11.2 |

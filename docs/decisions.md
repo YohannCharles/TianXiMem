@@ -1029,3 +1029,83 @@ agent 才存在**，那是另一个 Step 的事。⇒ 把它标出 v1，免得 S
 > 它自报的 58.2 / 93.2 是**它自己的 harness**跑出来的，**不能拿来当基线**（§13）。
 
 > **事项 8（`SqliteStore` 的连接与线程模型）已决 ⇒ 升格为 [D17](#d17--sqlitestore-的连接模型短生命周期连接--交给-sqlite-自己串行化2026-09-24)。**
+
+---
+
+## D28 · **`request_id` 回到 opaque string；邻接改成 Add 内显式链**（推翻 D25）（2026-09-29）
+
+**决定（由项目负责人做出）**：
+
+> 1. **`request_id` 只做三件事**：**幂等键**、**溯源**、**成功响应原样回显**。
+>    ⛔ **一律不解析**——不取 chunk 序号、不取顺序、不取任何业务语义。
+> 2. **位置 = `(request_id, local_index)`**（`id = hash(user_id, session_id, request_id, local_index)`）。
+>    `request_id` 作为**一个整体**参与哈希。
+> 3. **邻接 = 存储里的显式指针**：`qa_pairs.prev_memory_id` / `next_memory_id`，
+>    **只连同一次 Add 内的完整 QA**（A-only / Q-only 两侧恒为 `NULL`，不进链）。
+> 4. **扩窗与段合并都只在这条链上走**：`pair_idx ± 1` / 会话稠密序 `seq` 那类
+>    **推断出来的**相邻性**整个删掉**（`fetch_session_ordered` / `_SEQ_COLUMN` 已删）。
+> 5. **幂等守卫加一半新职责**：`applied_batches.payload_hash`——同 `request_id`
+>    **不同 payload** ⇒ **409**（不是 500、更不是静默重放）。
+
+### 它推翻了什么
+
+| 推翻 | 原文 |
+| --- | --- |
+| **D25 的位置来源** | "`chunk_ordinal` 从 `request_id` 解析（`ingest.chunk_ordinal_pattern`）" |
+| **D25 的 fail-loud 形态** | "解析失败一律响亮失败（非 200），没有回退"——**现在不再需要解析，也就没有这条失败** |
+| **不变式 2（D25 版）** | "邻域由读时稠密序 `seq` 现算" → 现在由**存储里的指针**给出 |
+| **§10 扩窗的"整段取回、按下标切窗口"** | 现在**沿指针跳**（一跳 = 一个完整 QA） |
+| **§11.2 段合并的"连续 `seq`"** | 现在**只在同一次 Add 内、且 `前一条.next == 这一条.id`** 才合并 |
+| **配置项 `ingest.chunk_ordinal_pattern`** | **整个 `ingest` 段已删**（`common/config.py` 留了一行墓碑注释，防止有人加回来） |
+
+### 为什么（全部有实测依据，不是推测）
+
+| # | 事实 | 出处 |
+| --- | --- | --- |
+| 1 | **平台实发的 `request_id` 是 `r_31156f4174…`（不透明，没有 `chunk-`、没有序号）** | 2026-09-29 的请求原文采集（`service/capture.py`，S6 那条路的落地）抓到的**真实外部请求**，`client=221.194.152.241`；那一条的 `error=ValueError`、服务返回 500 |
+| 2 | ⇒ **D25 的解析在真实流量上 100% 失败** | 也就是 S6 登记的"表现是 **Add 全挂**"——**它发生了** |
+| 3 | 而 S6 的依据是"**团队告知 + ReFind 的示例**"，**不是一手文档** | [`open-questions.md`](./open-questions.md) 的 S6（现已收口） |
+| 4 | 跨 Add 的"顺序"本来就没有可信来源：`request_id` 不透明之后，**它从哪里来都没有** | 本条的直接推论 |
+
+⇒ 两条路摆在面前：**(a) 继续猜 `request_id` 的形状**（把正则改宽——但它对**任意**形状都不成立，
+而"任意形状"正是官方示例之外的全部空间）；**(b) 承认"跨 Add 没有顺序"**，
+把位置与邻接都收进**一次 Add 内**。选 (b)：**代价是跨 Add 的 continuation 与邻接，
+买到的是协议兼容与"顺序无关"**。
+
+### 代价（要认账）
+
+| 代价 | 说明 |
+| --- | --- |
+| **跨 Add 不再有邻接** | 两次 Add 的块**永不合并成同一段**（§11.2 的窗口变短）。同一 session 的对话被切成 N 段，**段内是连续的，段间不是** |
+| **扩窗变小** | 只能沿本次 Add 的链走 ⇒ 长 session 上"看到整段对话"的能力**变弱**。token 预算的占用也会随之下降（段短了） |
+| **`id` 全变** | 旧库的 `id`（D25 公式）与新公式不同 ⇒ Qdrant 里的 point 全成孤儿。`SqliteStore.open()` 会**自动搬一次**（保正文、重算 `id`、重连链），**但必须跑一次 `tools/reindex.py --drop`**（embedding 缓存按内容哈希 ⇒ **不会重付**） |
+| **旧 evals 数字不可比** | ledger 里所有以"段"为单位的结论（N1 的扩窗收益、A3 的段级消融）都建立在**会话级邻接**上，D28 之后**同一份数据会切出更多段**。**重跑之前不要引用旧数字** |
+
+### 与 D24 的关系（容易混）
+
+| | D24 | D28 |
+| --- | --- | --- |
+| 改什么 | **组合**（哪些消息进同一个块） | **位置与邻接**（块与块之间怎么排） |
+| 作用域 | 一次 Add | 一次 Add |
+| 留下什么 | 块写下即最终形状（无 pending / 无 repair） | 位置与邻接都是**请求的纯函数**（无 `MAX+1`、无读-改-写） |
+
+两条是**同一个方向上的两步**：D24 把"组合"收进一次 Add，D28 把"顺序与邻接"也收进去。
+⇒ 现在**一条 Add 的全部行为只由它自己的 payload 决定**，与到达顺序、与其他 Add、
+与 `request_id` 的形状**全都无关**。
+
+### 落地清单
+
+* `store/schema.sql`：`(request_id, local_index)` + `prev_memory_id` / `next_memory_id` +
+  `applied_batches.payload_hash`；`chunk_ordinal` **删列**。
+* `store/sqlite_store.py`：`make_pair_id`、`insert_pair`（一次 INSERT 写死邻接）、
+  `fetch_by_request`、`migrate()`（旧库→D28，事务内、保正文、重算 id、重连链）。
+* `pairing/pairing.py`：`link_blocks()`（"只连完整 QA"那条规则的**唯一实现**）；
+  `parse_chunk_ordinal` **删除**。
+* `pairing/apply.py`：`payload_fingerprint()` + 守卫的 payload 校验 + `PayloadMismatchError`。
+* `rank/neighbor.py`：扩窗改**沿指针跳**、合并改**看指针相接**。
+* `service/errors.py`：`PayloadMismatchError → 409`。
+* `service/capture.py`：**不再解析** `request_id`（它已经不解析了——记录里保留那一列只是因为
+  "看一眼官方发的形状"仍然有用）。
+
+> ⚠ **不要再加回任何"从 `request_id` 里取东西"的逻辑**——那是本条要根治的病。
+> 想表达顺序，就把它放进 payload（`messages` 里本来的次序），或者放一个新的**显式**字段。

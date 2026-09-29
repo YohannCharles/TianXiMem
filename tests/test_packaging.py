@@ -50,8 +50,9 @@ def _segment(
         source_memory_ids=tuple(source) if source is not None else (anchor,),
         user_id="u1",
         session_id="s1",
-        start_seq=0,
-        end_seq=0,
+        request_id="r-seg",
+        start_local_index=0,
+        end_local_index=0,
         anchor_memory_id=anchor,
         best_rank=best_rank,
         anchor_event_time=event_time,
@@ -261,7 +262,7 @@ def test_response_item_has_exactly_the_contract_fields(counter: TokenCounter) ->
 def test_no_internal_fields_leak_into_the_item(counter: TokenCounter) -> None:
     """`session_id` / 位置 / `status` / `best_rank` 都不该出现在响应项里。
 
-    ⚠ 位置自 **D25** 起是**两个**字段（`chunk_ordinal` + `local_index`）⇒ 两个都要挡；
+    ⚠ 位置自 **D28** 起是 `(request_id, local_index)` ⇒ 三个内部名都要挡；
     只挡旧的 `pair_idx` 会**静默放行**它们（那个名字已经不存在了，断言永远为真）。
     """
     seg = _segment(counter, anchor="m0", content="c")

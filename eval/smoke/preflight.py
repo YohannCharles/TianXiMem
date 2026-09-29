@@ -427,10 +427,9 @@ class Preflight:
         于是响应里**只有一项**——凡是"要多条才能验"的检查（`score` 的单调性、
         `top_k` 真的会截断）都必须让它们分属不同 session，**否则检查会静默变空过**。
 
-        ⚠ **`request_id` 必须带 `chunk-<n>`**（D25）：服务端的位置模型
-        `(chunk_ordinal, local_index)` **只能**从这个 id 里取 chunk 序号，
-        取不到就**非 200**（没有回退）。每个 tag 给一个不同的序号 ⇒ 各占一个位置，
-        顺便也让"同一 session 里多条"这件事的**顺序**由序号而不是到达顺序决定。
+        ⚠ **`request_id` 只是"唯一 + 原样回显"**（§2.1）——服务端**不解析它**（D28）。
+        这里仍然把 `chunk-<n>` 拼进去，纯粹是为了让 id 在日志里**可读**；
+        它**不是**格式要求，服务端认任何形状（`abc` / UUID / `foo:bar` 都行）。
         """
         made: list[tuple[str, str]] = []
         for ordinal, tag in enumerate(tags):

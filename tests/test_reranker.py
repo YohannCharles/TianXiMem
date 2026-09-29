@@ -632,7 +632,10 @@ def test_candidate_truth_is_fetched_in_one_batch(wired: Wired, monkeypatch) -> N
     wired.search(top_k=4)
 
     assert calls, "根本没取正文"
-    assert [len(c) for c in calls] == [4, 4], f"出现了非批量的取正文：{calls}"
+    # ⚠ **每一个调用都必须是批量的**（不带单条 id）——这是本用例的主题。
+    #   D28 之后调用次数不再恰好是 2：沿链跳窗是**每跳一次 `IN` 查询**
+    #   （一跳把所有前沿节点的 id 收成一批），所以次数 = 取候选 + 取精排正文 + 跳数。
+    assert all(len(c) > 1 for c in calls), f"出现了非批量的取正文：{calls}"
     assert sorted(calls[0]) == sorted(ids)
 
 
@@ -681,10 +684,16 @@ def test_rank_zero_after_rerank_is_the_expansion_seed(wired: Wired) -> None:
     ⚠ `seed_limit=1` 是**必须的**：默认 30 会让 A 和 B **都**是种子，
     于是两边的邻居都会进来，本用例就什么也证明不了（那是"两条都过"的假绿）。
     """
-    a = _seed(wired.store, 1, session_id="s1", question="A", answer="a")
-    _seed(wired.store, 0, session_id="s1", question="n-s1", answer="x")
-    b = _seed(wired.store, 0, session_id="s2", question="B", answer="b")
-    _seed(wired.store, 1, session_id="s2", question="n-s2", answer="y")
+    # ⚠ 邻居必须是**同一次 Add 内**的相邻块（D28）⇒ 用 `seed_line` 一次落两条
+    s1 = seed_line(
+        wired.store, range(2), session_id="s1",
+        qa=lambda i: ("n-s1", "x") if i == 0 else ("A", "a"),
+    )
+    s2 = seed_line(
+        wired.store, range(2), session_id="s2",
+        qa=lambda i: ("B", "b") if i == 0 else ("n-s2", "y"),
+    )
+    a, b = s1[1], s2[0]
     wired.qdrant.by_user["u1"] = [a, b]  # RRF：A 在前
 
     # ① 对照组：不接 reranker（`None`）⇒ 种子 = A（RRF 名次 0）⇒ 进来的是 s1 的邻居
@@ -706,7 +715,8 @@ def test_candidates_past_the_seed_limit_are_kept_but_not_expanded(wired: Wired) 
     构造：一个 session 5 条连续候选。精排把**最后一条**顶到名次 0，
     `seed_limit=1` ⇒ 只有它能扩窗。
     """
-    ids = [_seed(wired.store, i, question=f"q{i}", answer=f"a{i}") for i in range(5)]
+    # ⚠ 5 条在**同一次 Add 里连续**（D28）——否则它们各成一段，"保留但不扩"就看不出来
+    ids = seed_line(wired.store, range(5), qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
     # want=[4,0,1,2,3]：ids[4] 名次 0，其余保持相对顺序
     _wire(wired, FakeReranker(want=[4, 0, 1, 2, 3]), seed_limit=1, radius=1)

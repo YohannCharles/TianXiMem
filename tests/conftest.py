@@ -44,7 +44,7 @@ from tianxi_am.retrieve import (
 from tianxi_am.service import build_services
 from tianxi_am.service.pipeline import AddPipeline, SearchPipeline
 from tianxi_am.store.qdrant_store import ScoredMemoryId
-from tianxi_am.store.sqlite_store import SqliteStore
+from tianxi_am.store.sqlite_store import SqliteStore, make_pair_id
 
 # ── ① 的 fixture ────────────────────────────────────────────────────────
 
@@ -326,7 +326,7 @@ def wired_dated(tmp_path) -> Iterator[Wired]:
     那条断言要同时跑两臂并逐项比，所以两臂都得能就地造出来。
 
     ⚠ **它用自己的子目录**：两臂若共用 `tmp_path`，它们会写**同一个 `tianxi.db`**，
-    于是第二个 `wired` 落种子时直接撞 `UNIQUE(user_id, session_id, chunk_ordinal, local_index)`。
+    于是第二个 `wired` 落种子时直接撞 `UNIQUE(user_id, session_id, request_id, local_index)`。
     真实对照里两臂本来就该各有各的库与集合（见 `configs/CLAUDE.md` 的 `runs/`）。
     """
     own = tmp_path / "dated"
@@ -415,34 +415,88 @@ def seed_pair_in(
     user_id: str = "u1",
     session_id: str = "s1",
     event_time: int | None = None,
+    request_id: str | None = None,
 ) -> str:
     """落一个块，返回它的 canonical `memory_id`（位置派生，见 ① 的 ID 纪律）。
 
-    ⚠ **`index` 被映成 `(chunk_ordinal=index, local_index=0)`**（D25）：于是每个 chunk
-    恰好一块 ⇒ 读时的 `seq` **恰好等于 `index`**。这让既有调用点（"落 0..n-1 号"）
-    的语义一字不变地保留下来——**不是为了兼容，是因为那些用例要的就是"会话里第 i 块"**。
+    ⚠ **`index` 现在映射成 `(request_id=f"seed:{index}", local_index=0)`**（**D28**）：
+    每个 `index` 是**一次独立的 Add**（各自一块）⇒ 它们之间**没有** `prev` / `next`，
+    也不存在跨 Add 的序号。**要造"同一条链上相邻的几个块"请用 `seed_line`。**
 
     **全测试层唯一的一份**——`test_neighbor.py` / `test_reranker.py` 都从
     `tests.conftest import seed_pair_in as _seed` 取它，**别再各写一份**。
 
-    * `question` / `answer` 省掉时按 `q{index}` / `a{index}` 补
+    * `question` / `answer` 省掉时按 `q{index}` / `a{index}` 补；
+      传 `None`（显式）就是造**不完整块**（A-only / Q-only），它不进邻接链
     * `session_id` 可传——那两个文件要造"两个 session 各有一条候选"的形状
     * `event_time` 可传——`test_contract.py` 要造"有/无时间戳"两条
+    * `request_id` 可传——要造"同一个 request_id 下两块"时用得上（配 `seed_in_add`）
     """
     with store.transaction() as conn:
         pair = store.insert_pair(
             conn,
             user_id=user_id,
             session_id=session_id,
-            chunk_ordinal=index,
+            request_id=f"seed:{index}" if request_id is None else request_id,
             local_index=0,
+            prev_memory_id=None,
+            next_memory_id=None,
             question=question if question is not None else f"q{index}",
             answer=answer if answer is not None else f"a{index}",
             status="complete",
             event_time=event_time,
-            request_id="seed",
         )
     return pair.id
+
+
+def seed_in_add(
+    store: SqliteStore,
+    entries: Sequence[tuple[str | None, str | None]],
+    *,
+    user_id: str = "u1",
+    session_id: str = "s1",
+    request_id: str = "seed:one-add",
+    event_time: int | None = None,
+) -> list[str]:
+    """在**一次 Add 内**落下若干个块（`local_index` = 它们在 `entries` 里的下标）。
+
+    邻接按**与 `pairing.link_blocks` 完全相同的规则**连：**只连完整 QA**，
+    不完整的（`question` / `answer` 有一个是 `None`）两侧都是 `None`。
+
+    ⚠ **必须一次写完**：`prev` / `next` 是**写下时**算好的，没有事后回填
+    （D24 那条"块在写下那一刻就是最终形状"）。想造"中间缺一块"的形状，
+    就**别落那一块**——它的邻居的指针仍然指着它，而它不在库里 ⇒ 段自然断开。
+    """
+    ids = [
+        make_pair_id(user_id, session_id, request_id, index) for index in range(len(entries))
+    ]
+    complete = [i for i, (q, a) in enumerate(entries) if q is not None and a is not None]
+    links: dict[int, tuple[int | None, int | None]] = {
+        i: (None, None) for i in range(len(entries))
+    }
+    for position, index in enumerate(complete):
+        links[index] = (
+            complete[position - 1] if position else None,
+            complete[position + 1] if position + 1 < len(complete) else None,
+        )
+
+    with store.transaction() as conn:
+        for index, (question, answer) in enumerate(entries):
+            prev_index, next_index = links[index]
+            store.insert_pair(
+                conn,
+                user_id=user_id,
+                session_id=session_id,
+                request_id=request_id,
+                local_index=index,
+                prev_memory_id=None if prev_index is None else ids[prev_index],
+                next_memory_id=None if next_index is None else ids[next_index],
+                question=question,
+                answer=answer,
+                status="complete",
+                event_time=event_time,
+            )
+    return ids
 
 
 def seed_line(
@@ -452,28 +506,31 @@ def seed_line(
     user_id: str = "u1",
     session_id: str = "s1",
     qa: Callable[[int], tuple[str, str]] | None = None,
+    request_id: str = "seed:line",
 ) -> list[str]:
-    """在 `0..max(positions)` 上**落满**，只返回 `positions` 那几行的 `memory_id`（D25）。
+    """在**一次 Add 内**落满 `0..max(positions)`，只返回 `positions` 那几行的 `memory_id`。
 
     **为什么需要它**：想造"这几个块被选中了、中间那几个没被选中"，光落被选中的那几行
-    **不够**——`seq`（相邻性的依据）是 `ROW_NUMBER()` 在**库里已有的行**上现算的，
-    只落 0 和 2 的话它们的 `seq` 是 0 和 1，**挨着**（= 这段对话里就这两块）⇒ 会被合并。
+    **不够**——段合并的判据是"前一条的 `next` 指着我"，而 `next` 是写下时按**整批**
+    算好的：只落 0 和 2 的话，0 的 `next` 指着 1（那一行不在库里）⇒ 它们照样分开。
+    ⇒ "对话里的洞"必须**真的少落一行**来表达，而那正是这张函数要的语义。
 
-    旧口径下这两种情况长得一样（位置都带着洞），所以老 fixture 只落被选中的那几行；
-    D25 把"对话里的洞"与"没被选中"分开了，fixture 就得说清楚是哪一种。
+    ⚠ D28 起它们**必须在同一次 Add 里**（`request_id` 相同、`local_index` 0..n-1）——
+    跨 Add 的块**永远不会**相邻，所以"落 0..n-1 号"在 D28 之后只有一个意思：
+    **同一条链上的前 n 个块**。
 
     `qa`：可选，`(position) -> (question, answer)`；缺省是 `q{position}` / `a{position}`。
     """
     wanted = list(positions)
     if not wanted:
         return []
-    by_pos: dict[int, str] = {}
-    for i in range(max(wanted) + 1):
-        question, answer = (f"q{i}", f"a{i}") if qa is None else qa(i)
-        by_pos[i] = seed_pair_in(
-            store, i, question, answer, user_id=user_id, session_id=session_id
-        )
-    return [by_pos[i] for i in wanted]
+    entries = [
+        (f"q{i}", f"a{i}") if qa is None else qa(i) for i in range(max(wanted) + 1)
+    ]
+    ids = seed_in_add(
+        store, entries, user_id=user_id, session_id=session_id, request_id=request_id
+    )
+    return [ids[i] for i in wanted]
 
 
 @pytest.fixture

@@ -107,7 +107,7 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 **两个直接后果：**
 
 1. **harness 必须为每条消息合成 `timestamp`**——否则 §2.1 的可选字段为空，§6.1 的 `event_time` 全为 NULL，`created_at` 只能发 `""`（§11.3 的有定义降级路径）。
-2. **同一个 session 内所有消息拿到同一个日期** ⇒ `event_time` 在 session 内没有区分度 ⇒ **位置是唯一能保证邻域稳定的东西**（§6.1；D25 起 = `(chunk_ordinal, local_index)` + 读时稠密序 `seq`）。
+2. **同一个 session 内所有消息拿到同一个日期** ⇒ `event_time` 在 session 内没有区分度 ⇒ **位置是唯一能保证邻域稳定的东西**（§6.1；D28 起 = `(request_id, local_index)` + **Add 内显式链** `prev` / `next`：邻接不再跨 Add）。
 
 ---
 
