@@ -96,3 +96,15 @@ eval/baselines/invmem-candidate/
 # ⚠ 因此在 benchmark_data/ 里放 README 是不会被提交的——关于归档的说明写在
 #   docs/benchmark-data.md。
 benchmark_data/
+
+# ── 官方请求原文（采集导出）─────────────────────────────────────────────
+# `tools/replay_official_adds.py` 的输入：官方 AML 真跑出来的 `POST /add` 报文
+# （由 `capture.enabled` 那条诊断旁路导出）。与上面**同一条纪律**：官方评测数据不进 git。
+#
+# ⚠ 规则写在【仓库根】而不是只靠上面那条 `benchmark_data/`：这份文件是**当场导出**的，
+#   在还没取归档的机器上它多半就落在根上（导出的人不会先 mkdir）。
+# ⚠ 一条实测教训（2026-09-29）：**别为了让它被忽略就去 `mkdir benchmark_data/`**——
+#   `tests/test_datasets.py` 的 `needs_archive` 守卫判的是【目录在不在】而不是【归档在不在】
+#   ⇒ 建一个只装这个 jsonl 的空目录，会让两条归档用例从 **skip 变 fail**。
+#   （要真把归档取回来才是动那条守卫的时候：`make fetch-data`。）
+official-add-bodies-*.jsonl
