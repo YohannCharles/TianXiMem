@@ -107,12 +107,13 @@ COPY --chown=root:root eval/smoke/ /app/eval/smoke/
 #   · embedding 缓存不落盘 ⇒ 每次重启重付一遍 embedding 的钱
 # ⚠ 先建目录并 chown ⇒ 命名卷首次挂载时 Docker 会**继承镜像里该目录的属主**，
 #    于是 app 用户能写。目录不存在的话卷归 root，服务启动即失败（而且是写库时才炸）。
-RUN mkdir -p /data/embed_cache && chown -R app:app /data
+RUN mkdir -p /data/embed_cache /data/capture && chown -R app:app /data
 
 # `TIANXI_WORKERS=1`：§15 的第二道防线（第一道是 `common/config.py` 的 validate()）。
 ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache \
     TIANXI_SQLITE_PATH=/data/tianxi.db \
     TIANXI_EMBED_CACHE_DIR=/data/embed_cache \
+    TIANXI_CAPTURE_PATH=/data/capture/requests.jsonl \
     TIANXI_WORKERS=1
 
 # ⚠ 刻意**不**提供 `TIANXI_HOST` / `TIANXI_PORT` 这种变量：没有任何代码读它们

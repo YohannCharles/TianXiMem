@@ -15,6 +15,7 @@ var/
 ├── tianxi.db          SQLite 真源（§6.1）——**唯一的不可重建物**
 ├── qdrant_storage/    Qdrant 卷（§6.3）——**可从 tianxi.db 全量重建**
 ├── embed_cache/       embedding 缓存（§7.2）——**可重建，但重建要花钱**
+├── capture/           请求原文采集（`capture.enabled`）——**诊断产物，可弃**
 └── logs/
 ```
 
@@ -29,6 +30,7 @@ var/
 | **`tianxi.db`** | **没了就没了。**它是真源，**备份对象只有它** |
 | `qdrant_storage/` | 可从 `tianxi.db` 的正文全量重建（这正是"Qdrant 是派生读存储"的意思，§6.3） |
 | `embed_cache/` | 可重建，**但要重付一遍 embedding 的钱**——本地模型是电费，线上是 API 账单 |
+| `capture/` | **丢了就丢了，不用重建**——它是诊断产物（要再来一次就再打开开关跑一遍），而且**不进备份**（`deploy/CLAUDE.md` §4 的 runbook 只备份 SQLite） |
 
 **所以 Step 5 的重建 runbook 里"备份 SQLite"是第 2 步**（见 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4）——**顺序不能反**。
 

@@ -43,7 +43,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | 层 | 拥有哪些键 | 例子 |
 | --- | --- | --- |
-| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXI_SQLITE_PATH`、`TIANXI_QDRANT_URL`、`TIANXI_EMBED_CACHE_DIR`、`TIANXI_METRICS_PATH`、`TIANXI_WORKERS` |
+| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXI_SQLITE_PATH`、`TIANXI_QDRANT_URL`、`TIANXI_EMBED_CACHE_DIR`、`TIANXI_METRICS_PATH`、`TIANXI_CAPTURE_PATH`、`TIANXI_WORKERS` |
 | **`configs/<profile>.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.*`、`neighbor.*`、`models.embedder`、`storage.qdrant.collection`、`storage.sqlite.busy_timeout_ms` |
 
 **每个键只有一个家，两边不重叠也不许重叠。** 在 yaml 里写一个 env 拥有的键会**直接报错**
@@ -376,3 +376,40 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 - **不得硬编码**（§12.1 R1 对冲 3）：凡是本清单里的量，代码里只应有读配置的语句。
 - **开关只影响它命名的那一件事**（§13）：关掉 rerank 不得顺带改变候选数量；关掉 agent 不得顺带改变打包顺序。**否则对照不成立，而结果看起来完全正常，只是结论错了。**
 - **`k=61` 是正确性常量，不是调参项。** 不要把它放进"可调阈值"那一类。
+
+---
+
+## 12. 诊断：请求**原文**采集（**S6**）—— ✅ **已落地**（2026-09-29）
+
+**它全是诊断，不是功能**：把官方发来的 `/add` / `/search` **原样**抄一份落盘，
+用来核验**官方真实请求的形状**。默认关。
+
+| 配置项 | 初值 | 类 | 说明 |
+| --- | --- | --- | --- |
+| `capture.enabled` | `false` | **—** | 开关。`false` ⇒ **连中间件都不装**（零开销、零行为差异） |
+| `capture.max_bytes` | `67108864` | **—** | **护栏**（不是阈值）：写满就写一行 `truncated` 标记并**停止记录** |
+
+> ⚠ **`—` 不是漏标**：§1.5 的 A / B / C 三类说的都是**影响结果的量**，而本项不改任何行为
+> （它的"关"分支与"没有这个功能"逐字等价）。所以它既不是契约常量、也不是阈值、
+> 更不需要 ablation 数据——**它是观测**。默认关只是因为其余时间它是净开销。
+>
+> **路径在 `.env` 的 `TIANXI_CAPTURE_PATH`**（路径归 env，开关归 yaml）——与
+> `rerank.enabled` + `TIANXI_RERANKER_*` 同一个拆法。容器形态是
+> `/data/capture/requests.jsonl`（在卷里，`docker cp` 取得走）。
+
+**为什么要有它**：**S6** —— 平台的 `request_id` 到底长什么样（是否真带 `chunk-<n>`、
+序号在不在末尾）我们**从没见过**，而 D25 的位置模型整个押在这个假设上
+（[`open-questions.md`](./open-questions.md) 的 S6 记着"来源是团队告知、不是一手文档"）。
+每一行都记下 `request_id` 与 `chunk_ordinal`——**后者为 `null` 就是"服务当前解析不出来"**，
+那正是 2026-09-29 那次冒烟失败的形状。
+
+**四条纪律 + 一行记录里有什么**，一处声明在
+[`../src/tianxi_am/service/capture.py`](../src/tianxi_am/service/capture.py)：
+
+1. **在解析之前抄** ⇒ 是 ASGI 中间件而不是路由函数（不合 schema 的 422 进不了路由函数）
+2. **不改变下游看到的 body**（只复制，不"读掉再重放"）
+3. **不吞异常**（只记类型名，照旧往上抛）
+4. **写盘失败不影响响应**（只留一行 WARNING，先例是 `SnapshotMetricsSink`）
+
+> ⚠ **打开它要重建镜像**（`configs/` 是烘进镜像的，不是挂载的）⇒ 它是"预先开好、
+> 跑完关掉"的开关，不是运行期随手拨的。**跑完记得关回去**——文件里是**官方评测原文**。

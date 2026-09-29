@@ -104,9 +104,17 @@ WHERE event_time IS NOT NULL;
 > ⚠ **两种"正常"也会让它非 0**：①该 session 的 `event_time` 整段缺失；
 > ②**对话本身在时间上回跳**（回忆、倒叙）。⇒ 判据是"**连续多处**"，不是"出现一处"。
 
-**另一条路**：**问主办方**（与 S5 同渠道，一次把两条问掉）——它现在是唯一能**证明**
-序号语义的路，而不再只是"问一句安心"。
+**最直接的一条路：把官方发来的请求原文记下来**（`capture.enabled`，2026-09-29 落地）。
+打开它跑一轮，`/add` 与 `/search` 的**原始请求体**就落在
+`var/capture/requests.jsonl`（容器里是 `/data/capture/requests.jsonl`，在卷里可 `docker cp`）——
+每一行都有 `request_id` 与 `chunk_ordinal`，**后者为 `null` 就是"服务当前解析不出来"**。
+它比上面那条 SQL 判据直接：SQL 只能看"序号与时间对不对得上"，而这里看到的是
+**官方原样发来的那个字符串**。配置项与四条纪律见
+[`config-reference.md`](./config-reference.md) §12 与
+[`../src/tianxi_am/service/capture.py`](../src/tianxi_am/service/capture.py)。
 
+**另一条路**：**问主办方**（与 S5 同渠道，一次把两条问掉）——它仍是唯一能**证明**
+序号语义的路，而不再只是"问一句安心"。
 **若答案是"序号语义不对"**（对照实现的做法）：修法只有一条——**把配对从 Add 时搬到读时**（= ReFind 那套：只存原文，Search 时按源时间戳 + `request_id` 序号重建）。代价是 **§6 整层重写**，且 ledger 里所有既有数字**失去可比性** ⇒ **那是个决定，不是个实现**（先估，再动手）。
 
 ### S7 的现状

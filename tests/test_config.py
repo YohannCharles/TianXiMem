@@ -450,16 +450,22 @@ def test_thresholds_are_not_overridable_from_env(config_dir: Path) -> None:
     这条是"每个键只有一个家"的守门人：两处都能设的值，最终会变成
     "跑出来的结果和 yaml 里写的不一样，而没人知道为什么"。
     """
+    # 采集的开关也在 yaml（只有**路径**归 env）。⚠ 断言要**与 yaml 当前的取值无关**：
+    # 这个开关会被有意拨动（跑 Smoke 前打开、跑完关回去，见 `deploy/CLAUDE.md` §0.6），
+    # 写死 `is False` 会在有人合法地把它打开时误报 ⇒ 让环境变量说**相反**的话，再看它有没有用。
+    yaml_enabled = _load(config_dir).capture.enabled
     cfg = _load(
         config_dir,
         TIANXI_PREFETCH_LIMIT="999",
         TIANXI_RRF_K="2",
         AML_EMB_MODEL="some-other-model",
+        TIANXI_CAPTURE_ENABLED=str(not yaml_enabled).lower(),
     )
 
     assert cfg.retrieval.prefetch_limit == 200  # yaml 说了算
     assert cfg.retrieval.rrf.k == RRF_K
     assert cfg.models.embedder == "qwen3-embedding-8b"
+    assert cfg.capture.enabled is yaml_enabled  # ← env 说的是相反的值，但一点用都没有
 
 
 def test_env_is_not_mutated_by_loading() -> None:

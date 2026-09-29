@@ -78,6 +78,9 @@ services:
       # ③ 路径固定成卷里的位置（Dockerfile 里已经把目录建好并 chown 给 app 用户）。
       TIANXI_SQLITE_PATH: /data/tianxi.db
       TIANXI_EMBED_CACHE_DIR: /data/embed_cache
+      # 请求**原文**采集的落点（`capture.enabled=true` 时才写，默认关）。
+      # 它在同一个卷里 ⇒ `docker cp <容器>:/data/capture/requests.jsonl .` 取得走。
+      TIANXI_CAPTURE_PATH: /data/capture/requests.jsonl
       # ④ 单进程（§15）。Dockerfile 里已有第二道，这里写出来是为了让它**在 compose 上可见**。
       TIANXI_WORKERS: "1"
       # ⚠ **刻意不设 `TIANXI_ENV_FILE`**：容器里没有 .env 文件，配置全靠上面这些环境变量。

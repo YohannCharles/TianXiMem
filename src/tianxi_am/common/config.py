@@ -116,6 +116,14 @@ ENV_FILE: Final[str] = "TIANXI_ENV_FILE"
 #: 两臂对照时**每个服务给一份**，否则两个进程的计数会互相盖掉。
 ENV_METRICS_PATH: Final[str] = "TIANXI_METRICS_PATH"
 
+#: `Add` / `Search` **原文采集**的落点（`TIANXI_CAPTURE_PATH`）。【路径归 env】
+#:
+#: ⚠ 与 `TIANXI_METRICS_PATH` 的"空 ⇒ 不写"**不同**：本项**有**一个默认值
+#: （`var/capture/requests.jsonl`），开不开由 yaml 的 `capture.enabled` 决定
+#: ——一个键只有一个家（开关归 yaml、路径归 env，见 `configs/CLAUDE.md`）。
+#: 它存在的理由是 **S6**：平台的 `request_id` 到底长什么样，我们只听过转述。
+ENV_CAPTURE_PATH: Final[str] = "TIANXI_CAPTURE_PATH"
+
 DEFAULT_PROFILE: Final[str] = "default"
 DEFAULT_CONFIG_DIR: Final[str] = "configs"
 DEFAULT_ENV_FILE: Final[str] = ".env"
@@ -177,6 +185,14 @@ DEFAULT_WEIGHTS: Final[tuple[float, float]] = (0.5, 0.5)
 #: 实测（开发机、主网关）：**100 篇 ≈ 2.2s、200 篇 ≈ 5.3s** ⇒ 默认 30s 约 10 倍余量。
 #: **这是观测值，不是规格**；换模型或换网关后要重新量。
 DEFAULT_RERANK_TIMEOUT_S: Final[float] = 30.0
+
+#: `capture.max_bytes` 的默认值：**写满就停**的上限（64 MiB）。
+#:
+#: ⚠ 它不是"阈值"，是**护栏**：`capture.enabled` 是临时打开的诊断开关，而 Full run
+#: 连跑 0.5–2 天（§2.2）——忘了关的代价必须**有界**，不能是把 `/data` 卷写满。
+#: 实测量级：一次 Add 的请求体 ~1–5 KB、一次 Search ~0.1 KB ⇒ 64 MiB 够记
+#: **数万次**请求，远超一轮 Smoke。
+DEFAULT_CAPTURE_MAX_BYTES: Final[int] = 64 * 1024 * 1024
 
 
 # ── 配置树 ─────────────────────────────────────────────────────────────
@@ -358,6 +374,25 @@ class RerankConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class CaptureConfig:
+    """`Add` / `Search` 的**原文采集**（诊断旁路，**默认关**）。
+
+    ⚠ **它不属于 A / B / C 任何一类**：那三类说的都是"影响结果的量"，而本项
+    只把官方发来的请求抄一份落盘（[`../service/capture.py`](../service/capture.py)）。
+    默认关是因为它按设计**只在"要看清官方发了什么"时打开**（S6），其余时间是净开销。
+
+    实现与四条纪律（在解析之前抄 / 不改下游 body / 不吞异常 / 写失败不影响响应）见那个模块。
+    """
+
+    #: 开关。`false` ⇒ **不装中间件**（零开销、零行为差异）。
+    enabled: bool = False
+    #: 写多少字节后**停止记录**（并写一行 `truncated` 标记）。见模块顶部的常量说明。
+    max_bytes: int = DEFAULT_CAPTURE_MAX_BYTES
+    #: 落点（`TIANXI_CAPTURE_PATH`）。【路径归 env】——与 SQLite / 向量缓存同一条规矩。
+    path: str = "var/capture/requests.jsonl"
+
+
+@dataclass(frozen=True, slots=True)
 class ServerConfig:
     """服务进程形态（§15）。"""
 
@@ -379,6 +414,7 @@ class AppConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     packaging: PackagingConfig = field(default_factory=PackagingConfig)
     rerank: RerankConfig = field(default_factory=RerankConfig)
+    capture: CaptureConfig = field(default_factory=CaptureConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
 
     #: ⚠ **密钥与端点不在 yaml 里**——它们随机器与密钥而异、不进 git（见模块 docstring）。
@@ -410,7 +446,17 @@ class AppConfig:
 #: yaml 顶层允许的段。**env 拥有的键不出现在这里**（见模块 docstring 的分工表）：
 #: 路径 / 端点 / 密钥 / worker 数都只从环境变量来。
 _TOP_LEVEL_KEYS: Final[frozenset[str]] = frozenset(
-    {"storage", "models", "retrieval", "ingest", "neighbor", "budget", "packaging", "rerank"}
+    {
+        "storage",
+        "models",
+        "retrieval",
+        "ingest",
+        "neighbor",
+        "budget",
+        "packaging",
+        "rerank",
+        "capture",
+    }
 )
 
 
@@ -680,6 +726,20 @@ def _rerank(raw: object) -> RerankConfig:
     )
 
 
+def _capture(raw: object) -> CaptureConfig:
+    """诊断开关——**路径不在这里**（它归 env，由 `load_config` 覆盖）。"""
+    g = _group(raw, where="capture", allowed={"enabled", "max_bytes"})
+    enabled = g.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ConfigError(f"`capture.enabled` 必须是布尔值，收到 {enabled!r}")
+    return CaptureConfig(
+        enabled=False if enabled is None else enabled,
+        max_bytes=_int(
+            g.get("max_bytes"), where="capture.max_bytes", default=DEFAULT_CAPTURE_MAX_BYTES
+        ),
+    )
+
+
 # ── 校验 ───────────────────────────────────────────────────────────────
 
 _MISSING_HINT: Final[str] = (
@@ -743,6 +803,12 @@ def validate(cfg: AppConfig) -> AppConfig:
             f"`rerank.timeout_seconds` 必须为正：{cfg.rerank.timeout_seconds}\n"
             "  它挡的是【reranker 挂住不返回】——非正值会让每次 rerank 都立刻超时，"
             "于是**每次都降级**，而响应看起来完全合法（只是名次没被精排）。"
+        )
+    if cfg.capture.max_bytes <= 0:
+        raise ConfigError(
+            f"`capture.max_bytes` 必须为正：{cfg.capture.max_bytes}\n"
+            "  它是**护栏**不是阈值：`capture.enabled` 忘了关时，代价必须是有界的"
+            "（写满就停），而不是把磁盘写满。"
         )
     if cfg.server.workers != 1:
         raise ConfigError(
@@ -835,6 +901,11 @@ def load_config(
         embed=EmbedCacheConfig(dir=src.get(ENV_EMBED_CACHE_DIR) or "var/embed_cache")
     )
 
+    # 采集的**路径归 env**（与 SQLite / 向量缓存同一条规矩）；开不开在 yaml 的
+    # `capture.enabled`——一个键只有一个家，两处都能设的值最后没人知道为什么。
+    capture = _capture(data.get("capture"))
+    capture = replace(capture, path=src.get(ENV_CAPTURE_PATH) or capture.path)
+
     try:
         workers = int((src.get(ENV_WORKERS) or "1").strip() or "1")
     except ValueError as exc:
@@ -852,6 +923,7 @@ def load_config(
             budget=_budget(data.get("budget")),
             packaging=_packaging(data.get("packaging")),
             rerank=_rerank(data.get("rerank")),
+            capture=capture,
             server=ServerConfig(workers=workers),
             # 密钥与端点不在 yaml 里（见模块 docstring 的两层分工）
             embed_base_url=(src.get(ENV_EMBED_BASE_URL) or "").strip(),

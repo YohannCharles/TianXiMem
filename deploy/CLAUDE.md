@@ -213,6 +213,50 @@ docker compose up -d          # 注意：不要带 --build，否则它会想重�
 > ⚠ **镜像 tag 别用 `latest`**：与 Qdrant 同源的理由——Full 只有 2 次、一旦接受即版本冻结。
 > 打 tag 时带上日期或 commit（`tianxi-am:2026-09-28-4f56bcc`），下次要回退才有得回。
 
+### 0.6 打开**请求原文采集**（S6）—— 服务器上照着做
+
+**目的**：把官方发来的 `/add` / `/search` **原样**记下来，用来核验**官方真实的 `request_id` 形状**
+——那是 **S6** 唯一没在本地验过的一环，而 D25 的位置模型整个押在它上面。
+**配置语义、四条纪律、一行里有哪些字段**一处声明在
+[`../docs/config-reference.md`](../docs/config-reference.md) §12 与
+[`../src/tianxi_am/service/capture.py`](../src/tianxi_am/service/capture.py)。
+**本文件只写"怎么在服务器上做"。**
+
+> ⚠ **它是代码改动，不是配置改动** ⇒ §0.5 那条"挂配置目录"的路**在这里不适用**
+> （挂目录只换 yaml，换不掉代码）。**服务器必须先拿到带这一层的新镜像。**
+
+| 步 | 做什么 | 命令 / 判据 |
+| --- | --- | --- |
+| **①** | 拿到带这一层的代码 | **路 A**（服务器能出网）：`git pull` 到含 `src/tianxi_am/service/capture.py` 的 commit（`git log --oneline -- src/tianxi_am/service/capture.py` 查得到）· **路 B**（内网）：本地 `make image-build` → `docker save` → `scp` → `docker load`（见上一节） |
+| **②** | 打开开关 | **路 A**：在**服务器**的仓库里就地改 `configs/default.yaml` → `capture: enabled: true`。**别提交它**——它是个临时诊断开关，一提交下次 `git pull` 就撞冲突（未提交状态反而会在 pull 时**拦住你**，这是好事）。**路 B**：改**本地**那份再 `make image-build`（yaml 是烘进镜像的） |
+| **③** | 重建 + 起 | **路 A**：`docker compose -f deploy/compose.yaml up -d --build` · **路 B**：`docker load` 新镜像后 `up -d`（**不要带 `--build`**）。`ps` 期望 `app (healthy)` |
+| **④** | **核对采集真的开了** | `docker compose -f deploy/compose.yaml logs app \| grep 请求采集` ⇒ 期望 `请求采集已开启：…/data/capture/requests.jsonl（上限 … 字节，写满即停）`。⚠ 若看到 **ERROR「打不开文件」**：采集已**自动关闭**，服务照常跑——去查 `TIANXI_CAPTURE_PATH` 与 `/data` 卷属主（坑表里那条 `chown 10001:10001`） |
+| **⑤** | 跑你要跑的（冒烟一次 / 一轮 Smoke） | 见 [`../docs/submission.md`](../docs/submission.md) §1 |
+| **⑥** | 取文件 | `docker compose -f deploy/compose.yaml cp app:/data/capture/requests.jsonl ./requests.jsonl` |
+| **⑦** | 读它（下表） | |
+| **⑧** | **关回去** | 路 A：`git checkout -- configs/default.yaml` → `up -d --build`；路 B：本地改回 `false` 再走一遍镜像。⛔ **别用 `down -v`**：那个卷同时装着唯一不可重建的 `tianxi.db` |
+
+**⑦ 怎么读**——一行一次请求，`chunk_ordinal` 就是"服务用**当前**正则解析 `request_id` 的结果"：
+
+```bash
+python -c "
+import json
+for line in open('requests.jsonl', encoding='utf-8'):
+    e = json.loads(line)
+    if e.get('kind') == 'req':
+        print(e['path'], e['status'], e['chunk_ordinal'], e.get('request_id'))"
+```
+
+| 看到什么 | 说明什么 | 下一步 |
+| --- | --- | --- |
+| 每一行的 `chunk_ordinal` 都是数字 | 官方 id 确实带 `chunk-<n>`，我们的正则认得 | **S6 收口**：D25 的现状是对的，什么都不用改 |
+| 有行是 `null`，而那个 `request_id` 尾部**确实多了一段** | 我们的正则**太窄**（锚定末尾） | 放宽 `ingest.chunk_ordinal_pattern`（**配置项，不必改代码**）——但**先把样本留档**再动 |
+| 有行的 `request_id` 里**根本没有 chunk 序号** | D25 的立论基础没了 | ⛔ **停下来**：那是**决定**不是**实现**（见 [`../docs/open-questions.md`](../docs/open-questions.md) 的 S6） |
+
+> ⚠ 三条别踩的：① `/health` **刻意不记**（平台探活会刷屏，且它零核验价值）；
+> ② `authorization` **只记"在不在"、绝不记值**；③ 文件里是**官方评测原文**
+> ⇒ **不进 git、不传第三方**；`capture.max_bytes`（默认 64 MiB）写满即停，**别指望它记一整场 Full**。
+
 ---
 
 ## 1. 为什么必须 server 模式（§6.3）

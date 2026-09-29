@@ -66,6 +66,7 @@ from tianxi_am.embed.text_embedding_v4 import (
 from tianxi_am.observability import MetricsSink, NullMetricsSink, SnapshotMetricsSink
 from tianxi_am.rank import RemoteReranker
 from tianxi_am.retrieve import DenseArm, EvidenceChecker, HybridRetriever, make_hybrid_params
+from tianxi_am.service.capture import CaptureMiddleware, RequestCapture
 from tianxi_am.service.errors import register_error_handlers
 from tianxi_am.service.pipeline import AddPipeline, SearchPipeline
 from tianxi_am.service.routes import build_router
@@ -74,6 +75,7 @@ from tianxi_am.store.sqlite_store import SqliteStore
 
 __all__ = [
     "Services",
+    "build_capture",
     "build_embedder",
     "build_metrics_sink",
     "build_reranker",
@@ -95,6 +97,9 @@ class Services:
     embedder: QueryInstructionEmbedder
     add: AddPipeline
     search: SearchPipeline
+    #: 请求原文采集（`capture.enabled`）。**`None` = 没开或没打开成功**——
+    #: 那时 HTTP 层连中间件都不装（零开销、零行为差异）。
+    capture: RequestCapture | None = None
 
     def close(self) -> None:
         """释放长生命周期资源。
@@ -111,6 +116,8 @@ class Services:
         reranker = self.search.reranker
         if isinstance(reranker, RemoteReranker):
             reranker.close()
+        if self.capture is not None:
+            self.capture.close()
 
 
 def build_services(config: AppConfig) -> Services:
@@ -190,7 +197,46 @@ def build_services(config: AppConfig) -> Services:
             annotate_relatives=config.packaging.annotate_relatives,
             metrics=build_metrics_sink(config),
         ),
+        # ⚠ 采集**在装配时就打开**（见 `build_capture`）：写不了要在启动日志里说，
+        #   而不是等跑完一整场才发现文件是空的。
+        capture=build_capture(config),
     )
+
+
+def build_capture(config: AppConfig) -> RequestCapture | None:
+    """按配置构造**请求原文采集**。**该没有的时候就是 `None`。**
+
+    | 条件 | 结果 | 记什么 |
+    | --- | --- | --- |
+    | `capture.enabled = false`（默认） | `None` | 什么都不记——**不装中间件**，零开销 |
+    | 打开文件失败（路径不可写…） | `None` | **ERROR**——否则"开了却没记到"是一次静默失败 |
+
+    ⚠ **失败不抛异常**：采集是诊断旁路，不该有能力让服务起不来（启动失败 = 没进场，
+    是最坏的一类失败）。但它**必须响亮**——所以这里把 ERROR 打出来，而不是让它
+    安静地记个空文件。真失败时读者能从启动日志立刻看出"采集已经关了"。
+
+    ⚠ **打开就在启动时做**：写文件的能力是**启动期**的事实，不是运行期才出现的
+    （`configs/capture` 的路径归 env，容器里是卷里的一个目录）。等到第一次 `/add`
+    才发现路径写不了，那已经是"跑了一整场却什么都没记到"。
+    """
+    if not config.capture.enabled:
+        return None
+    capture = RequestCapture(
+        path=config.capture.path,
+        max_bytes=config.capture.max_bytes,
+        # ⚠ 与请求路径**同一个**模式：记录里的 `chunk_ordinal` 必须反映"服务此刻
+        #   会怎么解析"，否则这份记录会指向一个没人用的口径（S6 要看的就是它）。
+        chunk_ordinal_pattern=config.ingest.chunk_ordinal_pattern,
+    )
+    if not capture.open():
+        return None
+    logger.warning(
+        "请求采集已开启：`/add` 与 `/search` 的**原文**会写进 %s（上限 %d 字节，写满即停）。"
+        "⚠ 它记的是官方发来的原始请求体——**跑完记得把 `capture.enabled` 关回去**。",
+        capture.path,
+        config.capture.max_bytes,
+    )
+    return capture
 
 
 def build_metrics_sink(config: AppConfig) -> MetricsSink:
@@ -293,6 +339,9 @@ def create_app(services: Services) -> FastAPI:
     app = FastAPI(title="TianXi_AM", lifespan=lifespan)
     register_error_handlers(app)
     app.include_router(build_router(add_pipeline=services.add, search_pipeline=services.search))
+    # ⚠ **不装**是常态（默认关）：那时请求路径上一个字节都没多。
+    if services.capture is not None:
+        app.add_middleware(CaptureMiddleware, capture=services.capture)
     app.state.services = services
     return app
 

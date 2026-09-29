@@ -10,7 +10,15 @@ routes.py     POST /add、POST /search、GET /health（薄路由，只做形状�
 schemas.py    请求与响应模型（pydantic）= §2.1 的字面翻译
 pipeline.py   Add / Search 的**编排**（"按什么顺序调"）
 errors.py     异常 → 保持"可重试"的边界处理
+capture.py    请求**原文**采集（诊断旁路，默认关）—— **S6** 的唯一直接观察口
 ```
+
+> **`capture.py` 的边界**：它把官方发来的 `/add` / `/search` **原样**抄一份落盘
+> （`capture.enabled`，默认关），用来核验官方真实的请求形状——尤其 `request_id`。
+> **四条纪律与文件格式一处声明在** [`capture.py`](./capture.py) 的模块 docstring
+> （在解析之前抄 / 不改下游 body / 不吞异常 / 写盘失败不影响响应），本文件不复制。
+> ⚠ 它是本层**唯一**允许"吞掉自己内部错误"的地方（只留 WARNING），理由见那条纪律 4：
+> **诊断不该有能力把一次 Add 变成 500**。
 
 > **配置不在本目录**：由 [`../common/config.py`](../common/config.py) 统一提供，**注入** `build_services()`。
 > **`service/` 自己不读 `os.environ`**——这一条有静态测试钉住
