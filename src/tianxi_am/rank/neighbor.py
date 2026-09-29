@@ -3,13 +3,15 @@
 ```text
 ranked（已去重、已 rerank 的名次）
   → ① 全部保留进 selected（rerank_rank = 真实名次）
-  → ② 只对前 expansion_seed_limit 条扩窗 ± radius（**整段取回，按会话下标切窗口**）
+  → ② 只对前 expansion_seed_limit 条扩窗 ± radius
+       **沿 `prev_memory_id` / `next_memory_id` 跳**（一跳 = 一个完整 QA）
   → ③ 新扩出来的进 selected（rerank_rank = None —— **不造排名**）
-  → ④ 按 (user_id, session_id) 分组、组内按 `seq` 升序，**一次线性扫描**合并成段
+  → ④ 按 `(user_id, session_id, request_id)` 分组、组内按 `local_index` 扫描，
+       只把 **`prev.next == 当前 id`**（= 显式相邻）的那些合并成段
   → ⑤ 段按 best_rank（段内最小的真实名次）升序
 ```
 
-## 五条不能越过的线
+## 六条不能越过的线
 
 1. **`rank31+` 只保留、不扩展**（§10 的种子数）
    —— 扩窗代价随种子数线性增长；名次靠后的种子本就可能在预算里被砍掉
@@ -17,31 +19,32 @@ ranked（已去重、已 rerank 的名次）
    —— 编个假名次会让"段优先级只看真实名次"失去意义，锚点也会指向一条从没被选中过的记忆
 3. **禁止跨 session 扩窗**
    —— 那是跨对话拼接，语义上不成立；而这两个字段是**隔离契约**（§2.2）
-4. **只有 `seq` 相邻才合并**
-   —— 段的定义就是"连续对话"；硬拼不连续的对会让模型读到**断裂的上下文**，而 `content` 里看不出来
-5. **段内顺序只能是 `seq` 升序**
-   —— 把种子提到最前会把一段话**拦腰截断**（§11.2），而答案阶段按前缀截断
+4. **禁止跨 Add 扩窗 / 合并**（**D28**）
+   —— 跨 Add 不存在可信的全局顺序，硬拼起来会让模型读到**它以为连续、实际不连续**的
+   上下文，而 `content` 里**看不出来**
+5. **只有显式相邻才合并**
+   —— 判据是 `前一条.next_memory_id == 这一条.id`，不是"下标加一"、更不是"同一 session"
+6. **段内顺序只能是 `local_index` 升序**
+   —— 把种子提到最前会把一段对话**拦腰截断**（§11.2），而答案阶段按前缀截断
 
-## 相邻性是"会话内稠密序 `seq`"，不是"整数加一"
+## 邻接是**存储里的显式指针**，不是算出来的下标（D28）
 
-位置是 `(chunk_ordinal, local_index)`——**请求的纯函数**（D25），它**可能有空洞**
-（跳号、某批没产出块）⇒ 整数算术 `b == a + 1` **不等于**"会话里前后各 r 个"。⇒ 所以：
+`qa_pairs` 上存着 `prev_memory_id` / `next_memory_id`，它们在**一次 Add 内**按
+"只连完整 QA"的规则算好、**写下时就是最终形状**（没有 UPDATE、没有回填）。
 
-* **扩窗**：取回该 session 的**整段有序列表**，按**列表下标**切 `[i-r, i+r]`
-* **合并**：按 `seq`（`ROW_NUMBER()` 现算的稠密序）判相邻
-
-两者都让**缺号不破坏相邻**，而"中间真的少了一块"仍然被抓住（`seq` 有洞）。
+⇒ 扩窗 = **沿指针跳**，合并 = **看指针是否相接**。两处都不再有
+"`pair_idx ± 1`"或"会话内稠密序 `seq`"这类**推断出来的**相邻性——
+那种推断在 D25 的位置模型下还能自洽，在真实（不透明）`request_id` 上则根本没有依据。
 
 ## 为什么扩窗要读 SQLite 而不是 Qdrant
 
-§6.3 的分工：**正文不进 Qdrant**。邻域查询走
-`UNIQUE(user_id, session_id, chunk_ordinal, local_index)` 建出的索引（不变式 4）
-——`WHERE` 命中前两列前缀、`ORDER BY` 命中后两列 ⇒ **不扫全表、不额外排序**。
+§6.3 的分工：**正文不进 Qdrant**。邻接指针也在 SQLite（`prev` / `next` 是列），
+所以扩窗天然是"回真源查"——Qdrant 只负责"谁和查询像"。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Final, cast
 
 from tianxi_am.common.annotate import annotate
@@ -69,6 +72,8 @@ __all__ = [
 #:
 #: ⚠ 半径的单位是 **记忆块**（D24 前叫 QA 对）：`±1` 拿回前后各**一整块**（最多 4 条消息），
 #: 不是各一条消息——**扩窗比 message 粒度时更贵**（值见 config-reference §6）。
+#: ⚠ **D28 起它就是"沿链跳几跳"**：链上只有完整 QA，所以 A-only / Q-only 永远不作为
+#: 邻居出现（它们没有链）。
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,20 +89,26 @@ class SelectedMemory:
     is_neighbor: bool
 
     @property
-    def seq(self) -> int:
-        """**会话内稠密序**（0-based 连续，按 `(chunk_ordinal, local_index)` 排）。
+    def local_index(self) -> int:
+        """它在**那一次 Add** 的块列表里的序号。
 
-        ⚠ 它**不是列**，由 `store.fetch_session_ordered` 的 `ROW_NUMBER()` 现算。
-        ⚠ **它必须是真值**：`expand_neighbors` 保证每条 `SelectedMemory` 都拿到它
-        （候选那一路由 `fetch_pairs_by_ids` 回来时是 `-1`，那里补过一次）。
-        `-1` 流进 `merge_segments` 的相邻判断会让**所有块各自成段**，
-        而那看起来只像"检索质量差"。
+        ⚠ 只在一次 Add 内有意义（D28）——所以它**只**用来给同一条链上的成员排序，
+        任何"跨 Add 比大小"的用法都是错的。
         """
-        return self.pair.seq
+        return self.pair.local_index
 
     @property
     def session_key(self) -> tuple[str, str]:
         return (self.pair.user_id, self.pair.session_id)
+
+    @property
+    def chain_key(self) -> tuple[str, str, str]:
+        """**邻接链的作用域** = 一次 Add（D28）。
+
+        ⚠ 段合并必须按它分组：换成 `session_key` 就会把**两次 Add** 的记忆放进同一组，
+        而"它们恰好下标相接"这件事在下标是**每批各从 0 开始**的数时**毫无意义**。
+        """
+        return (self.pair.user_id, self.pair.session_id, self.pair.request_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +140,8 @@ def expand_neighbors(
     """把 `ranked` 全部保留，并对**前 `seed_limit` 条**扩窗 `± radius`。
 
     **一次 `store.read()` 里做完所有查询**：短生命周期连接模型下每次开连接都要付一次
-    `connect`（D17），而这里有 1 次批量取正文 + 至多 `seed_limit` 次邻域查询。
+    `connect`（D17）。跳 `radius` 跳 ⇒ 至多 `radius` 次批量查询（每跳把所有前沿节点
+    的 `prev` / `next` 收成**一次** `IN`），不是"每个种子各跳各的"。
 
     ⚠ 读操作**不拿写锁**（D17：不要为读拿 `BEGIN IMMEDIATE`）。
     """
@@ -147,31 +159,14 @@ def expand_neighbors(
     if not by_id:
         return ExpansionResult(selected=(), neighbors_added=0, missing_rows=0)
 
-    # ① 先把**全部** rerank 候选取正文并放进去——注意是【全部】，不是前 30。
-    #    rank31+ 只是**不扩展**，它们仍然是候选（用户口径：不要删除它们）。
     with store.read() as conn:
+        # ① 先把**全部** rerank 候选取正文并放进去——注意是【全部】，不是前 30。
+        #    rank31+ 只是**不扩展**，它们仍然是候选（用户口径：不要删除它们）。
         pairs = store.fetch_pairs_by_ids(conn, list(by_id))
         pair_by_id: dict[str, QaPair] = {p.id: p for p in pairs}
 
-        # ② 给候选所在的每个 session **取一次有序全段**（带 `seq`）。同时供两处用：
-        #      (a) 补上候选自己的 `seq`——`fetch_pairs_by_ids` 给不了（见它的 docstring：
-        #          按主键取一批没有会话上下文，窗口函数只会算出"这一批里的第几个"）
-        #      (b) 给种子切 `±radius` 窗口
-        #    ⚠ **一个 session 只取一次**：种子密集时同一个 session 会被反复扩窗，
-        #    重复查询纯属浪费（D17：每次都要 connect）；也让同一 session 的多个种子
-        #    看到**同一份**快照。
-        session_cache: dict[tuple[str, str], list[QaPair]] = {}
-        for row in pair_by_id.values():
-            # ⚠ 变量名不与下面那个 `pair` 复用：mypy 会按第一次赋值定死类型，
-            #   而下一个 `pair` 是 `QaPair | None`（`.get()` 的返回）
-            key = (row.user_id, row.session_id)
-            if key not in session_cache:
-                session_cache[key] = store.fetch_session_ordered(conn, *key)
-        #: `id → 它在会话里的下标`。`ordered` 按 `seq` 升序且 0-based 连续 ⇒ 下标就是 `seq`。
-        pos_by_id: dict[str, int] = {
-            q.id: index for ordered in session_cache.values() for index, q in enumerate(ordered)
-        }
-
+        #: `id → QaPair`：候选与逐跳扩出来的邻居都登记在这里。链的指针也从这里读。
+        known: dict[str, QaPair] = dict(pair_by_id)
         selected: dict[str, SelectedMemory] = {}
         for memory_id, candidate in by_id.items():
             pair = pair_by_id.get(memory_id)
@@ -179,10 +174,7 @@ def expand_neighbors(
                 continue  # 真源缺行 ⇒ 记进 missing_rows，不补造
             selected[memory_id] = SelectedMemory(
                 memory_id=memory_id,
-                # ★ 补上 `seq`：`merge_segments` 按它排序与判相邻，而按主键取回来的行
-                #   `seq` 是 `-1` ⇒ 不补的话**所有块都会各自成段**，
-                #   而那看起来只像"检索质量差"。
-                pair=replace(pair, seq=pos_by_id[pair.id]),
+                pair=pair,
                 rerank_rank=candidate.rank,
                 is_neighbor=False,
             )
@@ -190,22 +182,27 @@ def expand_neighbors(
         # ③ 只对前 `seed_limit` 条扩窗。**按名次取，不是按列表位置**——
         #    名次已经是连续 0-based（`dedup_candidates` 保证），两者等价；
         #    但按名次写更贴着"种子数"这个规格。
-        seeds = [c for c in by_id.values() if c.rank < seed_limit]
-        seeds.sort(key=lambda c: c.rank)
-
+        seeds = sorted((c for c in by_id.values() if c.rank < seed_limit), key=lambda c: c.rank)
         added = 0
-        for seed in seeds:
-            anchor = selected.get(seed.memory_id)
-            if anchor is None:
-                continue  # 种子自己的真源行缺失 ⇒ 连它在会话里的位置都不知道，扩不了
-            ordered = session_cache[(anchor.pair.user_id, anchor.pair.session_id)]
-            center = pos_by_id[anchor.memory_id]
-            # ⚠ 按**列表下标**切，不是 `pair_idx - r .. + r` 那种整数算术：
-            #    位置（`chunk_ordinal`）有空洞时整数窗口会拿到"位置上相邻、
-            #    会话里不相邻"的块。这里实现的是**"会话里前后各 r 个"**这个定义本身。
-            window = ordered[max(0, center - radius) : center + radius + 1]
-            for pair in window:
-                # 已经在里面（它本身就是候选，或已被前一个种子扩到）⇒ **跳过**
+        #: 本跳的**前沿**：只从这些节点继续往外跳（不是从全部已选节点）。
+        frontier: set[str] = {c.memory_id for c in seeds if c.memory_id in selected}
+        for _ in range(radius):
+            wanted: dict[str, None] = {}  # 有序去重，顺便稳定
+            for memory_id in sorted(frontier):
+                pair = known.get(memory_id)
+                if pair is None:
+                    continue
+                for neighbour in (pair.prev_memory_id, pair.next_memory_id):
+                    # ⚠ `prev` / `next` 只会在**同一次 Add 内**连过（D28）⇒
+                    #    "不跨 Add 扩窗"是**结构性**的，这里不需要再判断 request_id。
+                    if neighbour is not None and neighbour not in selected:
+                        wanted.setdefault(neighbour, None)
+            if not wanted:
+                break  # 链到头了（或这一跳全是已选中的）⇒ 停止，不"猜相邻的补上"
+
+            rows = store.fetch_pairs_by_ids(conn, list(wanted))
+            for pair in rows:
+                known[pair.id] = pair
                 if pair.id in selected:
                     continue
                 selected[pair.id] = SelectedMemory(
@@ -215,6 +212,7 @@ def expand_neighbors(
                     is_neighbor=True,
                 )
                 added += 1
+            frontier = {pair.id for pair in rows}
 
     return ExpansionResult(
         selected=tuple(selected.values()),
@@ -225,15 +223,24 @@ def expand_neighbors(
 
 @dataclass(frozen=True, slots=True)
 class ContextSegment:
-    """一段**连续**对话（§11.2 / §11.3）。**它是 v1 打包与预算的原子单位。**"""
+    """一段**连续**对话（§11.2 / §11.3）。**它是 v1 打包与预算的原子单位。**
+
+    ⚠ **"连续"的判据是显式指针**（D28）：段内相邻两条必须满足
+    `前一条.next_memory_id == 后一条.id`。所以一个段**整体落在一次 Add 内**，
+    自带它的 `request_id`。
+    """
 
     source_memory_ids: tuple[str, ...]
-    """段内全部记忆的 `id`，**按 `seq` 升序**（= 会话顺序）。"""
+    """段内全部记忆的 `id`，**按 `local_index` 升序**（= 那一次 Add 内的顺序）。"""
 
     user_id: str
     session_id: str
-    start_seq: int
-    end_seq: int
+    request_id: str
+    """这一段来自**哪一次 Add**（D28）。段是 Add-local 的，所以这个字段是**唯一值**。"""
+
+    start_local_index: int
+    end_local_index: int
+    """段首 / 段尾在**那一次 Add** 里的 `local_index`。**不是**跨 Add 的序号。"""
 
     anchor_memory_id: str
     """**段优先级的来源**：段内真实名次最好的那条候选的 `id`。
@@ -268,37 +275,38 @@ def merge_segments(
     seed_placement: str = "keep",
     annotate_relatives: bool = False,
 ) -> list[ContextSegment]:
-    """把选中的记忆按"连续 `seq`"合并成段，并按 `best_rank` 升序返回。
+    """把选中的记忆按**显式相邻**合并成段，并按 `best_rank` 升序返回。
 
-    **算法是一次线性扫描**：按 `(user_id, session_id)` 分组 → 组内按 `seq` 升序 →
-    遍历维护"当前段"，`seq == end + 1` 就**直接延长**，否则收尾当前段、新建一段。
+    **算法是一次线性扫描**：按 `(user_id, session_id, request_id)` 分组 →
+    组内按 `local_index` 升序 → 遍历维护"当前段"，
+    `前一条.next_memory_id == 这一条.memory_id` 就**直接延长**，否则收尾当前段、新建一段。
 
-    ⚠ `seq` 是**读时的会话内稠密序**（D25），不是 `chunk_ordinal`：所以"中间少了一个块"
-    仍然被抓住（`seq` 有洞 ⇒ 中间真的少了一块），而"chunk 序号跳号"（AML 那边的批次编号）
-    **不会**被误判成断裂。
+    ⚠ **分组键里带着 `request_id`，而且判据读的是存储里的指针**——两道都在保证
+    "段不出一次 Add"。只留判据的话，一次 Add 内部的下标为 0 的行会被误判成
+    "接着上一次 Add 的末尾"；只留分组的话，一次 Add 里**缺了一块**（比如只有第 0 和第 2 块）
+    会被硬拼成一段。**两条都要**。
 
-    ⚠ **不同 session 永远不能合并**：分组键里就带着 `session_id`，所以
-    跨 session 合并**在结构上做不到**，而不是靠一句判断。
-
-    ⚠ **只有 `seq` 严格相邻才延长**。`end + 1` 而不是 `end + k`：
+    ⚠ **只有严格相邻才延长**（`prev.next == cur.id`，不是
+    `cur.local_index == prev.local_index + 1`）：
     中间缺一个块就说明那段对话**不完整**，硬拼成一整段会让模型读到自己以为连续、
     实际缺了一环的上下文——而 `content` 里**看不出来**。
 
-    ⚠ 段内顺序 = `seq` 升序（**不把锚点提到最前**，§11.2）。
+    ⚠ 段内顺序 = `local_index` 升序（**不把锚点提到最前**，§11.2）。
     """
-    # ── 分组：session_key → 该 session 的成员，组内按 seq 升序 ──
-    groups: dict[tuple[str, str], list[SelectedMemory]] = {}
+    # ── 分组：chain_key → 该 Add 的成员，组内按 local_index 升序 ──
+    groups: dict[tuple[str, str, str], list[SelectedMemory]] = {}
     for memory in selected:
-        groups.setdefault(memory.session_key, []).append(memory)
+        groups.setdefault(memory.chain_key, []).append(memory)
 
     segments: list[ContextSegment] = []
-    for (user_id, session_id), members in groups.items():
-        members.sort(key=lambda m: m.seq)
+    for (user_id, session_id, request_id), members in groups.items():
+        members.sort(key=lambda m: m.local_index)
 
         # 一次线性扫描：`runs` 里每个元素是一段连续的成员列表
         runs: list[list[SelectedMemory]] = []
         for memory in members:
-            if runs and memory.seq == runs[-1][-1].seq + 1:
+            previous = runs[-1][-1] if runs else None
+            if previous is not None and previous.pair.next_memory_id == memory.memory_id:
                 runs[-1].append(memory)  # ★ 直接延长，不新建
             else:
                 runs.append([memory])
@@ -309,6 +317,7 @@ def merge_segments(
                     run,
                     user_id=user_id,
                     session_id=session_id,
+                    request_id=request_id,
                     counter=counter,
                     inject_abs_time=inject_abs_time,
                     seed_placement=seed_placement,
@@ -326,6 +335,7 @@ def _build_segment(
     *,
     user_id: str,
     session_id: str,
+    request_id: str,
     counter: TokenCounter,
     inject_abs_time: bool = False,
     seed_placement: str = "keep",
@@ -334,9 +344,9 @@ def _build_segment(
     """把一段连续的成员收成一个 `ContextSegment`（含渲染与计数）。"""
     # 锚点 = 段内**真实名次最好**的那条。邻居（rerank_rank is None）不参与。
     #
-    # ⚠ 扩窗窗口是"种子前后各 r 个"的**连续区间**，所以种子必与它扩出来的邻居同段 ⇒ 段里
-    #    至少有一条真实候选。但 `radius` 可配、`selected` 也可能被别的调用方构造出来，
-    #    所以这里**不假设**那个不变量：全是邻居时取会话顺序的第一条当锚点，而不是崩掉。
+    # ⚠ 扩窗是"沿链跳"的，跳出来的邻居与种子同链 ⇒ 段里至少有一条真实候选。
+    #    但 `radius` 可配、`selected` 也可能被别的调用方构造出来，
+    #    所以这里**不假设**那个不变量：全是邻居时取段内第一条当锚点，而不是崩掉。
     ranked_members = [m for m in run if m.rerank_rank is not None]
     # `cast` 不是装饰：上面的 filter 已保证这里没有 None，但**类型系统看不出来**
     # （lambda 的返回类型不会因外层列表推导而收窄）⇒ 这行是"把已知的不变式告诉
@@ -347,9 +357,9 @@ def _build_segment(
     best_rank = anchor.rerank_rank if anchor.rerank_rank is not None else _NO_RANK
 
     # ── 段内顺序（§11.2 的"组内顺序"，明文列为**可消融项**）─────────────────────
-    # 默认 `keep`：纯 `seq` 时间序。它当初被选中的理由是"窗口是一段连续对话，
+    # 默认 `keep`：纯位置（`local_index`）时间序。它当初被选中的理由是"窗口是一段连续对话，
     # 按时间序读才成立"——所以另两个变体**都要用数据说话**，不能凭直觉换。
-    # ⚠ 它们**只改渲染顺序**：`source_memory_ids` / `start_seq` / 锚点 / `best_rank`
+    # ⚠ 它们**只改渲染顺序**：`source_memory_ids` / `start_local_index` / 锚点 / `best_rank`
     #   一个都不动（否则"段优先级只看真实候选"这条不变式就破了）。
     ordered = run
     echoed: list[SelectedMemory] = []
@@ -384,8 +394,9 @@ def _build_segment(
         source_memory_ids=tuple(m.memory_id for m in run),
         user_id=user_id,
         session_id=session_id,
-        start_seq=run[0].seq,
-        end_seq=run[-1].seq,
+        request_id=request_id,
+        start_local_index=run[0].local_index,
+        end_local_index=run[-1].local_index,
         anchor_memory_id=anchor.memory_id,
         best_rank=best_rank,
         anchor_event_time=anchor.pair.event_time,
@@ -398,7 +409,7 @@ def _build_segment(
 
 #: 段里**一条真实候选都没有**时的 `best_rank`。
 #:
-#: ⚠ 按当前口径**不应该出现**（扩窗窗口是连续区间，种子必与邻居同段）。真出现说明
-#: `radius` 或 `selected` 的构造方式变了——给它一个**排在所有真实段之后**的值，
+#: ⚠ 按当前口径**不应该出现**（扩窗沿链跳，种子必与它扩出来的邻居同链 ⇒ 同段）。
+#: 真出现说明 `radius` 或 `selected` 的构造方式变了——给它一个**排在所有真实段之后**的值，
 #: 而不是崩掉，也不是静默塞到最前。
 _NO_RANK: Final[int] = 1 << 60

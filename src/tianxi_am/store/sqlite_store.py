@@ -8,19 +8,22 @@
 
 不变式归属（store/CLAUDE.md 的五条）：
   1. `id` 位置派生 .................... `make_pair_id()` + `schema.sql` 的 PRIMARY KEY
-  2. 位置 = 请求的纯函数 ............... `(chunk_ordinal, local_index)`，**D25** 起
-                                        **不再有读-改-写**（⇒ 没有"分配位置"这一步）
+  2. 邻接是 **Add 内显式链** ............ `prev_memory_id` / `next_memory_id`，**D28** 起
+                                        （跨 Add 不存在可信的全局序 ⇒ 不推断）
   3. `applied_batches` 只增不改 ....... `record_batch()`（只 INSERT，不 UPDATE）
-  4. UNIQUE 索引 = 会话顺序的排序键 .... `schema.sql` 的 UNIQUE + `fetch_session_ordered()`
+  4. UNIQUE 索引 = 一次 Add 的排序键 ... `schema.sql` 的 UNIQUE + `fetch_by_request()`
   5. 缓存键 = 渲染文本哈希 ............ **不在本模块**，属 `embed/`（§7.2）
 
-⚠ **D25（2026-09-27）与 D24（同日）的区别**：D24 只改"哪些消息进同一个块"（组合），
-D25 改"块的位置从哪来"（`MAX+1` → 请求里的 chunk 序号）。**位置模型变了 ⇒ 旧库不可复用。**
+⚠ **三次位置模型变更**（每一次都**不可与旧库混用**，但 `open()` 会**自动搬一次**）：
+D24 改"哪些消息进同一个块"（组合边界 = 一次 Add）；D25 把位置从 `MAX+1` 改成
+`request_id` 里解析出的 chunk 序号；**D28 取消解析**——`request_id` 回到 opaque string，
+位置 = `(request_id, local_index)`（详细理由见 `docs/decisions.md` 的 D28）。
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import sqlite3
 import time
 from collections.abc import Iterator, Sequence
@@ -29,6 +32,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
 
+logger = logging.getLogger(__name__)
+
 Status = Literal["complete", "pending"]
 
 STATUS_COMPLETE: Final[Status] = "complete"
@@ -36,6 +41,27 @@ STATUS_PENDING: Final[Status] = "pending"
 _VALID_STATUSES: Final[frozenset[str]] = frozenset({"complete", "pending"})
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+
+#: D28 重建表用的 DDL —— **刻意在这里复制一份、刻意不跟 `schema.sql` 走**。
+#:
+#: 它是一次**历史时刻的快照**（"把 D25 的库搬成 D28 的形状"），而不是"当前 schema"：
+#: 将来 schema 再变，这段也不该跟着变——它描述的永远是那个已经发生过的搬移。
+_MIGRATE_DDL: Final[str] = """
+CREATE TABLE qa_pairs__d28 (
+    id             TEXT PRIMARY KEY,
+    user_id        TEXT NOT NULL,
+    session_id     TEXT NOT NULL,
+    request_id     TEXT NOT NULL,
+    local_index    INTEGER NOT NULL,
+    prev_memory_id TEXT,
+    next_memory_id TEXT,
+    question       TEXT,
+    answer         TEXT,
+    status         TEXT NOT NULL,
+    event_time     INTEGER,
+    UNIQUE(user_id, session_id, request_id, local_index)
+)
+"""
 
 
 def _canonical(*parts: str) -> str:
@@ -51,49 +77,99 @@ def _canonical(*parts: str) -> str:
     return "".join(f"{len(p)}:{p}" for p in parts)
 
 
-def make_pair_id(user_id: str, session_id: str, chunk_ordinal: int, local_index: int) -> str:
-    """不变式 1：`id` **位置派生** = hash(user_id, session_id, chunk_ordinal, local_index)。
+def make_pair_id(user_id: str, session_id: str, request_id: str, local_index: int) -> str:
+    """不变式 1：`id` **位置派生** = hash(user_id, session_id, request_id, local_index)。
 
     ⚠ **绝不能用内容哈希。** 按内容算的 `id` 会在两段**内容相同**的记忆上撞车，
     而**重建索引**要求「同一行永远是同一个 point」——做不到就会在 Qdrant 里留下
     **孤儿 point**（旧的还在，新的也写进去，检索命中"不存在的那个版本"，**且不报错**）。
 
-    ⚠ **这两个数都必须是请求的纯函数**（chunk 来自 `request_id`、local 来自组合结果）：
-    它们一旦依赖到达顺序，位置就又变成读-改-写，D25 想买的两件事（并发安全、乱序不翻转）
-    会一起消失。
+    ⚠ **`request_id` 在这里只是"一个字符串"**（D28）：它作为一个**整体**参与哈希，
+    **绝不解析**它的内容。于是任意形状的 id（`abc` / `foo:bar` / UUID / 平台实发的
+    `r_3115…`）都等价可用——这正是要买的那件事。
 
-    哈希算法本身**不是规格规定的**——规格只规定了**输入**是位置四元组。
+    ⚠ **位置仍然全是请求的纯函数**（`request_id` 来自请求、`local_index` 来自组合结果）：
+    同一 `request_id` + 同一 payload 重试时，必然算出**同一个 `id`** ⇒ upsert 是覆盖，
+    不会留下孤儿；不同 Add 之间也不会撞（`request_id` 不同 ⇒ `id` 不同）。
+
+    哈希算法本身**不是规格规定的**——规格只规定了**输入**是那四元组。
     这里取 SHA-256 全 64 位十六进制：确定性、无碰撞顾虑、长度对 TEXT 主键无所谓。
     """
-    payload = _canonical(user_id, session_id, str(chunk_ordinal), str(local_index))
+    payload = _canonical(user_id, session_id, request_id, str(local_index))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
 class QaPair:
-    """一个记忆块的领域对象（§6.2 的 QA 对 + D24 的块模型）。
+    """一个记忆块的领域对象（§6.2 的 QA 对 + D24 的块模型 + D28 的 Add 内邻接）。
 
-    `seq` **不是列**——它是**读时算出来的会话内稠密序**（见 `fetch_session_ordered`），
-    扩窗与段合并只用它，所以"缺号的 chunk 不破坏相邻"这件事是结构性成立的。
+    ⚠ **没有"会话内序号"这种字段**（D28）：跨 Add 不存在可信的全局序，所以位置只在
+    一次 Add 内有意义（`local_index`），而"谁跟谁相邻"由 `prev_memory_id` /
+    `next_memory_id` **显式**给出。
     """
 
     id: str
     user_id: str
     session_id: str
-    chunk_ordinal: int
+    #: 写下这一行的 Add。**opaque**：只做溯源与位置的一半，一律不解析（D28）。
+    request_id: str
+    #: 它在**那一次 Add 的块列表**里的 0-based 序号。⚠ 跨 Add 没有意义。
     local_index: int
+    #: Add 内**显式**邻接（D28）：指向前/后**完整的 QA 块**；不完整或链端为 `None`。
+    prev_memory_id: str | None
+    next_memory_id: str | None
     question: str | None
     answer: str | None
     status: Status
     event_time: int | None
-    request_id: str
-    #: 会话内稠密序（0-based，按 `(chunk_ordinal, local_index)` 排）。
-    #: 只有 `fetch_session_ordered` / `iter_pairs` 会填；`insert_pair` 不知道它。
-    seq: int = -1
+
+    @property
+    def is_complete(self) -> bool:
+        """两侧都在的块（= 一个完整的 QA）。
+
+        ⚠ **只有它进 Add 内的邻接链**（D28）：A-only / Q-only 照样存、照样 embedding、
+        照样能被检索到，但它们**不参与邻接**（`prev` / `next` 恒为 `None`）。
+        """
+        return self.question is not None and self.answer is not None
 
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _remap_legacy_rows(
+    rows: Sequence[sqlite3.Row],
+) -> list[tuple[str, str | None, str | None, sqlite3.Row]]:
+    """旧库（D25）的行 → `(新 id, prev_memory_id, next_memory_id, 原行)`。
+
+    **邻接规则与 `apply_batch` 逐字相同**（只连完整 QA、只在同一次 Add 内），
+    否则搬完之后"同一个库、两种邻接"——那是最难查的一类不一致。
+
+    ⚠ 分组键里**必须**带 `request_id`：那正是"邻接只在一次 Add 内"这条规则的落点。
+    行是按 `(user_id, session_id, request_id, local_index)` 排好序进来的 ⇒ 同组必然连续。
+    """
+    out: list[tuple[str, str | None, str | None, sqlite3.Row]] = []  # (id, prev, next, row)
+    group: list[tuple[str, sqlite3.Row]] = []
+    owner: tuple[str, str, str] | None = None
+
+    def flush() -> None:
+        complete = [row_id for row_id, row in group if row["is_complete"]]
+        prev_by = {rid: complete[i - 1] for i, rid in enumerate(complete) if i}
+        next_by = {
+            rid: complete[i + 1] for i, rid in enumerate(complete) if i + 1 < len(complete)
+        }
+        for row_id, row in group:
+            out.append((row_id, prev_by.get(row_id), next_by.get(row_id), row))
+
+    for row in rows:
+        this = (row["user_id"], row["session_id"], row["request_id"])
+        if this != owner:
+            flush()
+            group = []
+            owner = this
+        group.append((make_pair_id(*this, row["local_index"]), row))
+    flush()
+    return out
 
 
 class SqliteStore:
@@ -141,7 +217,7 @@ class SqliteStore:
 
     @classmethod
     def open(cls, db_path: str | Path, *, busy_timeout_ms: int = 5000) -> SqliteStore:
-        """建表（幂等），并**把数据库级设置落一次**。
+        """建表（幂等）→ **若有旧库就搬一次**（D28）→ 把数据库级设置落一次。
 
         ⚠ **`journal_mode = WAL` 只在这里执行一次**（见 `_init_journal_mode` 的理由），
         不在每个短生命周期连接上重复。与之相对，`busy_timeout` / `synchronous` /
@@ -149,8 +225,94 @@ class SqliteStore:
         """
         store = cls(db_path, busy_timeout_ms=busy_timeout_ms)
         store.init_schema()
+        store.migrate()
         store._init_journal_mode()
         return store
+
+    # ── 旧库迁移（D28）─────────────────────────────────────────────────
+
+    def migrate(self) -> bool:
+        """把**按旧规则（D25）写过的库**搬到 D28 的形态。返回是否真的搬了。
+
+        ## 为什么是"重建表"而不是 `ALTER TABLE`
+
+        要做的三件事里有两件只有重建才做得到：**去掉 `chunk_ordinal` 列**，
+        以及**重算 `id`**——`id` 是位置派生的，而位置的定义变了（`chunk_ordinal` 来自解析
+        `request_id`，而 D28 取消解析）。SQLite 的 `ALTER TABLE DROP COLUMN` 还带着一堆
+        版本与索引限制，重建顺带把 UNIQUE 也换成新的。
+
+        ## 搬什么、不搬什么
+
+        | 东西 | 怎么处理 |
+        | --- | --- |
+        | **正文**（`question` / `answer` / `event_time` / `status`） | **原样搬**——真源不可丢 |
+        | `id` | **重算** = `hash(user_id, session_id, request_id, local_index)` |
+        | `prev` / `next` | 按 `(user_id, session_id, request_id)` 分组、组内按 `local_index` 重连，
+        只连完整 QA（与 `apply_batch` 同一条规则） |
+        | `payload_hash`（旁表） | **留 NULL**（旧行没有 payload 可核）⇒ 那一批的重放只能放行，
+        见 `applied_batch_payload_hash` |
+
+        ⚠ **搬完之后 Qdrant 里的 point 全是孤儿**（`id` 变了，point id 由它派生）⇒
+        **必须跑一次 `tools/reindex.py --drop`**。这一步是**免费**的：embedding 缓存按
+        "渲染文本的哈希"作键，而渲染没变 ⇒ 不会重付 embedding 的钱（§7.2）。
+
+        ⚠ 全程在**一个事务**里：搬一半的库比旧库更糟。
+        """
+        with self.transaction() as conn:
+            if not self._needs_migration(conn):
+                return False
+            rows = conn.execute(
+                "SELECT user_id, session_id, request_id, local_index,"
+                " question, answer, status, event_time,"
+                " (question IS NOT NULL AND answer IS NOT NULL) AS is_complete"
+                " FROM qa_pairs"
+                " ORDER BY user_id, session_id, request_id, local_index"
+            ).fetchall()
+            values = _remap_legacy_rows(rows)
+
+            conn.execute(_MIGRATE_DDL)
+            conn.executemany(
+                "INSERT INTO qa_pairs__d28"
+                " (id, user_id, session_id, request_id, local_index, prev_memory_id,"
+                "  next_memory_id, question, answer, status, event_time)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        row_id,
+                        row["user_id"],
+                        row["session_id"],
+                        row["request_id"],
+                        row["local_index"],
+                        prev_id,
+                        next_id,
+                        row["question"],
+                        row["answer"],
+                        row["status"],
+                        row["event_time"],
+                    )
+                    for row_id, prev_id, next_id, row in values
+                ],
+            )
+            conn.execute("DROP TABLE qa_pairs")
+            conn.execute("ALTER TABLE qa_pairs__d28 RENAME TO qa_pairs")
+
+            batch_columns = {
+                str(row["name"]) for row in conn.execute("PRAGMA table_info(applied_batches)")
+            }
+            if "payload_hash" not in batch_columns:
+                conn.execute("ALTER TABLE applied_batches ADD COLUMN payload_hash TEXT")
+
+        logger.warning(
+            "真源库按旧规则（D25：位置来自 request_id 里的 chunk 序号）写过，已搬到 D28 的形态"
+            "（位置 = `(request_id, local_index)`，邻接改成 Add 内显式链）。\n"
+            "  ⚠ **`id` 全变了 ⇒ Qdrant 里的 point 现在是孤儿**：跑一次"
+            " `tools/reindex.py --drop`（embedding 缓存按内容哈希，不会重付）。"
+        )
+        return True
+
+    def _needs_migration(self, conn: sqlite3.Connection) -> bool:
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(qa_pairs)")}
+        return bool(columns) and ("chunk_ordinal" in columns or "prev_memory_id" not in columns)
 
     def _init_journal_mode(self) -> None:
         """把 `journal_mode = WAL` **落到数据库文件**上。只在 `open()` 里调用一次。
@@ -277,12 +439,24 @@ class SqliteStore:
         """本批是否已应用过。
 
         ⚠ 查的是 **`applied_batches`**，**不是 `qa_pairs.request_id`**——
-        后者会被后一批覆盖，指纹会丢（见 D4）。
+        后者记的是"哪一批写下了这一行"，与"这批被应用过吗"是两件事（见 D4）。
         """
         row = conn.execute(
             "SELECT 1 FROM applied_batches WHERE request_id = ? LIMIT 1", (request_id,)
         ).fetchone()
         return row is not None
+
+    def applied_batch_payload_hash(self, conn: sqlite3.Connection, request_id: str) -> str | None:
+        """那批当时写下的 `payload_hash`。**`None` = 没这行，或那行早于 D28（未知）**。
+
+        ⚠ 调用方**必须**把这两种 `None` 都当成"核不了"（放行），而**不能**当成
+        "payload 不同"——后者会把**每一个老库里的 request_id 重放**变成 409。
+        判据是 `is_batch_applied()` 那个布尔，不是这个返回值。
+        """
+        row = conn.execute(
+            "SELECT payload_hash FROM applied_batches WHERE request_id = ? LIMIT 1", (request_id,)
+        ).fetchone()
+        return None if row is None else row["payload_hash"]
 
     def record_batch(
         self,
@@ -290,28 +464,41 @@ class SqliteStore:
         request_id: str,
         user_id: str,
         session_id: str,
+        payload_hash: str | None = None,
         applied_at: int | None = None,
     ) -> None:
         """记下"本批已应用"。**只增不改**——没有对应的 UPDATE，也不该有。
 
         必须在**与业务写入同一个事务**里调用（§6.5 第 1 步的"※"）。
         主键冲突会直接抛 `IntegrityError`：那是**调用方漏了守卫**的信号，要响。
+
+        `payload_hash` 是规范化 payload 的 sha256（D28）——它让"同 id 不同 payload"
+        能被判出来（否则只能静默当成重放，而那是**两份不同的记忆里必有一份消失**）。
         """
         conn.execute(
-            "INSERT INTO applied_batches (request_id, user_id, session_id, applied_at)"
-            " VALUES (?, ?, ?, ?)",
-            (request_id, user_id, session_id, _now_ms() if applied_at is None else applied_at),
+            "INSERT INTO applied_batches"
+            " (request_id, user_id, session_id, payload_hash, applied_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                request_id,
+                user_id,
+                session_id,
+                payload_hash,
+                _now_ms() if applied_at is None else applied_at,
+            ),
         )
 
-    # ── 位置来自请求，**没有"分配"这一步**（D25）─────────────────────────
+    # ── 位置来自请求，**没有"分配"这一步**（D25 / D28）───────────────────
     #
-    # 位置是 `(chunk_ordinal, local_index)`——**请求的纯函数**：
+    # 位置 = `(request_id, local_index)`——**请求的纯函数**：
     #
-    #   * `chunk_ordinal` 从 `request_id` 解析（`pairing.parse_chunk_ordinal`）
-    #   * `local_index`   是这一批组合出的块的 0-based 序号（`compose_memory_blocks` 确定）
+    #   * `request_id`  原样来自请求（**opaque，不解析**，D28）
+    #   * `local_index` 是这一批组合出的块的 0-based 序号（`compose_memory_blocks` 确定）
     #
-    # ⇒ 没有共享计数器、没有读-改-写 ⇒ **不需要串行化**，且**乱序到达不会翻转顺序**。
-    # ⚠ **不要在这里加回一个"取下一个位置"的方法**——那会把 D25 买的两件事一起还回去。
+    # ⇒ 没有共享计数器、没有读-改-写 ⇒ **不需要串行化**，不同 Add 之间**也不存在
+    #   任何顺序关系**（跨 Add 的"谁先谁后"既不表达、也不推断）。
+    # ⚠ **不要在这里加回一个"取下一个位置"的方法**——那是 D25 之前的读-改-写。
+    # ⚠ **也不要加回"从 request_id 里取序号"**——那正是 D28 取消的东西。
 
     # ── 第 3 步：写 ────────────────────────────────────────────────────
 
@@ -321,103 +508,101 @@ class SqliteStore:
         *,
         user_id: str,
         session_id: str,
-        chunk_ordinal: int,
+        request_id: str,
         local_index: int,
+        prev_memory_id: str | None,
+        next_memory_id: str | None,
         question: str | None,
         answer: str | None,
         status: Status,
         event_time: int | None,
-        request_id: str,
         pair_id: str | None = None,
     ) -> QaPair:
         """新建一个块。`id` 由位置派生，调用方通常不必传 `pair_id`。
 
-        ⚠ **位置是传进来的、不是这里算的**（D25）：调用方（`pairing/apply.py`）从
-        `request_id` 解析 `chunk_ordinal`、从组合结果拿 `local_index`。
+        ⚠ **位置与邻接都是传进来的、不是这里算的**（D28）：调用方（`pairing/apply.py`）
+        从组合结果拿 `local_index`，并按"只连完整 QA"那条规则算出 `prev` / `next`。
         这里**不许**有"看起来更方便"的默认值——一个默认值就会让调用方悄悄退回旧口径。
-        ⚠ 主键/UNIQUE 冲突会直接抛 `IntegrityError`（同一 `(chunk, local)` 被写两次）：
-        那是"同一批被应用了两次"的信号，**要响**——守卫本该拦住它。
+
+        ⚠ **邻接在一次 INSERT 里就写死**：没有任何 UPDATE、没有"回填上一条的 next"这种事。
+        这一条是 D24 那条纪律（块在写下那一刻就是最终形状）在邻接上的延伸——
+        只要一次 Add 的块列表在写之前就全知道了，就不需要第二遍写。
+
+        ⚠ 主键/UNIQUE 冲突会直接抛 `IntegrityError`（同一 `(request_id, local_index)`
+        被写两次）：那是"同一批被应用了两次"的信号，**要响**——守卫本该拦住它。
         """
         if status not in _VALID_STATUSES:
             raise ValueError(f"非法 status: {status!r}（只允许 'complete' | 'pending'）")
         pid = (
-            make_pair_id(user_id, session_id, chunk_ordinal, local_index)
+            make_pair_id(user_id, session_id, request_id, local_index)
             if pair_id is None
             else pair_id
         )
         conn.execute(
             "INSERT INTO qa_pairs"
-            " (id, user_id, session_id, chunk_ordinal, local_index,"
-            "  question, answer, status, event_time, request_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " (id, user_id, session_id, request_id, local_index,"
+            "  prev_memory_id, next_memory_id, question, answer, status, event_time)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 pid,
                 user_id,
                 session_id,
-                chunk_ordinal,
+                request_id,
                 local_index,
+                prev_memory_id,
+                next_memory_id,
                 question,
                 answer,
                 status,
                 event_time,
-                request_id,
             ),
         )
         return QaPair(
             id=pid,
             user_id=user_id,
             session_id=session_id,
-            chunk_ordinal=chunk_ordinal,
+            request_id=request_id,
             local_index=local_index,
+            prev_memory_id=prev_memory_id,
+            next_memory_id=next_memory_id,
             question=question,
             answer=answer,
             status=status,
             event_time=event_time,
-            request_id=request_id,
         )
 
     # ── 读 ─────────────────────────────────────────────────────────────
 
-    def fetch_session_ordered(
+    def fetch_by_request(
         self,
         conn: sqlite3.Connection,
         user_id: str,
         session_id: str,
+        request_id: str,
     ) -> list[QaPair]:
-        """该 session 的**全部块，按会话顺序**，并给每行填上 `seq`（D25）。
+        """**一次 Add 写下的全部块**，按 `local_index` 升序（D28）。
 
-        ## 为什么取整段，而不是按整数区间取窗口
+        这是"Add 内"这个作用域在存储层的唯一入口：邻接（`prev` / `next`）只在
+        这一批里成立，所以**凡是需要"前后"的代码都从这里出发**，而不是从 session 出发。
 
-        位置是 `(chunk_ordinal, local_index)`：后者
-        **可能有空洞**（某个 chunk 一批都没产出块、或 chunk 序号跳号），于是
-        `pair_idx BETWEEN k-r AND k+r` 那种**整数算术**不等价于"会话里前后各 r 个"。
+        两个调用方：
 
-        所以：一次取整个 session 的有序列表（session 很小，实测最长 ~40 块），
-        在 Python 里按 `seq` 切窗口 ⇒ **"相邻"由列表位置给出，缺号不破坏相邻**
-        （这正是"仍然能相邻片段扩展"的落点）。
+        * `rank/neighbor.py` 的扩窗（沿 `prev` / `next` 走，见那边的 `expand_neighbors`）
+        * `service/pipeline.py` 的修复路径（守卫命中后按 **request_id** 幂等重建，
+          而不是按 session——那正是 D28 收紧的那一处）
 
-        ## `seq` 的定义
+        ⚠ **`user_id` / `session_id` 也在 `WHERE` 里**：`request_id` 虽然是全局唯一的，
+        但隔离契约（§2.2）不该由"调用方记得传对 id"来保证——带上另外两个键之后，
+        跨 user 取数**结构上做不到**。
 
-        `ROW_NUMBER() OVER (PARTITION BY user_id, session_id ORDER BY chunk_ordinal, local_index)`
-
-        ⚠ **稠密序必须是 0-based 连续的**：`merge_segments` 靠 `seq == end + 1` 判相邻。
-        `ROW_NUMBER()` 天然满足（有空洞的是 `chunk_ordinal`，不是 `seq`）。
-
-        ⚠ **排序键是 `(chunk_ordinal, local_index)`，不是 `event_time`**：`event_time`
-        在 session 内**没有区分度**（时间戳是 session 级的，两个数据集都如此），
-        用它排序会让邻域产生抖动（§6.1）。**顺序来自请求里的 chunk 序号**（D25）。
-
-        ⚠ 跨 session **永远看不到对方**（`WHERE` 里带着两个键），所以"禁止跨对话拼接"
-        是结构性成立的，不靠调用方自觉（§2.2 的隔离契约 / §10）。
-
-        ⚠ 走的是 `UNIQUE(user_id, session_id, chunk_ordinal, local_index)` 建出的索引
-        （不变式 4）：`WHERE` 命中前两列作前缀，`ORDER BY` 命中后两列 ⇒ **不扫全表、不排序**。
+        ⚠ 走的是 `UNIQUE(user_id, session_id, request_id, local_index)` 建出的索引
+        （不变式 4）：三列前缀命中 `WHERE`、第四列命中 `ORDER BY` ⇒ **不扫全表、不额外排序**。
         """
         rows = conn.execute(
-            f"SELECT {_COLUMNS}, {_SEQ_COLUMN}"
-            " FROM qa_pairs WHERE user_id = ? AND session_id = ?"
-            " ORDER BY chunk_ordinal, local_index",
-            (user_id, session_id),
+            f"SELECT {_COLUMNS} FROM qa_pairs"
+            " WHERE user_id = ? AND session_id = ? AND request_id = ?"
+            " ORDER BY local_index",
+            (user_id, session_id, request_id),
         ).fetchall()
         return [_to_pair(r) for r in rows]
 
@@ -427,13 +612,8 @@ class SqliteStore:
         正文**不进** Qdrant payload；"取正文"这一步没有缓存层，也不应该有——
         正文的可信来源只有这一处。
 
-        ⚠ **这里回来的行 `seq` 全是 `-1`**（`QaPair.seq` 的默认值）：`seq` 是
-        **会话内**的稠密序，而"按主键取一批"跨 session、拿不到完整的会话上下文。
-        需要 `seq` 的调用方（`rank/neighbor.py`）自己去 `fetch_session_ordered` 取——
-        那边本来就要取整段来切窗口，顺带就能把 `id → seq` 补上。
-        ⚠ **别在这里用窗口函数"顺手"算**：`ROW_NUMBER() OVER (PARTITION BY ...)`
-        的窗口是 **`IN` 列表里那几行**，算出来的是"这一批里的第几个"，
-        不是"会话里的第几个"——**数值看起来完全正常**，而那正是最坏的一种错。
+        ⚠ 回来的行带着它们**真实的** `prev_memory_id` / `next_memory_id`（那两列就在表里）
+        ——D28 起邻接是**显式存储的**，不再需要"取回整个 session 再算下标"那一步。
         """
         if not pair_ids:
             return []
@@ -447,7 +627,12 @@ class SqliteStore:
         return [by_id[pid] for pid in pair_ids if pid in by_id]
 
     def iter_pairs(self, conn: sqlite3.Connection, *, user_id: str | None = None) -> list[QaPair]:
-        """枚举全部块（可选按 `user_id` 限定），按 `(session_id, chunk_ordinal, local_index)` 排序。
+        """枚举全部块（可选按 `user_id` 限定），按
+        `(session_id, request_id, local_index)` 排序。
+
+        ⚠ **这个顺序不是"会话顺序"**（D28 起不存在这种东西）：它只是"同一 session 的
+        各次 Add 挨在一起，每次 Add 内部按 `local_index`"——够用，因为调用方
+        （`tools/reindex.py` 的全量重建）要的就是"每条都写到"。
 
         ⚠ **只读访问器**，不改动任何既有语义。存在的理由是 §6.3 那条"Qdrant 可从 SQLite
         全量重建"：重建需要一次枚举，而让 `qdrant_store.py` 自己写 SQL 会破坏
@@ -457,13 +642,13 @@ class SqliteStore:
         """
         if user_id is None:
             rows = conn.execute(
-                f"SELECT {_COLUMNS}, {_SEQ_COLUMN} FROM qa_pairs"
-                " ORDER BY user_id, session_id, chunk_ordinal, local_index"
+                f"SELECT {_COLUMNS} FROM qa_pairs"
+                " ORDER BY user_id, session_id, request_id, local_index"
             ).fetchall()
         else:
             rows = conn.execute(
-                f"SELECT {_COLUMNS}, {_SEQ_COLUMN} FROM qa_pairs WHERE user_id = ?"
-                " ORDER BY session_id, chunk_ordinal, local_index",
+                f"SELECT {_COLUMNS} FROM qa_pairs WHERE user_id = ?"
+                " ORDER BY session_id, request_id, local_index",
                 (user_id,),
             ).fetchall()
         return [_to_pair(r) for r in rows]
@@ -475,44 +660,31 @@ class SqliteStore:
         **不是** Search 的过滤器（§2.2）。
         """
         rows = conn.execute(
-            f"SELECT {_COLUMNS}, {_SEQ_COLUMN} FROM qa_pairs WHERE user_id = ?"
-            " ORDER BY session_id, chunk_ordinal, local_index",
+            f"SELECT {_COLUMNS} FROM qa_pairs WHERE user_id = ?"
+            " ORDER BY session_id, request_id, local_index",
             (user_id,),
         ).fetchall()
         return [_to_pair(r) for r in rows]
 
-    def explain_session_ordered(
-        self, conn: sqlite3.Connection, user_id: str, session_id: str
+    def explain_by_request(
+        self, conn: sqlite3.Connection, user_id: str, session_id: str, request_id: str
     ) -> str:
-        """会话有序查询的 `EXPLAIN QUERY PLAN`（测试用：断言它**不扫全表、不额外排序**）。"""
+        """"取一次 Add 的全部块"那条查询的 `EXPLAIN QUERY PLAN`。
+
+        测试用：断言它**不扫全表、不额外排序**（走 `UNIQUE` 建出的那个索引）。
+        """
         rows = conn.execute(
             "EXPLAIN QUERY PLAN SELECT id FROM qa_pairs"
-            " WHERE user_id = ? AND session_id = ?"
-            " ORDER BY chunk_ordinal, local_index",
-            (user_id, session_id),
+            " WHERE user_id = ? AND session_id = ? AND request_id = ?"
+            " ORDER BY local_index",
+            (user_id, session_id, request_id),
         ).fetchall()
         return " | ".join(str(r["detail"]) for r in rows)
 
 
 _COLUMNS = (
-    "id, user_id, session_id, chunk_ordinal, local_index,"
-    " question, answer, status, event_time, request_id"
-)
-
-#: `seq` = **会话内稠密序**（0-based、连续）。它**不是列**，每次都现算。
-#:
-#: ⚠ **凡是要喂给扩窗 / 段合并的查询都必须带上它**——`QaPair.seq` 的默认值是 `-1`，
-#: 而 `-1` 一旦流进 `merge_segments` 的 `seq == end + 1` 判断，会让**所有块各自成段**
-#: （看起来像"检索质量差"，而不像 bug）。⇒ 这里用**一个片段**而不是各查询各写一份。
-_SEQ_COLUMN = (
-    # ⚠ `ROW_NUMBER()` 是 **1-based** 的，而本仓的 `seq` 语义是 **0-based**
-    #   （`rank/neighbor.py` 的 `merge_segments` 拿它当列表下标用）⇒ **必须减 1**。
-    #   不减的话两处会用**不同的基准**：合并的 `seq == end + 1` 判断照样自洽
-    #   （1-based 也是稠密的），但 `expand_neighbors` 里"给候选补 seq"那条路径
-    #   （`enumerate` 出来的 0-based 下标）与邻居的 1-based 会**混在同一个列表里**，
-    #   于是相邻判断在**跨候选/邻居**处静默错位——只表现为"段切得碎了一点"。
-    "(ROW_NUMBER() OVER (PARTITION BY user_id, session_id"
-    " ORDER BY chunk_ordinal, local_index) - 1) AS seq"
+    "id, user_id, session_id, request_id, local_index,"
+    " prev_memory_id, next_memory_id, question, answer, status, event_time"
 )
 
 
@@ -524,14 +696,12 @@ def _to_pair(row: sqlite3.Row) -> QaPair:
         id=row["id"],
         user_id=row["user_id"],
         session_id=row["session_id"],
-        chunk_ordinal=row["chunk_ordinal"],
+        request_id=row["request_id"],
         local_index=row["local_index"],
+        prev_memory_id=row["prev_memory_id"],
+        next_memory_id=row["next_memory_id"],
         question=row["question"],
         answer=row["answer"],
         status=status,
         event_time=row["event_time"],
-        request_id=row["request_id"],
-        # `seq` 只有带 `_SEQ_COLUMN` 的查询才填得上（`fetch_pairs_by_ids` 就没带）。
-        # 其余查询留 `-1`：它**不是列**，谁都不该拿它当持久字段用。
-        seq=row["seq"] if "seq" in row.keys() else -1,  # noqa: SIM118 — Row 没有 __contains__
     )

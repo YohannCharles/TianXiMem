@@ -14,6 +14,16 @@
 把失败包装成 200 会让 AML 认为本批已成功 ⇒ **那批记忆永远不会重试** ⇒
 SQLite 与 Qdrant 永久不一致 ⇒ **某些记忆永远检索不到，且没有任何报错**。
 这正是本项目最不能接受的失败类型。
+
+## 唯一一处"重试也没用"的非 200：**409**（D28）
+
+`request_id` 相同、`payload_hash` 不同 ⇒ `PayloadMismatchError` ⇒ **409**。
+它**不是**服务端的暂时故障，重试一百次也还是这个结果；但契约里没有比"非 200"
+更好的表达方式（§2.1 只定义了 200）。
+
+⇒ 它的价值是**把原因说清楚**（响应体里写着"同 id 不同 payload"），而不是：
+* 伪装成 500 —— 那会让排查方向跑到"下游是不是挂了"
+* 静默当重放 —— 那会让**两份不同记忆里的一份凭空消失**，而检索侧看不出来
 """
 
 from __future__ import annotations
@@ -23,6 +33,8 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+from tianxi_am.pairing import PayloadMismatchError
 
 __all__ = ["RetryableError", "register_error_handlers"]
 
@@ -46,6 +58,17 @@ def register_error_handlers(app: FastAPI) -> None:
     async def _retryable(request: Request, exc: RetryableError) -> JSONResponse:
         logger.warning("可重试失败：%s", exc)
         return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+    @app.exception_handler(PayloadMismatchError)
+    async def _conflict(request: Request, exc: PayloadMismatchError) -> JSONResponse:
+        """同一个 `request_id` 收到了不同的 payload（D28）——**409，不是 500**。
+
+        ⚠ 它**没有写坏任何东西**：冲突是在守卫那一步判出来的，事务整体回滚 ⇒
+        真源里那一批仍是**第一次**投进来的那份。这一条有测试钉着
+        （`tests/test_idempotency.py::test_conflicting_payload_leaves_the_first_one_intact`）。
+        """
+        logger.warning("request_id 冲突（同 id 不同 payload）：%s", exc)
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:

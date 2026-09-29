@@ -28,7 +28,7 @@ qdrant_store.py   collection 建/写/查、payload 过滤、**按传入参数执
 
 | | SQLite（真源） | Qdrant（派生索引） |
 | -- | -- | ---- |
-| 存 | QA 对正文、`status`、`chunk_ordinal` + `local_index`、`event_time`、`id` | 向量（`dense` + `bm25`）+ 过滤键 payload |
+| 存 | QA 对正文、`status`、`(request_id, local_index)`、`prev` / `next`、`event_time`、`id` | 向量（`dense` + `bm25`）+ 过滤键 payload |
 | 不存 | 向量 | **正文** |
 | 能做的事 | 事务、关系查询 | 向量检索、payload 过滤、**按给定参数**执行 RRF 融合 |
 | 不能做的事 | 向量检索 | 跨 point 事务、关系查询 |
@@ -44,32 +44,32 @@ qdrant_store.py   collection 建/写/查、payload 过滤、**按传入参数执
 
 ```sql
 qa_pairs(
-  id             TEXT PRIMARY KEY,     -- hash(user_id, session_id, chunk_ordinal, local_index)，位置派生
+  id             TEXT PRIMARY KEY,     -- hash(user_id, session_id, request_id, local_index)，位置派生
   user_id        TEXT NOT NULL,        -- 隔离契约
   session_id     TEXT NOT NULL,
-  chunk_ordinal  INTEGER NOT NULL,     -- 从 request_id 解析（D25）
-  local_index    INTEGER NOT NULL,     -- 该批组合出的块序号（D25）
+  request_id     TEXT NOT NULL,        -- 写下这一行的 Add；**opaque：只做溯源 + 位置的一半**（D28）
+  local_index    INTEGER NOT NULL,     -- 它在【那一次 Add 的块列表】里的 0-based 序号（D28）
+  prev_memory_id TEXT,                 -- Add 内**显式**邻接（D28）：只连完整 QA，
+  next_memory_id TEXT,                 -- 不完整的块（A-only / Q-only）恒为 NULL
   question       TEXT,                 -- 可空
   answer         TEXT,                 -- 可空
   status         TEXT NOT NULL,        -- 'complete' | 'pending'（D24 起写入恒为 complete）
-  event_time     INTEGER,              -- Unix 毫秒，取该对首条消息的 timestamp，可空
-  request_id     TEXT NOT NULL         -- 最后触碰该行的 Add；**不承担幂等职责**
+  event_time     INTEGER               -- Unix 毫秒，取该对首条消息的 timestamp，可空
 )
-UNIQUE(user_id, session_id, chunk_ordinal, local_index);
+UNIQUE(user_id, session_id, request_id, local_index);
 
 applied_batches(
-  request_id  TEXT PRIMARY KEY,        -- AML 的 Add request_id，天然唯一
-  user_id     TEXT NOT NULL,
-  session_id  TEXT NOT NULL,
-  applied_at  INTEGER NOT NULL
+  request_id   TEXT PRIMARY KEY,       -- AML 的 Add request_id，天然唯一
+  user_id      TEXT NOT NULL,
+  session_id   TEXT NOT NULL,
+  payload_hash TEXT,                   -- 规范化 payload 的 sha256（D28）；NULL = 旧行（未知⇒放行）
+  applied_at   INTEGER NOT NULL
 )
 ```
 
-> ⚠ **位置列是 `chunk_ordinal` + `local_index`**，而**相邻性不由它们表达**
-> （chunk 序号可以跳号），由一条读时现算的稠密序：
-> `ROW_NUMBER() OVER (PARTITION BY user_id, session_id ORDER BY chunk_ordinal, local_index) - 1`。
-> ⚠ `ROW_NUMBER()` 是 **1-based**，**必须减 1**——忘了会在该列上混基，直接破坏相邻判定。
-> 落点：`sqlite_store._SEQ_COLUMN`，入口 `fetch_session_ordered()`。
+> ⚠ **位置是 `(request_id, local_index)`，相邻性由 `prev_memory_id` / `next_memory_id`
+> 显式给出**（D28）——**没有**"会话内稠密序 `seq`"这种东西了（它随 D28 一起删掉：
+> 跨 Add 不存在可信的顺序，按下标推相邻会**跨 Add 拼接到一起**而不报错）。
 
 **设计原则**（§6.1）：
 
@@ -85,21 +85,23 @@ applied_batches(
 
 | # | 不变式 | 为什么 |
 | --- | --- | --- |
-| **1** | `id` **位置派生** `hash(user_id, session_id, chunk_ordinal, local_index)`（D25） | 用内容哈希会在内容变时变 `id`，留下**孤儿 point** |
-| **2** | 邻域由**读时稠密序** `seq` 现算（D25）：chunk 序号跳号**不破坏相邻**，而"中间真的少了一块"仍被抓住 | `event_time` 保证不了 session 内顺序 ⇒ 稠密序必须**按位置**算，**不能按时间** |
+| **1** | `id` **位置派生** `hash(user_id, session_id, request_id, local_index)`（D28，`request_id` 作为整体参与、**不解析**） | 用内容哈希会在内容变时变 `id`，留下**孤儿 point** |
+| **2** | 邻接由**存储里的显式指针**给出（D28）：`prev` / `next` 在**写下时**就按"只连完整 QA"算好，跨 Add 永不连 | 跨 Add 没有可信顺序（`request_id` 不透明）⇒ 任何"推出来的"相邻性都会**跨 Add 拼接** |
 | **3** | `applied_batches` **只增不改**，应用成功时**在同一事务里插入** | AML 重试是**正常行为**；没有它，正常重试就得靠撞 `UNIQUE` 兜（D25 之后撞得响，但那会把重试变成 500） |
-| **4** | `UNIQUE(user_id, session_id, chunk_ordinal, local_index)` **既保唯一、又是 `ORDER BY` 的键** | 唯一性防同一位置被写两次；`ORDER BY` 决定 `seq`，进而决定**谁跟谁相邻** |
+| **4** | `UNIQUE(user_id, session_id, request_id, local_index)` **既保唯一、又是"取一次 Add"的排序键** | 唯一性防同一位置被写两次；`ORDER BY local_index` 是 `fetch_by_request` 的顺序 |
 | **5** | 缓存键 = **渲染后文本的哈希**（实现在 [`../embed/`](../embed/)） | **不能用 `id`**——同一位置的内容若变了而 `id` 不变，用 `id` 会拿到**陈旧向量** |
 
 > **不变式 1 与 5 的方向正好相反**，这是故意的：`id` 要**稳定**（所以位置派生），缓存键要**跟着内容变**（所以内容哈希）。两者互换都会静默出错。
 
 **幂等一律查 `applied_batches`**——`qa_pairs.request_id` **不承担幂等职责**（§6.1）。它记的是"哪一批写下了这一行"，而守卫要回答的是"这批被应用过吗"——两件事。旁表是唯一记着后者的地方，还带着 `user_id` / `session_id` / `applied_at`。
 
-**位置不能与既有行撞车**：`id` 是位置派生的，而写入是 upsert ⇒ **同一位置被写两次会静默覆盖**。
-位置是**请求里带来的** `(chunk_ordinal, local_index)`（D25）——所以风险是
-**"两个不同的 Add 声称同一个 chunk 序号"**（重复投递一批、或平台侧序号错乱）。
-那种情况下 UPSERT 会覆盖，**而 `applied_batches` 只能挡住完全相同的 `request_id`**。
-⚠ **容易误读的一点**：组合的边界是**一次 Add**（D24），位置的作用域仍是**整个 session**——两者不是一回事。
+**位置由请求唯一决定**（D28）：`(request_id, local_index)` 里的两半**都来自这一次请求**
+（`request_id` 原样、`local_index` 是本批组合的产物）⇒ **两个不同的 Add 不可能撞位置**
+（`request_id` 不同 ⇒ `id` 不同）。唯一能撞的是"**同一批被写两次**"，而那由
+`applied_batches` 守卫 + `UNIQUE` 两道一起挡。
+
+⚠ **D28 之后组合与位置是同一个作用域**（都是一次 Add）——D25 时代那个"组合按 Add 切、
+位置按 session 算"的错位**没有了**。
 
 > **`status` 恒为 `'complete'`**（D24）：块在写下那一刻就是最终形状，
 > 没有 pending、没有 repair、**没有任何后台任务会回头改这些行**。`'pending'` 仍在取值域里

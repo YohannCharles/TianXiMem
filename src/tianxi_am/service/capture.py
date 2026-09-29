@@ -2,15 +2,20 @@
 
 ## 它为什么存在
 
-**不是为了功能，是为了"看见"**，两件事：
+**不是为了功能，是为了"看见"**：
 
-1. **S6**：平台的 `request_id` 到底长什么样（是否真带 `chunk-<n>`、序号在不在末尾）
-   ——我们**从没见过**它，而 D25 的位置模型整个押在这个假设上
-   （[`../../../docs/open-questions.md`](../../../docs/open-questions.md) 的 S6 记着
-   "来源是团队告知、不是一手文档"）。这个文件是**唯一能直接看到**它的地方
-   （另一条路是问主办方）。
+1. **它已经干掉过一次事故（S6，2026-09-29）**：官方的 `request_id` 到底长什么样，
+   我们此前只听过转述，而 D25 的位置模型整个押在那个转述上。它抓到的真实请求是
+   `r_3115…` 这种**不透明 id** ⇒ 解析必然失败 ⇒ **Add 全挂** ⇒ 直接催生了 **D28**
+   （`request_id` 回到 opaque string）。
 2. **契约核验**：官方实发请求的形状——字段名、`timestamp` 的单位、`top_k` 的值、
    有没有未知字段。这些在本地只能猜（harness 是我们自己写的）。
+   ⚠ **D28 起它不再解析 `request_id`**（那个解析器已经删了）——它只把**原文**记下来，
+   形状的判断留给读的人（见 `deploy/CLAUDE.md` §0.6 的判据表）。
+
+**记哪些**：`/add` 与 `/search`（`CAPTURED_PATHS`）——**任何形状都记**，
+包括不合 schema 的 422 与内部异常导致的 500（它跑在路由与校验**之前**）。
+`/health` **刻意不记**（平台探活会刷屏，零核验价值）。
 
 ## 四条纪律（每一条都很好违反，所以写在这里）
 
@@ -24,10 +29,15 @@
    [`../observability/metrics.py`](../observability/metrics.py) 的 `SnapshotMetricsSink`
    ——"指标是诊断，不能因为它写不进去就让一次 Search 变成 500"。
 
-## 为什么是 JSONL
+## 为什么是 JSONL，以及**为什么要轮转**
 
 一行一次请求，追加写、随时 `tail` / `jq`；写坏只坏一行，不会毁掉整份。
 每行都带 `kind`，让文件自己说明自己（`meta` / `req` / `truncated`）。
+
+⚠ **一轮 Full 的请求原文按 ~1.5 GB 估**（§2.2 的 0.5–2 天），而**单个 1.5 GB 的 JSONL
+根本打不开**——诊断产物打不开就等于没记。⇒ **每 `capture.max_bytes`（默认 50 MiB）
+换一份文件**，文件名见 `RequestCapture._file_for`。
+**没有总量上限**：写满一块盘是"忘关"的代价，由人盯着（跑完记得 `capture.enabled: false`）。
 
 ## ⚠ 一个必须知道的边界
 
@@ -48,9 +58,6 @@ from typing import Any, Final, TextIO
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from tianxi_am.common.config import DEFAULT_CHUNK_ORDINAL_PATTERN
-from tianxi_am.pairing.pairing import parse_chunk_ordinal
-
 __all__ = ["CAPTURED_PATHS", "CaptureMiddleware", "RequestCapture"]
 
 logger = logging.getLogger(__name__)
@@ -69,53 +76,53 @@ def _now_iso() -> str:
     return datetime.now(UTC).astimezone().isoformat(timespec="milliseconds")
 
 
-def _try_parse_chunk_ordinal(request_id: str, pattern: str) -> int | None:
-    """**只读地**用当前正则试解析；取不到返回 `None`，**绝不抛**。
-
-    ⚠ 这不是校验，是**观测**：解析失败正是 S6 要看的那一个信号，所以它绝不能在
-    这里变成异常。真正的失败判定在 `pairing.parse_chunk_ordinal`——那是请求路径上的事，
-    本模块是**旁路**。
-    """
-    try:
-        return parse_chunk_ordinal(request_id, pattern)
-    except (ValueError, TypeError):
-        return None
-
-
 class RequestCapture:
-    """把一次请求写成一行 JSONL。**没打开成功时是一个 no-op 对象。**
+    """把一次请求写成一行 JSONL，**写满一份就换下一份**（轮转）。
+
+    没打开成功时是一个 no-op 对象（`enabled` 为 `False`，所有写入静默跳过）。
+
+    ## 文件怎么分
+
+    | 文件 | 什么时候 |
+    | --- | --- |
+    | `<path>`（配置里那个） | 第 1 份 |
+    | `<stem>.part2<suffix>`、`.part3`… | 第 2、3… 份（写满即转） |
+
+    每份的 `meta` 行带着 `file_seq` ⇒ **光看文件自己就知道它是第几份**。
 
     ## 线程安全
 
     `--workers 1`（§15）⇒ 只有一个进程，但 FastAPI 的 `def` 路由跑在**线程池**里，
     而本类的写入点在**响应边界**上（事件循环 + 线程池都可能碰到它）⇒ 用一把锁把
-    "判断是否超限 + 写 + 计数"做成一个原子段。跨进程不需要（单 worker）。
+    "判断该不该转 + 写 + 计数"做成一个原子段。跨进程不需要（单 worker）。
     """
 
-    def __init__(
-        self,
-        *,
-        path: str | Path,
-        max_bytes: int,
-        chunk_ordinal_pattern: str = DEFAULT_CHUNK_ORDINAL_PATTERN,
-    ) -> None:
+    def __init__(self, *, path: str | Path, max_bytes: int) -> None:
         self._path = Path(path)
         self._max_bytes = max_bytes
-        #: ⚠ 与请求路径**同一个**模式（`ingest.chunk_ordinal_pattern`）——
-        #: 记录里的 `chunk_ordinal` 必须反映"服务此刻会怎么解析"，不是另一套口径。
-        self._pattern = chunk_ordinal_pattern
         self._lock = threading.Lock()
         self._fh: TextIO | None = None
+        #: 当前是第几份（1 = 配置里那个路径）。
+        self._seq = 0
+        #: **当前文件**已写的字节数 / 行数。
         self._written = 0
+        self._lines_in_file = 0
+        #: 累计写出的行数（跨所有份，含 `meta` / `truncated`）——测试与诊断用。
         self._lines = 0
 
     # ── 生命周期 ────────────────────────────────────────────────────────
 
+    def _file_for(self, seq: int) -> Path:
+        """第 `seq` 份的路径。**第 1 份就是配置里写的那个路径**（文档与命令都指着它）。"""
+        if seq <= 1:
+            return self._path
+        return self._path.with_name(f"{self._path.stem}.part{seq}{self._path.suffix}")
+
     def open(self) -> bool:
-        """打开文件（追加）并写一行 `meta`。**返回是否可用**——不复用异常。
+        """打开第 1 份（追加）并写一行 `meta`。**返回是否可用**——不复用异常。
 
         ⚠ **失败不抛**：采集是诊断，不该有能力让服务起不来（那会变成"没进场"，
-        是最坏的失败）。但**必须响亮**——调用方（`service/app.py` 的 `build_capture`）
+        是最坏的一类失败）。但**必须响亮**——调用方（`service/app.py` 的 `build_capture`）
         会把 ERROR 打出来，否则"开了却没记到"就成了一次静默失败。
         """
         try:
@@ -126,23 +133,12 @@ class RequestCapture:
                 "请求采集**打不开文件**，本次运行将不记录任何请求：%s（%s）", self._path, exc
             )
             return False
-        self._fh = fh
-        self._emit(
-            {
-                "kind": "meta",
-                "ts": _now_iso(),
-                "path": str(self._path),
-                "max_bytes": self._max_bytes,
-                "chunk_ordinal_pattern": self._pattern,
-                "note": (
-                    "TianXi_AM 的请求原文采集。每一行 `kind=req` 是一次 `/add` 或 `/search`："
-                    "`body` 是**原样**收到的请求体。`chunk_ordinal` = 服务用当前的 "
-                    "`ingest.chunk_ordinal_pattern` 解析 `request_id` 的结果，"
-                    "**null 表示解析不出来**（那正是要看的东西）。"
-                    "⚠ 只在 `capture.enabled=true` 时才有这个文件。"
-                ),
-            }
-        )
+        with self._lock:
+            self._fh = fh
+            self._seq = 1
+            self._written = 0
+            self._lines_in_file = 0
+            self._write_meta_locked()
         return True
 
     def close(self) -> None:
@@ -156,16 +152,27 @@ class RequestCapture:
 
     @property
     def path(self) -> Path:
+        """**第 1 份**的路径（= 配置里那个）。此刻在写哪一份见 `current_path`。"""
         return self._path
 
     @property
+    def current_path(self) -> Path:
+        """**此刻正在写**的那一份。"""
+        return self._file_for(self._seq)
+
+    @property
+    def files_written(self) -> int:
+        """已经开过几份（1 = 还没转过）。"""
+        return self._seq
+
+    @property
     def enabled(self) -> bool:
-        """此刻**真的在记**吗（打开成功且还没写满）。"""
+        """此刻**真的在记**吗（打开成功、且还没到总量上限）。"""
         return self._fh is not None
 
     @property
     def lines(self) -> int:
-        """已写出的行数（含 `meta` / `truncated` 标记）——测试与诊断用。"""
+        """累计写出的行数（含 `meta` / `truncated` 标记）——测试与诊断用。"""
         return self._lines
 
     # ── 记录 ────────────────────────────────────────────────────────────
@@ -187,11 +194,12 @@ class RequestCapture:
         """写一行。**任何失败都只留 WARNING**（纪律 4）。
 
         `error` = 未被处理的异常类型名（那时 `status` 仍是 `None`：异常要穿过本层才被
-        `errors.py` 的通用处理器转成 500，见 `capture` 的说明）。
+        `errors.py` 的通用处理器转成 500，见本模块 docstring）。
         """
         entry: dict[str, Any] = {
             "kind": "req",
             "ts": _now_iso(),
+            "file_seq": self._seq,
             "method": method,
             "path": path,
             "status": status,
@@ -217,73 +225,132 @@ class RequestCapture:
             else:
                 entry["body"] = payload
         if isinstance(payload, dict):
+            # ⚠ **只把 `request_id` 抄出来，不解析它**（D28）：它是不透明字符串，
+            #   这里取出来只是为了让人**一眼看见它长什么样**。
             request_id = payload.get("request_id")
             if isinstance(request_id, str):
                 entry["request_id"] = request_id
-                entry["chunk_ordinal"] = _try_parse_chunk_ordinal(request_id, self._pattern)
         if response_body:
             entry["response_body"] = response_body.decode("utf-8", errors="replace")
 
         self._emit(entry)
 
-    # ── 写 ──────────────────────────────────────────────────────────────
+    # ── 写（**本类唯一碰文件的地方**）────────────────────────────────────
 
     def _emit(self, entry: dict[str, Any]) -> None:
-        """把一条记录写出去。**唯一碰文件的地方**（截断判断也在这里）。"""
+        """写一条记录；必要时**先转下一份**。"""
         line = json.dumps(entry, ensure_ascii=False) + "\n"
         size = len(line.encode("utf-8"))
         with self._lock:
-            fh = self._fh
-            if fh is None:
+            if self._fh is None:
                 return
-            if self._written + size > self._max_bytes:
-                # ⚠ 护栏：`capture.enabled` 忘了关时，不该由它把 `/data` 卷写满
-                #   （Full run 连跑 0.5–2 天，§2.2）。写一行截断标记后**停止记录**。
-                self._fh = None
-                self._write_marker(fh)
+            # ⚠ `_lines_in_file > 0`：**别让 meta 行自己触发轮转**——它在每份文件的开头，
+            #   而"新文件刚开就被判定写满"会让轮转在一个文件里无限递归。
+            if (
+                self._lines_in_file > 0
+                and self._written + size > self._max_bytes
+                and not self._rotate_locked()  # ← 短路的最后一环：只有前两条成立才会转
+            ):
+                self._stop_locked()
                 return
-            try:
-                fh.write(line)
-                # flush 而不是 fsync：这是诊断日志，不需要崩溃持久性，
-                # 而 fsync 会在**每个请求**的关键路径上等一次磁盘。
-                fh.flush()
-            except OSError:
-                logger.warning(
-                    "请求采集写盘失败，**本次运行不再记录**：%s", self._path, exc_info=True
-                )
-                self._fh = None
-                return
-            self._written += size
-            self._lines += 1
+            self._append_locked(line)
 
-    def _write_marker(self, fh: TextIO) -> None:
-        """写"已写满、停止记录"那一行，然后关掉文件。"""
-        marker = json.dumps(
-            {
-                "kind": "truncated",
-                "ts": _now_iso(),
-                "written_bytes": self._written,
-                "max_bytes": self._max_bytes,
-                "note": (
-                    "已达 `capture.max_bytes` ⇒ **从这里开始不再记录**。"
-                    "把 `capture.enabled` 关掉，或调大 `capture.max_bytes` 后重跑。"
-                ),
-            },
-            ensure_ascii=False,
-        )
+    def _append_locked(self, line: str) -> bool:
+        """把一行追加到当前文件（**已持锁**）。写失败 ⇒ 停止记录并返回 `False`。"""
+        fh = self._fh
+        if fh is None:
+            return False
         try:
-            fh.write(marker + "\n")
+            fh.write(line)
+            # flush 而不是 fsync：这是诊断日志，不需要崩溃持久性，
+            # 而 fsync 会在**每个请求**的关键路径上等一次磁盘。
             fh.flush()
-            fh.close()
-        except OSError:  # pragma: no cover — 连标记都写不进去时没有可做的事
-            logger.warning("请求采集写截断标记失败：%s", self._path, exc_info=True)
+        except OSError:
+            logger.warning(
+                "请求采集写盘失败，**本次运行不再记录**：%s", self.current_path, exc_info=True
+            )
+            self._fh = None
+            return False
+        size = len(line.encode("utf-8"))
+        self._written += size
         self._lines += 1
+        self._lines_in_file += 1
+        return True
+
+    def _rotate_locked(self) -> bool:
+        """换下一份（**已持锁**）。**开不了新文件**（盘满 / 权限）⇒ `False`。"""
+        nxt = self._seq + 1
+        new_path = self._file_for(nxt)
+        try:
+            fh = new_path.open("a", encoding="utf-8", newline="\n")
+        except OSError:
+            logger.warning("请求采集**开不了下一份**（%s）⇒ 停止记录", new_path, exc_info=True)
+            return False
+        old, self._fh = self._fh, fh
+        self._seq = nxt
+        self._written = 0
+        self._lines_in_file = 0
+        if old is not None:
+            try:
+                old.close()
+            except OSError:  # pragma: no cover
+                logger.warning("请求采集关闭上一份失败：%s", new_path, exc_info=True)
         logger.warning(
-            "请求采集已达上限 %d 字节 ⇒ **停止记录**（文件：%s）。"
-            "后续请求照常处理，只是不再进这个文件。",
-            self._max_bytes,
-            self._path,
+            "请求采集写满一份（%d 字节）⇒ 已转到第 %d 份：%s", self._max_bytes, nxt, new_path
         )
+        self._write_meta_locked()
+        return True
+
+    def _write_meta_locked(self) -> None:
+        """每份文件的头一行——**它就是"这份是什么、第几份"的唯一说明**。"""
+        self._append_locked(
+            json.dumps(
+                {
+                    "kind": "meta",
+                    "ts": _now_iso(),
+                    "file_seq": self._seq,
+                    "path": str(self.current_path),
+                    "max_bytes": self._max_bytes,
+                    "note": (
+                        "TianXi_AM 的请求原文采集。每一行 `kind=req` 是一次 `/add` 或 "
+                        "`/search`：`body` 是**原样**收到的请求体，`request_id` 是从里面"
+                        "取出来的那一个字段（**不做任何解析**——D28 之后它是不透明字符串）。"
+                        f"本份是第 {self._seq} 份；写满 {self._max_bytes} 字节就换下一份"
+                        "（文件名形如 `<name>.part2.jsonl`）。"
+                        "⚠ 只在 `capture.enabled=true` 时才有这些文件。"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    def _stop_locked(self) -> None:
+        """**转不到下一份**（盘满 / 权限）：写一行标记、关掉文件、停止记录（已持锁）。"""
+        fh = self._fh
+        self._append_locked(
+            json.dumps(
+                {
+                    "kind": "truncated",
+                    "ts": _now_iso(),
+                    "file_seq": self._seq,
+                    "written_bytes": self._written,
+                    "max_bytes": self._max_bytes,
+                    "note": (
+                        "**开不了下一份文件**（盘满 / 权限？）⇒ 从这里开始不再记录"
+                        "（后续请求照常处理，只是不进文件）。"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+        self._fh = None
+        if fh is not None:
+            try:
+                fh.close()
+            except OSError:  # pragma: no cover
+                logger.warning("请求采集关闭文件失败：%s", self.current_path, exc_info=True)
 
 
 class CaptureMiddleware:

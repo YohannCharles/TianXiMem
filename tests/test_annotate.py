@@ -151,17 +151,19 @@ def _dress(chain) -> list[str]:
     pairs = []
     for ordinal, question, answer in _PAIRS:
         with chain.store.transaction() as conn:
+            # 每次 Add 一块（D28：位置 = `(request_id, local_index)`，彼此不相邻）
             pair = chain.store.insert_pair(
                 conn,
                 user_id="u1",
                 session_id="s1",
-                chunk_ordinal=ordinal,
+                request_id=f"r-annotate-{ordinal}",
                 local_index=0,
+                prev_memory_id=None,
+                next_memory_id=None,
                 question=question,
                 answer=answer,
                 status="complete",
                 event_time=_EVENT_TIME,
-                request_id="seed",
             )
         ids.append(pair.id)
         pairs.append(pair)

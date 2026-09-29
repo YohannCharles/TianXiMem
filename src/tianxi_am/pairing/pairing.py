@@ -17,6 +17,7 @@
 
 **不同 Add 之间永不组合**：不拼 QA、不合并连续 assistant、不等下一个 chunk、
 不 repair、不重新 embedding。即使 A 与 B 属于同一 session，也各自独立成块。
+**D28 起邻接也只在这一个作用域内**（`link_blocks`）：跨 Add 既不组合、也不建立 prev/next。
 
 ⚠ **这条推翻了 §6.2 / §6.5 的字面与 D20**（那两条的配对作用域是**整个 session**，
 一个 QA 对可以跨批次）。理由、实测代价与边界见
@@ -31,11 +32,8 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-
-from tianxi_am.common.config import DEFAULT_CHUNK_ORDINAL_PATTERN
 
 __all__ = [
     "MemoryBlock",
@@ -45,7 +43,7 @@ __all__ = [
     "encode_answer",
     "is_user",
     "join_question",
-    "parse_chunk_ordinal",
+    "link_blocks",
 ]
 
 
@@ -79,37 +77,6 @@ def is_user(message: Message) -> bool:
     它们进同一个 block，且**每条都带 `[role]` 标记**（见 `encode_answer`）。
     """
     return message.role == "user"
-
-
-def parse_chunk_ordinal(
-    request_id: str, pattern: str = DEFAULT_CHUNK_ORDINAL_PATTERN
-) -> int:
-    """从 `request_id` 里取出**这一批的序号**（D25）——位置模型的一半。
-
-    平台实发形如 `eval:<run_id>:locomo_refined:conv-0:chunk-3`；本仓 harness 用
-    `<user_id>|<session_id>|3`。默认正则两个都认（`re.search`，取第 1 个捕获组）。
-
-    ## 取不到就**响亮失败**，没有回退
-
-    ⚠ **这里绝不回退到"`MAX+1` 现算一个位置"**。回退会把 D25 要修的那个 bug
-    偷偷带回来：位置一旦由到达顺序决定，`chunk-1` 先于 `chunk-0` 提交就会拿到更小的位置，
-    而 §10 扩窗、§11.2 段合并把"位置相邻"当成"会话相邻"⇒ **把对话顺序读反，且不报错**。
-
-    ⇒ 宁可让这一批**非 200**（AML 会重试；格式真变了就该立刻被人看见），
-    也不要安静地跑完一整场、留下一份顺序错乱的记忆。**这正是 Smoke 该验的那类未知。**
-
-    ⚠ 模式**可配置**（`ingest.chunk_ordinal_pattern`）⇒ 平台换了形状**不必改代码**。
-    这一对"可配置 + 响亮失败"就是 §12.1 R1 对冲 3 要的形态。
-    """
-    match = re.search(pattern, request_id)
-    if match is None:
-        raise ValueError(
-            f"request_id 里取不出 chunk 序号：{request_id!r}\n"
-            f"  当前模式：{pattern!r}（配置项 `ingest.chunk_ordinal_pattern`）\n"
-            "  ⚠ 位置由它派生（D25），**取不到就不能落库**——回退到按到达顺序分配位置，"
-            "会在乱序/并发到达时**静默把对话顺序读反**。"
-        )
-    return int(match.group(1))
 
 
 def encode_answer(messages: Sequence[Message]) -> str:
@@ -240,6 +207,34 @@ def compose_memory_blocks(messages: Sequence[Message]) -> tuple[MemoryBlock, ...
         blocks.append(_block_from(*role_blocks[i:end]))
         i = end
     return tuple(blocks)
+
+
+def link_blocks(
+    blocks: Sequence[MemoryBlock],
+) -> tuple[tuple[int | None, int | None], ...]:
+    """**Add 内的邻接链**：每个块的 `(prev_local_index, next_local_index)`（D28）。
+
+    ⚠ **只连完整 QA**（`MemoryBlock.is_paired`）。A-only / Q-only 照样存、照样 embedding、
+    照样能被检索到，但**不进链**——两侧都是 `None`。它们没有"上下文邻居"可言，
+    硬连上去只会让段合并把一段不完整的对话当成连续的。
+
+    ⚠ **这条链只在一次 Add 内成立**：跨 Add 不存在可信的全局序（D28），
+    所以这里**只看传进来的这一批块**，不看库、不看别的 Add（与组合规则同一个作用域）。
+
+    ⚠ 不完整块**只可能出现在两端**（组合规则决定：开头的非 user 段配不上 user、
+    结尾的 user 段配不上非 user），但实现**不依赖**这条性质——它扫一遍、只把完整的串起来，
+    所以将来组合规则变了也不会悄悄错位。
+
+    返回值与 `blocks` **等长同序**：第 i 项是第 i 个块的 `(前一块的 local_index,
+    后一块的 local_index)`。调用方把它翻成 `memory_id`（`store.make_pair_id`）。
+    """
+    links: list[tuple[int | None, int | None]] = [(None, None)] * len(blocks)
+    complete = [index for index, block in enumerate(blocks) if block.is_paired]
+    for position, index in enumerate(complete):
+        prev_index = complete[position - 1] if position else None
+        next_index = complete[position + 1] if position + 1 < len(complete) else None
+        links[index] = (prev_index, next_index)
+    return tuple(links)
 
 
 def _merge_consecutive_roles(messages: Sequence[Message]) -> tuple[RoleBlock, ...]:

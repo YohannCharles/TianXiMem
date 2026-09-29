@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import multiprocessing
 import os
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -152,17 +151,13 @@ DEFAULT_RADIUS: Final[int] = 2  # 同日 1 → 2，与 `default.yaml` 同一条�
 #: `neighbor.seed_placement` 的取值域（§11.2 的组内顺序消融，2026-09-25）。
 SEED_PLACEMENTS: Final[tuple[str, ...]] = ("keep", "front", "echo")
 
-#: `ingest.chunk_ordinal_pattern` 的默认值（D25）——**取 chunk 序号的那个正则**。
+#: ~~`ingest.chunk_ordinal_pattern`~~ —— **已删除（D28）**。
 #:
-#: 两种形态各一个分支（`re.search`，取**最后一个**捕获组）：
-#:
-#: * `chunk-3` —— 平台实发：`eval:<run_id>:locomo_refined:conv-0:chunk-3`
-#: * `|3`     —— 本仓 harness 的 `request_id_for()`：`<user_id>|<session_id>|3`
-#:
-#: ⚠ **只锚定末尾**：中间还有别的数字（`run_id` 里可能有、`conv-26` 里就有 `26`）
-#: ⇒ 不锚定会取到 `26`，而那样**每一批都会解析成同一个序号**，落库时撞 UNIQUE
-#: ——**响亮**，比静默错位好，但没必要去撞。
-DEFAULT_CHUNK_ORDINAL_PATTERN: Final[str] = r"(?:chunk-|\|)(\d+)\s*$"
+#: 它曾经是"从 `request_id` 里正则取 chunk 序号"的那个模式（D25 的位置模型）。
+#: 平台实发的是 `r_3115…` 这种**不透明 id**（2026-09-29 用请求采集抓到的真实请求），
+#: 于是那条路在真实流量上 **100% 失败**（`ValueError` → 500 → Add 全挂）。
+#: D28 把整个 `ingest` 配置段一并删掉：`request_id` 现在是 opaque string，
+#: 位置 = `(request_id, local_index)`。**不要再加回任何"解析 request_id"的配置项。**
 
 #: §7.3 的两个检索参数初值：每路进入 RRF 的候选池大小（`N`）与 `[w_bm25, w_dense]` 权重。
 #:
@@ -186,13 +181,12 @@ DEFAULT_WEIGHTS: Final[tuple[float, float]] = (0.5, 0.5)
 #: **这是观测值，不是规格**；换模型或换网关后要重新量。
 DEFAULT_RERANK_TIMEOUT_S: Final[float] = 30.0
 
-#: `capture.max_bytes` 的默认值：**写满就停**的上限（64 MiB）。
+#: `capture.max_bytes` 的默认值：**每份文件**写这么多就换下一份（50 MiB）。
 #:
-#: ⚠ 它不是"阈值"，是**护栏**：`capture.enabled` 是临时打开的诊断开关，而 Full run
-#: 连跑 0.5–2 天（§2.2）——忘了关的代价必须**有界**，不能是把 `/data` 卷写满。
-#: 实测量级：一次 Add 的请求体 ~1–5 KB、一次 Search ~0.1 KB ⇒ 64 MiB 够记
-#: **数万次**请求，远超一轮 Smoke。
-DEFAULT_CAPTURE_MAX_BYTES: Final[int] = 64 * 1024 * 1024
+#: ⚠ 它是**切分粒度，不是总量上限**：一轮 Full 的请求原文按 ~1.5 GB 估（§2.2），
+#: 而单个 1.5 GB 的 JSONL 打不开 ⇒ 分成 ~30 份、每份都能直接看。
+#: `capture.enabled` 忘了关的代价就是"记满一块盘"，由人盯着（跑完关掉）。
+DEFAULT_CAPTURE_MAX_BYTES: Final[int] = 50 * 1024 * 1024
 
 
 # ── 配置树 ─────────────────────────────────────────────────────────────
@@ -271,28 +265,6 @@ class RetrievalConfig:
     #: 要不要开是**待定的规格问题**，见 `embed/query_instruction.py`。
     query_instruction: str = ""
     rrf: RrfConfig = field(default_factory=RrfConfig)
-
-
-@dataclass(frozen=True, slots=True)
-class IngestConfig:
-    """`Add` 的接入口径（D25）。"""
-
-    #: 从 `request_id` 里**取 chunk 序号**的正则（D25）。
-    #:
-    #: 位置 = `(chunk_ordinal, local_index)`，而 chunk 序号是**唯一**从请求里拿的东西
-    #: ——它决定顺序、`id`、以及"位置不再需要读-改-写"。**取不到就响亮失败**
-    #: （`pairing.parse_chunk_ordinal`），**没有回退**：回退会把"乱序到达静默翻转顺序"
-    #: 那个 bug 偷偷带回来。
-    #:
-    #: 默认值同时匹配两种形态（`re.search` 语义）：
-    #:
-    #: * 平台实发：`eval:<run_id>:locomo_refined:conv-0:chunk-3`
-    #: * 本仓 harness：`<user_id>|<session_id>|3`
-    #:
-    #: ⚠ **格式假设的来源是团队告知，不是一手文档**（见 D25 的"关键依据"）。
-    #: 做成配置项是为了让"平台换了个形状"**不必改代码**——但**必须响亮失败**，
-    #: 否则我们会拿一个解析错的序号安静地跑完整场。
-    chunk_ordinal_pattern: str = DEFAULT_CHUNK_ORDINAL_PATTERN
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,7 +358,8 @@ class CaptureConfig:
 
     #: 开关。`false` ⇒ **不装中间件**（零开销、零行为差异）。
     enabled: bool = False
-    #: 写多少字节后**停止记录**（并写一行 `truncated` 标记）。见模块顶部的常量说明。
+    #: **每份文件**的字节上限，写满就换下一份（`<name>.part2.jsonl`…）。
+    #: 见模块顶部的常量说明——**它不是总量上限**。
     max_bytes: int = DEFAULT_CAPTURE_MAX_BYTES
     #: 落点（`TIANXI_CAPTURE_PATH`）。【路径归 env】——与 SQLite / 向量缓存同一条规矩。
     path: str = "var/capture/requests.jsonl"
@@ -409,7 +382,6 @@ class AppConfig:
     cache: CacheConfig = field(default_factory=CacheConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
-    ingest: IngestConfig = field(default_factory=IngestConfig)
     neighbor: NeighborConfig = field(default_factory=NeighborConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     packaging: PackagingConfig = field(default_factory=PackagingConfig)
@@ -450,7 +422,6 @@ _TOP_LEVEL_KEYS: Final[frozenset[str]] = frozenset(
         "storage",
         "models",
         "retrieval",
-        "ingest",
         "neighbor",
         "budget",
         "packaging",
@@ -654,17 +625,6 @@ def _retrieval(raw: object) -> RetrievalConfig:
     )
 
 
-def _ingest(raw: object) -> IngestConfig:
-    g = _group(raw, where="ingest", allowed={"chunk_ordinal_pattern"})
-    return IngestConfig(
-        chunk_ordinal_pattern=_str(
-            g.get("chunk_ordinal_pattern"),
-            where="ingest.chunk_ordinal_pattern",
-            default=DEFAULT_CHUNK_ORDINAL_PATTERN,
-        )
-    )
-
-
 def _neighbor(raw: object) -> NeighborConfig:
     g = _group(raw, where="neighbor", allowed={"expansion_seed_limit", "radius", "seed_placement"})
     placement = _str(g.get("seed_placement"), where="neighbor.seed_placement", default="keep")
@@ -783,21 +743,6 @@ def validate(cfg: AppConfig) -> AppConfig:
         raise ConfigError(f"`retrieval.rrf.weights` 不得为负：{[w_bm25, w_dense]!r}")
     if w_bm25 == 0 and w_dense == 0:
         raise ConfigError("`retrieval.rrf.weights` 两项不能同时为 0——那等于不检索")
-    # D25：位置由 `request_id` 的 chunk 序号派生 ⇒ 这个正则**必须在启动时就验**。
-    # 它是"取不到就响亮失败"的第一道：模式写错在启动时炸，而不是等第一批请求。
-    try:
-        compiled = re.compile(cfg.ingest.chunk_ordinal_pattern)
-    except re.error as exc:
-        raise ConfigError(
-            f"`ingest.chunk_ordinal_pattern` 不是合法正则：{cfg.ingest.chunk_ordinal_pattern!r}\n"
-            f"  正则引擎报：{exc}"
-        ) from exc
-    if compiled.groups != 1:
-        raise ConfigError(
-            f"`ingest.chunk_ordinal_pattern` 必须恰好有 **1** 个捕获组（chunk 序号），"
-            f"收到 {compiled.groups} 个：{cfg.ingest.chunk_ordinal_pattern!r}\n"
-            "  0 个 ⇒ 取不出序号；多个 ⇒ 不知道该用哪个。两种都会让位置失去依据（D25）。"
-        )
     if cfg.rerank.timeout_seconds <= 0:
         raise ConfigError(
             f"`rerank.timeout_seconds` 必须为正：{cfg.rerank.timeout_seconds}\n"
@@ -918,7 +863,6 @@ def load_config(
             cache=cache,
             models=_models(data.get("models")),
             retrieval=_retrieval(data.get("retrieval")),
-            ingest=_ingest(data.get("ingest")),
             neighbor=_neighbor(data.get("neighbor")),
             budget=_budget(data.get("budget")),
             packaging=_packaging(data.get("packaging")),

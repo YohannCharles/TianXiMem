@@ -78,7 +78,7 @@ def placeholder_score(rank: int) -> float:
 class ResponseItem:
     """`data[]` 的一项——**§2.1 的四个字段，一个不多**。
 
-    ⚠ 这里**没有** `session_id` / `chunk_ordinal` / `local_index` /
+    ⚠ 这里**没有** `session_id` / `request_id` / `local_index` /
     `source_memory_ids` 之类的内部字段。
     多余的键通常被忽略，但**没有理由冒这个险**。
     """

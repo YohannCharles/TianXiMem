@@ -172,7 +172,6 @@ def build_services(config: AppConfig) -> Services:
             qdrant=qdrant,
             embedder=embedder,
             inject_abs_time=config.packaging.inject_abs_time,
-            chunk_ordinal_pattern=config.ingest.chunk_ordinal_pattern,
         ),
         search=SearchPipeline(
             store=store,
@@ -224,15 +223,14 @@ def build_capture(config: AppConfig) -> RequestCapture | None:
     capture = RequestCapture(
         path=config.capture.path,
         max_bytes=config.capture.max_bytes,
-        # ⚠ 与请求路径**同一个**模式：记录里的 `chunk_ordinal` 必须反映"服务此刻
-        #   会怎么解析"，否则这份记录会指向一个没人用的口径（S6 要看的就是它）。
-        chunk_ordinal_pattern=config.ingest.chunk_ordinal_pattern,
     )
     if not capture.open():
         return None
     logger.warning(
-        "请求采集已开启：`/add` 与 `/search` 的**原文**会写进 %s（上限 %d 字节，写满即停）。"
-        "⚠ 它记的是官方发来的原始请求体——**跑完记得把 `capture.enabled` 关回去**。",
+        "请求采集已开启：`/add` 与 `/search` 的**原文**会写进 %s"
+        "（每份 %d 字节，写满自动换下一份：`.part2.jsonl`、`.part3.jsonl` …）。"
+        "⚠ 它记的是官方发来的原始请求体，**没有总量上限**——跑完记得把 "
+        "`capture.enabled` 关回去。",
         capture.path,
         config.capture.max_bytes,
     )

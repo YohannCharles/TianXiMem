@@ -1,13 +1,13 @@
 # pairing/ — 记忆块组合与落库
 
-**PRD**：§6.2（一个 QA 对是什么）· **D24**（一次 Add = 组合的唯一边界）· **D25**（位置由 `request_id` 的 chunk 序号派生）
+**PRD**：§6.2（一个 QA 对是什么）· **D24**（一次 Add = 组合的唯一边界）· **D28**（`request_id` 是 opaque string；邻接只在 Add 内）
 
 ## 本模块的构成
 
 ```text
 pairing.py   本批消息 → 记忆块（组合规则的**唯一实现**，纯函数）
-              + `parse_chunk_ordinal()`（从 request_id 取 chunk 序号，D25）
-apply.py     幂等守卫 → 组合 → 按 chunk 派生位置写入（一个事务）
+              + `link_blocks()`（Add 内邻接链：只连完整 QA，D28）
+apply.py     幂等守卫（含 payload 指纹）→ 组合 → 连链 → 按位置写入（一个事务）
 ```
 
 > ⚠ **D24（2026-09-27）之后没有"批次续接"**：`continuation.py` 已改名 `apply.py`，
@@ -62,32 +62,42 @@ apply.py     幂等守卫 → 组合 → 按 chunk 派生位置写入（一个�
 
 ---
 
-## 位置：`(chunk_ordinal, local_index)`（**D25**）
+## 位置：`(request_id, local_index)`（**D28**）
 
 ```text
-chunk_ordinal  从 request_id 解析（`parse_chunk_ordinal`）——**只能从那儿取**
-local_index    这一批组合出的块序号（`compose_memory_blocks` 的输出下标）
-id              hash(user_id, session_id, chunk_ordinal, local_index)
+request_id   原样来自请求的**整体**（opaque，一个字节都不解析）
+local_index  这一批组合出的块序号（`compose_memory_blocks` 的输出下标）
+id           hash(user_id, session_id, request_id, local_index)
 ```
 
 **两者都是请求的纯函数** ⇒ 没有共享计数器、没有读-改-写 ⇒
-**同 session 的 Add 可以并发**，**乱序到达也不翻转会话顺序**。
+**同 session 的 Add 可以并发**，而"到达顺序"**根本没有被表达过**。
 
-⚠ **取不到 chunk 序号 ⇒ 响亮失败**（非 200），**没有 `MAX+1` 回退**——
-那等于把"到达顺序是权威"这条假设悄悄带回来。格式住在
-`ingest.chunk_ordinal_pattern`（可配置，所以平台换形状不必改代码）。
-**这条格式假设的来源是团队告知、不是一手文档**（与 S2/S5 同类）——见 D25。
+> ⛔ **D25 的 `parse_chunk_ordinal` 已删除**（连 `ingest.chunk_ordinal_pattern` 这个配置项一起）。
+> 理由：**平台实发的是 `r_31156f4174…` 这种不透明 id**（2026-09-29 用请求采集抓到的真实请求，
+> 详见 [`../../../docs/decisions.md`](../../../docs/decisions.md) **D28**）⇒ 那条解析在真实流量上
+> **100% 失败**（`ValueError` → 500 → Add 全挂）。
+> **不要再加回任何"从 `request_id` 里取东西"的逻辑。**
 
-### 位置对齐 ≠ 组合边界
+### 邻接也在这一个作用域内：`link_blocks()`
+
+```text
+一次 Add 的块列表 → link_blocks() → 每个块的 (prev_local_index, next_local_index)
+                                     ↑ **只连完整 QA**（`MemoryBlock.is_paired`）
+```
+
+* A-only / Q-only **照样存、照样 embedding、照样能被检索到**，但**不进链**（两侧 `None`）
+* 指针在**写下时**就写死（`insert_pair` 一次 INSERT）——**没有回填、没有 UPDATE**
+* ⇒ 跨 Add **永远不相邻**：`Add1` 的末尾与 `Add2` 的开头在位置上看着接得上，
+  但链上就是断的（见 [`../rank/neighbor.py`](../rank/neighbor.py) 的合并判据）
 
 | | 作用域 |
 | --- | --- |
 | **组合**（哪些消息进同一个块） | **一次 Add**（D24） |
-| **位置的作用域** | `chunk_ordinal` 由**请求**给出 ⇒ 与"哪个 Add 先到"无关（D25） |
+| **位置与邻接** | **一次 Add**（D28） |
 
-**相邻性不走位置**，走 `store.fetch_session_ordered` 现算的稠密序 `seq`
-（`ROW_NUMBER() ... - 1`）——所以 chunk 序号**跳号不破坏相邻**，
-而"中间真的少了一块"仍然被抓住（见 [`../rank/neighbor.py`](../rank/neighbor.py)）。
+⇒ **一次 Add 的全部行为只由它自己的 payload 决定**：与到达顺序、与其他 Add、
+与 `request_id` 的形状**全都无关**。
 
 ---
 
