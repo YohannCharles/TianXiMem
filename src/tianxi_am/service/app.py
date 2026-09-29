@@ -295,6 +295,10 @@ def build_reranker(config: AppConfig) -> RemoteReranker | None:
         api_key=config.reranker_api_key,
         model=config.reranker_model,
         timeout=config.rerank.timeout_seconds,
+        # ⚠ **与 base_url 是同一件事的两半**：它说"对面那个网关收哪种线格式"。
+        #   两个网关互斥（vLLM 要 `queries` 数组、自研封装要 `query` 字符串），
+        #   而填错的表现是**每次检索都静默降级**——见 common/config.py 的同名常量。
+        envelope=config.rerank.envelope,
     )
 
 

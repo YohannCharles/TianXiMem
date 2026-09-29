@@ -181,6 +181,24 @@ DEFAULT_WEIGHTS: Final[tuple[float, float]] = (0.5, 0.5)
 #: **这是观测值，不是规格**；换模型或换网关后要重新量。
 DEFAULT_RERANK_TIMEOUT_S: Final[float] = 30.0
 
+#: rerank 请求里那**一个字段叫什么**（`rerank.envelope`）。
+#:
+#: 两个自托管网关的线格式**互斥**，而且**填错哪边都不报错**：
+#:
+#: * `"queries"` —— **vLLM 原生 score 形状**（`queries: [...]`，数组）。`memory3.021130.xyz`
+#:   （2026-09-28 迁移后的提交口径）。给它发 `query` ⇒ **400**。
+#: * `"query"` —— **自研封装**的形状（单数字符串）。本机自托管网关
+#:   （容器里 `host.docker.internal:9002` → 宿主机 `127.0.0.1:8082`），
+#:   给它发 `queries` ⇒ **422**。
+#:
+#: ⚠ **代价是静默的**：D12 把远端问题一律吞成 `RerankUnavailable` ⇒ 发错字段名的表现是
+#:   **每次检索都降级、服务不报错、响应照旧合法**，只在 §14 的 `rerank.degraded` 计数上看得见。
+#:   ⇒ 它是**端点身份的一部分**，跟着 `TIANXI_RERANKER_BASE_URL` 一起换，**不是可调旋钮**。
+DEFAULT_RERANK_ENVELOPE: Final[str] = "queries"
+
+#: `rerank.envelope` 的取值域。见 `DEFAULT_RERANK_ENVELOPE` 的两条格式与各自的拒绝码。
+RERANK_ENVELOPES: Final[frozenset[str]] = frozenset({"queries", "query"})
+
 #: `capture.max_bytes` 的默认值：**每份文件**写这么多就换下一份（50 MiB）。
 #:
 #: ⚠ 它是**切分粒度，不是总量上限**：一轮 Full 的请求原文按 ~1.5 GB 估（§2.2），
@@ -331,9 +349,12 @@ class PackagingConfig:
 class RerankConfig:
     """远程 reranker（§11.2 / D12）。**只放阈值与开关；端点与密钥在 env。**
 
-    ⚠ **本段刻意只有两个键**：一个键要有消费者才收（§6.1 对 DDL 的同一条纪律）——
-    而 rerank 的真实旋钮只有"开不开"与"等多久"。想调模型就换 `.env` 的
+    ⚠ **本段刻意只有三个键**：一个键要有消费者才收（§6.1 对 DDL 的同一条纪律）——
+    而 rerank 的真实旋钮只有"开不开"、"等多久"与"发哪个字段名"。想调模型就换 `.env` 的
     `TIANXI_RERANKER_MODEL`（那是端点身份，不是阈值）。
+
+    ⚠ `envelope` 是三个里**唯一跟端点走**的：它描述的是"对面那个网关说哪种线格式"，
+    与 `TIANXI_RERANKER_BASE_URL` 是同一件事的两半 ⇒ **换网关必须一起换**。
     """
 
     #: §15 的消融开关之一。`false` ⇒ **不构造 reranker**，Search 直接用融合名次。
@@ -343,6 +364,9 @@ class RerankConfig:
     enabled: bool = True
     #: 单次 rerank 请求的超时（秒）。见模块顶部 `DEFAULT_RERANK_TIMEOUT_S` 的两条约束。
     timeout_seconds: float = DEFAULT_RERANK_TIMEOUT_S
+    #: 请求里那一个字段叫什么。见模块顶部 `DEFAULT_RERANK_ENVELOPE`——
+    #: **填错不报错，只静默降级**（两端各有自己的拒绝码：400 / 422）。
+    envelope: str = DEFAULT_RERANK_ENVELOPE
 
 
 @dataclass(frozen=True, slots=True)
@@ -672,10 +696,21 @@ def _packaging(raw: object) -> PackagingConfig:
 
 
 def _rerank(raw: object) -> RerankConfig:
-    g = _group(raw, where="rerank", allowed={"enabled", "timeout_seconds"})
+    g = _group(raw, where="rerank", allowed={"enabled", "timeout_seconds", "envelope"})
     enabled = g.get("enabled")
     if enabled is not None and not isinstance(enabled, bool):
         raise ConfigError(f"`rerank.enabled` 必须是布尔值，收到 {enabled!r}")
+    envelope = _str(g.get("envelope"), where="rerank.envelope", default=DEFAULT_RERANK_ENVELOPE)
+    # ⚠ **这一条必须是硬错误**（哪怕两个值都能让服务起来）：它是"对面那个网关说什么格式"
+    #   的声明，而写错的表现是**每次检索都静默降级**——那种失败只在 §14 的计数里看得见，
+    #   排查成本远高于在这里响亮地拒绝。同 `rrf.k` / `workers` 的口径（配置化 ≠ 可调）。
+    if envelope not in RERANK_ENVELOPES:
+        raise ConfigError(
+            f"`rerank.envelope` 只能是 {sorted(RERANK_ENVELOPES)}，收到 {envelope!r}\n"
+            "  `queries` = vLLM 原生 score 形状（`memory3.021130.xyz`）；\n"
+            "  `query`   = 自研封装（本机网关，容器里走 `host.docker.internal:9002`）。\n"
+            "  ⚠ 它与 `TIANXI_RERANKER_BASE_URL` 是同一件事的两半：**换网关要一起换**。"
+        )
     return RerankConfig(
         enabled=True if enabled is None else enabled,
         timeout_seconds=_float(
@@ -683,6 +718,7 @@ def _rerank(raw: object) -> RerankConfig:
             where="rerank.timeout_seconds",
             default=DEFAULT_RERANK_TIMEOUT_S,
         ),
+        envelope=envelope,
     )
 
 
