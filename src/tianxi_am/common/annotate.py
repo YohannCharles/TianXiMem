@@ -108,16 +108,20 @@ Rule = tuple[re.Pattern[str], Callable[[re.Match[str], date], "str | None"]]
 
 
 def _day(day: date) -> str:
-    return day.strftime("%B %-d, %Y")
+    # ⚠ **不要写 `%-d`**：那是 glibc 的扩展，Windows 的 `strftime` 直接抛
+    # `ValueError: Invalid format string`——而本函数在**每次 Search** 上都会跑
+    # （`packaging.annotate_relatives` 默认 true）⇒ 那等于"Windows 上服务不能用"。
+    # `{day.day}` 是不带前导零的十进制，与 `%-d` 输出**逐字节相同**。
+    return f"{day:%B} {day.day}, {day.year}"
 
 
 def _range(start: date, end: date) -> str:
     """`July 15 to 16, 2023`——两端同月时省掉前半的年月。"""
     if (start.year, start.month) == (end.year, end.month):
-        return f"{start:%B %-d} to {end:%-d, %Y}"
+        return f"{start:%B} {start.day} to {end.day}, {end.year}"
     if start.year == end.year:
-        return f"{start:%B %-d} to {end:%B %-d, %Y}"
-    return f"{start:%B %-d, %Y} to {end:%B %-d, %Y}"
+        return f"{start:%B} {start.day} to {end:%B} {end.day}, {end.year}"
+    return f"{start:%B} {start.day}, {start.year} to {end:%B} {end.day}, {end.year}"
 
 
 def _month(year: int, month: int) -> str:
