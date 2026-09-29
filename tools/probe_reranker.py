@@ -366,6 +366,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"profile     : {config.profile}")
     print(f"rerank 开关 : {config.rerank.enabled}")
     print(f"超时        : {config.rerank.timeout_seconds}s")
+    # ⚠ **单独印出来**：它是"填错就静默降级"的那一类，而本探针存在的理由正是
+    #   把这类失败变成看得见的一行（两端各有自己的拒绝码：vLLM 400 / 自研封装 422）。
+    print(f"信封        : {config.rerank.envelope}（对面那个网关收的字段名）")
 
     reranker = build_reranker(config)
     if reranker is None:

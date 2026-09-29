@@ -135,8 +135,13 @@ def _remote(
     handler: Callable[[httpx.Request], httpx.Response],
     *,
     timeout: float = 5.0,
+    envelope: str = "queries",
 ) -> RemoteReranker:
-    """一个打假传输层的 `RemoteReranker`（**不发真请求**）。"""
+    """一个打假传输层的 `RemoteReranker`（**不发真请求**）。
+
+    `envelope` 默认是 `queries`（vLLM 原生）——**大多数用例只关心别的**，
+    信封那一条由 `test_request_shape_...` 与它的 legacy 对偶用例分别钉住。
+    """
     client = httpx.Client(
         transport=httpx.MockTransport(handler), timeout=timeout, base_url="https://gw.test"
     )
@@ -145,6 +150,7 @@ def _remote(
         api_key="k",
         model="Qwen3-Reranker-4B",
         timeout=timeout,
+        envelope=envelope,
         client=client,
     )
 
@@ -175,6 +181,10 @@ def test_request_shape_is_the_one_the_endpoint_actually_accepts() -> None:
     ⚠ **断言里没有 `top_n`**——它是个静默截断的旋钮：传了就只回前 k 条，
     于是 `_parse` 的集合校验会失败 ⇒ 每次 Search 都降级。
     **不传它就等于"全都要"**（实测）。
+
+    ⚠ 这是 `rerank.envelope = "queries"`（**默认**）那一支；它的对偶是下面那条
+    `..._for_the_legacy_wrapper`——**两个网关各要一个名字，而发错的那个是静默降级**，
+    所以两条正向用例必须成对存在（与 `_parse` 收两个容器名同理）。
     """
     seen: dict[str, object] = {}
 
@@ -202,6 +212,53 @@ def test_request_shape_is_the_one_the_endpoint_actually_accepts() -> None:
     assert "top_n" not in body, "传 top_n 会静默截断候选（见模块 docstring）"
     # 分数**按输入位置**对齐（index 0 → 1.0，index 1 → 2.0），不是按响应顺序
     assert scores == [1.0, 2.0]
+
+
+def test_request_shape_for_the_legacy_wrapper() -> None:
+    """`rerank.envelope = "query"`：`{model, query, documents}`——**本机自托管网关**要的形状。
+
+    ⚠ 它与上面那条 vLLM 形状**互斥**，而且**两边都拒对面那一个**（实测）：
+    vLLM 收到 `query` ⇒ 400；自研封装收到 `queries` ⇒ **422**
+    （pydantic 报 `body.query Field required`）。
+    ⇒ 这条用例钉的是"填了 `envelope: query` 就真的发单数字段"，
+    而**没有它，那一支断了也不会有人知道**——表现与 D12 的降级一模一样。
+    """
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"results": [_result(0, 1.0), _result(1, 2.0)]})
+
+    reranker = _remote(handler, envelope="query")
+    scores = reranker.score(query="几点开", documents=["A", "B"])
+
+    body = seen["body"]
+    assert isinstance(body, dict)
+    assert body["query"] == "几点开", "自研封装要的是**单个字符串**，不是数组"
+    assert "queries" not in body, "发数组会被 422 拒（实测：body.query Field required）"
+    assert body["documents"] == ["A", "B"]
+    assert "top_n" not in body
+    # 响应侧与信封无关：`results` + `score` 本来就在 `_parse` 收的两个容器里
+    assert scores == [1.0, 2.0]
+
+
+def test_unknown_envelope_is_rejected_at_construction() -> None:
+    """未知信封**在构造期就响亮失败**，不发出去等对面回 4xx。
+
+    ⚠ 理由与 `rrf.k` / `workers` 同：它的错误表现是**每次检索都静默降级**，
+    那种失败只在 §14 的计数里看得见 ⇒ 能在本地拦下就绝不留给运行时。
+    """
+    import pytest
+
+    with pytest.raises(ValueError, match="envelope"):
+        RemoteReranker(
+            base_url="https://gw.test/v1",
+            api_key="k",
+            model="m",
+            envelope="queries ",  # 尾随空格——最容易犯的那种拼写错
+        )
 
 
 def test_vllm_data_container_is_accepted() -> None:

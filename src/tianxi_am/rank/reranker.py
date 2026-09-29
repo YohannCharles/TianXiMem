@@ -16,11 +16,13 @@ Hybrid Retrieval → RRF → memory_id 稳定去重 → 【rerank（恰好一次
 
 | 信封 | 我们发什么 | 响应容器 | 分数键 | 什么时候 / 在哪见过 |
 | --- | --- | --- | --- | --- |
-| A | `query`（字符串） | `results` | `score` | `memory.021130.xyz`（自研封装） |
+| A | `query`（字符串） | `results` | `score` | `memory.021130.xyz`；**本机自托管网关** |
 | B | `query`（字符串） | `results` | `relevance_score` | `memory3.…` 换 nginx 之前 |
-| **C（现在）** | **`queries: [...]`** | **`data`** | `score` | `memory3.…` 现在（vLLM 原生） |
+| **C** | **`queries: [...]`** | **`data`** | `score` | `memory3.…` 现在（vLLM 原生） |
 
-**请求（C）——只发这一种**：
+**发 A 还是 C，由 `rerank.envelope` 挑**（两个网关互斥，没有"都对"的写法）：
+
+* `envelope: "queries"`（**默认**）⇒ 发 C：
 
 ```http
 POST {base_url}/rerank          # base_url 形如 https://memory3.021130.xyz/v1
@@ -30,10 +32,19 @@ Content-Type: application/json
 {"model": "qwen3-reranker-4b", "queries": ["..."], "documents": ["...", "..."]}
 ```
 
-⚠ **`queries` 是数组、且名字不能写成 `query`**：发错名字拿到的是 **400**（服务端校验器同时索要
-`queries` / `items` / `data_1` / `text_1`，是 vLLM score 的**多形态联合体**）。
-⚠ **没有回退**：A/B 的请求形状在新路由上**已经被拒**，所以不做"猜两个名字各发一次"——
-那会让每次 Search 多付一个 400 往返，而错误方向（把坏形状当常态）比省一次往返贵得多。
+* `envelope: "query"` ⇒ 发 A（**本机自托管网关**，宿主机 `127.0.0.1:8082` 上的自研封装）：
+
+```json
+{"model": "Qwen/Qwen3-Reranker-4B", "query": "...", "documents": ["...", "..."]}
+```
+
+⚠ **两边的名字与类型都不同，而且各自拒对面那一个**（都实测过）：vLLM 收到 `query` ⇒ **400**
+（它的校验器同时索要 `queries` / `items` / `data_1` / `text_1`，是 score 的**多形态联合体**）；
+自研封装收到 `queries` ⇒ **422**（pydantic 报 `body.query Field required`）。
+⚠ **没有回退**：不做"猜两个名字各发一次"——那会让每次 Search 多付一个 4xx 往返，
+而错误方向（把坏形状当常态）比省一次往返贵得多。
+⇒ **填错信封的表现与 D12 的降级一模一样**：每次检索都不精排、服务不报错、响应照旧合法。
+`envelope` 与 `TIANXI_RERANKER_BASE_URL` 是同一件事的两半，**换网关要一起换**。
 
 **响应：两个容器、两个分数键，`_parse` 四种组合都收**（A/B 共用 `results`）：
 
@@ -97,6 +108,8 @@ from typing import Protocol, runtime_checkable
 
 import httpx
 
+from tianxi_am.common.config import DEFAULT_RERANK_ENVELOPE, RERANK_ENVELOPES
+
 __all__ = ["RemoteReranker", "RerankUnavailable", "Reranker"]
 
 
@@ -156,14 +169,22 @@ class RemoteReranker:
         api_key: str,
         model: str,
         timeout: float = 30.0,
+        envelope: str = DEFAULT_RERANK_ENVELOPE,
         client: httpx.Client | None = None,
     ) -> None:
         if not base_url or not api_key:
             raise ValueError("base_url 与 api_key 都不得为空")
+        # ⚠ **构造期就拒绝未知信封**（而不是发出去等对面回 400/422）：它写错的表现是
+        #   每次检索都静默降级，那种失败只在 §14 的计数里看得见（见 config 侧的同一条注释）。
+        if envelope not in RERANK_ENVELOPES:
+            raise ValueError(
+                f"envelope 只能是 {sorted(RERANK_ENVELOPES)}，收到 {envelope!r}"
+            )
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
+        self._envelope = envelope
         self._client = client
 
         #: 诊断量（§14）。**不进响应**——响应只有 §2.1 那四个字段。
@@ -228,13 +249,18 @@ class RemoteReranker:
         """发一次请求并解出 JSON。**任何 HTTP 层问题都转成 `RerankUnavailable`。**"""
         payload: dict[str, object] = {
             "model": self._model,
-            # ⚠ **`queries` 是数组**（vLLM 原生 score 形状，见模块 docstring 的信封表）。
-            #    写成旧的 `query`（单数）⇒ 400 ⇒ **每次检索都降级，而服务不报错**。
-            "queries": [query],
             "documents": list(documents),
             # ⚠ **刻意不传 `top_n`**：传了会静默截断（见模块 docstring 的陷阱一节）。
             #    不传 ⇒ 端点返回全部候选 ⇒ `_parse` 的集合校验才有意义。
         }
+        # ⚠ **查询字段的名字与类型都跟着端点变**（`rerank.envelope`，见模块 docstring 的信封表）：
+        #    `queries`（数组）是 vLLM 原生 score 形状，`query`（单个字符串）是自研封装的。
+        #    两者**互斥**，而发错的表现是一样的：对面回 400 / 422，D12 再把它吞成降级
+        #    ⇒ 每次检索都不精排，而服务不报错、响应照旧合法。
+        if self._envelope == "queries":
+            payload["queries"] = [query]
+        else:
+            payload["query"] = query
         started = time.perf_counter()
         self.calls += 1
         try:
