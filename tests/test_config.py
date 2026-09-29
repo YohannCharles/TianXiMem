@@ -383,8 +383,13 @@ def test_submit_profile_changes_only_the_embedder(config_dir: Path) -> None:
     """`submit.yaml` **只换模型**——这是 Step 5 能归因的前提（§12.1 R1 对冲 4）。
 
     ⚠ 它同时是"提交口径没被悄悄改过"的回归位：**基线本来就是提交口径**
-    （集合 `memories`、`rerank.enabled: true`），submit 只该在上面加模型名，
+    （集合 `memories`，精排开关由 `default.yaml` 定），submit 只该在上面加模型名，
     以及将来重标定出来的那几个量。集合名尤其不能在这儿改——覆盖它的是 `local.yaml`。
+
+    ⚠ **`rerank.enabled` 断言的是"继承"，不钉具体值**：它在 2026-09-29 当天被翻过两次
+    （服务端精排 OOM ⇒ 临时改 `false` ⇒ 修好后当天翻回 `true`，见 `configs/default.yaml`
+    的注释）。钉死某个值的话，基线每动一次这条用例就红一次，而它要守的从来不是那个值——
+    是"**submit.yaml 不得与基线不同**"。
     """
     base = _load(config_dir)
     submit = _load(config_dir, **{ENV_PROFILE: "submit"})
@@ -394,7 +399,7 @@ def test_submit_profile_changes_only_the_embedder(config_dir: Path) -> None:
 
     # 其余一律继承基线
     assert submit.storage.qdrant.collection == base.storage.qdrant.collection == "memories"
-    assert submit.rerank.enabled is True
+    assert submit.rerank.enabled == base.rerank.enabled
     assert submit.budget.max_tokens == base.budget.max_tokens
     assert submit.retrieval.prefetch_limit == base.retrieval.prefetch_limit
 

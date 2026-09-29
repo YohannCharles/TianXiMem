@@ -139,6 +139,20 @@ volumes:
   #   （SQLite 在 WAL 模式下直接拷文件可能不一致，所以"先停服务再拷"或走 SQLite 的备份 API。）
   tianxi_data:
 
+networks:
+  # ⚠ **网段必须钉死，不能让它自己挑**（2026-09-29 实测踩到）：
+  #   本机的模型网关（`/data/wangqianyu_bak/hechj-aml`，容器里走 `host.docker.internal:9002`）
+  #   在鉴权**之前**先按**来源地址**白名单过滤（`AML_ALLOWED_CLIENT_CIDRS`，只有
+  #   `127.0.0.0/8` 与 `172.28.0.0/24` 两项）。不钉 ⇒ 每次 `up -d --build` 重建网络时
+  #   Docker 从地址池里另挑一个（当天从 `172.28.0.0/24` 漂到 `172.24.0.0/16`）
+  #   ⇒ **每一次 embedding 都是 `403 {"detail":"client address not allowed"}`**，
+  #   而容器自己照样 `(healthy)`（探的是不碰下游的 `/health`）、**服务日志里一个字都没有**。
+  #   ⇒ 这个网段是与网关白名单**成对**的，改一边必须改另一边。
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
 # 注意：以下集合级设置【不在本文件里】，由客户端在建集合时施加（src/tianxi_am/store/）：
 #   - 分片数 = 1            （根级融合跨分片合并，分片数变化会改变排名且无报错）
 #   - 命名向量 dense + bm25 （稀疏向量距离固定为 Dot）
