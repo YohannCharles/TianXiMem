@@ -12,7 +12,7 @@ with ServiceClient("http://127.0.0.1:8000") as client:
     results = run_judge(pipeline_for(bench_dir, sample.dataset), items, out_dir)
 ```
 
-**`eval/` 与 `src/tianxi_am` 之间只有一条通道：HTTP**——harness 不得 `import`
+**`eval/` 与 `src/tianximem` 之间只有一条通道：HTTP**——harness 不得 `import`
 服务内部模块（理由见 [`../CLAUDE.md`](../CLAUDE.md)）。本包只依赖 `httpx` 与标准库。
 """
 

@@ -31,7 +31,7 @@
     make data-check                 # 校验本地已有的是否与清单逐字节一致（默认）
     make fetch-data                 # 取回缺失/不符的（只取 required + optional 里有出处的）
 
-环境变量 `TIANXI_BENCHMARK_DIR` 决定落点（D16：数据路径的唯一入口，代码不得硬编码
+环境变量 `TIANXIMEM_BENCHMARK_DIR` 决定落点（D16：数据路径的唯一入口，代码不得硬编码
 `benchmark_data/`）；未设时用默认值 `benchmark_data`。
 
 ## 两条读法
@@ -409,7 +409,7 @@ def _sha256(path: Path) -> str:
 def _download(url: str, dest: Path) -> None:
     """下到临时文件再原子改名——**别让半截文件看起来像"已经到手"**。"""
     tmp = dest.with_suffix(dest.suffix + ".part")
-    request = urllib.request.Request(url, headers={"User-Agent": "tianxi-am/fetch-benchmark-data"})
+    request = urllib.request.Request(url, headers={"User-Agent": "tianximem/fetch-benchmark-data"})
     with urllib.request.urlopen(request, timeout=300) as response, tmp.open("wb") as handle:
         while chunk := response.read(1 << 20):
             handle.write(chunk)
@@ -496,14 +496,14 @@ def main() -> int:
     )
     parser.add_argument(
         "--dir",
-        default=os.environ.get("TIANXI_BENCHMARK_DIR", "benchmark_data"),
-        help="归档落点，默认取 TIANXI_BENCHMARK_DIR（D16）",
+        default=os.environ.get("TIANXIMEM_BENCHMARK_DIR", "benchmark_data"),
+        help="归档落点，默认取 TIANXIMEM_BENCHMARK_DIR（D16）",
     )
     args = parser.parse_args()
 
     root = Path(args.dir)
     if not root.is_dir():
-        print(f"✗ 归档目录不存在：{root}（用 --dir 或 TIANXI_BENCHMARK_DIR 指定）")
+        print(f"✗ 归档目录不存在：{root}（用 --dir 或 TIANXIMEM_BENCHMARK_DIR 指定）")
         return 1
 
     wanted = [e for e in MANIFEST if args.tier == "all" or e["tier"] == "required"]

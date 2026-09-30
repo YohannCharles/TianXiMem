@@ -1,6 +1,6 @@
 """代理评测（§12 / §13）。
 
-**这一层与 `src/tianxi_am` 之间只有一条通道：HTTP。** harness 不得 `import`
+**这一层与 `src/tianximem` 之间只有一条通道：HTTP。** harness 不得 `import`
 服务内部模块——理由有两条，都不是洁癖（[`CLAUDE.md`](./CLAUDE.md)）：
 
 1. §13 要求 B1（ReFind）在我们自己的 harness 里重跑，而 B1 只以"另一个 Add/Search

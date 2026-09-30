@@ -21,7 +21,7 @@ a4_agent.py           A4a 门控 / A4b always-on                    ⬜（v1 没
 **跑一轮**（runner 打 HTTP，服务得先起着）：
 
 ```bash
-make serve                    # 另一个终端；TIANXI_PROFILE=local 时用 memories_dev 集合
+make serve                    # 另一个终端；TIANXIMEM_PROFILE=local 时用 memories_dev 集合
 make eval                     # = DATASET=locomo-refined；ARGS='--limit 3 --skip-ingest' 可冒烟
 make eval DATASET=longmemeval-s
 # ⚠ LongMemEval **部分跑必须加 `--spread`**：它的文件**按 `question_type` 分块**

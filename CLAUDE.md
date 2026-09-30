@@ -8,7 +8,7 @@
   本文件已按官方建议控制篇幅（<200 行）——超了会降低遵循度。
 -->
 
-# TianXi_AM — AML 参赛系统
+# TianXiMem — AML 参赛系统
 
 **只提供 `Add` / `Search` 两个 HTTP 端点**（外加一个探活用、不碰下游的 `GET /health`——平台默认探它，S4）；答案生成、评判、聚合全部由 AML 完成。本系统的输出是**按名次排列的证据**，不是答案。
 
@@ -18,9 +18,9 @@
 
 | 状态 | 模块 |
 | --- | --- |
-| ✅ **已实现** | [`store/`](src/tianxi_am/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianxi_am/pairing/)（**记忆块组合 / 一次 Add = 唯一边界，D24**）· [`embed/`](src/tianxi_am/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + **`text-embedding-v4`**（提交口径，2026-09-28）+ 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianxi_am/common/) 的 **`render.py`**（渲染唯一实现）、**`annotate.py`**（**相对时间就地注解**，只改 `content`、不碰索引，**D22**）、**`config.py`**（**全包唯一读环境变量的地方**，③-d）与 **`tokens.py`**（`o200k_base` 计数，§6.4）· [`retrieve/`](src/tianxi_am/retrieve/)（**策略与参数所有权** + §8 判据 + `dedup_candidates`）· [`rank/`](src/tianxi_am/rank/) 的 **`reranker.py`**（**远端精排接入**）、**`neighbor.py`**（**扩窗 + 段合并**，§10/§11.2）与 **`packaging.py`**（**段级打包 + 双预算**）· [`service/`](src/tianxi_am/service/)（HTTP 层 + **Add/Search 端到端编排**，③-c + **`GET /health` 探活**，S4 + **请求原文采集**（诊断旁路，默认关；**S6** 的唯一直接观察口））· [`observability/`](src/tianxi_am/observability/) 的 **`metrics.py`**（**§14 的出口**：latency + rerank 计数 → run record；⚠ **`embed/` 与 `agent/` 两个发射方还没接**）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` + **`submit.yaml`**（提交期 profile，2026-09-28 建；**由模型派生的阈值待 Step 5 重标定**） · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）· [`eval/datasets/`](eval/datasets/)（**加载层 + schema 落差预处理**）· [`eval/harness/`](eval/harness/)（**HTTP 驱动 / 切批 / 裁判包装 / run record + `api_config.py` + `annotate.py` 注解原型**）· [`eval/reports/schema.py`](eval/reports/schema.py)（**run record 的形状**）· [`tools/check_env.py`](tools/check_env.py)（**环境自检，含 V7 探针**）、[`tools/probe_reranker.py`](tools/probe_reranker.py)（**精排探针**）、[`tools/t2_retrieval_dump.py`](tools/t2_retrieval_dump.py)（**T2 的纯 BM25 转储**）与 [`tools/reindex.py`](tools/reindex.py)（**从 SQLite 全量重建 Qdrant**）· [`eval/experiments/`](eval/experiments/)（**通用 runner `run.py` + T1/T2/A3 三个 arm**）· [`eval/reports/ledger.md`](eval/reports/ledger.md)（**结果台账**）· [`configs/runs/`](configs/runs/)（**各 arm 的冻结配置**）· [`deploy/`](deploy/) 的 `Dockerfile` + `compose.yaml`（**整栈容器：服务 + Qdrant**）+ `.env.example`（**服务器形态，2026-09-28 起**）——测试在 [`tests/`](tests/) |
-| ⬜ **未实现** | [`llm/`](src/tianxi_am/llm/) · **`eval/` 还没写的**：`datasets/contracts.py`、`experiments/` 的 **A0 一个 arm**（A4 已移出 v1——它要 agent 真的存在，而 v1 不做 agentic，D13）、`baselines/`（**两个参考实现的代码已 Vendor 就位，B1 包装仍未做**——[`refind/`](eval/baselines/refind/) 是 MIT 的 B1，[`invmem-candidate/`](eval/baselines/invmem-candidate/) **只读、不是基线**）、`smoke/` 的 S1/S2/S3 探针与 `quota.py` · 尚未接线的消融开关（**逐项状态以 [`docs/config-reference.md`](docs/config-reference.md) §2 的表为准**——`checker.*` / `agent.*` / `rrf` 未接，`neighbor` 只有 `radius` 可关） |
-| ⛔ **v1 不做** | [`agent/`](src/tianxi_am/agent/)（D13） |
+| ✅ **已实现** | [`store/`](src/tianximem/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianximem/pairing/)（**记忆块组合 / 一次 Add = 唯一边界，D24**）· [`embed/`](src/tianximem/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + **`text-embedding-v4`**（提交口径，2026-09-28）+ 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianximem/common/) 的 **`render.py`**（渲染唯一实现）、**`annotate.py`**（**相对时间就地注解**，只改 `content`、不碰索引，**D22**）、**`config.py`**（**全包唯一读环境变量的地方**，③-d）与 **`tokens.py`**（`o200k_base` 计数，§6.4）· [`retrieve/`](src/tianximem/retrieve/)（**策略与参数所有权** + §8 判据 + `dedup_candidates`）· [`rank/`](src/tianximem/rank/) 的 **`reranker.py`**（**远端精排接入**）、**`neighbor.py`**（**扩窗 + 段合并**，§10/§11.2）与 **`packaging.py`**（**段级打包 + 双预算**）· [`service/`](src/tianximem/service/)（HTTP 层 + **Add/Search 端到端编排**，③-c + **`GET /health` 探活**，S4 + **请求原文采集**（诊断旁路，默认关；**S6** 的唯一直接观察口））· [`observability/`](src/tianximem/observability/) 的 **`metrics.py`**（**§14 的出口**：latency + rerank 计数 → run record；⚠ **`embed/` 与 `agent/` 两个发射方还没接**）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` + **`submit.yaml`**（提交期 profile，2026-09-28 建；**由模型派生的阈值待 Step 5 重标定**） · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）· [`eval/datasets/`](eval/datasets/)（**加载层 + schema 落差预处理**）· [`eval/harness/`](eval/harness/)（**HTTP 驱动 / 切批 / 裁判包装 / run record + `api_config.py` + `annotate.py` 注解原型**）· [`eval/reports/schema.py`](eval/reports/schema.py)（**run record 的形状**）· [`tools/check_env.py`](tools/check_env.py)（**环境自检，含 V7 探针**）、[`tools/probe_reranker.py`](tools/probe_reranker.py)（**精排探针**）、[`tools/t2_retrieval_dump.py`](tools/t2_retrieval_dump.py)（**T2 的纯 BM25 转储**）与 [`tools/reindex.py`](tools/reindex.py)（**从 SQLite 全量重建 Qdrant**）· [`eval/experiments/`](eval/experiments/)（**通用 runner `run.py` + T1/T2/A3 三个 arm**）· [`eval/reports/ledger.md`](eval/reports/ledger.md)（**结果台账**）· [`configs/runs/`](configs/runs/)（**各 arm 的冻结配置**）· [`deploy/`](deploy/) 的 `Dockerfile` + `compose.yaml`（**整栈容器：服务 + Qdrant**）+ `.env.example`（**服务器形态，2026-09-28 起**）——测试在 [`tests/`](tests/) |
+| ⬜ **未实现** | [`llm/`](src/tianximem/llm/) · **`eval/` 还没写的**：`datasets/contracts.py`、`experiments/` 的 **A0 一个 arm**（A4 已移出 v1——它要 agent 真的存在，而 v1 不做 agentic，D13）、`baselines/`（**两个参考实现的代码已 Vendor 就位，B1 包装仍未做**——[`refind/`](eval/baselines/refind/) 是 MIT 的 B1，[`invmem-candidate/`](eval/baselines/invmem-candidate/) **只读、不是基线**）、`smoke/` 的 S1/S2/S3 探针与 `quota.py` · 尚未接线的消融开关（**逐项状态以 [`docs/config-reference.md`](docs/config-reference.md) §2 的表为准**——`checker.*` / `agent.*` / `rrf` 未接，`neighbor` 只有 `radius` 可关） |
+| ⛔ **v1 不做** | [`agent/`](src/tianximem/agent/)（D13） |
 
 > **⚠ 状态描述是本仓最易过期的东西**：改动状态时，**连同搜一遍所有声称"未实现 / 未开始"的地方**——本表是唯一权威，别处只应指回这里。
 
@@ -32,9 +32,9 @@
 
 | 要动的东西 | 先读 |
 | --- | --- |
-| `src/tianxi_am/<模块>/` 下任何代码 | 该目录的 `CLAUDE.md`（要写什么、边界在哪、本层的坑） |
+| `src/tianximem/<模块>/` 下任何代码 | 该目录的 `CLAUDE.md`（要写什么、边界在哪、本层的坑） |
 | 契约层（service、Add/Search 形状） | [`docs/contract.md`](docs/contract.md) |
-| 任何阈值 / 权重 / 开关 | [`docs/config-reference.md`](docs/config-reference.md)（**开关的唯一声明处**）+ [`configs/CLAUDE.md`](configs/CLAUDE.md)（**每个键住在 `.env` 还是 yaml**）。**全包只有 [`common/config.py`](src/tianxi_am/common/config.py) 读环境变量**——有静态测试钉住 |
+| 任何阈值 / 权重 / 开关 | [`docs/config-reference.md`](docs/config-reference.md)（**开关的唯一声明处**）+ [`configs/CLAUDE.md`](configs/CLAUDE.md)（**每个键住在 `.env` 还是 yaml**）。**全包只有 [`common/config.py`](src/tianximem/common/config.py) 读环境变量**——有静态测试钉住 |
 | 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（逐条 `Dn` + 待决事项——**编号别在这里列范围，它会过期**） |
 | 跑对照实验 | [`docs/experiments.md`](docs/experiments.md)（协议）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（怎么跑） |
 | 数据集加载 / harness | [`docs/benchmark-data.md`](docs/benchmark-data.md) + [`eval/datasets/CLAUDE.md`](eval/datasets/CLAUDE.md) |
@@ -67,7 +67,7 @@
 
 | 陷阱 | 为什么静默 | 在本文件之外 |
 | --- | --- | --- |
-| **幂等现在是纯内容层的**：块写下即最终形状（D24），位置是**请求的纯函数**（D28）⇒ 重试必然算出**同一位置**。但**批次级仍必须查 `applied_batches` 旁表**：AML 的重试是正常行为，不能每次靠撞 `UNIQUE` 来兜（那会让正常重试变成 500）。⚠ **D28 起它还要比对 payload 指纹**：同 `request_id` **不同 payload** ⇒ **409**（那不是重试；静默挑一份落库 = 另一份记忆凭空消失） | 写入是 upsert；D28 之后撞 `UNIQUE` **不再静默**，而"同 id 不同 payload"**响亮冲突** | [`pairing/CLAUDE.md`](src/tianxi_am/pairing/CLAUDE.md) |
+| **幂等现在是纯内容层的**：块写下即最终形状（D24），位置是**请求的纯函数**（D28）⇒ 重试必然算出**同一位置**。但**批次级仍必须查 `applied_batches` 旁表**：AML 的重试是正常行为，不能每次靠撞 `UNIQUE` 来兜（那会让正常重试变成 500）。⚠ **D28 起它还要比对 payload 指纹**：同 `request_id` **不同 payload** ⇒ **409**（那不是重试；静默挑一份落库 = 另一份记忆凭空消失） | 写入是 upsert；D28 之后撞 `UNIQUE` **不再静默**，而"同 id 不同 payload"**响亮冲突** | [`pairing/CLAUDE.md`](src/tianximem/pairing/CLAUDE.md) |
 | **Qdrant RRF 的 `k` 默认是 `2`**，不是文献里的 60。**必须显式设 `k=61`**（Qdrant 秩 0-based：`1/(0+61) = 1/(1+60)`） | 不设会得到一个与所有参考实现都不同的融合行为，极难排查 | [`docs/decisions.md`](docs/decisions.md) D5 |
 | **Qdrant local 模式会静默丢弃 payload 索引**（`create_payload_index` 只打一行警告就返回） | 而 `user_id` / `session_id` / `event_time` 三个筛选**全依赖**它 | [`deploy/CLAUDE.md`](deploy/CLAUDE.md) |
 

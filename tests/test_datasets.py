@@ -352,13 +352,13 @@ def test_lme_limit_and_evidence(tmp_path):
 def test_benchmark_dir_reads_env_only():
     """**唯一读取点**：默认归档，`.env` 可改指（本地开发指到 `eval/datasets/...`）。"""
     assert benchmark_dir({}) == Path("benchmark_data")
-    assert benchmark_dir({"TIANXI_BENCHMARK_DIR": "/tmp/x"}) == Path("/tmp/x")
+    assert benchmark_dir({"TIANXIMEM_BENCHMARK_DIR": "/tmp/x"}) == Path("/tmp/x")
 
 
 def test_loaders_take_path_from_argument_not_cwd(tmp_path, monkeypatch):
     """D16：**加载器只认传进来的 `Path`**，不自己去猜数据在哪。
 
-    行为断言而不是扫源码：换个 cwd、并把 `TIANXI_BENCHMARK_DIR` 指到别处，
+    行为断言而不是扫源码：换个 cwd、并把 `TIANXIMEM_BENCHMARK_DIR` 指到别处，
     传绝对路径的结果必须**一个字节都不变**。硬编码路径出错时不会报错，
     只会让"换台机器就指错数据"变成静默行为——所以只能这么测。
     """
@@ -366,7 +366,7 @@ def test_loaders_take_path_from_argument_not_cwd(tmp_path, monkeypatch):
     empty = tmp_path / "empty"
     empty.mkdir()
 
-    monkeypatch.setenv("TIANXI_BENCHMARK_DIR", str(empty))
+    monkeypatch.setenv("TIANXIMEM_BENCHMARK_DIR", str(empty))
     monkeypatch.chdir(empty)
 
     assert len(load_locomo(bench)) == 1

@@ -2,7 +2,7 @@
 
 ## 路径口径（D16）
 
-**数据路径一律经 `TIANXI_BENCHMARK_DIR` 读取**——代码中不得硬编码 `benchmark_data/`
+**数据路径一律经 `TIANXIMEM_BENCHMARK_DIR` 读取**——代码中不得硬编码 `benchmark_data/`
 或 `eval/datasets/`。默认值是 `benchmark_data`（只读归档）；本地开发用 `.env` 指到
 开发数据集即可。全仓只有 [`benchmark_dir()`][eval.datasets.registry.benchmark_dir] 一处
 读这个变量，其余模块一律接 `Path` 参数——**这样测试才能指向临时目录**。
@@ -43,9 +43,9 @@ _HASH_CHUNK = 1 << 20
 
 
 def benchmark_dir(env: dict[str, str] | None = None) -> Path:
-    """`TIANXI_BENCHMARK_DIR`——**本仓唯一的读取点**（D16）。"""
+    """`TIANXIMEM_BENCHMARK_DIR`——**本仓唯一的读取点**（D16）。"""
     source = os.environ if env is None else env
-    return Path(source.get("TIANXI_BENCHMARK_DIR") or "benchmark_data")
+    return Path(source.get("TIANXIMEM_BENCHMARK_DIR") or "benchmark_data")
 
 
 def file_fingerprint(path: Path) -> dict:

@@ -20,7 +20,7 @@ registry.py       数据指纹（版本 + 切批口径）——§13 的记录要
 >
 > **理由**：同一套 `Add` / `Search` 最终要接 **LongMemEval / PersonaMem / BEAM 以及未来的真实 API 请求**。**任何数据集的便利格式都不得向上渗透**——`conversations.jsonl` 的"本身即 JSONL / 自带 `role`"止步于此。
 
-> **⚠ 一条路径口径（D16）**：**数据路径一律通过 `TIANXI_BENCHMARK_DIR` 读取，代码中不得硬编码 `benchmark_data/` 或 `eval/datasets/`。** 默认值仍是 `benchmark_data/`；本地开发通过 `.env` 指向实际数据目录。
+> **⚠ 一条路径口径（D16）**：**数据路径一律通过 `TIANXIMEM_BENCHMARK_DIR` 读取，代码中不得硬编码 `benchmark_data/` 或 `eval/datasets/`。** 默认值仍是 `benchmark_data/`；本地开发通过 `.env` 指向实际数据目录。
 >
 > **边界**：`eval/datasets/LoCoMo-Refined/data/` 是**开发与自测用**的数据，**不是最终要跑的数据集**——归档才是。两者不可混为一谈，**也不得让代码依赖任何一边**。
 

@@ -34,7 +34,7 @@ test_capture.py         请求**原文**采集（**S6**）：开关归 yaml / �
 
 ## 一、记忆块组合（§6.2 / **D24**）
 
-**组合规则一处声明在 [`../src/tianxi_am/pairing/CLAUDE.md`](../src/tianxi_am/pairing/CLAUDE.md)**，
+**组合规则一处声明在 [`../src/tianximem/pairing/CLAUDE.md`](../src/tianximem/pairing/CLAUDE.md)**，
 本节只列**要覆盖的用例**。
 
 ```text
@@ -206,7 +206,7 @@ test_idempotency.py  批次级守卫
 | **`index_pairs` 失败会留下"SQLite 有、Qdrant 没有"的行** | 检索命中的是**不存在的那个版本**而**不报错**——要测的是这条路径能被修复 |
 | **配的向量维度来自接口，不是常量** | §2.3 / §7.4——写死会在 Step 5 静默错 |
 | **能仅凭 SQLite 全量重建 Qdrant** | §6.3 的"派生读存储"就是这条的意思 |
-| **代码中没有硬编码 `benchmark_data/` 或 `eval/datasets/`** | D16：路径一律走 `TIANXI_BENCHMARK_DIR` |
+| **代码中没有硬编码 `benchmark_data/` 或 `eval/datasets/`** | D16：路径一律走 `TIANXIMEM_BENCHMARK_DIR` |
 
 ### 连接生命周期与并发（D17）
 

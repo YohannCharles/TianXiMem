@@ -17,7 +17,7 @@ from pathlib import Path
 from eval.experiments import run as runner
 from tests.conftest import Wired, seed_line
 
-from tianxi_am.common.config import (
+from tianximem.common.config import (
     AppConfig,
     CacheConfig,
     EmbedCacheConfig,
@@ -25,15 +25,15 @@ from tianxi_am.common.config import (
     SqliteConfig,
     StorageConfig,
 )
-from tianxi_am.observability import (
+from tianximem.observability import (
     MetricsSink,
     NullMetricsSink,
     SearchObservation,
     SnapshotMetricsSink,
 )
-from tianxi_am.retrieve import EvidenceChecker
-from tianxi_am.service.app import build_metrics_sink, build_services
-from tianxi_am.service.pipeline import SearchPipeline
+from tianximem.retrieve import EvidenceChecker
+from tianximem.service.app import build_metrics_sink, build_services
+from tianximem.service.pipeline import SearchPipeline
 
 
 def _obs(**overrides: object) -> SearchObservation:

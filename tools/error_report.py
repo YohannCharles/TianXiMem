@@ -25,11 +25,11 @@ uv run python -m tools.error_report --run smoke-locomo-1
 uv run python -m tools.error_report --run a3-off --category 2 --sample 8
 ```
 
-（`tools/` 可以 import `tianxi_am` 与 `eval.datasets`；
+（`tools/` 可以 import `tianximem` 与 `eval.datasets`；
 本脚本只读 JSONL，不碰网络、不碰 Qdrant。）
 
 ⚠ **用 `-m` 跑**（`python -m tools.error_report`）：直接给路径时仓库根不在 `sys.path` 上，
-`import eval.datasets` 会失败——那几个 CLI 工具只 import `tianxi_am`
+`import eval.datasets` 会失败——那几个 CLI 工具只 import `tianximem`
 （editable 安装）所以没这个问题。
 """
 

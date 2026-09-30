@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import pytest
 from tests.conftest import FakeEmbedder
 
-from tianxi_am.retrieve import (
+from tianximem.retrieve import (
     RRF_K,
     Candidate,
     DenseArm,
@@ -24,7 +24,7 @@ from tianxi_am.retrieve import (
     make_hybrid_params,
     rank_consistency,
 )
-from tianxi_am.store.qdrant_store import HybridParams, ScoredMemoryId
+from tianximem.store.qdrant_store import HybridParams, ScoredMemoryId
 
 # ── 桩 ─────────────────────────────────────────────────────────────────
 
@@ -301,7 +301,7 @@ def test_build_services_forwards_retrieval_params_to_the_store(tmp_path) -> None
     携带的参数就是 config 给的那些。**故意用非默认值**——用默认值的话，
     改坏了这条用例也照样绿。
     """
-    from tianxi_am.common.config import (
+    from tianximem.common.config import (
         AppConfig,
         CacheConfig,
         EmbedCacheConfig,
@@ -311,7 +311,7 @@ def test_build_services_forwards_retrieval_params_to_the_store(tmp_path) -> None
         SqliteConfig,
         StorageConfig,
     )
-    from tianxi_am.service import build_services
+    from tianximem.service import build_services
 
     config = AppConfig(
         storage=StorageConfig(
@@ -364,7 +364,7 @@ def test_rank_consistency_handles_empty_arms() -> None:
 
 def test_rank_consistency_thresholds_are_configurable() -> None:
     """三个初值是**自设阈值**（可调，但要有 ablation 数据支撑）——所以必须可配。"""
-    from tianxi_am.retrieve import CheckerThresholds
+    from tianximem.retrieve import CheckerThresholds
 
     strict = CheckerThresholds(topk_overlap=10, topk_overlap_min=9)
     assert rank_consistency(["a", "b", "c"], ["x", "b", "c"], strict) is False

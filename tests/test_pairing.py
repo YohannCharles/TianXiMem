@@ -7,7 +7,7 @@
   → ③ 配不上的 RoleBlock 独立成块
 ```
 
-**规则一处声明在 [`../src/tianxi_am/pairing/CLAUDE.md`](../src/tianxi_am/pairing/CLAUDE.md)**，
+**规则一处声明在 [`../src/tianximem/pairing/CLAUDE.md`](../src/tianximem/pairing/CLAUDE.md)**，
 本文件只覆盖它。跨 Add 的那一半（不拼接、乱序无关、幂等）在
 [`test_apply.py`](./test_apply.py)。
 
@@ -21,7 +21,7 @@ from collections.abc import Callable
 
 import pytest
 
-from tianxi_am.pairing.pairing import (
+from tianximem.pairing.pairing import (
     MemoryBlock,
     Message,
     compose_memory_blocks,

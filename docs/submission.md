@@ -128,9 +128,9 @@
 > **T2 要"先用它确认，再去信其他实验"**（R1 对冲 2）——它**对外部模型依赖最小**（纯 BM25 检索 + 人工判读，不调用任何模型）。**顺序反了的话，其他实验的偏移无法与它自身的漂移区分。**
 >
 > ⬜ **现状（2026-09-28）：这一节要记的那次切换还没发生。** 已落地的是**前置件**——
-> [`../src/tianxi_am/embed/text_embedding_v4.py`](../src/tianxi_am/embed/text_embedding_v4.py)、
+> [`../src/tianximem/embed/text_embedding_v4.py`](../src/tianximem/embed/text_embedding_v4.py)、
 > [`../configs/submit.yaml`](../configs/submit.yaml)、以及装配按模型名挑实现
-> （[`../src/tianxi_am/service/app.py`](../src/tianxi_am/service/app.py) 的 `build_embedder`）。
+> （[`../src/tianximem/service/app.py`](../src/tianximem/service/app.py) 的 `build_embedder`）。
 > 真切换还差：**端点到位**（`AML_EMB_*` 指向 DashScope）、**集合重建**、**阈值重标定**。
 > ⚠ **"LLM：`qwen3.5-9b` → `gpt-4o-mini`"这一行在 v1 里没有要切的东西**——没有调用点（D13）。
 > 记录时写清"无调用点"，**别勾成一个看起来做过的 ☐**。

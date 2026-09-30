@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 from tests.conftest import FakeEmbedder
 
-from tianxi_am.common.render import TEMPLATE_VERSION
-from tianxi_am.embed.base import (
+from tianximem.common.render import TEMPLATE_VERSION
+from tianximem.embed.base import (
     CachingEmbedder,
     DimensionMismatchError,
     DimNotKnownError,
@@ -22,8 +22,8 @@ from tianxi_am.embed.base import (
     EmbeddingError,
     OpenAICompatEmbedder,
 )
-from tianxi_am.embed.qwen3_embedding import DEFAULT_MODEL, Qwen3EmbeddingEmbedder
-from tianxi_am.embed.text_embedding_v4 import DEFAULT_BATCH_SIZE, TextEmbeddingV4Embedder
+from tianximem.embed.qwen3_embedding import DEFAULT_MODEL, Qwen3EmbeddingEmbedder
+from tianximem.embed.text_embedding_v4 import DEFAULT_BATCH_SIZE, TextEmbeddingV4Embedder
 
 COORD = EmbeddingCoordinate(model="Qwen/Qwen3-Embedding-8B")
 
@@ -385,8 +385,8 @@ def test_assembly_picks_the_client_by_model_name() -> None:
     漏掉这一步的表现：yaml 写了 `text-embedding-v4`，服务仍用开发期的类（批大小 64）
     ⇒ 只在**提交期**炸，本地代理评测一律正常。
     """
-    from tianxi_am.common.config import AppConfig, ModelsConfig
-    from tianxi_am.service.app import build_embedder
+    from tianximem.common.config import AppConfig, ModelsConfig
+    from tianximem.service.app import build_embedder
 
     dev = build_embedder(AppConfig(embed_base_url="http://x/v1", embed_api_key="k"))
     assert isinstance(dev, Qwen3EmbeddingEmbedder)  # 默认模型名 = 开发期那个

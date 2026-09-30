@@ -1,4 +1,4 @@
-# TianXi_AM — 常用命令入口
+# TianXiMem — 常用命令入口
 #
 # 已经能真跑：`sync` / `lock` / `fmt` / `lint` / `typecheck` / `test` / `check` / `serve` /
 #            `contract-check` / `probe-reranker` / `eval` / `t1` / `t2` / `t2-dump` /
@@ -12,7 +12,7 @@
 #   · WSL 侧那台**已装**（`sudo apt-get install make`）。
 #   Makefile 始终是命令的**唯一声明处**——目标是什么，与"这台机器装没装 make"无关。
 #
-# ⚠ **`.env` 由 [`common/config.py`](src/tianxi_am/common/config.py) 读**（2026-09-24 起）
+# ⚠ **`.env` 由 [`common/config.py`](src/tianximem/common/config.py) 读**（2026-09-24 起）
 #   ⇒ `serve` **不需要**额外的 `--env-file`，别再加一条会与它打架的注入路径。
 #   但 `tools/check_env.py` 是**独立进程**、只读 `os.environ`，所以 `check` 那一项
 #   显式带 `--env-file`——它也刻意**不依赖配置层**（配置层坏了它还得能跑）。
@@ -93,7 +93,7 @@ qdrant-down:  ## 停 Qdrant
 # 下面三条把**服务本身**也放进容器（**部署环路**，见 deploy/CLAUDE.md）。
 
 image-build:  ## 构建检索服务镜像（上下文是仓库根，不是 deploy/）
-	docker build -f deploy/Dockerfile -t tianxi-am:local .
+	docker build -f deploy/Dockerfile -t tianximem:local .
 # ⚠ `-f deploy/Dockerfile .` 的最后那个 `.` **不能省**：Dockerfile 要 pyproject.toml /
 #    uv.lock / src/ / configs/，所以上下文必须是仓库根（deploy/.dockerignore 在根上）。
 # ⚠ 镜像里【不装 [local] extra】（torch 那几个 G）——提交链路的三个模型全在远端网关。
@@ -115,18 +115,18 @@ deploy-check:  ## 对**已部署的容器**跑契约预检（真 HTTP，不消�
 #    从本机打是 `make contract-check` 那条路（`--base-url http://127.0.0.1:<宿主端口>`）。
 
 serve:  ## 起 Add/Search 服务（FastAPI + uvicorn，单进程）
-	uv run uvicorn tianxi_am.service.app:create_app_from_env --factory --workers 1
+	uv run uvicorn tianximem.service.app:create_app_from_env --factory --workers 1
 # ⚠ 必须 --workers 1。⚠ **D25 之后原因变了**：旧理由是"按 session 串行化用的是进程内锁，
 #    多 worker 会静默失效"——`SessionLocks` 已删，那条不再成立。现在拒的是
 #    **"放开多 worker 需要的验证一件都没做"**（并发写压力 / busy_timeout 多进程争用 /
 #    各自的 Qdrant 客户端）。⇒ **不要用"反正现在安全了"当理由把它去掉。**
 #    两条防线都会拦：`--workers N`（N>1）被 assert_single_process() 拦下，
-#    TIANXI_WORKERS != 1 被配置校验拦下（见 src/tianxi_am/common/config.py）。
+#    TIANXIMEM_WORKERS != 1 被配置校验拦下（见 src/tianximem/common/config.py）。
 # ⚠ 用 --factory 而不是模块级 app：模块级 app 会让"导入本模块"就要求环境变量齐备，
-#    测试没法只导入工厂函数（见 src/tianxi_am/service/app.py 的 docstring）。
+#    测试没法只导入工厂函数（见 src/tianximem/service/app.py 的 docstring）。
 # ⚠ 需要 .env 里的 AML_EMB_BASE_URL / AML_EMB_API_KEY 与 configs/default.yaml；
 #    缺了会在启动时响亮失败（不会带着空值跑起来）。
-#    开发期建议 TIANXI_PROFILE=local（换用独立的 memories_dev 集合）。
+#    开发期建议 TIANXIMEM_PROFILE=local（换用独立的 memories_dev 集合）。
 
 test:  ## 跑单元测试
 	uv run pytest
@@ -166,7 +166,7 @@ eval:  ## 跑一轮代理评测（§13）：DATASET / ARGS 可覆盖
 #   `.env` 是 `common/config.py` 自己读的。少了它 → Add/Search 全跑完、**裁判才炸**。
 #   缺哪个名字会在跑之前直说（退出码 2）。
 # ⚠ 缺 `--embedder` 时 run record 的模型指纹会写"未声明"——**R1 要求记下换没换模型**，
-#   所以想留下可比记录就设 `TIANXI_EMBED_MODEL`（或 `ARGS='--embedder ...'`）。
+#   所以想留下可比记录就设 `TIANXIMEM_EMBED_MODEL`（或 `ARGS='--embedder ...'`）。
 # ⚠ 冒烟用 `ARGS='--limit 3'`；**截断跑会在数据指纹的 note 里留警示**，别拿它跟全量比。
 
 t1:  ## §13 的 T1 实验：时间戳前缀 带/不带（**改渲染 = 重建索引**）

@@ -32,7 +32,7 @@ from eval.experiments.run import main as run_main
 EXIT_OK: Final[int] = 0
 EXIT_PRECONDITION_FAILED: Final[int] = 2
 
-#: 冻结快照的根目录。**它是 `TIANXI_CONFIG_DIR` 要指向的地方**（configs/CLAUDE.md）。
+#: 冻结快照的根目录。**它是 `TIANXIMEM_CONFIG_DIR` 要指向的地方**（configs/CLAUDE.md）。
 RUNS_DIR: Final[Path] = Path("configs/runs")
 
 #: 基线配置（两份都要**原样**进快照，否则臂跑的是内置默认值而不是今天的值）。
@@ -233,7 +233,7 @@ def commands(arm: Arm, *, dataset: str, base_url: str, limit: int | None) -> lis
     """不带 `--execute` 时打印的两条命令（起服务 / 跑一轮）。**它计划、不代管进程。**"""
     limit_arg = f" --limit {limit}" if limit is not None else ""
     return [
-        f"TIANXI_CONFIG_DIR={arm.dir} TIANXI_PROFILE=local make serve",
+        f"TIANXIMEM_CONFIG_DIR={arm.dir} TIANXIMEM_PROFILE=local make serve",
         (
             "uv run --env-file .env python -m eval.experiments.run"
             f" --dataset {dataset} --base-url {base_url}"

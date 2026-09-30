@@ -20,7 +20,7 @@ uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000   # 打�
 `make contract-check` 必须是一条命令、一个退出码。所以缺省自己 `subprocess` 起
 `uvicorn --factory --workers 1`，跑完关掉。（`--base-url` 用于打已经在跑的那一个。）
 
-**2. 它不 `import tianxi_am`。**
+**2. 它不 `import tianximem`。**
 `eval/` 的纪律是"**打 HTTP、不 import `src/`**"（[`../CLAUDE.md`](../CLAUDE.md)）——
 理由有两条，两条都适用于本文件：契约层**只有打 HTTP 才碰得到**（进程内调用根本看不到
 `/add` 的 422 与 `data` 的序列化）。顺带还有一条更微妙的：
@@ -31,7 +31,7 @@ uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000   # 打�
 > 这些性质**独立于我们的实现**。
 
 **3. 它不碰开发期的集合。**
-自启时用一份**临时 configs/**（`TIANXI_CONFIG_DIR` 指过去），把集合换成
+自启时用一份**临时 configs/**（`TIANXIMEM_CONFIG_DIR` 指过去），把集合换成
 `memories_preflight`，跑完 drop 掉。否则预检写进去的记忆会**永久留在 `memories_dev` 里**，
 污染之后的每一次检索——而那正是 `open-questions.md` **V9** 的形状。
 
@@ -82,20 +82,20 @@ EXIT_PRECONDITION_FAILED = 2
 
 _REPO = Path(__file__).resolve().parents[2]
 
-#: ⚠ 这两个名字的**单一声明**在 `src/tianxi_am/common/config.py` 的 `ENV_*` 表。
+#: ⚠ 这两个名字的**单一声明**在 `src/tianximem/common/config.py` 的 `ENV_*` 表。
 #: 本文件不能 import 它（`eval/` 不 import `src/`），所以这里是一处**有意的重复**——
 #: 由 `tests/test_contract_preflight.py::test_env_names_match_the_single_declaration` 钉住相等。
-_ENV_QDRANT_URL = "TIANXI_QDRANT_URL"
+_ENV_QDRANT_URL = "TIANXIMEM_QDRANT_URL"
 _ENV_EMBED_BASE_URL = "AML_EMB_BASE_URL"
 _ENV_EMBED_API_KEY = "AML_EMB_API_KEY"
-_ENV_CONFIG_DIR = "TIANXI_CONFIG_DIR"
-_ENV_PROFILE = "TIANXI_PROFILE"
+_ENV_CONFIG_DIR = "TIANXIMEM_CONFIG_DIR"
+_ENV_PROFILE = "TIANXIMEM_PROFILE"
 
-#: `TIANXI_QDRANT_URL` 没设时的回落值（与 `config.py` 的内置默认同值）。
+#: `TIANXIMEM_QDRANT_URL` 没设时的回落值（与 `config.py` 的内置默认同值）。
 _DEFAULT_QDRANT_URL = "http://localhost:6333"
-_ENV_SQLITE_PATH = "TIANXI_SQLITE_PATH"
-_ENV_EMBED_CACHE_DIR = "TIANXI_EMBED_CACHE_DIR"
-_ENV_WORKERS = "TIANXI_WORKERS"
+_ENV_SQLITE_PATH = "TIANXIMEM_SQLITE_PATH"
+_ENV_EMBED_CACHE_DIR = "TIANXIMEM_EMBED_CACHE_DIR"
+_ENV_WORKERS = "TIANXIMEM_WORKERS"
 
 #: 预检专用的集合名。**与开发期的 `memories_dev` / 提交期的 `memories` 都不同**。
 _PREFLIGHT_COLLECTION = "memories_preflight"
@@ -290,7 +290,7 @@ def _launch_service(*, timeout: float, verbose: bool) -> ServiceHandle:
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "tianxi_am.service.app:create_app_from_env",
+                "tianximem.service.app:create_app_from_env",
                 "--factory",
                 "--workers",
                 "1",
@@ -818,7 +818,7 @@ class Preflight:
     def check_unknown_fields_are_tolerated(self) -> None:
         """**未知字段一律忽略**（不做 `extra="forbid"`）。
 
-        理由在 [`../../src/tianxi_am/service/schemas.py`](../../src/tianxi_am/service/schemas.py)：
+        理由在 [`../../src/tianximem/service/schemas.py`](../../src/tianximem/service/schemas.py)：
         AML 将来加字段不该让我们 422——那会把它送进重试。
         """
         resp = self._client.post(

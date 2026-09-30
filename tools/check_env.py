@@ -17,7 +17,7 @@ LongMemEval 都没传**——若网关默认开着，thinking 会混进 `generat
 本脚本**不打印任何 key**，只打印"已填/未填"。`--env-file` 由调用方传入
 （`make check` 用 `uv run --env-file .env`），**别在这里自己解析 `.env`**——
 那会变成第二个配置加载点（`.env` 现在由
-[`common/config.py`](../src/tianxi_am/common/config.py) 读）。
+[`common/config.py`](../src/tianximem/common/config.py) 读）。
 **本工具刻意不依赖配置层**：配置层自己坏了的时候，这条诊断仍要能跑。
 """
 
@@ -92,7 +92,7 @@ def _discover_model(base: str, key: str, *, prefer: str = "") -> str:
     **永远红的探针**（而"永远红"和"真的坏了"在屏幕上长得一样，最后会被人关掉）。
 
     ⚠ 也**不读配置层**（本工具的纪律：配置层自己坏了时它还得能跑）。
-    `prefer` 给了就用它（例如 `.env` 里的 `TIANXI_RERANKER_MODEL`），否则取 `/v1/models`
+    `prefer` 给了就用它（例如 `.env` 里的 `TIANXIMEM_RERANKER_MODEL`），否则取 `/v1/models`
     的第一个——**两个 id 都会打进探针结论**，所以"用了哪个"永远是可见的。
     """
     if prefer:
@@ -246,9 +246,9 @@ def run_all(env: dict[str, str] | None = None) -> list[Check]:
     llm_base, llm_key = source.get("AML_BASE_URL", ""), source.get("AML_API_KEY", "")
     return [
         *check_keys(),
-        check_qdrant(source.get("TIANXI_QDRANT_URL") or "http://localhost:6333"),
+        check_qdrant(source.get("TIANXIMEM_QDRANT_URL") or "http://localhost:6333"),
         check_embedding(emb_base, emb_key, source.get("AML_EMB_MODEL", "")),
-        check_reranker(emb_base, emb_key, source.get("TIANXI_RERANKER_MODEL", "")),
+        check_reranker(emb_base, emb_key, source.get("TIANXIMEM_RERANKER_MODEL", "")),
         check_llm(llm_base, llm_key, source.get("AML_MODEL", "")),
     ]
 

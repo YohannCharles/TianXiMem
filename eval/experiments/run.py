@@ -9,7 +9,7 @@
 >   → run_record.build_record / write_record    配置指纹 + 数据指纹 + 分数
 > ```
 >
-> **一条边界**：打 HTTP、**不 import `src/tianxi_am`**（[`../CLAUDE.md`](../CLAUDE.md)）。
+> **一条边界**：打 HTTP、**不 import `src/tianximem`**（[`../CLAUDE.md`](../CLAUDE.md)）。
 > 所以本文件只依赖 `eval/` 与标准库 + `httpx`。
 
 ## 为什么需要一个通用 runner
@@ -129,7 +129,7 @@ def models_fingerprint(*, embedder: str, llm: str, reranker: str) -> dict[str, s
     ⇒ 所以这里由调用方声明，缺了就**显式写成"没说"**，而不是编一个看起来合理的值。
     """
     return {
-        "embedder": embedder or "<未声明：传 --embedder 或设 TIANXI_EMBED_MODEL>",
+        "embedder": embedder or "<未声明：传 --embedder 或设 TIANXIMEM_EMBED_MODEL>",
         "llm": llm or "<未声明：传 --llm>",
         "reranker": reranker or "disabled",
     }
@@ -382,14 +382,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--switches", default=None, help="消融臂声明，如 '{\"rerank.enabled\": false}'"
     )
     parser.add_argument("--notes", default="", help="写进 run record 的自由文本")
-    parser.add_argument("--embedder", default=os.environ.get("TIANXI_EMBED_MODEL", ""))
+    parser.add_argument("--embedder", default=os.environ.get("TIANXIMEM_EMBED_MODEL", ""))
     parser.add_argument("--llm", default="")
-    parser.add_argument("--reranker", default=os.environ.get("TIANXI_RERANKER_MODEL", ""))
+    parser.add_argument("--reranker", default=os.environ.get("TIANXIMEM_RERANKER_MODEL", ""))
     parser.add_argument(
         "--metrics",
         default=None,
         help=(
-            "服务写的 §14 指标快照路径（缺省取 `TIANXI_METRICS_PATH`）。"
+            "服务写的 §14 指标快照路径（缺省取 `TIANXIMEM_METRICS_PATH`）。"
             "`rerank.degraded > 0` 会在这里被念出来——**端点是死是活只有这一条会说**（V12）"
         ),
     )
@@ -468,23 +468,23 @@ def _assemble_record(args, *, run_id: str, bench_dir: Path, samples, results, no
 
 
 def _read_service_metrics(args) -> dict[str, Any]:
-    """读服务侧写的 §14 指标快照（`--metrics`，缺省取 `TIANXI_METRICS_PATH`）。
+    """读服务侧写的 §14 指标快照（`--metrics`，缺省取 `TIANXIMEM_METRICS_PATH`）。
 
     **它不是 `counters=`**：那份是 §6.5 的 pending 计数器，`schema.validate()` 要求
     `pending_orphaned_*` 两个键**必须在场**（D24 之后恒为 `None`）。§14 的指标住
     `metrics=`（[`../reports/CLAUDE.md`](../reports/CLAUDE.md) 的字段表就是这么分的）。
 
     ⚠ **读不到就返回空 dict，并且说出来**：空 `metrics` 是**可见的**
-    （记录里没有 `rerank` 键），但它有两种来源——"服务侧没配 `TIANXI_METRICS_PATH`"
+    （记录里没有 `rerank` 键），但它有两种来源——"服务侧没配 `TIANXIMEM_METRICS_PATH`"
     与"这一轮真的没精排"。不说出来，第二种会被读成第一种。
     """
-    raw = args.metrics or os.environ.get("TIANXI_METRICS_PATH", "")
+    raw = args.metrics or os.environ.get("TIANXIMEM_METRICS_PATH", "")
     if not raw:
         return {}
     path = Path(raw)
     if not path.exists():
         print(
-            f"⚠ 指标快照不存在：{path}——服务侧没配 `TIANXI_METRICS_PATH`，"
+            f"⚠ 指标快照不存在：{path}——服务侧没配 `TIANXIMEM_METRICS_PATH`，"
             "或那个进程这一轮没跑过 Search。这一轮的 metrics 为空。",
             file=sys.stderr,
         )

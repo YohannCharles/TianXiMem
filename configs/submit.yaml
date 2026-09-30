@@ -1,4 +1,4 @@
-# 提交期覆盖（`TIANXI_PROFILE=submit`）
+# 提交期覆盖（`TIANXIMEM_PROFILE=submit`）
 #
 # ⚠ **只写真正与基线不同的键。** 这份文件存在的意义就是让"提交期与基线差在哪"一眼可见
 #    （configs/CLAUDE.md）——重述默认值等于把那个信息淹掉。

@@ -20,8 +20,8 @@ off   rerank.enabled = false   ← 直接用融合名次
 uv run python -m eval.experiments.a3_rerank --freeze
 
 # 2) 两个服务，各带一份快照（**同一个集合**，端口不同）
-TIANXI_CONFIG_DIR=configs/runs/a3-on  TIANXI_PROFILE=local make serve   # :8000
-TIANXI_CONFIG_DIR=configs/runs/a3-off TIANXI_PROFILE=local make serve   # :8001
+TIANXIMEM_CONFIG_DIR=configs/runs/a3-on  TIANXIMEM_PROFILE=local make serve   # :8000
+TIANXIMEM_CONFIG_DIR=configs/runs/a3-off TIANXIMEM_PROFILE=local make serve   # :8001
 
 # 3) 两臂各跑一轮（同一份数据、同一批题）
 uv run python -m eval.experiments.a3_rerank --execute \

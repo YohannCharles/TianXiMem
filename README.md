@@ -1,4 +1,4 @@
-# TianXi_AM
+# TianXiMem
 
 **AML（Agent Memory Leaderboard，记忆之巅排行榜）参赛系统。**只提供 `Add` 与 `Search` 两个 HTTP 端点，答案生成、评判、聚合全部由 AML 完成。
 
@@ -97,7 +97,7 @@
 | [`benchmark_data/`](./docs/benchmark-data.md) | AML 官方 pipeline 源码与数据集的**只读归档**（**整目录 gitignored**，说明见链接的文档） | §12 |
 | [`configs/`](./configs/) | 运行时配置：三个 profile + 完整开关清单 + 开关依赖图 | §15 |
 | [`deploy/`](./deploy/) | Qdrant server（**版本钉死**）、Step 5 重建 runbook | §6.3、§7.3 |
-| [`src/tianxi_am/`](./src/tianxi_am/) | 检索服务本体 | §6–§11、§14、§15 |
+| [`src/tianximem/`](./src/tianximem/) | 检索服务本体 | §6–§11、§14、§15 |
 | [`eval/`](./eval/) | 代理评测：`datasets/` `harness/` `experiments/` `baselines/` `smoke/` `reports/` | §12、§13 |
 | [`tests/`](./tests/) | 单元测试（记忆块组合 / 幂等 / 契约 / 隔离 / 开关纯度） | — |
 | [`var/`](./var/) | 运行时产物（**gitignored**，只保留说明） | §6.1 |

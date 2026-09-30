@@ -18,8 +18,8 @@ import random
 
 from tests.conftest import rd
 
-from tianxi_am.pairing import AddBatch, Message, apply_batch
-from tianxi_am.store.sqlite_store import STATUS_COMPLETE, SqliteStore
+from tianximem.pairing import AddBatch, Message, apply_batch
+from tianximem.store.sqlite_store import STATUS_COMPLETE, SqliteStore
 
 
 def _msg(role: str, content: str, ts: int | None = None) -> Message:

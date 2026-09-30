@@ -23,7 +23,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tianxi_am.common import config as cfg
+from tianximem.common import config as cfg
 
 _PREFLIGHT_PATH = Path(__file__).resolve().parents[1] / "eval" / "smoke" / "preflight.py"
 _REPO = Path(__file__).resolve().parents[1]
@@ -44,7 +44,7 @@ def preflight():
 
 
 def test_preflight_does_not_import_src() -> None:
-    """**`eval/` 的边界是结构性的**：本文件不得 `import tianxi_am`。
+    """**`eval/` 的边界是结构性的**：本文件不得 `import tianximem`。
 
     理由两条（[`../../eval/CLAUDE.md`](../../eval/CLAUDE.md)）：
 
@@ -53,18 +53,18 @@ def test_preflight_does_not_import_src() -> None:
     * **契约层只有走 HTTP 才碰得到**——进程内调用根本看不到 `/add` 的 422
       与 `data` 的序列化。
 
-    ⚠ 用 AST 而不是文本匹配：注释与 docstring 里出现 `tianxi_am` 是**正常的**
+    ⚠ 用 AST 而不是文本匹配：注释与 docstring 里出现 `tianximem` 是**正常的**
     （本文件的说明就在提它），把它们算成违规会让规则变成噪音。
     """
     tree = ast.parse(_PREFLIGHT_PATH.read_text(encoding="utf-8"), filename=str(_PREFLIGHT_PATH))
     offenders: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            if (node.module or "").startswith("tianxi_am"):
+            if (node.module or "").startswith("tianximem"):
                 offenders.append(f"L{node.lineno}: from {node.module} import ...")
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.startswith("tianxi_am"):
+                if alias.name.startswith("tianximem"):
                     offenders.append(f"L{node.lineno}: import {alias.name}")
 
     assert offenders == [], (
@@ -162,7 +162,7 @@ def test_preconditions_fail_loudly_when_the_service_cannot_start(tmp_path: Path)
     这是本文件最要紧的一条：预检的全部价值在于"**它是门禁**"。一个在缺前置时静默放行的
     门禁，会让 Smoke 的额度直接暴露在契约违规之下。
 
-    **怎么做到不依赖机器状态**：把 `TIANXI_ENV_FILE` 指到一个不存在的路径
+    **怎么做到不依赖机器状态**：把 `TIANXIMEM_ENV_FILE` 指到一个不存在的路径
     ⇒ 连 `.env` 也不会被读到 ⇒ 密钥必然为空 ⇒ 服务启动即失败。
     （配置校验由服务自己负责，见 `preflight._launch_service` 的说明。）
     """
@@ -175,8 +175,8 @@ def test_preconditions_fail_loudly_when_the_service_cannot_start(tmp_path: Path)
         timeout=180,
         cwd=str(_REPO),
         env={
-            **{k: v for k, v in os.environ.items() if not k.startswith(("AML_", "TIANXI_"))},
-            "TIANXI_ENV_FILE": str(tmp_path / "no-such.env"),
+            **{k: v for k, v in os.environ.items() if not k.startswith(("AML_", "TIANXIMEM_"))},
+            "TIANXIMEM_ENV_FILE": str(tmp_path / "no-such.env"),
         },
     )
     assert result.returncode == 2, (

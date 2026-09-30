@@ -100,7 +100,7 @@ def main() -> None:
     embedder = GatewayEmbedder(
         base_url=os.environ["AML_EMB_BASE_URL"],
         api_key=os.environ["AML_EMB_API_KEY"],
-        model=os.environ.get("TIANXI_EMBED_MODEL", "Qwen/Qwen3-Embedding-8B"),
+        model=os.environ.get("TIANXIMEM_EMBED_MODEL", "Qwen/Qwen3-Embedding-8B"),
     )
     # ★ 唯一的一处改动：把它的 embedder 工厂换掉。其余全是它的代码。
     api.build_embedder = lambda model_name, device=None, query_prefix=None: embedder  # type: ignore[assignment]

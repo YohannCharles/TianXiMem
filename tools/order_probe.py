@@ -44,7 +44,7 @@ from pathlib import Path
 import httpx
 
 # ⚠ **本仓唯一一个 import `eval` 的 `tools/` 脚本**，所以需要下面这一行：
-#   `eval` 不是已安装的包（`pyproject.toml` 只装 `src/tianxi_am`），它靠 cwd 或 pytest 的
+#   `eval` 不是已安装的包（`pyproject.toml` 只装 `src/tianximem`），它靠 cwd 或 pytest 的
 #   `pythonpath` 才可见。而直接跑脚本时 `sys.path[0]` 是**脚本所在目录**（`tools/`），
 #   不是仓库根 ⇒ 不插这一行就是 `ModuleNotFoundError: No module named 'eval'`。
 #   `eval/harness/` 对归档 pipeline 用的是同一招（注入 `PYTHONPATH`）。
@@ -89,7 +89,7 @@ def _serve(name: str, port: int, collection: str, db: Path, tag: str = "") -> su
     # ⚠ **起之前必须先确认端口空着**——否则会撞上"上一轮没杀干净的服务"。
     #   后果不是报错，而是**静默测了别人的库**：`_serve` 的探活会立刻拿到那个残留服务的
     #   `/health` 200、返回一个马上死掉的进程，随后所有请求都打到残留服务上
-    #   （它的 `TIANXI_SQLITE_PATH` 指向别的目录）⇒ 断言失败在一个与被测对象无关的地方。
+    #   （它的 `TIANXIMEM_SQLITE_PATH` 指向别的目录）⇒ 断言失败在一个与被测对象无关的地方。
     #   这正是本项目反复对付的那一类失败：**它看起来像"代码坏了"，其实是"测错了对象"**。
     if not _port_is_free(port):
         raise RuntimeError(
@@ -99,17 +99,17 @@ def _serve(name: str, port: int, collection: str, db: Path, tag: str = "") -> su
     cfg = _config_dir(name, collection)
     env = {
         "PATH": f"{Path.home()}/.local/bin:/usr/local/bin:/usr/bin:/bin",
-        "TIANXI_PROFILE": "local",
-        "TIANXI_CONFIG_DIR": str(cfg),
-        "TIANXI_SQLITE_PATH": str(db),
+        "TIANXIMEM_PROFILE": "local",
+        "TIANXIMEM_CONFIG_DIR": str(cfg),
+        "TIANXIMEM_SQLITE_PATH": str(db),
         # 向量缓存落在探针自己的目录里：复用别人的缓存目录会在那个实验被清掉时静默重付一遍
-        "TIANXI_EMBED_CACHE_DIR": str(ROOT / "var" / "order-probe-cache"),
+        "TIANXIMEM_EMBED_CACHE_DIR": str(ROOT / "var" / "order-probe-cache"),
     }
     proc = subprocess.Popen(
         [
             str(Path.home() / ".local" / "bin" / "uv"),
             "run", "--env-file", str(ROOT / ".env"),
-            "uvicorn", "tianxi_am.service.app:create_app_from_env",
+            "uvicorn", "tianximem.service.app:create_app_from_env",
             "--factory", "--workers", "1", "--port", str(port),
         ],
         cwd=ROOT, env={**env, "HOME": str(Path.home())},

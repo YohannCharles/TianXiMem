@@ -13,10 +13,10 @@ Dockerfile      检索服务的镜像（多阶段；**上下文是仓库根**）
 **这个目录最要紧的两件事**：① 把 **Qdrant 的版本**钉死；② 把**服务做成单进程容器**。
 其余都是围绕这两条的说明。
 
-> ### ⚠ 跑哪一套由 `TIANXI_PROFILE` 决定，而 **default 不是提交口径**
+> ### ⚠ 跑哪一套由 `TIANXIMEM_PROFILE` 决定，而 **default 不是提交口径**
 >
 > `configs/submit.yaml` **已建**（2026-09-28，只换了模型名 `text-embedding-v4`），
-> 但它的取值要靠 `TIANXI_PROFILE=submit` 才生效；`.env.example` 里默认写的仍是 `default`
+> 但它的取值要靠 `TIANXIMEM_PROFILE=submit` 才生效；`.env.example` 里默认写的仍是 `default`
 > ——那一份的 `models.embedder` 是开发期的 `qwen3-embedding-8b`。
 > ⇒ **镜像本身两种口径都能跑**，差别只在 profile 与 `AML_EMB_*` 指向哪。
 > ⬜ **Step 5 尚未完成**：由模型派生的阈值**还没重标定**，换模型后**整个集合要重建**
@@ -52,9 +52,9 @@ make deploy-check                      # 在容器里跑契约预检（14 条，
 **① `deploy/.env` 全文**（其余键一个都不用填）：
 
 ```bash
-TIANXI_PROFILE=default                          # 集合 memories（⚠ 不是 local）
-TIANXI_BIND=0.0.0.0                             # 要让别的机器访问就必须这样
-TIANXI_PORT=28088                               # 对外端口
+TIANXIMEM_PROFILE=default                          # 集合 memories（⚠ 不是 local）
+TIANXIMEM_BIND=0.0.0.0                             # 要让别的机器访问就必须这样
+TIANXIMEM_PORT=28088                               # 对外端口
 AML_EMB_BASE_URL=http://host.docker.internal:9002/v1
 AML_EMB_API_KEY=<网关的 key；网关不校验也要填个非空的>
 ```
@@ -81,9 +81,9 @@ curl -s http://10.193.135.28:28088/health                      # 期望 {"status
 | 现象 | 原因 | 怎么办 |
 | --- | --- | --- |
 | Add 报 500 / connection refused | `.env` 里写了 `127.0.0.1:9002` | 改 `host.docker.internal:9002` |
-| 从别的机器 connection refused，**日志里什么都没有** | `TIANXI_BIND` 还是 `127.0.0.1` | 设 `0.0.0.0` |
+| 从别的机器 connection refused，**日志里什么都没有** | `TIANXIMEM_BIND` 还是 `127.0.0.1` | 设 `0.0.0.0` |
 | `sqlite3.OperationalError: unable to open database file`，容器**启动即退** | 用了**绑定挂载**（`-v /宿主/路径:/data`）——容器以 `app`（**uid 10001**）运行，而那个目录属于宿主用户 | `chown -R 10001:10001 /宿主/路径`（或 `chmod 777`）。⚠ **命名卷不会有这个问题**——Docker 首次挂载时会继承镜像里 `/data` 的属主，所以 compose 默认那条路是好的 |
-| `Bind for 0.0.0.0:6333 failed: port is already allocated` | 老版本 compose 起的 Qdrant 容器还占着 0.0.0.0 | 先 `docker rm -f tianxi-qdrant`，或用 `TIANXI_QDRANT_PORT` 换端口 |
+| `Bind for 0.0.0.0:6333 failed: port is already allocated` | 老版本 compose 起的 Qdrant 容器还占着 0.0.0.0 | 先 `docker rm -f tianxi-qdrant`，或用 `TIANXIMEM_QDRANT_PORT` 换端口 |
 | Add 报 4xx 且信息里有模型名 | `configs/default.yaml` 的 `models.embedder`（现在是 `qwen3-embedding-8b`）与本机网关服务的不一致 | ⚠ 网关（vLLM 直服）**会校验** `model`：必须与 `/v1/models` 列出的 id 逐字相同，否则 404（改 config 后重建镜像，或挂配置目录，见 §0.5） |
 | 服务起不来、日志说缺 `embed.base_url` | `deploy/.env` 没建或键名写错 | 见上面 ① |
 
@@ -91,7 +91,7 @@ curl -s http://10.193.135.28:28088/health                      # 期望 {"status
 > 拷到别处会报 `lstat .../var/deploy: no such file or directory`。要换位置就连 `Dockerfile` 与
 > 仓库根一起拷（或者改 `context`）。
 
-### 0.5 不改镜像改配置：挂一个 `TIANXI_CONFIG_DIR`
+### 0.5 不改镜像改配置：挂一个 `TIANXIMEM_CONFIG_DIR`
 
 **阈值 / 权重 / 开关都在 `configs/*.yaml` 里，而它们是烘进镜像的**（有意为之：配置文件是被评审、
 被 diff 的产物，不是运行时输入）。要在**不重建镜像**的前提下改一项，挂一个配置目录：
@@ -104,7 +104,7 @@ vim /srv/tianxi/configs/default.yaml        # 例如 rerank.enabled: true
 
 # ② compose 里加两行（或写进 override 文件）
 #    volumes:  - /srv/tianxi/configs:/cfg:ro
-#    environment:  TIANXI_CONFIG_DIR: /cfg
+#    environment:  TIANXIMEM_CONFIG_DIR: /cfg
 ```
 
 > ⚠ **挂载后 `configs/` 就与镜像里那份脱钩了**——镜像升级不会带上新的配置，
@@ -124,9 +124,9 @@ vim /srv/tianxi/configs/default.yaml        # 例如 rerank.enabled: true
 # ① 配置：`<profile>.yaml` 里 rerank.enabled（按 §0.5 挂目录，或重建镜像）
 #    ⚠ 挂的是哪个 profile 就改哪个文件：default → default.yaml，submit → submit.yaml
 # ② .env 加三行：
-TIANXI_RERANKER_BASE_URL=http://host.docker.internal:9002/v1   # ⚠ 同 embedding 那条规矩：不是 127.0.0.1
-TIANXI_RERANKER_API_KEY=<key>
-TIANXI_RERANKER_MODEL=Qwen3-Reranker-4B                        # 只进 run record，端点忽略它
+TIANXIMEM_RERANKER_BASE_URL=http://host.docker.internal:9002/v1   # ⚠ 同 embedding 那条规矩：不是 127.0.0.1
+TIANXIMEM_RERANKER_API_KEY=<key>
+TIANXIMEM_RERANKER_MODEL=Qwen3-Reranker-4B                        # 只进 run record，端点忽略它
 ```
 
 **怎么确认真的生效**（三层，从便宜到贵）：
@@ -153,10 +153,10 @@ TIANXI_RERANKER_MODEL=Qwen3-Reranker-4B                        # 只进 run reco
 | 要求 | 为什么 | 怎么确认 |
 | --- | --- | --- |
 | **能连到自建网关**（embedding 必需 / reranker 可选） | 三个模型都不在本机（§2.3 / D12）⇒ **没有本地推理，也就不需要 GPU** | 下面那条命令，**期望 `200`** |
-| **不需要外网**（除了上面那个网关） | tiktoken 的 BPE 已烘进镜像；依赖已在构建期装完 | `docker run --rm --network none --entrypoint python tianxi-am:local -c "import tiktoken; tiktoken.get_encoding('o200k_base')"` |
+| **不需要外网**（除了上面那个网关） | tiktoken 的 BPE 已烘进镜像；依赖已在构建期装完 | `docker run --rm --network none --entrypoint python tianximem:local -c "import tiktoken; tiktoken.get_encoding('o200k_base')"` |
 | **Qdrant 与真源都有持久盘** | SQLite 不可重建（§6.3） | `docker volume ls`；**备份见 §4 的表** |
-| **8000 端口的暴露面想清楚** | **本服务没有任何鉴权**——`user_id` 是隔离字段，不是认证（§2.2） | `TIANXI_BIND` 默认 `127.0.0.1`（只有本机）；要对外就自己加 TLS + 反代 |
-| **镜像 tag 不要用 `latest`** | 与 Qdrant 同源的理由：Full 只有 2 次、一旦接受即版本冻结 | 打 tag 时带上日期或 commit，别覆盖 `tianxi-am:local` 就上线 |
+| **8000 端口的暴露面想清楚** | **本服务没有任何鉴权**——`user_id` 是隔离字段，不是认证（§2.2） | `TIANXIMEM_BIND` 默认 `127.0.0.1`（只有本机）；要对外就自己加 TLS + 反代 |
+| **镜像 tag 不要用 `latest`** | 与 Qdrant 同源的理由：Full 只有 2 次、一旦接受即版本冻结 | 打 tag 时带上日期或 commit，别覆盖 `tianximem:local` 就上线 |
 
 > ⚠ **服务器上跑 `default` profile，不是 `local`**：`local` 会把集合换成 `memories_dev`
 > （开发期与提交期隔离用）。**提交期必须是 `memories`**——换了集合名 = 换了集合，
@@ -177,8 +177,8 @@ print('GET /models ->', r.status_code, '（期望 200）')"
 ```bash
 docker compose -f deploy/compose.yaml exec -T app python -c "
 import os, httpx
-u = os.environ['TIANXI_RERANKER_BASE_URL'].rstrip('/')
-r = httpx.get(u + '/models', headers={'Authorization': 'Bearer ' + os.environ['TIANXI_RERANKER_API_KEY']}, timeout=15)
+u = os.environ['TIANXIMEM_RERANKER_BASE_URL'].rstrip('/')
+r = httpx.get(u + '/models', headers={'Authorization': 'Bearer ' + os.environ['TIANXIMEM_RERANKER_API_KEY']}, timeout=15)
 print('GET /models ->', r.status_code)"
 ```
 
@@ -186,16 +186,16 @@ print('GET /models ->', r.status_code)"
 
 ```bash
 # 路 A：在服务器上构建（需要服务器能访问 PyPI + ghcr.io 拉 uv 二进制）
-git clone <repo> && cd TianXi_AM
+git clone <repo> && cd TianXiMem
 cp deploy/.env.example deploy/.env      # 填值
 make up                                 # 内部就是 up -d --build
 
 # 路 B：本地构建、导出、scp 过去（服务器不需要外网，只需要 docker）
 make image-build
-docker save tianxi-am:local | gzip > tianxi-am.tar.gz
-scp tianxi-am.tar.gz deploy/ docker-compose.yml server:/opt/tianxi/
+docker save tianximem:local | gzip > tianximem.tar.gz
+scp tianximem.tar.gz deploy/ docker-compose.yml server:/opt/tianxi/
 # 服务器上：
-gunzip -c tianxi-am.tar.gz | docker load
+gunzip -c tianximem.tar.gz | docker load
 docker compose up -d          # 注意：不要带 --build，否则它会想重新构建
 ```
 
@@ -207,11 +207,11 @@ docker compose up -d          # 注意：不要带 --build，否则它会想重�
 
 > ⚠ **路 B 要连 `deploy/` 一起拷**（compose、`.env`），但**不要拷 `deploy/.env.example`
 > 就以为完事**——真值在 `.env` 里。而且**别把本地 `.env` 直接 scp 上去**：
-> 里面的 `TIANXI_SQLITE_PATH` / `TIANXI_QDRANT_URL` 是开发机的值。
+> 里面的 `TIANXIMEM_SQLITE_PATH` / `TIANXIMEM_QDRANT_URL` 是开发机的值。
 > 服务器上的 `.env` **从 `.env.example` 起**，只填密钥。
 >
 > ⚠ **镜像 tag 别用 `latest`**：与 Qdrant 同源的理由——Full 只有 2 次、一旦接受即版本冻结。
-> 打 tag 时带上日期或 commit（`tianxi-am:2026-09-28-4f56bcc`），下次要回退才有得回。
+> 打 tag 时带上日期或 commit（`tianximem:2026-09-28-4f56bcc`），下次要回退才有得回。
 
 ### 0.6 打开**请求原文采集**（S6）—— 服务器上照着做
 
@@ -219,7 +219,7 @@ docker compose up -d          # 注意：不要带 --build，否则它会想重�
 ——那是 **S6** 唯一没在本地验过的一环，而 D25 的位置模型整个押在它上面。
 **配置语义、四条纪律、一行里有哪些字段**一处声明在
 [`../docs/config-reference.md`](../docs/config-reference.md) §12 与
-[`../src/tianxi_am/service/capture.py`](../src/tianxi_am/service/capture.py)。
+[`../src/tianximem/service/capture.py`](../src/tianximem/service/capture.py)。
 **本文件只写"怎么在服务器上做"。**
 
 > ⚠ **它是代码改动，不是配置改动** ⇒ §0.5 那条"挂配置目录"的路**在这里不适用**
@@ -227,10 +227,10 @@ docker compose up -d          # 注意：不要带 --build，否则它会想重�
 
 | 步 | 做什么 | 命令 / 判据 |
 | --- | --- | --- |
-| **①** | 拿到带这一层的代码 | **路 A**（服务器能出网）：`git pull` 到含 `src/tianxi_am/service/capture.py` 的 commit（`git log --oneline -- src/tianxi_am/service/capture.py` 查得到）· **路 B**（内网）：本地 `make image-build` → `docker save` → `scp` → `docker load`（见上一节） |
+| **①** | 拿到带这一层的代码 | **路 A**（服务器能出网）：`git pull` 到含 `src/tianximem/service/capture.py` 的 commit（`git log --oneline -- src/tianximem/service/capture.py` 查得到）· **路 B**（内网）：本地 `make image-build` → `docker save` → `scp` → `docker load`（见上一节） |
 | **②** | 打开开关 | **路 A**：在**服务器**的仓库里就地改 `configs/default.yaml` → `capture: enabled: true`。**别提交它**——它是个临时诊断开关，一提交下次 `git pull` 就撞冲突（未提交状态反而会在 pull 时**拦住你**，这是好事）。**路 B**：改**本地**那份再 `make image-build`（yaml 是烘进镜像的） |
 | **③** | 重建 + 起 | **路 A**：`docker compose -f deploy/compose.yaml up -d --build` · **路 B**：`docker load` 新镜像后 `up -d`（**不要带 `--build`**）。`ps` 期望 `app (healthy)` |
-| **④** | **核对采集真的开了** | `docker compose -f deploy/compose.yaml logs app \| grep 请求采集` ⇒ 期望 `请求采集已开启：…/data/capture/requests.jsonl（每份 … 字节，写满自动换下一份）`。⚠ 若看到 **ERROR「打不开文件」**：采集已**自动关闭**，服务照常跑——去查 `TIANXI_CAPTURE_PATH` 与 `/data` 卷属主（坑表里那条 `chown 10001:10001`） |
+| **④** | **核对采集真的开了** | `docker compose -f deploy/compose.yaml logs app \| grep 请求采集` ⇒ 期望 `请求采集已开启：…/data/capture/requests.jsonl（每份 … 字节，写满自动换下一份）`。⚠ 若看到 **ERROR「打不开文件」**：采集已**自动关闭**，服务照常跑——去查 `TIANXIMEM_CAPTURE_PATH` 与 `/data` 卷属主（坑表里那条 `chown 10001:10001`） |
 | **⑤** | 跑你要跑的（冒烟一次 / 一轮 Smoke） | 见 [`../docs/submission.md`](../docs/submission.md) §1 |
 | **⑥** | 取文件 | **可能有好几份**（每 50 MiB 一份）：`docker compose -f deploy/compose.yaml exec -T app sh -c 'ls -la /data/capture/'`，再逐份 `docker compose -f deploy/compose.yaml cp app:/data/capture/requests.jsonl ./`、`…/requests.part2.jsonl ./` … |
 | **⑦** | 读它（下表） | |
@@ -296,7 +296,7 @@ for line in open('requests.jsonl', encoding='utf-8'):
 
 | 项 | 落在哪 |
 | --- | --- |
-| 集合分片数 / 命名向量 / payload 索引 / payload 内容 / 写入 `wait=true` | [`../src/tianxi_am/store/CLAUDE.md`](../src/tianxi_am/store/CLAUDE.md)（**一处声明**） |
+| 集合分片数 / 命名向量 / payload 索引 / payload 内容 / 写入 `wait=true` | [`../src/tianximem/store/CLAUDE.md`](../src/tianximem/store/CLAUDE.md)（**一处声明**） |
 
 **本目录只管起服务。** 集合是客户端建的——拓扑本身**已经是规格**（单集合 + `user_id` tenant 过滤 + `is_tenant` 索引 + 分片 1 + payload 索引先于写数据），原文见 [`../docs/config-reference.md`](../docs/config-reference.md) §8。
 
@@ -322,7 +322,7 @@ for line in open('requests.jsonl', encoding='utf-8'):
 | 1 | `docker compose -f deploy/compose.yaml stop app`（⚠ **`stop` 而不是 `down`**——`down` 是按项目拆的，会顺手把 Qdrant 也拆了） |
 | 2 | `docker compose ... exec app tar -c -C /data . > backup.tar`。⚠ **先停服务再拷**：SQLite 在 WAL 模式下直接拷文件可能拿到不一致的快照 |
 | 3 | 缓存与真源**在同一个卷** `/data/embed_cache` ⇒ `rm -rf` 那一个子目录即可（**别删 `/data` 本身**） |
-| 4–5 | `T2` 的转储走 [`../tools/reindex.py`](../tools/reindex.py)；换 profile（`TIANXI_PROFILE`）会换集合名 |
+| 4–5 | `T2` 的转储走 [`../tools/reindex.py`](../tools/reindex.py)；换 profile（`TIANXIMEM_PROFILE`）会换集合名 |
 
 **第 2 步不能省**：Qdrant 是**派生读存储**，可从 SQLite 全文重建；**SQLite 是真源，丢了就没了**。
 
@@ -357,7 +357,7 @@ for line in open('requests.jsonl', encoding='utf-8'):
 
 | 检查项 | 出处 | 容器里由谁落地 |
 | --- | --- | --- |
-| `--workers 1`（**理由见 [`../src/tianxi_am/service/CLAUDE.md`](../src/tianxi_am/service/CLAUDE.md)**："放开多 worker 需要的验证一件都没做"） | §15 → **D25** | `ENTRYPOINT` 写死 + `TIANXI_WORKERS=1`；`--workers N` 仍被 `assert_single_process()` 拦（**已在容器里实测拦下**） |
+| `--workers 1`（**理由见 [`../src/tianximem/service/CLAUDE.md`](../src/tianximem/service/CLAUDE.md)**："放开多 worker 需要的验证一件都没做"） | §15 → **D25** | `ENTRYPOINT` 写死 + `TIANXIMEM_WORKERS=1`；`--workers N` 仍被 `assert_single_process()` 拦（**已在容器里实测拦下**） |
 | Qdrant 与 SQLite 的文件都在**持久卷**上——SQLite **随 run 归档** | §15 | `qdrant_storage`（可重建，**不是备份对象**）/ `tianxi_data:/data`（**唯一备份对象**） |
 | `latency/query` 有观测——**接近 30 分钟上限就削减 agent 轮数** | §14 | ——（v1 没有 agent；见 §17.1 的 S8） |
 | 单请求最长 30 分钟，**预算充足但不是无限** | §2.2 | `stop_grace_period: 60s`——**默认 10s 会拦腰砍断在途请求** |

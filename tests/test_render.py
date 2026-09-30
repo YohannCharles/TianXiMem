@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from tianxi_am.common.render import (
+from tianximem.common.render import (
     TEMPLATE_VERSION,
     render,
 )
@@ -86,7 +86,7 @@ def test_template_separator_is_a_single_constant() -> None:
     ⚠ PRD §11.3 与 rank/README §4 之间有一处**自相矛盾**：模板块是一个换行，
     同节的示例画成了空行。这里取模板块的字面（规范表述优先于示意）。
     """
-    from tianxi_am.common.render import QUESTION_ANSWER_SEP
+    from tianximem.common.render import QUESTION_ANSWER_SEP
 
     assert QUESTION_ANSWER_SEP == "\n"
     assert render("q", "a").count(QUESTION_ANSWER_SEP) == 1
@@ -101,7 +101,7 @@ def test_render_date_is_the_switch_and_nothing_else() -> None:
 
     两臂若连格式也不同，T1 就不是一个单变量对照了。
     """
-    from tianxi_am.common.render import day_granularity, render_date
+    from tianximem.common.render import day_granularity, render_date
 
     assert render_date(_MAY_8_2023_MS, inject_abs_time=False) == ""
     # ⛔ 星期试过更差（见 `render_date` 的注释）⇒ 前缀**只到日粒度**
@@ -126,7 +126,7 @@ def test_empty_pair_gets_no_date_prefix() -> None:
 
 def test_template_version_separates_the_two_arms() -> None:
     """两臂的**缓存坐标必须不同**——否则"带"臂会静默复用"不带"臂的向量（§7.2）。"""
-    from tianxi_am.common.render import template_version
+    from tianximem.common.render import template_version
 
     assert template_version(inject_abs_time=False) == TEMPLATE_VERSION
     assert template_version(inject_abs_time=True) != TEMPLATE_VERSION
@@ -134,7 +134,7 @@ def test_template_version_separates_the_two_arms() -> None:
 
 def test_render_pair_takes_the_date_from_the_pair_itself() -> None:
     """`render_pair` 是**三个调用点唯一的入口**——日期只能来自对自身的 `event_time`。"""
-    from tianxi_am.common.render import render_pair
+    from tianximem.common.render import render_pair
 
     class _Pair:
         question = "Q1"
@@ -164,7 +164,7 @@ def _dress(chain, *, inject_abs_time: bool) -> list[str]:
     """
     from functools import partial
 
-    from tianxi_am.common.render import render_pair
+    from tianximem.common.render import render_pair
 
     ids: list[str] = []
     pairs = []
@@ -200,7 +200,7 @@ def test_t1_switch_only_changes_the_text(wired, wired_dated) -> None:
     命名的那一件事。这里被"命名"的是**正文里带不带日期**，所以名次、`id`、`created_at`、
     `score`、段数**一个都不许动**——动了就说明这个对照同时在测两件事，结论不可归因。
     """
-    from tianxi_am.common.render import day_granularity
+    from tianximem.common.render import day_granularity
 
     prefix = f"[{day_granularity(_MAY_8_2023_MS)}] "
     for chain, inject in ((wired, False), (wired_dated, True)):

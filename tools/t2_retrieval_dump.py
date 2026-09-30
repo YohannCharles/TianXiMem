@@ -15,7 +15,7 @@ T2 的口径是**纯 BM25**，而 D15 决定**服务只有混合检索一种形�
   "纯 BM25 检索是本目录的 T2 手段，不是一条被评分的 arm"；
 * 走服务意味着**改 service 与检索层**，而那两处是稳定代码。
 
-⚠ 本工具在 `tools/` 下 ⇒ **可以** `import tianxi_am`（"打 HTTP"那条边界只管
+⚠ 本工具在 `tools/` 下 ⇒ **可以** `import tianximem`（"打 HTTP"那条边界只管
 [`eval/`](../eval/CLAUDE.md)；`tools/` 里的探针本来就直连组件）。
 
 ## 用法
@@ -37,8 +37,8 @@ import sys
 from pathlib import Path
 from typing import Any, Final
 
-from tianxi_am.common.config import load_config
-from tianxi_am.store.qdrant_store import (
+from tianximem.common.config import load_config
+from tianximem.store.qdrant_store import (
     BM25_MODEL,
     KEY_MEMORY_ID,
     KEY_SESSION_ID,

@@ -8,7 +8,7 @@ ranked（已去重、已 rerank）
 
 > **段模型是 `Search` 链上的一环**——排在 `hybrid → checker` 之后。段的三个概念
 > （锚点、`best_rank`、连续性）**只由它定义**，链上别处不存在第二处——见
-> [`../src/tianxi_am/rank/CLAUDE.md`](../src/tianxi_am/rank/CLAUDE.md)。
+> [`../src/tianximem/rank/CLAUDE.md`](../src/tianximem/rank/CLAUDE.md)。
 
 ⚠ **D28：邻接只在一次 Add 内**。所以本文件的脚手架分两种：
 
@@ -29,11 +29,11 @@ from __future__ import annotations
 import pytest
 from tests.conftest import FakeCounter, Wired, seed_line
 
-from tianxi_am.common.render import render, render_segment
-from tianxi_am.rank import expand_neighbors, merge_segments
-from tianxi_am.rank.neighbor import SelectedMemory
-from tianxi_am.retrieve import Candidate
-from tianxi_am.store.sqlite_store import SqliteStore, make_pair_id
+from tianximem.common.render import render, render_segment
+from tianximem.rank import expand_neighbors, merge_segments
+from tianximem.rank.neighbor import SelectedMemory
+from tianximem.retrieve import Candidate
+from tianximem.store.sqlite_store import SqliteStore, make_pair_id
 
 #: 脚手架用的 `request_id`——同一条"线"上的块都在这**一次 Add** 里。
 _LINE = "r-line"
@@ -596,7 +596,7 @@ def test_segments_are_sorted_by_best_rank(store: SqliteStore, counter: FakeCount
 def test_segment_content_is_the_rendered_run_in_order(store: SqliteStore) -> None:
     """段的 `content` = 段内各对**按 Add 内顺序**渲染后、用 `SEGMENT_SEP` 连起来。
 
-    ⚠ 走 [`common/render`](../../src/tianxi_am/common/render.py)——它是渲染的**唯一实现**
+    ⚠ 走 [`common/render`](../../src/tianximem/common/render.py)——它是渲染的**唯一实现**
     （不变式 I1）。这里断言的是"段这一层没有自己拼字符串"。
     """
     ids = _line(store, range(2), session_id="s1")

@@ -108,7 +108,7 @@ class JudgeResult:
     generated_answer: str
 
 
-#: 日期前缀的形状——**与 `src/tianxi_am/common/render.py` 的 `DATE_PREFIX` 必须逐字相同**
+#: 日期前缀的形状——**与 `src/tianximem/common/render.py` 的 `DATE_PREFIX` 必须逐字相同**
 #: （那边是 `content` 里加日期时用的同一段）。
 #: ⚠ 这里是**故意重复的一份字面量**：harness 不许 import `src/`（本目录最硬的一条边界，
 #: [`../../tests/test_harness.py`](../../tests/test_harness.py) 用 AST 钉着），

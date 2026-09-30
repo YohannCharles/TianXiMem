@@ -33,8 +33,8 @@ temporal +3.5pt，整体 0.601 → **0.633** ⇒ D21 把它定成默认。
 uv run python -m eval.experiments.t1_timestamp --freeze
 
 # 2) 两个服务（各带一份快照）——**服务自己读配置，脚本不代管进程**
-TIANXI_CONFIG_DIR=configs/runs/t1-plain TIANXI_PROFILE=local make serve   # :8000
-TIANXI_CONFIG_DIR=configs/runs/t1-dated TIANXI_PROFILE=local make serve   # 另一个端口
+TIANXIMEM_CONFIG_DIR=configs/runs/t1-plain TIANXIMEM_PROFILE=local make serve   # :8000
+TIANXIMEM_CONFIG_DIR=configs/runs/t1-dated TIANXIMEM_PROFILE=local make serve   # 另一个端口
 
 # 3) 跑两臂（同一份数据、同一批题）
 uv run python -m eval.experiments.t1_timestamp --execute \

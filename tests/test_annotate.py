@@ -1,7 +1,7 @@
 """相对时间注解 —— **只加不改**，且**碰不到索引**（不变式 I1 的声明式例外）。
 
-对应 [`../src/tianxi_am/common/annotate.py`](../src/tianxi_am/common/annotate.py) 与
-[`../src/tianxi_am/rank/neighbor.py`](../src/tianxi_am/rank/neighbor.py) 的 `_text()`。
+对应 [`../src/tianximem/common/annotate.py`](../src/tianximem/common/annotate.py) 与
+[`../src/tianximem/rank/neighbor.py`](../src/tianximem/rank/neighbor.py) 的 `_text()`。
 
 这一层错了**不会报错**：注解只是往 `content` 里多写几个字，检索照常返回值、分数照常算。
 所以这里钉三件事：
@@ -20,8 +20,8 @@ from functools import partial
 
 import pytest
 
-from tianxi_am.common.annotate import annotate
-from tianxi_am.common.render import render_pair
+from tianximem.common.annotate import annotate
+from tianximem.common.render import render_pair
 
 #: 2023-07-20 是**周四**——下面几条期望值全部锚在它上面。
 _ANCHOR = date(2023, 7, 20)

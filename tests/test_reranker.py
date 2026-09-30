@@ -30,12 +30,12 @@ import pytest
 from tests.conftest import Wired, seed_line
 from tests.conftest import seed_pair_in as _seed
 
-from tianxi_am.common.config import DEFAULT_RADIUS
-from tianxi_am.common.render import render
-from tianxi_am.rank import RemoteReranker, RerankUnavailable
-from tianxi_am.retrieve import EvidenceChecker
-from tianxi_am.service.pipeline import SearchPipeline
-from tianxi_am.store.sqlite_store import SqliteStore
+from tianximem.common.config import DEFAULT_RADIUS
+from tianximem.common.render import render
+from tianximem.rank import RemoteReranker, RerankUnavailable
+from tianximem.retrieve import EvidenceChecker
+from tianximem.service.pipeline import SearchPipeline
+from tianximem.store.sqlite_store import SqliteStore
 
 #: 仓库里的 `configs/`。**用绝对路径**：相对路径会让用例依赖 cwd
 #: （从别的目录跑 pytest 时 `configs/` 找不到，而那是**报错**，不是静默——但没必要）。
@@ -513,7 +513,7 @@ def test_constructor_rejects_incomplete_endpoint() -> None:
 
 def test_build_reranker_returns_a_client_when_fully_configured(tmp_path) -> None:
     """项 1：配置齐备 ⇒ **真的构造 `RemoteReranker`**，不是又传了 `None`。"""
-    from tianxi_am.service.app import build_reranker
+    from tianximem.service.app import build_reranker
 
     config = _app_config(tmp_path, reranker=True)
     reranker = build_reranker(config)
@@ -528,8 +528,8 @@ def test_build_reranker_returns_a_client_when_fully_configured(tmp_path) -> None
     ("env", "reason"),
     [
         ({}, "端点与密钥都没填"),
-        ({"TIANXI_RERANKER_BASE_URL": "https://gw.test/v1"}, "只填了端点"),
-        ({"TIANXI_RERANKER_API_KEY": "test-key"}, "只填了密钥"),
+        ({"TIANXIMEM_RERANKER_BASE_URL": "https://gw.test/v1"}, "只填了端点"),
+        ({"TIANXIMEM_RERANKER_API_KEY": "test-key"}, "只填了密钥"),
     ],
 )
 def test_build_reranker_is_none_without_endpoint(tmp_path, env: dict, reason: str) -> None:
@@ -539,7 +539,7 @@ def test_build_reranker_is_none_without_endpoint(tmp_path, env: dict, reason: st
     但它会打一条 WARNING——"想用却没配全"与"明确关掉"是两件事，
     否则它会表现成"每次检索都静默不精排"。
     """
-    from tianxi_am.service.app import build_reranker
+    from tianximem.service.app import build_reranker
 
     config = _app_config(tmp_path, reranker=False, rerank_env=env)
     assert build_reranker(config) is None, reason
@@ -549,8 +549,8 @@ def test_build_reranker_is_none_when_explicitly_disabled(tmp_path) -> None:
     """显式 `rerank.enabled = false` ⇒ `None`（**消融开关**，不是漏配）。"""
     import dataclasses
 
-    from tianxi_am.common.config import RerankConfig
-    from tianxi_am.service.app import build_reranker
+    from tianximem.common.config import RerankConfig
+    from tianximem.service.app import build_reranker
 
     config = _app_config(tmp_path, reranker=True)
     off = dataclasses.replace(config, rerank=RerankConfig(enabled=False))
@@ -558,7 +558,7 @@ def test_build_reranker_is_none_when_explicitly_disabled(tmp_path) -> None:
 
 
 def _app_config(tmp_path, *, reranker: bool, rerank_env: dict | None = None):  # noqa: ANN001, ANN202
-    """造一份 `AppConfig`。`reranker=True` ⇒ 带上完整的 `TIANXI_RERANKER_*`。
+    """造一份 `AppConfig`。`reranker=True` ⇒ 带上完整的 `TIANXIMEM_RERANKER_*`。
 
     ⚠ **`rerank.enabled` 一律强制为 `true`**：本组用例测的是 `build_reranker`
     的三分支表，而出厂默认值是 `false`（`configs/default.yaml`——A3 未跑之前不默认付
@@ -566,21 +566,21 @@ def _app_config(tmp_path, *, reranker: bool, rerank_env: dict | None = None):  #
     `test_build_reranker_is_none_without_endpoint` 想验的**缺端点**分支也就走不到了
     ——那就是一条**永远不会 FAIL 的检查**。
     """
-    from tianxi_am.common.config import load_config
+    from tianximem.common.config import load_config
 
     env = {
         "AML_EMB_BASE_URL": "http://unused/v1",
         "AML_EMB_API_KEY": "k",
-        "TIANXI_SQLITE_PATH": str(tmp_path / "tianxi.db"),
-        "TIANXI_QDRANT_URL": "http://unused",
-        "TIANXI_EMBED_CACHE_DIR": str(tmp_path / "cache"),
+        "TIANXIMEM_SQLITE_PATH": str(tmp_path / "tianxi.db"),
+        "TIANXIMEM_QDRANT_URL": "http://unused",
+        "TIANXIMEM_EMBED_CACHE_DIR": str(tmp_path / "cache"),
     }
     if reranker:
         env.update(
             {
-                "TIANXI_RERANKER_BASE_URL": "https://gw.test/v1",
-                "TIANXI_RERANKER_API_KEY": "test-key",
-                "TIANXI_RERANKER_MODEL": "Qwen3-Reranker-4B",
+                "TIANXIMEM_RERANKER_BASE_URL": "https://gw.test/v1",
+                "TIANXIMEM_RERANKER_API_KEY": "test-key",
+                "TIANXIMEM_RERANKER_MODEL": "Qwen3-Reranker-4B",
             }
         )
     env.update(rerank_env or {})
@@ -594,7 +594,7 @@ def test_build_services_wires_the_reranker_into_the_search_pipeline(tmp_path) ->
     ⚠ 这条用例的价值在于它测的是 `build_services`：装配点若传硬编码的 `None`，
     **没有任何别处会发现**（Search 照常工作，只是名次没被精排）。
     """
-    from tianxi_am.service.app import build_services
+    from tianximem.service.app import build_services
 
     services = build_services(_app_config(tmp_path, reranker=True))
     try:
@@ -608,7 +608,7 @@ def test_close_releases_the_reranker_client(tmp_path) -> None:
 
     ⚠ 漏掉它的表现是"连接池在退出时没关"——平时完全看不出来。
     """
-    from tianxi_am.service.app import build_services
+    from tianximem.service.app import build_services
 
     services = build_services(_app_config(tmp_path, reranker=True))
     reranker = services.search.reranker
@@ -919,7 +919,7 @@ def test_raw_rerank_score_never_reaches_the_api(wired: Wired) -> None:
     ⚠ 这一条同时钉住三件事：①原始分没透传、②`score` 不是融合分数、③**它是按输出位置
     重算的**——若谁改成"照抄 rerank 名次"，第一位就不再是 `1.0`。
     """
-    from tianxi_am.service.schemas import SearchResponse, SearchResultItem
+    from tianximem.service.schemas import SearchResponse, SearchResultItem
 
     marker = 0.987654321  # 刻意刺眼：出现在响应里一眼就能看见
 
@@ -997,7 +997,7 @@ def test_http_search_returns_200_when_the_reranker_degrades(wired: Wired, exc: E
     """
     from fastapi.testclient import TestClient
 
-    from tianxi_am.service import create_app
+    from tianximem.service import create_app
 
     ids = _ids(wired.store, 3)
     wired.qdrant.by_user["u1"] = ids
