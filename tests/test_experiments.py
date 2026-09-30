@@ -355,6 +355,26 @@ def test_date_prefix_matches_the_one_in_src():
     assert HARNESS_PREFIX == SRC_PREFIX
 
 
+def test_platform_token_budget_matches_src():
+    """harness 的平台截断窗口与分词器，**必须与 `src` 那两份相等**。
+
+    与上一条同一条理由、同一种守法：harness 不许 import `src/`（AST 钉着），
+    于是这对常量**故意重复了一份**，只能靠断言守。
+
+    ⚠ **它守的是"判分看到的上下文"与"平台实际喂给答案模型的上下文"是同一段**：
+    §2.2 / §6.4 说答案阶段按 **117,760 token 取前缀**，所以 harness 判分前
+    必须先模拟同一条截断。窗口或分词器任一侧漂了，harness 会**继续按旧值截断**——
+    判分依据的那段文本与平台真正用到的不是同一段，**而没有任何东西会报错**
+    （`judge.py` 的注释自称"与 `budget.tokenizer` 同一口径"，此前无人验证）。
+    """
+    from eval.harness.judge import PLATFORM_TOKEN_PREFIX, PLATFORM_TOKENIZER
+
+    from tianximem.common.tokens import DEFAULT_TOKENIZER, MAX_INPUT_TOKENS
+
+    assert PLATFORM_TOKEN_PREFIX == MAX_INPUT_TOKENS
+    assert PLATFORM_TOKENIZER == DEFAULT_TOKENIZER
+
+
 def test_render_memories_date_prefix_is_opt_in():
     """默认**不加**日期（保持既有基线可比）；开了才加，且缺 `created_at` 时不加。"""
     from eval.harness import render_memories
@@ -374,7 +394,7 @@ def test_render_memories_date_prefix_is_opt_in():
 def test_render_memories_header_mode_states_what_the_dates_are():
     """`header` 模式：**把"这些日期是什么"写明**。
 
-    `per_item` 单独用实测没能让模型改用日期（27/35 仍答相对），所以第二版把语义写出来——
+    `per_item` 单独用实测没能让模型改用日期（27/35 仍答相对），所以 `header` 把语义写出来——
     这一档存在就是为了分辨"提示不够清楚"与"模型做不到"。
     """
     from eval.harness import render_memories

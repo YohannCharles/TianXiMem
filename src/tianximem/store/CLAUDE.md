@@ -10,7 +10,12 @@ sqlite_store.py   真源读写、事务、批次守卫、邻域查询（§10 的
 qdrant_store.py   collection 建/写/查、payload 过滤、**按传入参数执行** prefetch+RRF
 ```
 
-**这是唯一接触 SQLite 与 Qdrant 的目录。** 上层拿到的是领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`——§6.3 的分工表只有在读写收口到一处时才守得住。
+**这是唯一接触业务真源（SQLite）与 Qdrant 的目录。** 上层拿到的是领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`——§6.3 的分工表只有在读写收口到一处时才守得住。
+
+> ⚠ 那句限定词"业务真源"是必要的：`embed/` 的 `DiskVectorCache` **也直接开 SQLite**，
+> 但它是一个**可重建的派生缓存**（另一个库文件、另一套 PRAGMA），
+> 与这里"真源"的职责不同。两处的连接模型刻意一致（D17），见
+> [`../embed/base.py`](../embed/base.py) 的 `DiskVectorCache`。
 
 > ### ⚠ 检索的**参数所有权**不在本目录
 >
@@ -77,7 +82,7 @@ applied_batches(
 
 > 能被 `question` / `answer` 重建的东西，一律不进真源。
 
-**不预留 v2 字段**（§6.1 / D3）：`kind` / `parent_id`（Fact 抽取用）与无定义键的 `meta` **已删、也不要再加**——预留字段既不入索引也不进 `ORDER BY`，**正属于"不该是列"的一类**。真要做时再加。
+**不预留 v2 字段**（§6.1 / D3）：`kind` / `parent_id`（Fact 抽取用）与无定义键的 `meta` **不要加**——预留字段既不入索引也不进 `ORDER BY`，**正属于"不该是列"的一类**。真要做时再加。
 
 ---
 
@@ -111,7 +116,7 @@ applied_batches(
 
 ## 连接模型：**一次逻辑操作一个连接**（D17）
 
-`SqliteStore` **不长期持有连接**。写是 `connect → BEGIN IMMEDIATE → 读改写 → COMMIT/ROLLBACK → close`，读是 `connect → SELECT → close`；本类只保存 `db_path` 与存储逻辑。
+`SqliteStore` **不长期持有连接**。写是 `connect → BEGIN IMMEDIATE → 读改写 → COMMIT/ROLLBACK → close`，读是 `connect → SELECT → close`；本类只保存 `db_path`、`busy_timeout_ms` 与存储逻辑。
 
 **三条不许越过的线**：
 
@@ -126,8 +131,9 @@ applied_batches(
 > **但这一切的前提是 `BEGIN IMMEDIATE`**（已实测）：默认的 `BEGIN` 会让两条并发压力用例双双报 `database is locked`——**连"各写各的 session"那条也失败**，因为**升级写锁时 `busy_timeout` 不生效**（SQLite 宁可立刻报错也不冒死锁的险）。**不要把它当成"只是个位置分配优化"。**
 
 > **这里只有一条职责**：SQLite 的 writer 串行化（键是整个库文件）。
-> 按 session 的业务串行化**不在这里、也不需要**（D25）——位置是请求的纯函数。
-> 职责沿革见 D17 → D25。
+> 按 session 的业务串行化**不在这里、也不需要**（D28）——
+> 一块的位置由**请求本身**决定，不经过任何跨请求的分配。
+> 连接模型的完整论证见 **D17**。
 
 **为什么是短生命周期，而不是 thread-local 长连接 / 单一共享连接**：见 [D17](../../../docs/decisions.md)。一句话是"**连接与线程的约束不该泄漏到任何上层**"，而 FastAPI 的 `def` 路由**就跑在线程池里**。
 

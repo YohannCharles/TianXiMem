@@ -79,7 +79,7 @@ DEFAULT_TOP_K: Final[int] = 100
 #: 服务地址：与 `eval/harness/__init__.py` 的示例、`make serve` 的缺省端口一致。
 DEFAULT_BASE_URL: Final[str] = "http://127.0.0.1:8000"
 
-#: 有加载器的数据集（**只服务两个计分数据集**，§12.4）。
+#: 有加载器的数据集——**三个**（不只是代理评测那两个；CL-Bench 也在加载层里，§12.4）。
 DATASETS: Final[tuple[str, ...]] = ("clbench", "locomo-refined", "longmemeval-s")
 
 
@@ -88,13 +88,14 @@ def _load(
 ) -> list[Sample]:
     """加载 + `limit`。
 
-    ⚠ **两份数据集的 `limit` 不是同一个机制**，别当成对称的：
+    ⚠ **各数据集的 `limit` 不是同一个机制**，别当成对称的：
     LongMemEval 的 `limit` 在**加载器里**做（那份 277 MB，全量解析要几十秒、几 GB 内存），
     而 LoCoMo 的加载器没有这个参数（它整份才 10 段对话，切片在加载后做）。
 
-    ⚠ **`spread` 只对 LongMemEval 有意义**：它的文件**按 `question_type` 分块**，
-    所以"前 N 题"往往只有一类 ⇒ 部分跑要**分层抽样**才代表整个数据集
-    （理由见 `eval/datasets/longmemeval.py` 的 `_spread`）。LoCoMo 是"10 段对话 ×
+    ⚠ **`spread` 对 LongMemEval 与 CL-Bench 有意义**：两者都**按类型分块**
+    （前者 `question_type`、后者 `context_category`），所以"前 N 题"会落在单一类型上
+    ⇒ 部分跑要用**分层抽样**才代表整个数据集（实现在
+    `eval/datasets/sampling.py` 的 `stratified_sample`）。LoCoMo 是"10 段对话 ×
     若干题"的结构，切片天然跨段，不需要它——**传了也只当没看见**（不静默改语义）。
     """
     if dataset == "locomo-refined":
@@ -215,8 +216,10 @@ def run_round(
             #   （`<out>/<user>/answers.jsonl` 与 `labels.jsonl`，逐题 flush）。
             #   ⇒ 这两行是给"现在到哪一步了"的最低限度交代，**别删**：
             #   没有它们，一轮 346 题的 run 会有几个小时零输出。
-            n = len(sample.questions) if max_questions is None else min(
-                max_questions, len(sample.questions)
+            n = (
+                len(sample.questions)
+                if max_questions is None
+                else min(max_questions, len(sample.questions))
             )
             print(
                 f"  [{index}/{len(samples)}] {sample.user_id}：语料已投喂，开始检索 {n} 题"
@@ -293,8 +296,7 @@ def truncation_note(
             head = f"⚠ **截断跑**：只加载了前 {limit} 个 sample——不可与全量比"
     if max_questions is not None:
         tail = (
-            f"⚠ **题目截断**：每个 sample 只判了前 {max_questions} 题"
-            "（语料是整份）——不可与全量比"
+            f"⚠ **题目截断**：每个 sample 只判了前 {max_questions} 题（语料是整份）——不可与全量比"
         )
         return f"{head}\n{tail}" if head else tail
     return head
@@ -342,7 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--spread",
         action="store_true",
         help=(
-            "**分层抽样**（只有 LongMemEval 用得上）：它的文件按 `question_type` 分块，"
+            "**分层抽样**（LongMemEval 与 CL-Bench 用得上）：两者都按类型分块，"
             "所以 `--limit N` 不加本标志时取到的是**单一类型**——部分跑要用它跨类取题"
         ),
     )
@@ -375,7 +377,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "**超限兜底**（只为 B1）：主服务返回 5xx 时，改问这个实例（同一个 vendor、"
-            "另一档 RETRIEVAL_MODE）。用过的题数会记进 run record 的 notes"
+            "另一档 RETRIEVAL_MODE）。⚠ **用过的题数只记在 `ServiceClient` 上，"
+            "runner 不把它写进 run record**（那条路没有实现）"
         ),
     )
     parser.add_argument(

@@ -14,7 +14,7 @@ uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000   # 打�
 | 跑在**本地服务 + 本地 Qdrant + 自建网关**上 | 不碰 AML 任何端点 ⇒ **不消耗 Smoke 配额** |
 | **Smoke 之前的最后一道门** | 不能替代 Smoke（S1–S3 只能靠 Smoke 消除，§17.1） |
 
-## 三条设计决定
+## 四条设计决定
 
 **1. 它自己拉起服务，而不是要求你先起一个。**
 `make contract-check` 必须是一条命令、一个退出码。所以缺省自己 `subprocess` 起

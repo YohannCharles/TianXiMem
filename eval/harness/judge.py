@@ -122,7 +122,7 @@ DATE_PREFIX: str = "[{date}] "
 #: 注入里怎么带日期——**三档**（`--memory-date` 的取值域）。
 #:
 #: * `none`：完全不带（**基线**，也是"AML 侧只取 content"那条 S1 假设）
-#: * `per_item`：每条记忆（= 一个段）前面加 `[YYYY-MM-DD] `（2026-09-25 第一版）
+#: * `per_item`：每条记忆（= 一个段）前面加 `[YYYY-MM-DD] `
 #: * `per_pair`：**每一对**前面都加 `[YYYY-MM-DD] `——同一个日期，但离该句更近。
 #:   动机（2026-09-25）：temporal 的失败里有这么一类——模型**不缺信息**（`[2023-07-15]`
 #:   就在段首、"Last Friday" 就在下面），但不把锚点接到自己那句上（见 `eval/reports/ledger.md`）
@@ -143,7 +143,7 @@ DATE_PREFIX: str = "[{date}] "
 #:   否则实验量的是 A、上线跑的是 B，而两边都不报错。
 #:
 #: 为什么要有 `header`：`per_item` 实测**没能改变模型行为**（27/35 仍答相对，与基线 26/35 几乎相同）
-#: ——"看得见日期"≠"用得上日期"。所以第二版把语义**写明**，看是提示不够清楚还是模型做不到。
+#: ——"看得见日期"≠"用得上日期"。所以 `header` 把语义**写明**，看是提示不够清楚还是模型做不到。
 DATE_MODES: tuple[str, ...] = ("none", "per_item", "per_pair", "per_pair_wd", "header", "annotate")
 
 #: `header` 模式的那行说明。`{dates}` 是**去重后的会话日期**，按出现顺序。
@@ -206,7 +206,7 @@ def render_memories(
     ⇒ 时间戳不可见，那条规则就无法执行，模型只能照抄 "Yesterday"，**必判错**
     （实测 `eval/reports/ledger.md`：gold 含绝对日期的 35 道里 **26 道答成相对、全部判错**）。
 
-    ⚠ **`created_at` 服务本来就返回了**（`data[]` 四字段之一），是**本函数原先把它丢了**。
+    ⚠ **`created_at` 服务本来就返回了**（`data[]` 四字段之一），是**本函数必须显式带上它**。
     但"AML 真实侧往 `speaker_1_memories` 里填什么"仍是 **S1 未知**：
     开这个开关是**换一条代理假设**，不是修一个 bug——所以默认关，
     开启时要在 run record 里记明（runner 的 `--memory-date` + `--switches`）。
@@ -313,9 +313,7 @@ def _subprocess_env() -> dict[str, str]:
     return env
 
 
-def _run(
-    pipeline: Path, argv: list[str], *, timeout: float | None, attempts: int = 3
-) -> None:
+def _run(pipeline: Path, argv: list[str], *, timeout: float | None, attempts: int = 3) -> None:
     """跑一个 pipeline 子命令，**瞬时故障自动重试**。
 
     ## 为什么必须重试（2026-09-26，一次真实事故）
@@ -484,11 +482,16 @@ def _jsonl_line(item: dict) -> str:
 #: `budget.tokenizer` 同一口径——**不要用字符数近似**（§6.4）。
 PLATFORM_TOKEN_PREFIX: Final[int] = 117_760
 
+#: 与 `budget.tokenizer`（`src` 的 `DEFAULT_TOKENIZER`）**同一口径**。
+#: 提成具名常量是为了让 `tests/test_experiments.py::test_platform_token_budget_matches_src`
+#: 能断言两处相等——**两侧各写各的字面量，分叉时不会报错**。
+PLATFORM_TOKENIZER: Final[str] = "o200k_base"
+
 
 def _encoder():
     import tiktoken  # 只在真要用时才 import（harness 的纯逻辑用例不必装它）
 
-    return tiktoken.get_encoding("o200k_base")
+    return tiktoken.get_encoding(PLATFORM_TOKENIZER)
 
 
 def truncate_to_platform_prefix(text: str) -> tuple[str, bool]:
@@ -507,11 +510,12 @@ def _build_clbench_items(sample: Sample, hits_by_qid: dict[str, list[SearchHit]]
     | 字段 | 哪来的 / 为什么 |
     | --- | --- |
     | `idx` | `clb_pipeline.py` 的 `row_id()` **先认 `idx`**（`answer` 靠它跳过已完成） |
-    | `system_prompt` | 记录里第一条 `system` 消息——**raw 文件里没有这个顶层键**，不补就塌成空串 |
+    | `system_prompt` | 记录里第一条 `system` 消息——**raw 文件里没有这个顶层键**，
+    不补就塌成空串 |
     | `question` | 加载器切出来的任务文本（末条 user 的尾部窗口） |
     | `rubrics` | 判分标准；`official_rubrics()` 认 `item["rubrics"]` |
     | `retrieval.selected` | **每项 `created_at` + `text`**——⚠ 读的是 **`text`**，
-而且**缺 `text` 的项会被直接跳过**（`docs/contract.md` §5） |
+    而且**缺 `text` 的项会被直接跳过**（`docs/contract.md` §5） |
 
     ⚠ 记忆块**按平台的 117,760 token 前缀截断**，且**按项截**（不切半个段）——
     与 `packaging` 的"段是原子单位"同一条理由。
@@ -572,9 +576,9 @@ def _read_clbench_labels(answers_path: Path, labels_path: Path) -> list[JudgeRes
     | 文件 | 谁写的 / 读什么 |
     | --- | --- |
     | `answers.jsonl` | `answer` 步写 **`model_output`**（不是 `generated_answer`），
-行键是 **`idx`** |
+    行键是 **`idx`** |
     | `labels.jsonl` | `evaluate` 步写 `rubric_clbench_score` / `_rationale` /
-`_requirement_status` / `_requirement_ratio` |
+    `_requirement_status` / `_requirement_ratio` |
 
     ⚠ **它是严格全有全无**：`score` 只有 0 或 1 ⇒ 映射成 `is_correct = score >= 1.0`，
     并把 `requirement_ratio`（满足了几成要求）一并留进 `judge_response`——**分档信息在

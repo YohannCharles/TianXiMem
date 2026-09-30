@@ -28,14 +28,20 @@ I've taught for 7 years →  I've taught for 7 years (since 2016)
 而编错的日期比不换算更糟：**模型会自信地照抄**，而裁判是精确比值的。
 ⇒ 查不到数字的一律原样保留（`_quantifier` 返回 `None`）。
 
-## ⚠ 这是**原型**，不是生产实现（S1 那条代理假设的又一次使用）
+## ⚠ 这份拷贝为什么还留着（D22 已落地之后）
 
-生产形态要落在 `src/tianximem/common/render.py`（`render_pair` 的入口 + 一个 `annotate` 开关），
-而且**只在 `content` 侧调用、索引侧一个字不改**——理由与实测（`per-pair` 0.627 vs
-`t1-dated` 0.633，差在噪声内 ⇒ 日期进向量**没有贡献**）见
+生产实现是 [`../../src/tianximem/common/annotate.py`](../../src/tianximem/common/annotate.py)，
+消费点是 `rank/neighbor.py` 的 `_build_segment._text()`——**只在 `content` 侧、索引侧一个字不改**。
+理由与实测（`per-pair` 0.627 vs `t1-dated` 0.633，差在噪声内 ⇒ 日期进向量**没有贡献**）见
 [`../reports/ledger.md`](../reports/ledger.md)。
-搬过去时要一并改不变式 **I1 的表述**：从"embedding 输入 == content"改成
-"**索引侧渲染是唯一真源，content = 索引文本 + 一个纯注解函数**"。
+
+**本文件留着有两个理由，都是刻意的**：
+
+1. harness **不许 import `src/`**（[`../CLAUDE.md`](../CLAUDE.md)），而那次注解实验
+   （run record 里的 `--memory-date annotate`）是在 harness 侧跑的——它是那次实验的**可复现工具**；
+2. 两份实现的一致性由 [`../../tests/test_annotate.py`](../../tests/test_annotate.py)
+   的**逐例等价断言**钉住（同一张用例表喂给两份，输出必须逐字相同）——
+   **改任何一份都要同时改另一份**，那条测试会立刻红。
 """
 
 from __future__ import annotations

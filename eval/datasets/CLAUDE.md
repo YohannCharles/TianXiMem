@@ -8,7 +8,7 @@
 longmemeval.py    lme_s_cleaned.json 加载
 locomo.py         questions.jsonl + conversations.jsonl 加载与合并
 preprocess.py     **schema 落差预处理层**（§12.3 第 9 条）
-contracts.py      其余四份 pipeline 的契约抽取（§12.4 的表就是从这份抽取来的）
+sampling.py       确定性分层抽样（`stratified_sample`，跨类不随机）
 registry.py       数据指纹（版本 + 切批口径）——§13 的记录要它
 ```
 

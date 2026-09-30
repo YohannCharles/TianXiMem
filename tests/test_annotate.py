@@ -135,8 +135,8 @@ def _strip_annotations(text: str) -> str:
 
 
 #: 三条**互不相邻**的位置（相邻会被扩窗合进同一段，段数断言就验不出东西）。
-#: ⚠ D25 起 `seq` 由**已有的行**现算 ⇒ 跳号会挨在一起，
-#: 所以要落满中间那些位置（`conftest.seed_line`）。
+#: ⚠ `next` 是**写下时按整批**算好的 ⇒ 只落 0 和 2 的话，0 的 `next` 指着那一行缺失的 1，
+#: 它们照样分开。所以要落满中间那些位置（`conftest.seed_line`）。
 _PAIRS: tuple[tuple[int, str, str], ...] = (
     (0, "What's new?", "I joined a new activist group last Tues."),
     (2, "How was your weekend?", "Last weekend our city held a pride parade!"),

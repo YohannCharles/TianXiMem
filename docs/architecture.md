@@ -69,7 +69,7 @@ query → BM25 ┐
 
 | 目录 | 负责什么 | PRD |
 | --- | --- | --- |
-| `service/` | HTTP 层：`POST /add`、`POST /search`（+ `GET /health` 探活）；请求/响应模型 | §2.1、§15 → **D25** |
+| `service/` | HTTP 层：`POST /add`、`POST /search`（+ `GET /health` 探活）；请求/响应模型 | §2.1、§15 → **D28** |
 | `pairing/` | **记忆块组合（一次 Add = 唯一边界，D24）**；幂等守卫 + 位置分配 + 落库；**§15 写入路径的唯一所有者** | §6.2、§6.5（D24 后的口径）、§15 |
 | `store/` | SQLite 真源（`qa_pairs` + `applied_batches`）；Qdrant 派生索引；邻域查询的 SQL | §6.1、§6.3 |
 | `embed/` | `Embedder` 协议 + 两个实现；**落盘的向量缓存** | §7.4、§7.2 |

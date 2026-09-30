@@ -1,6 +1,5 @@
 -- 真源 DDL —— **D28 起位置 = `(request_id, local_index)`，`request_id` 是 opaque string**
---（原本逐字对应 PRD §6.1；这是对该节的**有意偏离**，沿革 D25 → D28，逐条记在
--- docs/decisions.md）
+--（这是对 PRD §6.1 的**有意偏离**，逐条记在 docs/decisions.md）
 --
 -- 两张表：qa_pairs（业务正文）+ applied_batches（唯一旁表 = 批次级幂等守卫）。
 --

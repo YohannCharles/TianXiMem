@@ -59,14 +59,6 @@ KEY_SESSION_ID: Final[str] = "session_id"
 KEY_LOCAL_INDEX: Final[str] = "local_index"
 KEY_EVENT_TIME: Final[str] = "event_time"
 
-_PAYLOAD_KEYS: Final[tuple[str, ...]] = (
-    KEY_MEMORY_ID,
-    KEY_USER_ID,
-    KEY_SESSION_ID,
-    KEY_LOCAL_INDEX,
-    KEY_EVENT_TIME,
-)
-
 
 def point_id_for(memory_id: str) -> str:
     """SQLite 的 `memory_id`（64 位十六进制）→ Qdrant 接受的 **UUID 字符串**。
@@ -77,7 +69,8 @@ def point_id_for(memory_id: str) -> str:
 
     取哈希的**前 128 位**当 UUID：128 位对十万级的点而言碰撞概率可忽略，
     且映射是**纯函数**——同一个 `memory_id` 永远得到同一个 point id，
-    因此"补全时 upsert 覆盖原 point"成立（§6.5：`id` 不变 ⇒ point id 不变）。
+    因此"重放同一位置时 **upsert 覆盖原 point**、而不是留下孤儿 point"成立
+    （§6.5：`id` 不变 ⇒ point id 不变）——`tools/reindex.py` 的全量重建依赖这一点。
     """
     if len(memory_id) < 32:
         raise ValueError(f"memory_id 太短，无法当 UUID 用：{memory_id!r}")

@@ -56,15 +56,15 @@
 | 文件 | 是不是数据 |
 | --- | --- |
 | `lme_s_cleaned.json` | ✅ **用这个**（LongMemEval） |
-| `lme_test.json` | 🗑 **已删除**（266MB）——它是"用得上但**明令别用**"的陷阱：多出 1,230 个空 session + 15 个干扰 session，**会污染按 20 条切批的埋点**（§6.5）。要复核那 1,230 这个数字时，从上游 LongMemEval 取回（**出处未核**，见 `tools/fetch_benchmark_data.py` 的 `DELETED`） |
+| `lme_test.json` | 🗑 **不入档**（266MB）——它是"用得上但**明令别用**"的陷阱：多出 1,230 个空 session + 15 个干扰 session，**会污染按 20 条切批的埋点**（§6.5）。要复核那 1,230 这个数字时，从上游 LongMemEval 取回（**出处未核**，见 `tools/fetch_benchmark_data.py` 的 `DELETED`） |
 | `questions.jsonl` | ✅ LoCoMo-Refined 题目（1,382 题），**含 `evidence_messages`（只有证据轮）** |
 | `locomo_refined.json` | ✅ LoCoMo-Refined 全文（10 个 conversation），**含 `conversation` 整段对话** |
 | `locomo10.json` | 原始 LoCoMo |
 | `clbench.jsonl` | ✅ CL-Bench（真 JSONL） |
 | `pm_32k.csv` / `pm_questions_128k.csv` / `pm_questions_1M.csv` | PersonaMem 三个 split 的问题表。**来源是 v1 仓的 `questions_{32k,128k,1M}.csv`**——⚠ **来源是 v1 仓**：v2 仓里没有这三份 |
 | `scriptmem_q.jsonl` | ScriptMem **题目**（457 道 MCQ：Single Choice / Multi-Select / Ordering，4 个 script / 6 种题型）。**对话原文因版权未发布** |
-| `beam.json` / `beam_rows.json` | 🗑 **已删除**——**失败下载的残留**（15 字节 `Entry not found` / 29 字节 `{"error":"Unexpected error."}`）。留着只会让下一个人重排一遍 |
-| `beam_100k.json` | 🗑 **已删除**——**不是数据集**，是 HuggingFace datasets-server 的**分页响应**（顶层键 `features`/`rows`/`num_rows_total`，且 `num_rows_total=20`、**实际只取到 1 行**） |
+| `beam.json` / `beam_rows.json` | 🗑 **不入档**——**失败下载的残留**（15 字节 `Entry not found` / 29 字节 `{"error":"Unexpected error."}`）。留着只会让下一个人重排一遍 |
+| `beam_100k.json` | 🗑 **不入档**——**不是数据集**，是 HuggingFace datasets-server 的**分页响应**（顶层键 `features`/`rows`/`num_rows_total`，且 `num_rows_total=20`、**实际只取到 1 行**） |
 | `rh.md` | ❌ **不是数据**——14 字节的桩文件，全文只有 `404: Not Found`（失败下载的占位） |
 | `rh2.md` / `rh3.md` | ⚠️ **不是 AML 材料**——它们是第三方系统 **MemoryHub** 自己的说明与**跑分结果**（R@k / P@k / MRR / NDCG / latency 与各次 run 的清单）。**与 AML 的数据集 schema 无关，不要当成数据集的读取格式依据** |
 

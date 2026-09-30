@@ -109,4 +109,4 @@ make eval DATASET=longmemeval-s
 
 ## 一条提醒：B1 不在这里
 
-**B1（ReFind 原版）的 runner 在 [`../baselines/`](../baselines/)（`refind/` 待建）**——它是"另一个服务"，不是本系统的一个 arm。**它的工作量未计入任何 Step，先估再做**（§13）。
+**B1（ReFind 原版）的 runner 在 [`../baselines/`](../baselines/) 的 `refind/`**（Vendor 代码已就位）——它是"另一个服务"，不是本系统的一个 arm。

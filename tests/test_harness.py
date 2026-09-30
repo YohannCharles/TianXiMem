@@ -81,7 +81,7 @@ class _Recorder:
 
 # ── 切批（§6.5）──
 def test_batches_are_20_and_keep_source_order():
-    """**源序切批、不重排**——批序号就是 `request_id` 里的 chunk 序号（D25 的位置来源），
+    """**源序切批、不重排**——`request_id` 里带着批序号（服务端位置 = `(request_id, local_index)`），
     重排会让同一 `request_id` 对应另一批消息。"""
     got = batches(_messages(45))
     assert [len(b) for b in got] == [20, 20, 5]
@@ -655,9 +655,7 @@ def test_readers_split_on_newline_not_splitlines(tmp_path):
 
     assert len(path.read_text(encoding="utf-8").splitlines()) == 3  # ← 反面证据：劈成 3 行
     rows = [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").split("\n")
-        if line.strip()
+        json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line.strip()
     ]
     assert rows == [{"id": "q1", "generated_answer": answer}]
 
@@ -680,6 +678,7 @@ def test_sanitize_jsonl_treats_a_u2028_line_as_one_record(tmp_path):
         "id": "a",
         "generated_answer": "x y",
     }
+
 
 def test_sanitize_jsonl_escapes_a_line_that_would_be_split(tmp_path):
     """**归档自己写的行**里若带 `U+2028`，也要在它读之前转义掉。
@@ -775,9 +774,7 @@ def test_build_input_items_reports_truncation(monkeypatch, capsys):
     from eval.harness import judge
     from eval.harness.driver import SearchHit
 
-    monkeypatch.setattr(
-        judge, "truncate_to_platform_prefix", lambda text: (text[:10], True)
-    )
+    monkeypatch.setattr(judge, "truncate_to_platform_prefix", lambda text: (text[:10], True))
     hit = SearchHit(id="a", content="Q: x\nA: y" * 100, created_at="", score=1.0)
     question = type("Q", (), {"qid": "q1", "question": "?", "gold": "g"})()
     sample = type(

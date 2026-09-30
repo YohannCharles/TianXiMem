@@ -10,9 +10,7 @@ pairing.py   本批消息 → 记忆块（组合规则的**唯一实现**，纯�
 apply.py     幂等守卫（含 payload 指纹）→ 组合 → 连链 → 按位置写入（一个事务）
 ```
 
-> ⚠ **D24（2026-09-27）之后没有"批次续接"**：`continuation.py` 已改名 `apply.py`，
-> `instrument.py`（三个 `pending` 计数器）、`plan_batch`、`ResumeActions`、`open_pair`、
-> `append_question` / `append_answer` / `mark_complete` / `touch_request_id` **全部删除**。
+> ⛔ **不实现"批次续接"**：块在写下那一刻就是最终形状，跨 Add 不合并、不补全。
 > 理由与实测代价见 [`../../../docs/decisions.md`](../../../docs/decisions.md) **D24**。
 
 ---
@@ -73,11 +71,11 @@ id           hash(user_id, session_id, request_id, local_index)
 **两者都是请求的纯函数** ⇒ 没有共享计数器、没有读-改-写 ⇒
 **同 session 的 Add 可以并发**，而"到达顺序"**根本没有被表达过**。
 
-> ⛔ **D25 的 `parse_chunk_ordinal` 已删除**（连 `ingest.chunk_ordinal_pattern` 这个配置项一起）。
-> 理由：**平台实发的是 `r_31156f4174…` 这种不透明 id**（2026-09-29 用请求采集抓到的真实请求，
-> 详见 [`../../../docs/decisions.md`](../../../docs/decisions.md) **D28**）⇒ 那条解析在真实流量上
-> **100% 失败**（`ValueError` → 500 → Add 全挂）。
-> **不要再加回任何"从 `request_id` 里取东西"的逻辑。**
+> ⛔ **`request_id` 是 opaque string，不要从里面取任何东西。**
+> 平台实发的是 `r_31156f4174…` 这种不透明 id（2026-09-29 用请求采集抓到的真实请求），
+> 任何"按形状解析它"的逻辑在真实流量上都会 **100% 失败**（→ 500 → Add 全挂，
+> 见 [`../../../docs/decisions.md`](../../../docs/decisions.md) **D28**）。
+> **位置只能来自 `(request_id, local_index)`。**
 
 ### 邻接也在这一个作用域内：`link_blocks()`
 
@@ -112,9 +110,9 @@ id           hash(user_id, session_id, request_id, local_index)
 "按旧规则写过的库"里还读得到。
 
 **与幂等正交**：守卫仍查 `applied_batches`（D4），`BEGIN IMMEDIATE` 仍保留
-（它现在是**数据库级写者串行**的唯一落点——D25 删掉应用层锁之后，并发全在这一处排队）。
+（它现在是**数据库级写者串行**的唯一落点——应用层锁已经没有了，并发全在这一处排队）。
 
-⚠ **D25 顺带把失败模式变响了**：位置是纯函数 ⇒ 同一批重放必然算出**同一位置**，
+⚠ **失败模式是响的**：位置是请求的纯函数 ⇒ 同一批重放必然算出**同一位置**，
 于是重放撞 `UNIQUE` 而**不是**静默落成重复记录。守卫仍然必须留（AML 重试是正常行为，
 不能每次都靠撞约束失败）。
 

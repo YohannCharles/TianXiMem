@@ -242,6 +242,7 @@ def test_a_full_file_rotates_instead_of_stopping(tmp_path: Path) -> None:
     assert len(files) > 1  # **真的转过**
     assert "r.jsonl" in names  # 第 1 份就是配置里那个路径
     assert "r.part2.jsonl" in names
+
     def _seq(path: Path) -> int:
         head = path.read_text(encoding="utf-8").splitlines()[0]
         return int(json.loads(head)["file_seq"])
@@ -325,7 +326,7 @@ def test_boundary_422_is_recorded_before_the_route(capture: RequestCapture, wire
 def test_unhandled_exception_is_recorded_with_its_type(
     capture: RequestCapture, wired: Wired, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """**冒烟失败的那条路径**：`request_id` 取不出 chunk 序号 ⇒ 异常 ⇒ 非 200。
+    """**未处理异常的那条路径**：Add 链路里抛异常 ⇒ 非 200。
 
     断言三件事，它们合起来就是"线上出了 500 时，这个文件能不能回答'是什么炸的'"：
 

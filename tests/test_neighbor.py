@@ -53,9 +53,7 @@ def _line(
     ⚠ 想造"对话里中间缺了一块"，**不要**在这里少落一块——那样链是断的（那正是"缺块"）。
     想造"存在但没被选中"，就把它**落下来、但别放进 `ranked`**。
     """
-    return seed_line(
-        store, indices, user_id=user_id, session_id=session_id, request_id=_LINE
-    )
+    return seed_line(store, indices, user_id=user_id, session_id=session_id, request_id=_LINE)
 
 
 def _ranked(*memory_ids: str) -> list[Candidate]:
