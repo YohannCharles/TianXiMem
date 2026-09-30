@@ -91,7 +91,6 @@ logger = logging.getLogger(__name__)
 class Services:
     """装配好的对象图。测试可以直接构造它，绕开 HTTP 与网络。"""
 
-    config: AppConfig
     store: SqliteStore
     qdrant: QdrantStore
     embedder: QueryInstructionEmbedder
@@ -163,7 +162,6 @@ def build_services(config: AppConfig) -> Services:
     dense = DenseArm(embedder)
 
     return Services(
-        config=config,
         store=store,
         qdrant=qdrant,
         embedder=embedder,

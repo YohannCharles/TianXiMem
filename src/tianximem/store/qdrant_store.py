@@ -59,14 +59,6 @@ KEY_SESSION_ID: Final[str] = "session_id"
 KEY_LOCAL_INDEX: Final[str] = "local_index"
 KEY_EVENT_TIME: Final[str] = "event_time"
 
-_PAYLOAD_KEYS: Final[tuple[str, ...]] = (
-    KEY_MEMORY_ID,
-    KEY_USER_ID,
-    KEY_SESSION_ID,
-    KEY_LOCAL_INDEX,
-    KEY_EVENT_TIME,
-)
-
 
 def point_id_for(memory_id: str) -> str:
     """SQLite 的 `memory_id`（64 位十六进制）→ Qdrant 接受的 **UUID 字符串**。

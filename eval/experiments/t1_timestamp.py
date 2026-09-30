@@ -54,7 +54,6 @@ from typing import ClassVar, Final
 
 from eval.experiments.arms import Arm as ArmBase
 from eval.experiments.arms import Spec
-from eval.experiments.arms import base_drift as base_drift
 from eval.experiments.arms import freeze as freeze
 from eval.experiments.arms import main as main
 from eval.experiments.arms import verify as verify

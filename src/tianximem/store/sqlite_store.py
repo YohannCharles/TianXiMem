@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 Status = Literal["complete", "pending"]
 
 STATUS_COMPLETE: Final[Status] = "complete"
-STATUS_PENDING: Final[Status] = "pending"
 _VALID_STATUSES: Final[frozenset[str]] = frozenset({"complete", "pending"})
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")

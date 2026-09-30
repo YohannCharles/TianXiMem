@@ -15,7 +15,6 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
-    "pydantic-settings>=2.6",
     "httpx>=0.27",          # embedding / LLM API 客户端；harness 驱动也用它
     "qdrant-client>=1.17,<1.18",  # §7.3：weights 需 ≥ v1.17.0，k 需 ≥ v1.16.0
     # ⚠ 上界钉在 1.18 而不是 2：**客户端 minor 必须与服务端同档**。
