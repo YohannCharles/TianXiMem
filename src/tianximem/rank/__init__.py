@@ -6,7 +6,7 @@
 Hybrid Retrieval → RRF → memory_id 稳定去重
   → 【rerank（恰好一次）】      ← rank/reranker.py：远端客户端
   → Neighbor Expansion         ← rank/neighbor.py：前 N 条扩 ±radius
-  → Context Segment Merge      ← rank/neighbor.py：连续 `seq` 合成段
+  → Context Segment Merge      ← rank/neighbor.py：沿显式链相接的块合成段
   → Token Budget               ← rank/packaging.py + common/tokens.py
   → Final Packaging            ← rank/packaging.py
 ```

@@ -81,7 +81,7 @@ class _Recorder:
 
 # ── 切批（§6.5）──
 def test_batches_are_20_and_keep_source_order():
-    """**源序切批、不重排**——批序号就是 `request_id` 里的 chunk 序号（D25 的位置来源），
+    """**源序切批、不重排**——`request_id` 里带着批序号（服务端位置 = `(request_id, local_index)`），
     重排会让同一 `request_id` 对应另一批消息。"""
     got = batches(_messages(45))
     assert [len(b) for b in got] == [20, 20, 5]

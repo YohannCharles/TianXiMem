@@ -77,7 +77,7 @@
       - **答案字段名以 pipeline 代码为准**：规范字段是 **`generated_answer`**（CL-Bench 写 `model_output`）。**readme 写的 `predicted_answer` / `hypothesis` 没有 pipeline 读**
 - [x] **LongMemEval 用 `lme_s_cleaned.json`**（加载器只认这一个文件名），**不要用 `lme_test.json`**——`test` 有 1,230 个 0-turn session，`s_cleaned` 有 0 个。**空 session 会污染按"20 条消息"切批的埋点逻辑**（§6.5）
 - [x] **给 LongMemEval 合成 per-message `timestamp`**（`longmemeval._sessions`）——它的 turn **只有 `role`+`content`**，时间在 **session 级**的 `haystack_dates` 里。不合成则 `event_time` 全 NULL、`created_at` 只能发 `""`
-      > **副作用是有价值的**：同一 session 内所有消息拿到同一日期 ⇒ **实证了 §6.1 的判断**——`event_time` 保证不了 session 内顺序，**位置才是唯一能保证邻域稳定的东西**（D25 起 = 读时稠密序 `seq`）
+      > **副作用是有价值的**：同一 session 内所有消息拿到同一日期 ⇒ **实证了 §6.1 的判断**——`event_time` 保证不了 session 内顺序，**位置才是唯一能保证邻域稳定的东西**（D28 起 = Add 内显式链）
 - [x] **切批模拟**：本地只能按 20 条复现词数那一路（§12.3 第 5 条）——[`../eval/harness/batching.py`](../eval/harness/batching.py)
       **量级已测（全量两份数据）**：LoCoMo 单条消息**最长 87 词**（中位 20），**从不触到 2,000 词上限** ⇒ 两条路径在它上面**完全重合**；
       LongMemEval 中位 75 / 均值 159 / **最长 11,661 词**，**60 条消息超 2,000 词**，且**40%（9,528/23,867）的 session 首批是被词数上限切开的**。
@@ -128,7 +128,7 @@
 - [x] Neighbor Expansion：种子 `neighbor.expansion_seed_limit`（**v1 取 30**，PRD §10 的 20 只是示例算术）、窗口 `radius = ±1`（§10）
 - [x] **全部 rerank 候选一条不删**，只对前 N 条扩窗；新扩出来的邻居 `rerank_rank = None`
 - [x] 同 `(user_id, session_id)` 才扩；**禁止跨 session**
-- [x] **Context Segment Merge**：连续块合成段，段内会话序、段间 `best_rank` 序（§11.2）——连续性判据 = **读时稠密序 `seq`**（D25）
+- [x] **Context Segment Merge**：连续块合成段，段内 `local_index` 序、段间 `best_rank` 序（§11.2）——连续性判据 = **Add 内显式链**（D28）
 - [x] 双预算截断：**段数（`top_k`）+ token 数**（§6.4）——段是**原子单位**，装不下就停
 - [x] `common/tokens.py`：`o200k_base` 计数，对**最终拼好的字符串**数
 - [x] `rank/reranker.py` 的**接缝**（协议 + 降级）——远端实现已接，见 Step 3

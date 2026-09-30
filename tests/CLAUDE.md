@@ -216,7 +216,7 @@ test_idempotency.py  批次级守卫
 | 同一操作**各拿一个连接**（两次 `read()` 不是同一个对象） | 短生命周期模型最直接的可观测性质 |
 | **异常后：事务已回滚 + 连接已关** | 只断言回滚会漏掉连接泄漏；只断言关闭会漏掉脏数据。**两条都要** |
 | **并发写不丢不串**：多 session 同时 `BEGIN IMMEDIATE` ⇒ 无 `SQLITE_BUSY`、**每 session 的位置不重号**、无跨 session 污染 | 见 `test_store.py` 与 `test_service_add.py` 的**压力**用例 |
-| **同 session 并发不再串行**（**D25**） | 位置互不相交 ⇒ 断言**两端都成功**且位置集合不重 |
+| **同 session 并发不串行**（**D28**） | 位置互不相交 ⇒ 断言**两端都成功**且位置集合不重 |
 | **跨 session 不互相阻塞** | 用 `Barrier` **证明**（而不是靠 sleep 赌时间）——若被串行化，barrier 会超时 |
 
 > **测试里读一律写 `rd(store, store.<方法>, ...)`**（[`conftest.py`](./conftest.py)）：

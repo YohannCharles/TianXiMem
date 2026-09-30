@@ -14,7 +14,7 @@ User Query → DenseArm（每 query 恰好 1 次）
            → EvidenceChecker（v1 passthrough，每轮记账）
            → rerank（恰好一次；不可用则降级回 RRF 顺序）
            → Neighbor Expansion（全部候选保留，只对前 N 条扩 ±radius）
-           → Context Segment Merge（段内会话序，段间 best_rank 序）
+           → Context Segment Merge（段内 local_index 序，段间 best_rank 序）
            → Token Budget + Final Packaging
            → ≤ top_k 个**段**
 ```
@@ -37,7 +37,7 @@ canonical AddRequest
 **D28 起邻接也只看本批**（`link_blocks`），所以这一段没有"跨批续接"带来的额外分支：
 本批触碰的行**恰好**是它自己新写的那几行。
 
-**D25 起没有 session 锁**：位置由请求派生（不是 `MAX+1`）⇒ **同 `(user_id, session_id)`
+**没有 session 锁**：位置由请求派生（不是 `MAX+1`）⇒ **同 `(user_id, session_id)`
 的 Add 可以并发**，它们在 `store.transaction()` 的 `BEGIN IMMEDIATE` 处排队（数据库级
 写者串行），而不是在应用层互斥。**D28 之后连"顺序"这个概念都不再存在**——
 不同 Add 之间既不比较先后，也不建立邻接。
@@ -202,7 +202,7 @@ class SearchPipeline:
     ③ Evidence Checker（v1 恒"充足"）   每轮判定都记账（D13）
     ④ rerank（**恰好一次**）            `RemoteReranker`；不可用 ⇒ 降级回 RRF 顺序（D12）
     ⑤ Neighbor Expansion               全部候选保留；只对前 N 条扩 ±radius
-    ⑥ Context Segment Merge            连续块（`seq`）合成段（段内会话序，段间 best_rank 序）
+    ⑥ Context Segment Merge            沿显式链合成段（段内 local_index 序）
     ⑦ Token Budget + Final Packaging   段是原子单位；`<= top_k` 的计数在这里收口
     ```
 

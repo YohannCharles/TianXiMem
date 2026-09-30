@@ -159,7 +159,7 @@ def _dress(chain, *, inject_abs_time: bool) -> list[str]:
     ⚠ 三条不是相邻的：相邻会被扩窗合进同一段，那样"段数没变"这条断言就验不出东西
     （[`../tests/CLAUDE.md`](../tests/CLAUDE.md) §三 的"一个候选 ≠ 一项"）。
     ⚠ 用 `insert_pair` 而不是走 Add：这里要的是**确定的**位置与 `event_time`
-    （Add 路径的位置由 `request_id` 的 chunk 序号给，`event_time` 取消息上的 timestamp）。
+    （Add 路径的位置 = `(request_id, local_index)`，`event_time` 取消息上的 timestamp）。
     索引侧仍然走**生产路径的同一个渲染函数**（`index_pairs` 的 `renderer`）。
     """
     from functools import partial

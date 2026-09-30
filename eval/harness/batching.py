@@ -44,11 +44,12 @@ MAX_MESSAGES_PER_BATCH = 20
 def batches(
     messages: Sequence[Message], *, max_messages: int = MAX_MESSAGES_PER_BATCH
 ) -> list[tuple[Message, ...]]:
-    """按**源序**切批——批序号就是 `request_id` 里的 chunk 序号，**绝不重排**。
+    """按**源序**切批——`request_id` 里带着批序号，**绝不重排**。
 
-    ⚠ **D25 起批序号是"声明"的，不是"到达顺序"推断的**：`request_id_for(user, session, index)`
-    把序号写进 id，服务端据此定位置。⇒ 重排调用顺序**不再**翻转会话顺序，
-    但**重排会让同一 `request_id` 对应另一批消息**——那才是现在要防的。
+    ⚠ **批边界是"声明"的，不是靠到达顺序推断的**：`request_id_for(user, session, index)`
+    把它写进 id，而服务端位置 = `(request_id, local_index)`（D28）——`local_index` 是块
+    **在那一次 Add 里**的序号。⇒ 重排调用顺序**不会**翻转会话顺序，
+    但**重排会让同一 `request_id` 对应另一批消息**——那才是要防的。
 
     **切批只在 session 内发生**（跨 session 的边界由 `session_id` 隔开，
     而每个 session 单独投喂）——沿用 §6.5 的形状。

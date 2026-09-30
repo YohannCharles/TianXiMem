@@ -286,7 +286,7 @@ def test_sqlite_failure_does_not_touch_qdrant(
     assert qdrant.points == {}
 
 
-# ── D25：同 session 的 Add **可以并发** ─────────────────────────────────
+# ── D28：同 session 的 Add **可以并发** ─────────────────────────────────
 
 
 def test_same_session_adds_run_concurrently_and_do_not_collide(
@@ -295,7 +295,7 @@ def test_same_session_adds_run_concurrently_and_do_not_collide(
     """**同一个 `(user_id, session_id)` 的 Add 并发**——D25 之后这是**允许**的。
 
     旧口径（`MAX+1` 分配位置）下这条必须串行，否则位置撞车；现在位置是请求的纯函数
-    （`(chunk_ordinal, local_index)`）⇒ 各批触碰**互不相交**的位置。
+    （`(request_id, local_index)`）⇒ 各批触碰**互不相交**的位置。
 
     断言四件事：
       1. 无异常（**含 `IntegrityError`**——那正是"位置撞车"的信号）
@@ -424,8 +424,8 @@ def test_different_sessions_write_to_sqlite_concurrently(
     assert len(pairs) == n_sessions * rounds  # 无丢批
     for i in range(n_sessions):
         mine = [p for p in pairs if p.session_id == f"s{i}"]
-        # 每个 session 内：chunk 序号恰好是 0..rounds-1，且每批各落一块
-        # （两批**互不相交** ⇒ 位置不会撞车，这正是 D25 让并发安全的原因）
+        # 每个 session 内：`request_id` 恰好是 0..rounds-1，且每批各落一块
+        # （两批**互不相交** ⇒ 位置不会撞车，这正是并发安全的原因）
         assert sorted(p.request_id for p in mine) == sorted(
             _rid(k, session_id=f"s{i}") for k in range(rounds)
         )

@@ -84,9 +84,8 @@ _STEP: Final[int] = 2 * DEFAULT_RADIUS + 3
 def _ids(store: SqliteStore, count: int, *, step: int = _STEP, session_id: str = "s1") -> list[str]:
     """`count` 个**互不相邻**的候选 ⇒ 一候选一段、彼此不扩窗。
 
-    ⚠ **D25**：落库走 `seed_line`（把 `0..max` 落满）——`seq` 在**已有的行**上现算，
-    只落 0,5,10 的话它们会挨着（= 这段对话里就这三块），那就该合并成一段了。
-    落满之后中间那些是"**存在但没被选中**"，缺口才是真的。
+    ⚠ 落库走 `seed_line`（把 `0..max` 落满，理由见它的 docstring）——只落 0,5,10 的话
+    反而是"这段对话里就这三块"。落满之后中间那些是"**存在但没被选中**"，缺口才是真的。
     """
     return seed_line(
         store,
@@ -957,8 +956,8 @@ def test_rerank_does_not_change_content_or_created_at(wired: Wired) -> None:
     import datetime as dt
 
     ids = _ids(wired.store, 3)
-    # ⚠ 中间那些位置要**落满**：`seq` 在已有的行上现算，不落的话 `a` 的 `seq`
-    #   会正好排在 ids[2] 的下一格 ⇒ 两者相邻 ⇒ 并进同一段（与 `_ids` 里那条同一个道理）
+    # ⚠ 中间那些位置要**落满**（与 `_ids` 里同一条道理，见 `seed_line` 的 docstring）——
+    #   不落的话 `a` 会正好接在 ids[2] 后面 ⇒ 并进同一段
     far = 4 * _STEP
     for pos in range(3 * _STEP + 1, far):
         _seed(wired.store, pos)

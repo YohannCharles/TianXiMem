@@ -326,7 +326,7 @@ def test_boundary_422_is_recorded_before_the_route(capture: RequestCapture, wire
 def test_unhandled_exception_is_recorded_with_its_type(
     capture: RequestCapture, wired: Wired, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """**冒烟失败的那条路径**：`request_id` 取不出 chunk 序号 ⇒ 异常 ⇒ 非 200。
+    """**未处理异常的那条路径**：Add 链路里抛异常 ⇒ 非 200。
 
     断言三件事，它们合起来就是"线上出了 500 时，这个文件能不能回答'是什么炸的'"：
 

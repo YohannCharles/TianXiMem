@@ -215,8 +215,8 @@ docker compose up -d          # 注意：不要带 --build，否则它会想重�
 
 ### 0.6 打开**请求原文采集**（S6）—— 服务器上照着做
 
-**目的**：把官方发来的 `/add` / `/search` **原样**记下来，用来核验**官方真实的 `request_id` 形状**
-——那是 **S6** 唯一没在本地验过的一环，而 D25 的位置模型整个押在它上面。
+**目的**：把官方发来的 `/add` / `/search` **原样**记下来，用来核验**官方真实的请求形状**
+——`request_id` 是 **S6** 唯一没在本地验过的一环（它已经查明过一次，见下）。
 **配置语义、四条纪律、一行里有哪些字段**一处声明在
 [`../docs/config-reference.md`](../docs/config-reference.md) §12 与
 [`../src/tianximem/service/capture.py`](../src/tianximem/service/capture.py)。

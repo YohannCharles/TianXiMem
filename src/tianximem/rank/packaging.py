@@ -6,7 +6,7 @@ ContextSegment[]（已按 best_rank 升序）
   → data[]（id = 锚点，content = 整段，created_at = 锚点的日粒度，score = 1/(final_rank+1)）
 ```
 
-> **分组顺序（组内 `seq` / 组间 `best_rank`）在 [`neighbor.py`](./neighbor.py) 定**，
+> **分组顺序（组内 `local_index` / 组间 `best_rank`）在 [`neighbor.py`](./neighbor.py) 定**，
 > 这里只按给定的顺序消费。**不要把这个文件当成整条 Search 链**（[`CLAUDE.md`](./CLAUDE.md)）。
 
 ## 三条本文件独有、且**必须**守住的东西

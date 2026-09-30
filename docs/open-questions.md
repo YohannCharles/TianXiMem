@@ -95,7 +95,7 @@ Adapter 计数的词时确定性分段」。出处：[`contract.md`](./contract.
 
 **为什么认为它就在请求里**：ReFind 用正则从 `request_id` 里解析 chunk 序号
 （[`../eval/baselines/refind/app/store.py`](../eval/baselines/refind/app/store.py) 的 `:50-58`）——
-**那队跑过真平台** ⇒ 这是 D25 的依据。
+**那队跑过真平台** ⇒ 这曾是 D25 的依据（见下：对**我们的**平台不成立）。
 
 **本地复现不了**：harness 是自己顺序发的，send order 必然等于 arrival order（同 S5）。
 
