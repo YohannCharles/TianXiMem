@@ -350,7 +350,7 @@ def test_date_prefix_matches_the_one_in_src():
     """
     from eval.harness.judge import DATE_PREFIX as HARNESS_PREFIX
 
-    from tianxi_am.common.render import DATE_PREFIX as SRC_PREFIX
+    from tianximem.common.render import DATE_PREFIX as SRC_PREFIX
 
     assert HARNESS_PREFIX == SRC_PREFIX
 
@@ -678,7 +678,7 @@ def test_eval_side_does_not_import_src(subdir: str):
 
     `test_harness_does_not_import_src` 只扫 `eval/harness/`——**arm 与基线同样要打 HTTP**
     （B1 只以"另一个 Add/Search 服务"的形式存在，进程内调用会让两条基线不可比）。
-    用 AST 扫 import 语句，不扫文本（docstring 里提到 `src/tianxi_am` 是说明，不是依赖）。
+    用 AST 扫 import 语句，不扫文本（docstring 里提到 `src/tianximem` 是说明，不是依赖）。
     """
     root = Path(__file__).resolve().parents[1] / "eval" / subdir
     offenders = []
@@ -694,6 +694,6 @@ def test_eval_side_does_not_import_src(subdir: str):
             offenders += [
                 f"{subdir}/{path.name}:{node.lineno}: {name}"
                 for name in names
-                if "tianxi_am" in name
+                if "tianximem" in name
             ]
     assert not offenders, "eval/ 下不许 import src/：\n" + "\n".join(offenders)

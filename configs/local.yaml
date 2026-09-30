@@ -1,4 +1,4 @@
-# 开发期覆盖（`TIANXI_PROFILE=local`）
+# 开发期覆盖（`TIANXIMEM_PROFILE=local`）
 #
 # ⚠ **只写真正与基线不同的键。** 这份文件存在的意义就是让"开发期与提交期差在哪"
 #    一眼可见（configs/CLAUDE.md 的原文理由）——**重述默认值等于把那个信息淹掉**。

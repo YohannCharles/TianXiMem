@@ -31,7 +31,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > ⛔ `submit.yaml` 里**别写 `storage.qdrant.collection`**（提交期就是基线那个 `memories`；
 > 覆盖它的是 `local.yaml`）。有回归位：`tests/test_config.py::test_submit_profile_changes_only_the_embedder`。
 
-**选 profile 用 `TIANXI_PROFILE`**（默认 `default`）；**指向另一份配置目录用 `TIANXI_CONFIG_DIR`**（arm 快照就靠它，见 `configs/CLAUDE.md` 的 `runs/`）。
+**选 profile 用 `TIANXIMEM_PROFILE`**（默认 `default`）；**指向另一份配置目录用 `TIANXIMEM_CONFIG_DIR`**（arm 快照就靠它，见 `configs/CLAUDE.md` 的 `runs/`）。
 
 > **切换 profile 不是一次配置改动，是一个独立阶段**（§12.1 R1 对冲 4 / §16 Step 5）：**不可与任何设计改动同时进行**，否则分数变化无法归因。
 
@@ -39,11 +39,11 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ## 1.2 每个键**住在哪**：`.env` 还是 `configs/*.yaml`
 
-> 加载器是 [`../src/tianxi_am/common/config.py`](../src/tianxi_am/common/config.py)——**全包唯一读环境变量的地方**（③-d）。
+> 加载器是 [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py)——**全包唯一读环境变量的地方**（③-d）。
 
 | 层 | 拥有哪些键 | 例子 |
 | --- | --- | --- |
-| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXI_SQLITE_PATH`、`TIANXI_QDRANT_URL`、`TIANXI_EMBED_CACHE_DIR`、`TIANXI_METRICS_PATH`、`TIANXI_CAPTURE_PATH`、`TIANXI_WORKERS` |
+| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXIMEM_SQLITE_PATH`、`TIANXIMEM_QDRANT_URL`、`TIANXIMEM_EMBED_CACHE_DIR`、`TIANXIMEM_METRICS_PATH`、`TIANXIMEM_CAPTURE_PATH`、`TIANXIMEM_WORKERS` |
 | **`configs/<profile>.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.*`、`neighbor.*`、`models.embedder`、`storage.qdrant.collection`、`storage.sqlite.busy_timeout_ms` |
 
 **每个键只有一个家，两边不重叠也不许重叠。** 在 yaml 里写一个 env 拥有的键会**直接报错**
@@ -105,7 +105,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > ### ⚠ `checker` / `agent` 为什么标成"**v2 再接**"而不是"待接线"（2026-09-28）
 >
 > 两者**共用一个死锁**：`checker` 关掉的意思是"**一律进 Agentic Search**"，而
-> [`../src/tianxi_am/agent/`](../src/tianxi_am/agent/) **只有 `CLAUDE.md`、没有任何代码**
+> [`../src/tianximem/agent/`](../src/tianximem/agent/) **只有 `CLAUDE.md`、没有任何代码**
 > ⇒ 那个"关"分支**无处可去**（`EvidenceChecker.decide()` 的返回值此刻在
 > `service/pipeline.py` 里被丢弃，那是 D13 的**刻意**形态）。
 >
@@ -144,7 +144,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `retrieval.rrf.weights` | `[0.5, 0.5]` | **C** | **任何调整都必须有 ablation 数据支撑** | §7.3 |
 | `retrieval.bm25.model` | `qdrant/bm25` | A | 服务端推理，真 BM25，`modifier: idf` | §7.1 |
 | `retrieval.dense.rewrite` | `false` | A | v1 **没有**查询改写（属 v2）。每查询恰好 1 次调用 | §7.2 |
-| `retrieval.query_instruction` | `""` | **C** | **查询侧**的 instruction 前缀（Qwen3-Embedding 的推荐输入格式，不是"改写"）。`""` = 原样送（v1 现状）。模型卡称不加会掉约 1%–5%；**要不要开是待定的规格问题**，实现见 [`../src/tianxi_am/embed/query_instruction.py`](../src/tianxi_am/embed/query_instruction.py) | §7.2 |
+| `retrieval.query_instruction` | `""` | **C** | **查询侧**的 instruction 前缀（Qwen3-Embedding 的推荐输入格式，不是"改写"）。`""` = 原样送（v1 现状）。模型卡称不加会掉约 1%–5%；**要不要开是待定的规格问题**，实现见 [`../src/tianximem/embed/query_instruction.py`](../src/tianximem/embed/query_instruction.py) | §7.2 |
 | `retrieval.query_top_k` | 请求里的 `top_k` | **A** ⛔ | **不要写死 100** | §7.3 |
 
 **类**：**A** = 外部契约常量（**无权改**）· **B** = 正确性常量（**算错就静默出错，不许"顺手调"**）· **C** = 自设阈值（**可调，但要有 ablation 数据**）。见 §1.5。
@@ -259,9 +259,9 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | --- | --- | --- |
 | `rerank.enabled` | **`true`** | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。**`true` 是提交口径**（2026-09-28）：D8 把排序定为主线，默认关着等于放弃它（A3 在 conv-26 上 +4.3pt）。⚠ 开发期在 `configs/local.yaml` 里**显式关掉**（墙钟约 3×，直接决定迭代速度）——**那是覆盖，不是默认值**。**它值不值是 A3 要回答的**（两臂快照 `configs/runs/a3-{on,off}/`），**别拿默认值当结论** |
 | `rerank.timeout_seconds` | **30.0** | **C 类**。实测 100 篇 ≈ 2.2s、200 篇 ≈ 5.3s ⇒ 约 10 倍余量。**太紧 ⇒ 伪降级**（网关排队被报成"reranker 坏了"）；**太松 ⇒ Search 被拖住** |
-| `rerank.envelope` | **`query`**（本机自托管网关；`memory3` 那条路是 `queries`） | ⛔ **B 类**：对面那个网关**收哪种线格式**。`queries` ⇒ vLLM 原生 `{"queries": [...]}`（`memory3.021130.xyz`；发 `query` 被 **400** 拒）。`query` ⇒ 自研封装 `{"query": "..."}`（本机网关，容器里 `host.docker.internal:9002` → 宿主机 `127.0.0.1:8082`；发 `queries` 被 **422** 拒，实测报 `body.query Field required`）。⚠ **它与 `TIANXI_RERANKER_BASE_URL` 是同一件事的两半 ⇒ 换网关必须一起换**；填错的表现与 D12 的降级**一模一样**（每次检索都不精排、服务不报错、响应照旧合法，只在 §14 的 `rerank.degraded` 上看得见）。未知值在启动阶段被 `ConfigError` 拒 |
+| `rerank.envelope` | **`query`**（本机自托管网关；`memory3` 那条路是 `queries`） | ⛔ **B 类**：对面那个网关**收哪种线格式**。`queries` ⇒ vLLM 原生 `{"queries": [...]}`（`memory3.021130.xyz`；发 `query` 被 **400** 拒）。`query` ⇒ 自研封装 `{"query": "..."}`（本机网关，容器里 `host.docker.internal:9002` → 宿主机 `127.0.0.1:8082`；发 `queries` 被 **422** 拒，实测报 `body.query Field required`）。⚠ **它与 `TIANXIMEM_RERANKER_BASE_URL` 是同一件事的两半 ⇒ 换网关必须一起换**；填错的表现与 D12 的降级**一模一样**（每次检索都不精排、服务不报错、响应照旧合法，只在 §14 的 `rerank.degraded` 上看得见）。未知值在启动阶段被 `ConfigError` 拒 |
 | `packaging.inject_abs_time` | **`true`**（2026-09-25，**D21**） | ✅ §2 表里 **T1** 的开关。`true` ⇒ 每对正文前加 `[YYYY-MM-DD] `（与 `created_at` **同一口径、同一 `event_time`**）。⚠ **「贵」消融项**：正文改了 embedding 输入也改 ⇒ **改它要重建索引**、两臂必须分集合 |
-| `packaging.annotate_relatives` | **`true`**（2026-09-26） | ✅ **只改 `content`、不碰 embedding**（不变式 **I1 的一个声明式例外**）：`true` ⇒ 正文里的相对时间**就地注解**成绝对日期（`last Tues (July 18, 2023)`），原文一字不动。⇒ **不用重建索引、不用换集合**，随时可开关。实现与"推不出就不动"那条硬纪律在 [`../src/tianxi_am/common/annotate.py`](../src/tianxi_am/common/annotate.py)；开关买到的东西见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。⚠ **C 类**：任何调整都要有 ablation 数据 |
+| `packaging.annotate_relatives` | **`true`**（2026-09-26） | ✅ **只改 `content`、不碰 embedding**（不变式 **I1 的一个声明式例外**）：`true` ⇒ 正文里的相对时间**就地注解**成绝对日期（`last Tues (July 18, 2023)`），原文一字不动。⇒ **不用重建索引、不用换集合**，随时可开关。实现与"推不出就不动"那条硬纪律在 [`../src/tianximem/common/annotate.py`](../src/tianximem/common/annotate.py)；开关买到的东西见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。⚠ **C 类**：任何调整都要有 ablation 数据 |
 | `budget.max_tokens` | **117,760** | ⛔ **A 类**（AML 定的答案窗口余量）。答案窗口 128k 扣掉输出与安全余量 |
 | `budget.tokenizer` | **`o200k_base`** | ⛔ **A 类**。必须是**答案模型自己的**分词器 |
 | `budget.max_slots` | 请求里的 `top_k` | —— |
@@ -269,12 +269,12 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `packaging.score_mode` | `reciprocal_rank` | `1/(rank+1)`，**按输出位置**、**不是**原始 RRF 分数 |
 | `packaging.render_template` | `Q:/A:` | **"贵"消融项**：改它等于改变 embedding 输入，**整个向量索引要重建**。唯一实现是 `common/render.py` |
 | `packaging.role_prefix` | `[assistant]` 等标记 | 一个对里有多条非 user 消息时每条带 role 标记 |
-| `TIANXI_RERANKER_BASE_URL` | `https://memory3.021130.xyz/v1` | **env**。主网关（**不是 memory2**，D18） |
-| `TIANXI_RERANKER_API_KEY` | —— | **env**。与 `AML_EMB_*` 是同 host、不同 key |
-| `TIANXI_RERANKER_MODEL` | `qwen3-reranker-4b` | **env**。⚠ **主网关会校验它**（vllm 直服，2026-09-28 迁移后）——填错就是 **404 ⇒ 每次检索都降级**，而服务**不报错**。旧 host（自研封装）是忽略它的。**提交时不得更换**（D12） |
+| `TIANXIMEM_RERANKER_BASE_URL` | `https://memory3.021130.xyz/v1` | **env**。主网关（**不是 memory2**，D18） |
+| `TIANXIMEM_RERANKER_API_KEY` | —— | **env**。与 `AML_EMB_*` 是同 host、不同 key |
+| `TIANXIMEM_RERANKER_MODEL` | `qwen3-reranker-4b` | **env**。⚠ **主网关会校验它**（vllm 直服，2026-09-28 迁移后）——填错就是 **404 ⇒ 每次检索都降级**，而服务**不报错**。旧 host（自研封装）是忽略它的。**提交时不得更换**（D12） |
 
 > ⚠ **`rerank.model` 这个键不存在**：模型名是**端点身份**、不是阈值，所以它住在 `.env` 的
-> `TIANXI_RERANKER_MODEL`（§1.2 的两层分工）。
+> `TIANXIMEM_RERANKER_MODEL`（§1.2 的两层分工）。
 > **那三个变量是缺了就降级的**（D12），与 `embed.*` 那种"缺了就拒绝启动"正相反——
 > 所以 `validate()` **不**校验它们，改由 `service/app.py` 的 `build_reranker()` 决定接不接。
 > ⚠ **"想用却没配全"会打一条 WARNING**：否则它会表现成"每次检索都静默不精排"。
@@ -325,7 +325,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | --- | --- | --- | --- | --- |
 | `models.embedder` | `text-embedding-v4` | **`qwen3-embedding-8b`** | **yaml** | **只能用前者**（§2.3）。⚠ 值是**服务端 id**，见下面那条迁移警告 |
 | `models.llm` | `gpt-4o-mini` | qwen3.5-9b | **env**（`AML_MODEL`） | **只能用前者**（§2.3） |
-| `TIANXI_RERANKER_MODEL` | **`qwen3-reranker-4b`** | 同左 | **env** | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12）。⚠ 新网关**校验**它，填错 ⇒ 404 ⇒ 降级 |
+| `TIANXIMEM_RERANKER_MODEL` | **`qwen3-reranker-4b`** | 同左 | **env** | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12）。⚠ 新网关**校验**它，填错 ⇒ 404 ⇒ 降级 |
 | `models.embed_dim` | **由接口提供** | —— | —— | **不能写死** |
 
 > ### ⛔ 2026-09-28：模型 id 随网关迁移**全变了**
@@ -339,7 +339,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > | reranker id | `Qwen3-Reranker-4B` | **`qwen3-reranker-4b`** |
 > | embedding **维度** | 1024 | **4096** |
 > | `/models` 列不列 reranker | 列 | **不列**（但 `/rerank` 可用） |
-> | `/rerank` 的请求/响应形状 | `query` → `results[]` | **`queries: [...]` → `data[].score`**（当天网关只改了 nginx.conf：`/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`。**客户端两个信封都收**，逐条实测见 [`../src/tianxi_am/rank/reranker.py`](../src/tianxi_am/rank/reranker.py) 顶部的表） |
+> | `/rerank` 的请求/响应形状 | `query` → `results[]` | **`queries: [...]` → `data[].score`**（当天网关只改了 nginx.conf：`/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`。**客户端两个信封都收**，逐条实测见 [`../src/tianximem/rank/reranker.py`](../src/tianximem/rank/reranker.py) 顶部的表） |
 >
 > ⚠ **维度变了 ⇒ 集合与缓存都要重建**：动作清单在
 > [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的"网关迁移"一节。
@@ -395,8 +395,8 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > （它的"关"分支与"没有这个功能"逐字等价）。所以它既不是契约常量、也不是阈值、
 > 更不需要 ablation 数据——**它是观测**。默认关只是因为其余时间它是净开销。
 >
-> **路径在 `.env` 的 `TIANXI_CAPTURE_PATH`**（路径归 env，开关归 yaml）——与
-> `rerank.enabled` + `TIANXI_RERANKER_*` 同一个拆法。容器形态是
+> **路径在 `.env` 的 `TIANXIMEM_CAPTURE_PATH`**（路径归 env，开关归 yaml）——与
+> `rerank.enabled` + `TIANXIMEM_RERANKER_*` 同一个拆法。容器形态是
 > `/data/capture/requests.jsonl`（在卷里，`docker cp` 取得走）。
 
 **为什么会有多个文件**：一轮 Full 的请求原文按 **~1.5 GB** 估（§2.2 的 0.5–2 天），
@@ -412,7 +412,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 （字段、`timestamp` 单位、未知字段）。⚠ **D28 起它不再解析 `request_id`**。
 
 **四条纪律 + 一行记录里有什么**，一处声明在
-[`../src/tianxi_am/service/capture.py`](../src/tianxi_am/service/capture.py)：
+[`../src/tianximem/service/capture.py`](../src/tianximem/service/capture.py)：
 
 1. **在解析之前抄** ⇒ 是 ASGI 中间件而不是路由函数（不合 schema 的 422 进不了路由函数）
 2. **不改变下游看到的 body**（只复制，不"读掉再重放"）

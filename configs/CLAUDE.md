@@ -1,7 +1,7 @@
 # configs/ — 运行时配置
 
 > **状态**：`default.yaml` 与 `local.yaml` **已建**，由
-> [`../src/tianxi_am/common/config.py`](../src/tianxi_am/common/config.py) 加载。
+> [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py) 加载。
 > **`runs/` 已建**：`configs/runs/{t1-plain,t1-dated,a3-on,a3-off}/` 是各对照臂的冻结快照（由
 > [`../eval/experiments/t1_timestamp.py`](../eval/experiments/t1_timestamp.py) 与
 > [`a3_rerank.py`](../eval/experiments/a3_rerank.py) 的 `--freeze` 生成）。
@@ -15,7 +15,7 @@
 
 | 层 | 拥有哪些键 | 例子 |
 | --- | --- | --- |
-| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXI_SQLITE_PATH`、`TIANXI_METRICS_PATH`、`TIANXI_WORKERS` |
+| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXIMEM_SQLITE_PATH`、`TIANXIMEM_METRICS_PATH`、`TIANXIMEM_WORKERS` |
 | **`configs/*.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.rrf.k`、`models.embedder`、`pairing.batch_max_messages` |
 
 **两者不重叠，也不许重叠。** 两处都能设的值，最终会变成"跑出来的结果和 yaml 里写的不一样，
@@ -42,13 +42,13 @@
 > 把上一套实验的 point **静默留给下一套**，V9）与 `rerank.enabled: false`（开发期不花那份墙钟——
 > 基线里是 `true`，那是提交口径）。**`submit.yaml` 现在只覆盖一项**：`models.embedder`。
 
-**两个 profile 之外的加载细节**（实现在 [`../src/tianxi_am/common/config.py`](../src/tianxi_am/common/config.py)）：
+**两个 profile 之外的加载细节**（实现在 [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py)）：
 
 | 变量 | 作用 |
 | --- | --- |
-| `TIANXI_PROFILE` | 选 `configs/<name>.yaml`（默认 `default`） |
-| `TIANXI_CONFIG_DIR` | 换一份配置**目录**（替代集合的 arm 快照就靠它，见下 `runs/`） |
-| `TIANXI_ENV_FILE` | 换 `.env` 的位置（默认 cwd 下的 `.env`） |
+| `TIANXIMEM_PROFILE` | 选 `configs/<name>.yaml`（默认 `default`） |
+| `TIANXIMEM_CONFIG_DIR` | 换一份配置**目录**（替代集合的 arm 快照就靠它，见下 `runs/`） |
+| `TIANXIMEM_ENV_FILE` | 换 `.env` 的位置（默认 cwd 下的 `.env`） |
 
 ⚠ **`.env` 由 `common/config.py` 读取**。它**不是**一条独立来源，而是"这台机器的环境"的本地副本——**排在真实环境变量之下**，`export` 过的值压过它。
 
@@ -65,7 +65,7 @@ configs/
 ```
 
 `runs/` 的用途：`docs/experiments.md` 要求记录**配置指纹**。让每个实验留下**冻结的配置副本**，而不是"当时的 local.yaml 大概是这样"——**后者在 Step 5 之后就无法重建了**。
-（跑某个 arm 用 `TIANXI_CONFIG_DIR=configs/runs/<arm>` 指向那份快照。）
+（跑某个 arm 用 `TIANXIMEM_CONFIG_DIR=configs/runs/<arm>` 指向那份快照。）
 
 > ⛔ **2026-09-28 网关迁移后，这些快照里的 `models.embedder` 已经过期**
 > （`Qwen/Qwen3-Embedding-8B` → `qwen3-embedding-8b`，见

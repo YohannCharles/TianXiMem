@@ -23,11 +23,11 @@ from dataclasses import dataclass, field
 import pytest
 from tests.conftest import FakeEmbedder, rd, run_parallel
 
-from tianxi_am.common.render import render_pair
-from tianxi_am.pairing import AddBatch
-from tianxi_am.pairing.pairing import Message
-from tianxi_am.service.pipeline import AddPipeline
-from tianxi_am.store.sqlite_store import SqliteStore
+from tianximem.common.render import render_pair
+from tianximem.pairing import AddBatch
+from tianximem.pairing.pairing import Message
+from tianximem.service.pipeline import AddPipeline
+from tianximem.store.sqlite_store import SqliteStore
 
 # ── 假 Qdrant ──────────────────────────────────────────────────────────
 
@@ -277,7 +277,7 @@ def test_sqlite_failure_does_not_touch_qdrant(
     def _boom(*args, **kwargs):  # noqa: ANN002, ANN003
         raise RuntimeError("模拟 SQLite 失败")
 
-    monkeypatch.setattr("tianxi_am.service.pipeline.apply_batch", _boom)
+    monkeypatch.setattr("tianximem.service.pipeline.apply_batch", _boom)
 
     with pytest.raises(RuntimeError, match="模拟 SQLite"):
         pipeline.apply(_batch(_rid(1), "Q1", "A1"))

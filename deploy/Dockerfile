@@ -1,7 +1,7 @@
-# TianXi_AM 检索服务镜像 —— Add / Search 两个 HTTP 端点（§2.1）
+# TianXiMem 检索服务镜像 —— Add / Search 两个 HTTP 端点（§2.1）
 #
 # 构建（**上下文必须是仓库根**，不是本目录）：
-#     docker build -f deploy/Dockerfile -t tianxi-am:local .
+#     docker build -f deploy/Dockerfile -t tianximem:local .
 # 或者直接用 compose（推荐）：
 #     docker compose -f deploy/compose.yaml up -d --build
 #
@@ -56,7 +56,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 # ② 再装本仓库。
 #    ⚠ **`--no-editable` 不能省**：uv 对 workspace 根项目**默认装成 editable**，
 #       那会在 site-packages 里留一个指向 `/app/src` 的 `.pth`——而运行阶段**不拷 src/**
-#       ⇒ 容器起来就是 `ModuleNotFoundError: No module named 'tianxi_am'`，
+#       ⇒ 容器起来就是 `ModuleNotFoundError: No module named 'tianximem'`，
 #       且这个错看起来像"镜像没装对包"，其实是"装成了指向源码目录的软链"。
 #    ⚠ 也不能反过来"那就把 src 拷进运行阶段"——那等于镜像里有两份代码（venv 里一份、
 #       /app/src 一份），改一份不改另一份时**不报错**。
@@ -93,8 +93,8 @@ COPY --from=builder --chown=root:root /app/.venv /app/.venv
 COPY --from=builder --chown=root:root /opt/tiktoken-cache /opt/tiktoken-cache
 
 # 配置（阈值 / 权重 / 模型名 / 集合名）——**烘进镜像**。
-# 理由：它是被评审、被 diff 的产物，不是运行时输入。换 profile 用 `TIANXI_PROFILE` 选，
-# 换一整套用 `TIANXI_CONFIG_DIR` 指（两条都是环境变量，见 .env.example 的 ②层分工）。
+# 理由：它是被评审、被 diff 的产物，不是运行时输入。换 profile 用 `TIANXIMEM_PROFILE` 选，
+# 换一整套用 `TIANXIMEM_CONFIG_DIR` 指（两条都是环境变量，见 .env.example 的 ②层分工）。
 COPY --chown=root:root configs/ /app/configs/
 
 # 契约预检：**在容器里就能对已部署的实例跑**（打真 HTTP，不 import src/，只依赖 httpx）。
@@ -109,14 +109,14 @@ COPY --chown=root:root eval/smoke/ /app/eval/smoke/
 #    于是 app 用户能写。目录不存在的话卷归 root，服务启动即失败（而且是写库时才炸）。
 RUN mkdir -p /data/embed_cache /data/capture && chown -R app:app /data
 
-# `TIANXI_WORKERS=1`：§15 的第二道防线（第一道是 `common/config.py` 的 validate()）。
+# `TIANXIMEM_WORKERS=1`：§15 的第二道防线（第一道是 `common/config.py` 的 validate()）。
 ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache \
-    TIANXI_SQLITE_PATH=/data/tianxi.db \
-    TIANXI_EMBED_CACHE_DIR=/data/embed_cache \
-    TIANXI_CAPTURE_PATH=/data/capture/requests.jsonl \
-    TIANXI_WORKERS=1
+    TIANXIMEM_SQLITE_PATH=/data/tianxi.db \
+    TIANXIMEM_EMBED_CACHE_DIR=/data/embed_cache \
+    TIANXIMEM_CAPTURE_PATH=/data/capture/requests.jsonl \
+    TIANXIMEM_WORKERS=1
 
-# ⚠ 刻意**不**提供 `TIANXI_HOST` / `TIANXI_PORT` 这种变量：没有任何代码读它们
+# ⚠ 刻意**不**提供 `TIANXIMEM_HOST` / `TIANXIMEM_PORT` 这种变量：没有任何代码读它们
 #   ⇒ 设了也不生效，而"我明明改过端口"会变成一次排查。端口与监听地址写在下面的
 #   ENTRYPOINT 里，改端口要改这个文件（**改不动就说明你改错地方了**）。
 
@@ -131,11 +131,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD ["python", "-c", "import sys,httpx; sys.exit(0 if httpx.get('http://127.0.0.1:8000/health', timeout=4).status_code == 200 else 1)"]
 
 # ⚠ `--workers 1` 与 `--factory` 都写死：
-#   · `--workers 1`：见文件头第 1 条。**不要改成 ${TIANXI_WORKERS}**——那就给了运行时改的口子，
+#   · `--workers 1`：见文件头第 1 条。**不要改成 ${TIANXIMEM_WORKERS}**——那就给了运行时改的口子，
 #     而 `assert_single_process()` 只能拦下"真的派了子进程"的情形，构造不出来时它拦不住。
 #   · `--factory`：模块级 `app = ...` 会让"导入本模块"就要求环境变量齐备（见 app.py 的 docstring）。
 # ⚠ **不要加 `--reload`**：它用 multiprocessing 起子进程，会被 `assert_single_process()` 拦下
 #   （两者在子进程里形状相同，故意一起拦）。
-ENTRYPOINT ["uvicorn", "tianxi_am.service.app:create_app_from_env", \
+ENTRYPOINT ["uvicorn", "tianximem.service.app:create_app_from_env", \
             "--factory", "--workers", "1", \
             "--host", "0.0.0.0", "--port", "8000"]

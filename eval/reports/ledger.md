@@ -524,7 +524,7 @@ conv-30 `0.5139` · conv-41 `0.5515`（B1）；我们对应 `0.7681` / `0.7361` 
 
 ## V13 修复：**并列分数的次序定死**（2026-09-26，3 段 346 题）—— 同一个分数、可复现了
 
-**改了什么**：[`retrieve/fusion.py`](../../src/tianxi_am/retrieve/fusion.py) 在名次被 `enumerate`
+**改了什么**：[`retrieve/fusion.py`](../../src/tianximem/retrieve/fusion.py) 在名次被 `enumerate`
 定下来**之前**，按 **`(-score, memory_id)`** 排一遍（主键分数降序、次级键 id 升序）。
 分数**只用于排序**，排完照旧丢掉（它仍然不是校准量）。
 

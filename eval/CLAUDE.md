@@ -26,7 +26,7 @@
 
 ## ⚠ 一条贯穿全目录的边界：**harness 打 HTTP，不 import `src/`**
 
-**`harness/` 必须通过 HTTP 驱动服务，不能 `import tianxi_am` 的内部模块。**（各子目录不重复这条。）
+**`harness/` 必须通过 HTTP 驱动服务，不能 `import tianximem` 的内部模块。**（各子目录不重复这条。）
 
 理由（§13）：**B1 是 ReFind 的原版实现，只以"另一个 Add/Search 服务"的形式存在**——进程内调用会让它成为特例、两条基线不可比；且**主路径（混合检索）过 Smoke 契约校验**（200 响应、`data` 数组、不超 `top_k`）**只有打 HTTP 才验证得了**，进程内调用根本碰不到契约层。
 

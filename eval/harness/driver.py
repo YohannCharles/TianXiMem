@@ -1,6 +1,6 @@
 """喂 `Add`、调 `Search`——**走 HTTP**。
 
-> **本模块不 import `tianxi_am` 的任何内部模块**，这是全目录最硬的一条边界
+> **本模块不 import `tianximem` 的任何内部模块**，这是全目录最硬的一条边界
 > （[`../CLAUDE.md`](../CLAUDE.md)）：§13 要求 B1（ReFind）在我们自己的 harness 里重跑，
 > 而 B1 只以"另一个 Add/Search 服务"的形式存在——走进程内调用会让 B1 变成特例、
 > 两条基线不可比；而且**只有打 HTTP 才碰得到契约层**。

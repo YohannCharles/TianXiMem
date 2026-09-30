@@ -30,7 +30,7 @@ services:
       #    `.dockerignore` 在仓库根，负责挡掉 benchmark_data / var / .env 那几样。
       context: ..
       dockerfile: deploy/Dockerfile
-    image: tianxi-am:local
+    image: tianximem:local
     container_name: tianxi-app
     # 24×7：Full run 连续跑 0.5–2 天，崩了必须自己回来。
     restart: unless-stopped
@@ -41,13 +41,13 @@ services:
     ports:
       # 宿主端口 → 容器 8000。⚠ 容器内部固定听 0.0.0.0:8000（写死在 Dockerfile 的 ENTRYPOINT）。
       #
-      # `TIANXI_BIND`：绑到宿主的哪个地址。**默认只听回环**——本服务**没有任何鉴权**
+      # `TIANXIMEM_BIND`：绑到宿主的哪个地址。**默认只听回环**——本服务**没有任何鉴权**
       #   （`user_id` 是隔离字段，不是认证），所以默认不给外面看。
       #   ⚠ 要让别的机器访问必须设 `0.0.0.0`（或某个具体网卡地址）：
       #     只改端口不顶用——绑在 127.0.0.1 上的话，同机 `curl localhost:28088` 通、
       #     从别的机器打过来是 connection refused，**而服务日志里什么都没有**。
-      # `TIANXI_PORT`：宿主端口。默认 8000（开发机）。
-      - "${TIANXI_BIND:-127.0.0.1}:${TIANXI_PORT:-8000}:8000"
+      # `TIANXIMEM_PORT`：宿主端口。默认 8000（开发机）。
+      - "${TIANXIMEM_BIND:-127.0.0.1}:${TIANXIMEM_PORT:-8000}:8000"
     extra_hosts:
       # 让**容器内**的 `host.docker.internal` 指回宿主机（Linux 上必须显式写；
       # Docker Desktop 自带这个名字，写了也不冲突）。
@@ -70,20 +70,20 @@ services:
       #   这里只放"换成容器形态就必须变"的：地址、集合、profile。
       #
       # ① Qdrant：compose 网络内用服务名解析。**指外部 Qdrant 就在 .env 里设
-      #    TIANXI_QDRANT_URL**（下面的 `${...:-默认}` 就是那个口子）。
-      TIANXI_QDRANT_URL: "${TIANXI_QDRANT_URL:-http://qdrant:6333}"
+      #    TIANXIMEM_QDRANT_URL**（下面的 `${...:-默认}` 就是那个口子）。
+      TIANXIMEM_QDRANT_URL: "${TIANXIMEM_QDRANT_URL:-http://qdrant:6333}"
       # ② profile 选 configs/<name>.yaml。开发期是 local（集合 memories_dev）；
       #    **提交期必须是 default**（集合 memories，见 configs/CLAUDE.md 的隔离说明）。
-      TIANXI_PROFILE: "${TIANXI_PROFILE:-local}"
+      TIANXIMEM_PROFILE: "${TIANXIMEM_PROFILE:-local}"
       # ③ 路径固定成卷里的位置（Dockerfile 里已经把目录建好并 chown 给 app 用户）。
-      TIANXI_SQLITE_PATH: /data/tianxi.db
-      TIANXI_EMBED_CACHE_DIR: /data/embed_cache
+      TIANXIMEM_SQLITE_PATH: /data/tianxi.db
+      TIANXIMEM_EMBED_CACHE_DIR: /data/embed_cache
       # 请求**原文**采集的落点（`capture.enabled=true` 时才写，默认关）。
       # 它在同一个卷里 ⇒ `docker cp <容器>:/data/capture/requests.jsonl .` 取得走。
-      TIANXI_CAPTURE_PATH: /data/capture/requests.jsonl
+      TIANXIMEM_CAPTURE_PATH: /data/capture/requests.jsonl
       # ④ 单进程（§15）。Dockerfile 里已有第二道，这里写出来是为了让它**在 compose 上可见**。
-      TIANXI_WORKERS: "1"
-      # ⚠ **刻意不设 `TIANXI_ENV_FILE`**：容器里没有 .env 文件，配置全靠上面这些环境变量。
+      TIANXIMEM_WORKERS: "1"
+      # ⚠ **刻意不设 `TIANXIMEM_ENV_FILE`**：容器里没有 .env 文件，配置全靠上面这些环境变量。
       #   设了它反而会让服务去读一个不存在的路径。
     volumes:
       # **真源 + 向量缓存**。⚠ SQLite 是**唯一不可重建物**（Qdrant 可从它全量重建，
@@ -113,8 +113,8 @@ services:
       #   而 Qdrant **本身没有鉴权** ⇒ 绑到 0.0.0.0 等于把整个向量库摊在网络上（谁都读得到、
       #   谁都能删）。它只是派生索引（可从 SQLite 重建），但被删了要重建一遍。
       #   要在宿主上直连（`make qdrant-up` 的开发环路、tools/ 的脚本）走 127.0.0.1 就够。
-      - "127.0.0.1:${TIANXI_QDRANT_PORT:-6333}:6333"   # REST —— 服务与 harness 都走这个
-      - "127.0.0.1:${TIANXI_QDRANT_GRPC_PORT:-6334}:6334"   # gRPC
+      - "127.0.0.1:${TIANXIMEM_QDRANT_PORT:-6333}:6333"   # REST —— 服务与 harness 都走这个
+      - "127.0.0.1:${TIANXIMEM_QDRANT_GRPC_PORT:-6334}:6334"   # gRPC
     volumes:
       # 派生数据的落点。Qdrant 可从 SQLite 全量重建，所以这个卷【不是备份对象】——
       # 真正的备份对象是 SQLite 真源文件（见 deploy/CLAUDE.md §4 的重建 runbook）。
@@ -153,7 +153,7 @@ networks:
       config:
         - subnet: 172.28.0.0/24
 
-# 注意：以下集合级设置【不在本文件里】，由客户端在建集合时施加（src/tianxi_am/store/）：
+# 注意：以下集合级设置【不在本文件里】，由客户端在建集合时施加（src/tianximem/store/）：
 #   - 分片数 = 1            （根级融合跨分片合并，分片数变化会改变排名且无报错）
 #   - 命名向量 dense + bm25 （稀疏向量距离固定为 Dot）
 #   - payload 索引          （必须在写入数据前建，否则 HNSW 需重建才有过滤感知）
@@ -171,4 +171,4 @@ networks:
 #     生成留在本地。要求：能连到自建网关（embedding 必需、reranker 可选）、
 #     有持久盘、**不需要 GPU 也不需要外网**（tiktoken 的 BPE 已烘进镜像）。
 #     ⚠ 服务器上用 `default` profile（集合 `memories`），**不是 `local`**。
-#     ⚠ 本服务**没有任何鉴权** ⇒ 默认只听 `127.0.0.1`（`TIANXI_BIND`），对外要自己加 TLS/反代。
+#     ⚠ 本服务**没有任何鉴权** ⇒ 默认只听 `127.0.0.1`（`TIANXIMEM_BIND`），对外要自己加 TLS/反代。

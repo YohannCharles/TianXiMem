@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from tianxi_am.common.config import (
+from tianximem.common.config import (
     ENV_QDRANT_URL,
     AppConfig,
     CacheConfig,
@@ -33,18 +33,18 @@ from tianxi_am.common.config import (
     SqliteConfig,
     StorageConfig,
 )
-from tianxi_am.common.render import render_pair
-from tianxi_am.pairing.pairing import Message
-from tianxi_am.retrieve import (
+from tianximem.common.render import render_pair
+from tianximem.pairing.pairing import Message
+from tianximem.retrieve import (
     DenseArm,
     EvidenceChecker,
     HybridRetriever,
     InMemoryCheckerInstrument,
 )
-from tianxi_am.service import build_services
-from tianxi_am.service.pipeline import AddPipeline, SearchPipeline
-from tianxi_am.store.qdrant_store import ScoredMemoryId
-from tianxi_am.store.sqlite_store import SqliteStore, make_pair_id
+from tianximem.service import build_services
+from tianximem.service.pipeline import AddPipeline, SearchPipeline
+from tianximem.store.qdrant_store import ScoredMemoryId
+from tianximem.store.sqlite_store import SqliteStore, make_pair_id
 
 # ── ① 的 fixture ────────────────────────────────────────────────────────
 
@@ -216,7 +216,7 @@ def qdrant_store(qdrant_client):
     ⚠ 刻意**不用**默认的 `memories`：那是开发/线上共用的集合，
     测试往里写点会让"检索结果为什么不对"变成一个无法回答的问题。
     """
-    from tianxi_am.store.qdrant_store import QdrantStore
+    from tianximem.store.qdrant_store import QdrantStore
 
     name = f"memories_test_{uuid.uuid4().hex[:8]}"
     store = QdrantStore(url="unused", collection=name, client=qdrant_client, hybrid=None)

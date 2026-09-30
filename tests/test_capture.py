@@ -23,9 +23,9 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.conftest import Wired, rd
 
-from tianxi_am.common.config import ConfigError, load_config
-from tianxi_am.service.app import build_capture, create_app
-from tianxi_am.service.capture import CAPTURED_PATHS, CaptureMiddleware, RequestCapture
+from tianximem.common.config import ConfigError, load_config
+from tianximem.service.app import build_capture, create_app
+from tianximem.service.capture import CAPTURED_PATHS, CaptureMiddleware, RequestCapture
 
 _MIN_ENV = {"AML_EMB_BASE_URL": "http://unused/v1", "AML_EMB_API_KEY": "k"}
 
@@ -97,11 +97,11 @@ def test_capture_is_off_by_default(tmp_path: Path) -> None:
 
 
 def test_enabled_comes_from_yaml_and_path_from_env(tmp_path: Path) -> None:
-    """开关归 yaml、**路径归 env**——与 `rerank.enabled` + `TIANXI_RERANKER_*` 同一个拆法。"""
+    """开关归 yaml、**路径归 env**——与 `rerank.enabled` + `TIANXIMEM_RERANKER_*` 同一个拆法。"""
     cfg = _load(
         tmp_path,
         "capture:\n  enabled: true\n  max_bytes: 4096\n",
-        TIANXI_CAPTURE_PATH="/data/capture/requests.jsonl",
+        TIANXIMEM_CAPTURE_PATH="/data/capture/requests.jsonl",
     )
     assert cfg.capture.enabled is True
     assert cfg.capture.max_bytes == 4096
@@ -110,7 +110,7 @@ def test_enabled_comes_from_yaml_and_path_from_env(tmp_path: Path) -> None:
 
 def test_enabled_is_not_overridable_from_env(tmp_path: Path) -> None:
     """**yaml 说了算**：环境里放一个同名的开关也没用（"每个键只有一个家"的守门人）。"""
-    cfg = _load(tmp_path, "capture:\n  enabled: false\n", TIANXI_CAPTURE_ENABLED="true")
+    cfg = _load(tmp_path, "capture:\n  enabled: false\n", TIANXIMEM_CAPTURE_ENABLED="true")
     assert cfg.capture.enabled is False
 
 

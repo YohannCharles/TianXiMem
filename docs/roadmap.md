@@ -101,7 +101,7 @@
 - [x] **`common/config.py`：配置的唯一入口**（③-d）——`service/` 等**五个目录都不再读 `os.environ`**（静态测试钉住）；`rrf_k != 61` 与 `workers != 1` 都**拒绝启动**
 - [x] `Search` 路径：混合检索，**精确 ≤ `top_k`**（§2.2）
 - [x] Weighted RRF：**`k=61` 显式设**、`prefetch` 每路带 `using`、根级 `limit` 取请求 `top_k`（§7.3）
-      [`../src/tianxi_am/retrieve/fusion.py`](../src/tianxi_am/retrieve/fusion.py) + [`../src/tianxi_am/store/qdrant_store.py`](../src/tianxi_am/store/qdrant_store.py)。
+      [`../src/tianximem/retrieve/fusion.py`](../src/tianximem/retrieve/fusion.py) + [`../src/tianximem/store/qdrant_store.py`](../src/tianximem/store/qdrant_store.py)。
       ⚠ 参数（`prefetch_limit` / `weights` / `rrf_k`）由**装配处注入 `QdrantStore`**——放在编排者手里会**静默无效**（它不执行那些参数）
 - [x] **主路径必须能通过 Smoke 契约校验**（200 响应、`data` 数组、不超 `top_k`）——**它是所有对照的参照点**（§13）
       **本地自动化**（③-e）：`make contract-check` → [`../eval/smoke/preflight.py`](../eval/smoke/preflight.py)，
@@ -115,9 +115,9 @@
 
 **链条**：`Qdrant arm_search`（单路查询）→ `service` 提供 BM25 / Dense 两路排名 → `Checker` 记录 `criterion_would_say` / **A4 分布**。
 
-**它解决什么**：[`../src/tianxi_am/retrieve/checker.py`](../src/tianxi_am/retrieve/checker.py) 的判据**已经写全并测到**（§8 的三条规则），但 v1 的调用方**不传**两路排名，于是 `criterion_would_say` 恒为 `None` ⇒ **D13 想要的那份 A4 反事实分布拿不到**。
+**它解决什么**：[`../src/tianximem/retrieve/checker.py`](../src/tianximem/retrieve/checker.py) 的判据**已经写全并测到**（§8 的三条规则），但 v1 的调用方**不传**两路排名，于是 `criterion_would_say` 恒为 `None` ⇒ **D13 想要的那份 A4 反事实分布拿不到**。
 
-**为什么现在不做**：要跑那两次查询，得给 [`../src/tianxi_am/store/qdrant_store.py`](../src/tianxi_am/store/qdrant_store.py) 加一个**单路查询**（现有的 `hybrid_search` 只做融合）。它也**不是通过 Smoke 契约校验所必需的**（Smoke 只看响应形状）。
+**为什么现在不做**：要跑那两次查询，得给 [`../src/tianximem/store/qdrant_store.py`](../src/tianximem/store/qdrant_store.py) 加一个**单路查询**（现有的 `hybrid_search` 只做融合）。它也**不是通过 Smoke 契约校验所必需的**（Smoke 只看响应形状）。
 
 ---
 
@@ -143,12 +143,12 @@
 > **本阶段定稿两件"贵"东西**：渲染模板与 reranker（**选型已定：`Qwen3-Reranker-4B`**）。
 
 - [x] **reranker 接入**——**提交时不得更换**（D12）
-      落点：`rank/reranker.RemoteReranker` → `POST {TIANXI_RERANKER_BASE_URL}/rerank`。
+      落点：`rank/reranker.RemoteReranker` → `POST {TIANXIMEM_RERANKER_BASE_URL}/rerank`。
       **线格式是实测的**（`top_n` 会静默截断、`model` 被忽略、响应按分数降序——三条都写在该文件顶部）。
       连通性与"它在链上真的起作用"用 `make probe-reranker` 验（真网关，**不消耗 Smoke 配额**）。
       ⚠ 端点**部署**仍不在本项目范围内（D12）；端点挂了 ⇒ 降级回 RRF 顺序并记 `rerank_degraded`。
 - [x] **渲染模板定稿为 `v1`**：`Q: {q}` / `A: {a}`，**正文带日粒度日期锚点**（D21，见下一条）。
-      声明处是 [`../src/tianxi_am/rank/CLAUDE.md`](../src/tianxi_am/rank/CLAUDE.md) §4；实现是 [`../src/tianxi_am/common/render.py`](../src/tianxi_am/common/render.py)。
+      声明处是 [`../src/tianximem/rank/CLAUDE.md`](../src/tianximem/rank/CLAUDE.md) §4；实现是 [`../src/tianximem/common/render.py`](../src/tianximem/common/render.py)。
       ⚠ **「定稿」不等于「不可推翻」**：推翻它要付「重建索引」的钱，而 T1 就是那笔钱的用途
 - [x] **跑 T1 实验**（§13），与 `created_at` 粒度那条同批测（§11.3）—— ✅ **2026-09-25 已跑**
       结论：日期写**段首**无效、写**每一对旁边**有效（multi-hop +8.9pt / temporal +3.5pt，整体 0.601 → **0.633**）
@@ -177,7 +177,7 @@
 > **本阶段只做一件事：换模型 + 重标定。不与任何设计改动合并。**
 
 - [ ] 切到 `text-embedding-v4` + `gpt-4o-mini`（§2.3）—— 🟡 **embedder 一侧已落地**（2026-09-28：
-      [`../src/tianxi_am/embed/text_embedding_v4.py`](../src/tianxi_am/embed/text_embedding_v4.py) +
+      [`../src/tianximem/embed/text_embedding_v4.py`](../src/tianximem/embed/text_embedding_v4.py) +
       [`../configs/submit.yaml`](../configs/submit.yaml) + 装配按模型名挑实现），**剩下的只是把
       `AML_EMB_*` 指到真端点**（端点尚未到位）。⚠ **`gpt-4o-mini` 在 v1 里没有调用点**
       （`Add` 侧不调用、`Search` 只在 `agent/` 里调用，而 v1 不做 agentic，D13）⇒ 无需接线。

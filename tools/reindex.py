@@ -19,7 +19,7 @@ uv run python -m tools.reindex                 # 不丢，按 id upsert 覆盖
 uv run python -m tools.reindex --user conv-26  # 只重建一个 user（调试用）
 ```
 
-⚠ 它按**当前配置**渲染（`TIANXI_PROFILE` / `TIANXI_CONFIG_DIR` 决定读哪份 yaml）——
+⚠ 它按**当前配置**渲染（`TIANXIMEM_PROFILE` / `TIANXIMEM_CONFIG_DIR` 决定读哪份 yaml）——
 所以"重建"的含义是"把索引对齐到此刻的配置"，**不是**"对齐到某个历史版本"。
 """
 
@@ -29,9 +29,9 @@ import argparse
 from functools import partial
 from typing import Final
 
-from tianxi_am.common.config import load_config
-from tianxi_am.common.render import render_pair
-from tianxi_am.service.app import build_services
+from tianximem.common.config import load_config
+from tianximem.common.render import render_pair
+from tianximem.service.app import build_services
 
 EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1

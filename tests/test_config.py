@@ -2,7 +2,7 @@
 
 ## 这个文件里最重要的一条
 
-`test_only_config_reads_the_environment` —— 它**静态地**扫描 `src/tianxi_am/**/*.py`，
+`test_only_config_reads_the_environment` —— 它**静态地**扫描 `src/tianximem/**/*.py`，
 断言除 `common/config.py` 之外**没有任何模块访问 `os.environ` / `os.getenv`**。
 "唯一入口"是一个可以被写成断言的**结构性质**，而不是一条靠自觉的约定。
 
@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from tianxi_am.common import config as config_module
-from tianxi_am.common.config import (
+from tianximem.common import config as config_module
+from tianximem.common.config import (
     ENV_CONFIG_DIR,
     ENV_EMBED_API_KEY,
     ENV_EMBED_BASE_URL,
@@ -43,7 +43,7 @@ _MIN_ENV: dict[str, str] = {
     ENV_EMBED_API_KEY: "k",
 }
 
-_SRC = Path(__file__).resolve().parents[1] / "src" / "tianxi_am"
+_SRC = Path(__file__).resolve().parents[1] / "src" / "tianximem"
 _REPO = Path(__file__).resolve().parents[1]
 
 
@@ -294,7 +294,7 @@ def test_packaging_switch_rejects_a_non_bool(config_dir: Path) -> None:
     （`common/render.py`）。放一个宽松的值进来，T1 的两臂就会同时在两个维度上不同，
     于是那个对照再也归因不了——而**分数看起来完全正常**。
     """
-    from tianxi_am.common.config import ConfigError, load_config
+    from tianximem.common.config import ConfigError, load_config
 
     other = config_dir / "bad_switch"
     other.mkdir()
@@ -302,11 +302,11 @@ def test_packaging_switch_rejects_a_non_bool(config_dir: Path) -> None:
         "packaging:\n  inject_abs_time: '2026-07-26'\n", encoding="utf-8"
     )
     with pytest.raises(ConfigError, match="packaging.inject_abs_time"):
-        load_config({"TIANXI_SQLITE_PATH": "x.db", "AML_EMB_API_KEY": "k"}, config_dir=other)
+        load_config({"TIANXIMEM_SQLITE_PATH": "x.db", "AML_EMB_API_KEY": "k"}, config_dir=other)
 
 
 def test_config_dir_env_redirects_where_yaml_is_read(config_dir: Path) -> None:
-    """`TIANXI_CONFIG_DIR` **重定向 yaml 的读取目录**。
+    """`TIANXIMEM_CONFIG_DIR` **重定向 yaml 的读取目录**。
 
     ⚠ 这条不只是"多测一个变量"：它是**替代集合**能不能做的前提——§13 的每个 arm
     都需要一份冻结的配置（`configs/runs/`），而"指定另一份配置跑"靠的就是这个变量。
@@ -411,7 +411,7 @@ def test_submit_model_name_matches_the_v4_client_default(config_dir: Path) -> No
     **不会报错**：服务退回开发期的类（批大小 64），只在**提交期第一次 `Add`** 时才 400。
     与 `test_model_default_is_the_same_in_both_places`（开发期那一对）是同一条理由。
     """
-    from tianxi_am.embed.text_embedding_v4 import DEFAULT_MODEL
+    from tianximem.embed.text_embedding_v4 import DEFAULT_MODEL
 
     assert _load(config_dir, **{ENV_PROFILE: "submit"}).models.embedder == DEFAULT_MODEL
 
@@ -425,8 +425,8 @@ def test_env_overrides_paths_and_secrets(config_dir: Path) -> None:
         config_dir,
         **{
             ENV_SQLITE_PATH: "/tmp/other.db",
-            "TIANXI_QDRANT_URL": "http://qdrant.internal:6333",
-            "TIANXI_EMBED_CACHE_DIR": "/tmp/other_cache",
+            "TIANXIMEM_QDRANT_URL": "http://qdrant.internal:6333",
+            "TIANXIMEM_EMBED_CACHE_DIR": "/tmp/other_cache",
             ENV_EMBED_BASE_URL: "http://gw/v1/",
             ENV_EMBED_API_KEY: "sk-xyz",
         },
@@ -442,7 +442,7 @@ def test_env_overrides_paths_and_secrets(config_dir: Path) -> None:
 def test_empty_env_var_does_not_wipe_a_default(config_dir: Path) -> None:
     """**空字符串不算覆盖**。
 
-    `.env` 里一行 `TIANXI_SQLITE_PATH=` 不该把路径变成空串——那会让服务在建库时
+    `.env` 里一行 `TIANXIMEM_SQLITE_PATH=` 不该把路径变成空串——那会让服务在建库时
     才炸，而不是在配置阶段。空值一律退回默认（或报错）。
     """
     cfg = _load(config_dir, **{ENV_SQLITE_PATH: ""})
@@ -461,10 +461,10 @@ def test_thresholds_are_not_overridable_from_env(config_dir: Path) -> None:
     yaml_enabled = _load(config_dir).capture.enabled
     cfg = _load(
         config_dir,
-        TIANXI_PREFETCH_LIMIT="999",
-        TIANXI_RRF_K="2",
+        TIANXIMEM_PREFETCH_LIMIT="999",
+        TIANXIMEM_RRF_K="2",
         AML_EMB_MODEL="some-other-model",
-        TIANXI_CAPTURE_ENABLED=str(not yaml_enabled).lower(),
+        TIANXIMEM_CAPTURE_ENABLED=str(not yaml_enabled).lower(),
     )
 
     assert cfg.retrieval.prefetch_limit == 200  # yaml 说了算
@@ -503,14 +503,14 @@ def test_rrf_k_is_the_same_constant_in_both_places() -> None:
     两份是**有意**的：配置层拒绝非法值（启动时），策略层拒绝非法参数（直接调用方）。
     但值本身只能有一个——这条用例就是那道保险。见 D5。
     """
-    from tianxi_am.retrieve.fusion import RRF_K as STRATEGY_K
+    from tianximem.retrieve.fusion import RRF_K as STRATEGY_K
 
     assert STRATEGY_K == RRF_K == 61
 
 
 def test_model_default_is_the_same_in_both_places() -> None:
     """`models.embedder` 的默认值在两处各有一份 ⇒ **必须相等**（同上一条的理由）。"""
-    from tianxi_am.embed.qwen3_embedding import DEFAULT_MODEL
+    from tianximem.embed.qwen3_embedding import DEFAULT_MODEL
 
     assert AppConfig().models.embedder == DEFAULT_MODEL
 
@@ -738,9 +738,9 @@ def test_dotenv_parses_our_own_file_format(config_dir: Path, tmp_path: Path) -> 
         "   \n"
         "AML_EMB_BASE_URL=https://gw/v1\n"
         "export AML_EMB_API_KEY=sk-exported\n"
-        'TIANXI_SQLITE_PATH="var/quoted.db"\n'
-        "TIANXI_QDRANT_URL=http://localhost:6333   # 这一行是行内注释\n"
-        "TIANXI_EMBED_CACHE_DIR=/tmp/cache#不是注释（# 前没有空白）\n",
+        'TIANXIMEM_SQLITE_PATH="var/quoted.db"\n'
+        "TIANXIMEM_QDRANT_URL=http://localhost:6333   # 这一行是行内注释\n"
+        "TIANXIMEM_EMBED_CACHE_DIR=/tmp/cache#不是注释（# 前没有空白）\n",
         encoding="utf-8",
     )
 
@@ -801,10 +801,10 @@ def test_env_dict_never_reads_dotenv(config_dir: Path, tmp_path: Path, monkeypat
 
 
 def test_env_file_location_is_overridable(config_dir: Path, tmp_path: Path, monkeypatch) -> None:
-    """`TIANXI_ENV_FILE` 能换 `.env` 的位置（预检靠它做到不依赖机器状态）。
+    """`TIANXIMEM_ENV_FILE` 能换 `.env` 的位置（预检靠它做到不依赖机器状态）。
 
     ⚠ 这条**必须走生产路径**（`env=None`）：传 `env` dict 时根本不读磁盘，
-    在 dict 里放 `TIANXI_ENV_FILE` 是没有意义的（它管的是"去哪读环境"）。
+    在 dict 里放 `TIANXIMEM_ENV_FILE` 是没有意义的（它管的是"去哪读环境"）。
     """
     other = tmp_path / "custom.env"
     other.write_text("AML_EMB_BASE_URL=https://custom/v1\nAML_EMB_API_KEY=k\n", encoding="utf-8")

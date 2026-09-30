@@ -183,7 +183,7 @@ session 第 0 位**，影响 **57/500 = 11.4% 的题**），**40%（9,528/23,867
 **当时的冲突**：PRD §2.1 与根 `CLAUDE.md` 都写着本系统"**只提供 Add / Search 两个端点**"，
 而 `service/routes.py` 也只有 `/add` 与 `/search` ⇒ **`GET /health` 会 404**。
 
-**处置（团队决定，S4 的对冲）**：[`service/routes.py`](../src/tianxi_am/service/routes.py)
+**处置（团队决定，S4 的对冲）**：[`service/routes.py`](../src/tianximem/service/routes.py)
 的 `build_router()` 里加了 `GET /health` —— **只回 `{"status": "ok"}`，不探任何下游**
 （SQLite / Qdrant / 网关一个都不碰）：探活一旦做成深检查，任何一个抖动都会让平台判我们不健康，
 而本端点的**唯一作用**就是让平台看得见我们。回归用例：
@@ -200,7 +200,7 @@ session 第 0 位**，影响 **57/500 = 11.4% 的题**），**40%（9,528/23,867
 
 | # | 外部说法 | 与本仓的差异 | 处置 |
 | --- | --- | --- | --- |
-| a | Search 请求可带 **`options`**（可选，选择题传字符串数组；开放题不发送） | §1 的 Search 形状里**没有**这个字段 | **不冲突**：`SearchRequest` 没开 `extra="forbid"`（[`schemas.py`](../src/tianxi_am/service/schemas.py)），未知字段被忽略 ⇒ 不会 422。**但它提醒我们：MCQ 数据集走的是同一条 Search** |
+| a | Search 请求可带 **`options`**（可选，选择题传字符串数组；开放题不发送） | §1 的 Search 形状里**没有**这个字段 | **不冲突**：`SearchRequest` 没开 `extra="forbid"`（[`schemas.py`](../src/tianximem/service/schemas.py)），未知字段被忽略 ⇒ 不会 422。**但它提醒我们：MCQ 数据集走的是同一条 Search** |
 | b | `created_at` 官方标注为 **可选** | 本仓 §3 要求**始终带上** | **保持本仓口径**：§3 的三条理由（CL-Bench 渲染）比"平台不要求"更硬。送出去不亏 |
 | c | 官方样例的 `created_at` 是 **`"2026-07-01T12:00:00Z"`（ISO-8601 带时分秒）** | §3 要求**只给到日粒度**（`2026-07-26`） | **保持日粒度**：§11.3 的理由是**粒度会被模型看见**（秒级会诱发"粒度变细"判负）。**别照样例"修正"成 ISO** |
 | d | 自动重试集：**Add = {408,409,425,429,500,502,503,504}**；Search 同上**但不含 409** | 根 `CLAUDE.md` 只记了"最多 32 次、payload 不变" | 一致（幂等仍是必需的）。⚠ **409 也在 Add 的重试集里** ⇒ "冲突"也会被重试，幂等守卫不能只在成功路径生效 |

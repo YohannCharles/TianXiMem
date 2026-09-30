@@ -43,14 +43,14 @@ import tempfile
 from pathlib import Path
 from typing import Final
 
-from tianxi_am.common.config import ConfigError, load_config
-from tianxi_am.common.render import render
-from tianxi_am.rank import RemoteReranker, RerankUnavailable
-from tianxi_am.retrieve import DenseArm, EvidenceChecker, HybridRetriever
-from tianxi_am.service.app import build_reranker
-from tianxi_am.service.pipeline import SearchPipeline
-from tianxi_am.store.qdrant_store import ScoredMemoryId
-from tianxi_am.store.sqlite_store import SqliteStore, make_pair_id
+from tianximem.common.config import ConfigError, load_config
+from tianximem.common.render import render
+from tianximem.rank import RemoteReranker, RerankUnavailable
+from tianximem.retrieve import DenseArm, EvidenceChecker, HybridRetriever
+from tianximem.service.app import build_reranker
+from tianximem.service.pipeline import SearchPipeline
+from tianximem.store.qdrant_store import ScoredMemoryId
+from tianximem.store.sqlite_store import SqliteStore, make_pair_id
 
 #: 本探针全部数据都落在这个 user 下（隔离字段，不影响别的数据）。
 _USER: Final[str] = "probe-u"
@@ -356,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--radius", type=int, default=1, help="扩窗半径（对）")
     args = parser.parse_args(argv)
 
-    _rule("TianXi_AM 精排探针")
+    _rule("TianXiMem 精排探针")
     try:
         config = load_config()
     except ConfigError as exc:
@@ -372,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
 
     reranker = build_reranker(config)
     if reranker is None:
-        print("\n✗ 没有可用的 reranker（`TIANXI_RERANKER_BASE_URL` / `_API_KEY` 没填全，")
+        print("\n✗ 没有可用的 reranker（`TIANXIMEM_RERANKER_BASE_URL` / `_API_KEY` 没填全，")
         print("  或 `configs/*.yaml` 的 `rerank.enabled` 是 false）。")
         print("  ⇒ 先填 `.env`（见 .env.example 的那一段），再跑一次。")
         return EXIT_PRECONDITION_FAILED

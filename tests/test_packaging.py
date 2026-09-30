@@ -4,7 +4,7 @@
 在 [`test_neighbor.py`](./test_neighbor.py)——本文件**直接构造 `ContextSegment`**，
 好把 `top_k`、`score`、`created_at`、预算这几件事**孤立**出来测。
 
-> **与"取正文"那一层的分界**（`src/tianxi_am/rank/CLAUDE.md`）：正文由段带进来，
+> **与"取正文"那一层的分界**（`src/tianximem/rank/CLAUDE.md`）：正文由段带进来，
 > `packaging.py` **一个数据库查询都不做**——`_segment()` 这个 helper 就是那个边界的体现。
 """
 
@@ -17,9 +17,9 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from tianxi_am.common.render import render, render_segment
-from tianxi_am.common.tokens import TokenCounter
-from tianxi_am.rank import (
+from tianximem.common.render import render, render_segment
+from tianximem.common.tokens import TokenCounter
+from tianximem.rank import (
     ContextSegment,
     ResponseItem,
     day_granularity,
