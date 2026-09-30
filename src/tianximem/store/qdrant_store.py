@@ -69,7 +69,8 @@ def point_id_for(memory_id: str) -> str:
 
     取哈希的**前 128 位**当 UUID：128 位对十万级的点而言碰撞概率可忽略，
     且映射是**纯函数**——同一个 `memory_id` 永远得到同一个 point id，
-    因此"补全时 upsert 覆盖原 point"成立（§6.5：`id` 不变 ⇒ point id 不变）。
+    因此"重放同一位置时 **upsert 覆盖原 point**、而不是留下孤儿 point"成立
+    （§6.5：`id` 不变 ⇒ point id 不变）——`tools/reindex.py` 的全量重建依赖这一点。
     """
     if len(memory_id) < 32:
         raise ValueError(f"memory_id 太短，无法当 UUID 用：{memory_id!r}")

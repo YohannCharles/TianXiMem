@@ -6,11 +6,11 @@
 
 ```text
 preflight.py    契约预检（**跑 Smoke 之前先本地过一遍**）
-quota.py        Smoke 配额与节流记账
-s1_discriminator.py   **S1 的最小判别实验**
-s2_probe.py     S2 探针（切批口径）
-s3_probe.py     S3 探针（created_at 是否被消费）
 ```
+
+> ⬜ **还没写的**：`quota.py`（配额与节流记账）、`s1_discriminator.py` / `s2_probe.py` / `s3_probe.py`
+> ——S1–S3 三个只能靠 Smoke 消除的未知（§17.1）。**它们现在不存在**，
+> 别按上面的老清单去找。
 
 ## 为什么单独一层
 

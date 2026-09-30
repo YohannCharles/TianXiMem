@@ -1,7 +1,8 @@
 """SQLite 真源（PRD §6.1 / §6.3）。
 
-**这是唯一接触 SQLite 的模块。** 上层拿到的是领域对象 `QaPair`，不是 `sqlite3.Row`
+**这是唯一接触业务真源 SQLite 的模块。** 上层拿到的是领域对象 `QaPair`，不是 `sqlite3.Row`
 ——§6.3 的分工表只有在读写收口到一处时才守得住。
+（⚠ `embed/base.py` 的 `DiskVectorCache` 也开 SQLite，但那是可重建的派生缓存。）
 
 本模块【不认识】Qdrant、embedding、渲染，也【不认识】任何数据集——
 它只认 §2.1 的 canonical Add 契约字段（`user_id` / `session_id` / `request_id` / 消息）。

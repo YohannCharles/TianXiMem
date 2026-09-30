@@ -37,7 +37,7 @@ tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 | 名字 | 用途 |
 | --- | --- |
 | `render(q, a, *, date="")` | 逐对的唯一拼装（`date` 非空 ⇒ 前缀 `[YYYY-MM-DD] `） |
-| `render_pair(pair, *, inject_abs_time)` | **三个调用点的入口**（索引 / 精排输入 / `content`）——日期口径只此一处 |
+| `render_pair(pair, *, inject_abs_time)` | **两个调用点的入口**（索引侧 / 精排输入）——日期口径只此一处。⚠ **`content` 是那个声明式例外**：它走 `render` + `render_date` + 可选的 `annotate()`（见 [`../rank/CLAUDE.md`](../rank/CLAUDE.md) §4 与不变式 I1） |
 | `render_date(...)` · `day_granularity(...)` · `event_day(...)` | T1 的开关落点、日期格式（`created_at` 与 `content` **共用同一个格式**）与**时间换算的唯一一处** |
 
 ⇒ **T1 的"带日期"臂**（`packaging.inject_abs_time`）不是三处各改一遍，而是这一条路上的一个开关。
