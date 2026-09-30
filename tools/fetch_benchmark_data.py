@@ -320,7 +320,7 @@ MANIFEST: list[dict[str, str]] = [
     },
 ]
 
-# ── 已删除 ────────────────────────────────────────────────────
+# ── 不入档（归档里刻意不收的）──────────────────────────────────
 # 留档是为了让"这个文件去哪了"有答案，而不是让下一个人重新从 /tmp 里翻出来。
 # 哈希记下来，万一将来要复核某个已写进文档的数字（例如 lme_test.json 的 1,230 个
 # 空 session），至少知道该找哪一份、以及它长什么样。
@@ -518,7 +518,7 @@ def main() -> int:
     else:
         print(f"✓ {len(wanted)} 项全部与清单一致")
     if DELETED:
-        print(f"\n（另有 {len(DELETED)} 份已删除，理由与哈希见本文件 DELETED）")
+        print(f"\n（另有 {len(DELETED)} 份不入档，理由与哈希见本文件 DELETED）")
     return 1 if bad else 0
 
 
