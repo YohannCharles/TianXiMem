@@ -148,8 +148,6 @@ rerank_candidates=200 · reranker_max_length=512 · result_window=1 · seed_k=20
 
 ### L3 · 集合的身份：**缓存**那一层我们有了，**存储**那一层没有
 
-> **本节 2026-09-25 改过一次**：初版写"补一道身份校验是几行的工程项"，**核过代码后发现不准确**——缓存那一层**已经做了**。
-
 **缓存（已有，且比候选仓库细）**：`EmbeddingCoordinate(model, render_template)`，一个坐标系一个缓存文件（`<cache_dir>/<坐标哈希>.db`），文件自描述，另有 `_verify_coordinate()` 校验（[`../src/tianximem/embed/base.py`](../src/tianximem/embed/base.py) 的 `EmbeddingCoordinate` / `DiskVectorCache`）。⇒ **换模型 ⇒ 缓存整体作废是自动的**，不靠人记得。候选仓库的坐标系串（`|context=v1:{n}`）也是这个思路。
 
 **存储（没有）**：Qdrant 集合与 SQLite 真源**都没有身份标记**，看不出这个集合是由哪个模型建的。候选仓库把 `embedding_identity` 写进**记忆库本身**，启动时对不上就 `ValueError` **拒绝打开库**（`memory_store.py:202-212`、`:289-298`）——它护的是**向量库**，不是缓存。
@@ -165,7 +163,7 @@ ReFind 与候选仓库都**从数据里重建顺序**：先按源时间戳，再
 **这一节的推理正是 D25 的依据**——上面那句"序号确实在 id 里"来自两个**跑过真平台**的实现，比我们自己猜可信。D25 于是：
 
 1. 位置改为 `(chunk_ordinal, local_index)`，`chunk_ordinal` **从 `request_id` 解析**；
-2. **没有业务串行锁**——位置不再是读-改-写 ⇒ 并发与乱序都安全；
+2. **没有业务串行锁**——位置不由读-改-写产生 ⇒ 并发与乱序都安全；
 3. 解析不到序号 ⇒ **响亮失败**（**不回退到"按到达顺序"**——那等于把"到达顺序是权威"这条假设悄悄带回来）。
 
 ⇒ [S6](./open-questions.md) 随之**消除**，收敛成一个更小、且 **fail-loud** 的新未知：

@@ -122,7 +122,7 @@ DATE_PREFIX: str = "[{date}] "
 #: 注入里怎么带日期——**三档**（`--memory-date` 的取值域）。
 #:
 #: * `none`：完全不带（**基线**，也是"AML 侧只取 content"那条 S1 假设）
-#: * `per_item`：每条记忆（= 一个段）前面加 `[YYYY-MM-DD] `（2026-09-25 第一版）
+#: * `per_item`：每条记忆（= 一个段）前面加 `[YYYY-MM-DD] `
 #: * `per_pair`：**每一对**前面都加 `[YYYY-MM-DD] `——同一个日期，但离该句更近。
 #:   动机（2026-09-25）：temporal 的失败里有这么一类——模型**不缺信息**（`[2023-07-15]`
 #:   就在段首、"Last Friday" 就在下面），但不把锚点接到自己那句上（见 `eval/reports/ledger.md`）
@@ -143,7 +143,7 @@ DATE_PREFIX: str = "[{date}] "
 #:   否则实验量的是 A、上线跑的是 B，而两边都不报错。
 #:
 #: 为什么要有 `header`：`per_item` 实测**没能改变模型行为**（27/35 仍答相对，与基线 26/35 几乎相同）
-#: ——"看得见日期"≠"用得上日期"。所以第二版把语义**写明**，看是提示不够清楚还是模型做不到。
+#: ——"看得见日期"≠"用得上日期"。所以 `header` 把语义**写明**，看是提示不够清楚还是模型做不到。
 DATE_MODES: tuple[str, ...] = ("none", "per_item", "per_pair", "per_pair_wd", "header", "annotate")
 
 #: `header` 模式的那行说明。`{dates}` 是**去重后的会话日期**，按出现顺序。
@@ -206,7 +206,7 @@ def render_memories(
     ⇒ 时间戳不可见，那条规则就无法执行，模型只能照抄 "Yesterday"，**必判错**
     （实测 `eval/reports/ledger.md`：gold 含绝对日期的 35 道里 **26 道答成相对、全部判错**）。
 
-    ⚠ **`created_at` 服务本来就返回了**（`data[]` 四字段之一），是**本函数原先把它丢了**。
+    ⚠ **`created_at` 服务本来就返回了**（`data[]` 四字段之一），是**本函数必须显式带上它**。
     但"AML 真实侧往 `speaker_1_memories` 里填什么"仍是 **S1 未知**：
     开这个开关是**换一条代理假设**，不是修一个 bug——所以默认关，
     开启时要在 run record 里记明（runner 的 `--memory-date` + `--switches`）。

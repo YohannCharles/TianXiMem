@@ -201,20 +201,19 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 5.5 接入口径 —— ⛔ **整个 `ingest` 配置段已删除（D28，2026-09-29）**
+## 5.5 接入口径 —— ⛔ **本层没有 `ingest.*` 键**（D28）
 
-这里曾经只有一项：`ingest.chunk_ordinal_pattern`（从 `request_id` 里正则取 chunk 序号，D25）。
-**它连同那条解析逻辑一起删掉了**——理由不是"用不上"，是**它在真实流量上 100% 失败**：
+**`request_id` 是 opaque string**：只做幂等键 / 溯源 / 原样回显，
+位置 = `(request_id, local_index)`。
+**不要再加回任何"解析 `request_id`"的配置项**——它在真实流量上必然失败：
 
 > 平台实发的是 `r_31156f4174b24abe83ad2c09a486cc5f398ddc819b4ca9e33b9c94bb1e2caab8`
 > 这种**不透明 id**（2026-09-29 用请求原文采集抓到的**真实外部请求**，那条请求
-> `error=ValueError`、服务回 500）。D25 的假设（"id 一定以 `chunk-<n>` 结尾"）
+> `error=ValueError`、服务回 500）。当年那条"id 一定以 `chunk-<n>` 结尾"的假设
 > 来自团队转述 + 参考实现的示例，**没有一手出处**，而现实是 **Add 全挂**。
 
-⇒ **`request_id` 现在是 opaque string**：只做幂等键 / 溯源 / 原样回显，
-位置改成 `(request_id, local_index)`。**不要再加回任何"解析 `request_id`"的配置项**——
-`common/config.py` 在原处留了一行墓碑注释防止有人加回来。完整论证见
-[`decisions.md`](./decisions.md) 的 **D28**。
+完整论证见 [`decisions.md`](./decisions.md) 的 **D28**；
+`common/config.py` 也留了一条同义的守卫注释。
 
 ---
 
@@ -222,9 +221,9 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | 配置项 | 初值 | 类 | 说明 |
 | --- | --- | --- | --- |
-| `neighbor.expansion_seed_limit` | **1000**（= 全部候选） | C | 只对**名次前 N 位**的候选主动扩窗；其余候选**仍保留，只是不扩展**。✅ 2026-09-25 由 30 提到 1000：3 段 346 题的 A/B **+3.5pt 且三段无倒退**（[`../eval/reports/ledger.md`](../eval/reports/ledger.md) 的 N1） |
+| `neighbor.expansion_seed_limit` | **1000**（= 全部候选） | C | 只对**名次前 N 位**的候选主动扩窗；其余候选**仍保留，只是不扩展**。✅ 取 1000 而非 30 的依据：3 段 346 题的 A/B **+3.5pt 且三段无倒退**（[`../eval/reports/ledger.md`](../eval/reports/ledger.md) 的 N1） |
 | `neighbor.seed_placement` | **`keep`** | C | **段内顺序**（§11.2 的组内顺序，明文可消融）：`keep`（纯时间序）/ `front`（种子提到段首，⚠ **断时序**）/ `echo`（段首重复种子，时间序块原样保留）。✅ 2026-09-25 加，**三档正在对照中** |
-| `neighbor.radius` | **2** | C | 扩窗半径，**单位是记忆块**（D24 前叫 QA 对）——`±2` 拿回会话里前后各**两整块**（最多 8 条消息），不是各一条消息。✅ 同日 1 → 2（同一条证据链） |
+| `neighbor.radius` | **2** | C | 扩窗半径，**单位是记忆块**——`±2` 拿回会话里前后各**两整块**（最多 8 条消息），不是各一条消息。✅ 同日 1 → 2（同一条证据链） |
 
 > ⚠ **PRD §10 的"20 种子 / 60 槽位"是一道示例算术**（用来演示预算怎么算），
 > 与这里的实际取值**不是一回事**，别互相替换。
@@ -271,7 +270,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `packaging.role_prefix` | `[assistant]` 等标记 | 一个对里有多条非 user 消息时每条带 role 标记 |
 | `TIANXIMEM_RERANKER_BASE_URL` | `https://memory3.021130.xyz/v1` | **env**。主网关（**不是 memory2**，D18） |
 | `TIANXIMEM_RERANKER_API_KEY` | —— | **env**。与 `AML_EMB_*` 是同 host、不同 key |
-| `TIANXIMEM_RERANKER_MODEL` | `qwen3-reranker-4b` | **env**。⚠ **主网关会校验它**（vllm 直服，2026-09-28 迁移后）——填错就是 **404 ⇒ 每次检索都降级**，而服务**不报错**。旧 host（自研封装）是忽略它的。**提交时不得更换**（D12） |
+| `TIANXIMEM_RERANKER_MODEL` | `qwen3-reranker-4b` | **env**。⚠ **网关可能校验它**（vllm 直服就校验）——填错就是 **404 ⇒ 每次检索都降级**，而服务**不报错**；而**忽略**它的网关会让错 id 静默"能用"。**提交时不得更换**（D12） |
 
 > ⚠ **`rerank.model` 这个键不存在**：模型名是**端点身份**、不是阈值，所以它住在 `.env` 的
 > `TIANXIMEM_RERANKER_MODEL`（§1.2 的两层分工）。

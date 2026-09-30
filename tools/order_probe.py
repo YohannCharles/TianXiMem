@@ -54,8 +54,7 @@ from eval.datasets import benchmark_dir, load_locomo  # noqa: E402
 from eval.harness import batches, request_id_for  # noqa: E402
 
 # ⚠ **`parents[1]` 而不是 `parent`**：本文件在 `tools/` 下，而 `var/` 在仓库根。
-#   （它原来在仓库根、用的是 `parent`——搬进 `tools/` 时这一行必须跟着改，
-#     否则产物会静默落进 `tools/var/`。）
+#   （写成 `parent` 的话产物会静默落进 `tools/var/`。）
 ROOT = Path(__file__).resolve().parents[1]
 PORT_A = 8131
 PORT_B = 8140  # B 臂的 N 个前端占 PORT_B .. PORT_B+N-1

@@ -394,7 +394,7 @@ def test_render_memories_date_prefix_is_opt_in():
 def test_render_memories_header_mode_states_what_the_dates_are():
     """`header` 模式：**把"这些日期是什么"写明**。
 
-    `per_item` 单独用实测没能让模型改用日期（27/35 仍答相对），所以第二版把语义写出来——
+    `per_item` 单独用实测没能让模型改用日期（27/35 仍答相对），所以 `header` 把语义写出来——
     这一档存在就是为了分辨"提示不够清楚"与"模型做不到"。
     """
     from eval.harness import render_memories

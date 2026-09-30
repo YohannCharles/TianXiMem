@@ -52,7 +52,7 @@ canonical AddRequest
 `ApplyBatchResult.applied` 在**守卫命中时是 `False`**（`apply_batch` 里那行早返回），
 所以重放时拿不到"本批写了哪些行"。**但修复不需要那个列表**：`user_id` / `session_id` /
 `request_id` 都在请求里，`fetch_by_request(...)` 能拿到**那一次 Add**写下的全部块
-（**D28 起作用域就是这一次 Add**，不再是整个 session），于是：
+（**D28 起作用域就是这一次 Add**），于是：
 
 * `point_id` 是位置派生的纯函数 ⇒ 同一对永远是同一个 point
 * `upsert` 幂等 ⇒ 已经写对的会被原样覆盖
@@ -177,7 +177,7 @@ class AddPipeline:
     def _batch_pairs(self, batch: AddBatch) -> list[QaPair]:
         """**这一次 Add**写下的全部块（真源）——修复路径的输入。
 
-        ⚠ D28 起作用域是 **`request_id`**（不再是整个 session）：
+        ⚠ D28 起作用域是 **`request_id`**：
 
         * **更准**：那次 Add 提交了哪些行、Qdrant 就可能缺哪些行——一行不多、一行不少
         * **更便宜**：长 session 上"整段重建"的代价随 session 增长，而它其实只需要一批

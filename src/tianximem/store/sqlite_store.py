@@ -15,10 +15,10 @@
   4. UNIQUE 索引 = 一次 Add 的排序键 ... `schema.sql` 的 UNIQUE + `fetch_by_request()`
   5. 缓存键 = 渲染文本哈希 ............ **不在本模块**，属 `embed/`（§7.2）
 
-⚠ **三次位置模型变更**（每一次都**不可与旧库混用**，但 `open()` 会**自动搬一次**）：
-D24 改"哪些消息进同一个块"（组合边界 = 一次 Add）；D25 把位置从 `MAX+1` 改成
-`request_id` 里解析出的 chunk 序号；**D28 取消解析**——`request_id` 回到 opaque string，
-位置 = `(request_id, local_index)`（详细理由见 `docs/decisions.md` 的 D28）。
+⚠ **当前库形状与 D28 之前写的库不兼容**——两者混用会**静默出错**。
+但 `open()` 会**自动搬一次**（`migrate()`，事务内、保正文、重算 id、重连链）。
+
+位置 = `(request_id, local_index)`，`request_id` 是 **opaque string**（D28）。
 """
 
 from __future__ import annotations

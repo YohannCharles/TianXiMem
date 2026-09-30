@@ -151,8 +151,7 @@ class RemoteReranker:
     """主网关上的 Qwen3-Reranker-4B（§11.2；选型见 D12，**提交时不得更换**）。
 
     ⚠ **模型 id 由 `.env` 的 `TIANXIMEM_RERANKER_MODEL` 给**，而且**必须填对**：
-    旧 host（自研封装）忽略 `model` 字段，新 host（vllm 直服）**校验**它——
-    填成旧 id 会拿到 **404 并降级**（`memory.021130.xyz` → `memory3.021130.xyz`，2026-09-28）。
+    网关（vllm 直服）**校验**它——**填错就拿到 404 并降级，而服务不报错**。
 
     ⚠ 它**只负责"文本 → 分数"**：取正文、映射回 `memory_id`、重排、重新编号
     全部在 [`../service/pipeline.py`](../service/pipeline.py)——
@@ -297,8 +296,8 @@ class RemoteReranker:
         | 容器不是数组 / 项不是对象 / 分数不是有限数 | 格式非法 | 崩在后面的算术里 |
 
         ⚠ **容器与分数键各收两个**（`results` / `data`，`score` / `relevance_score`）——
-        **四种组合都实测过**，信封表在模块 docstring。收两个不是"猜"，是**同一台网关上
-        已经换过两次信封**（迁到 `memory3` 一次、nginx 路由到 vLLM 原生 `/v1/score` 一次）；
+        **四种组合都实测过**，信封表在模块 docstring。收两个不是"猜"——**同一台网关上的
+        信封并不稳定**（它随网关侧的部署变）；
         `index` 集合校验把它们的**共同不变量**守住了，所以多认一个键**不会削弱任何检查**。
 
         ⚠ **多余的键一律忽略**（真实响应就带 `object` / `created` / `usage` / `id` /
