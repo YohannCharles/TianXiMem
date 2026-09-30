@@ -484,11 +484,16 @@ def _jsonl_line(item: dict) -> str:
 #: `budget.tokenizer` 同一口径——**不要用字符数近似**（§6.4）。
 PLATFORM_TOKEN_PREFIX: Final[int] = 117_760
 
+#: 与 `budget.tokenizer`（`src` 的 `DEFAULT_TOKENIZER`）**同一口径**。
+#: 提成具名常量是为了让 `tests/test_experiments.py::test_platform_token_budget_matches_src`
+#: 能断言两处相等——**两侧各写各的字面量，分叉时不会报错**。
+PLATFORM_TOKENIZER: Final[str] = "o200k_base"
+
 
 def _encoder():
     import tiktoken  # 只在真要用时才 import（harness 的纯逻辑用例不必装它）
 
-    return tiktoken.get_encoding("o200k_base")
+    return tiktoken.get_encoding(PLATFORM_TOKENIZER)
 
 
 def truncate_to_platform_prefix(text: str) -> tuple[str, bool]:
