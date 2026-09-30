@@ -155,9 +155,7 @@ def _remap_legacy_rows(
     def flush() -> None:
         complete = [row_id for row_id, row in group if row["is_complete"]]
         prev_by = {rid: complete[i - 1] for i, rid in enumerate(complete) if i}
-        next_by = {
-            rid: complete[i + 1] for i, rid in enumerate(complete) if i + 1 < len(complete)
-        }
+        next_by = {rid: complete[i + 1] for i, rid in enumerate(complete) if i + 1 < len(complete)}
         for row_id, row in group:
             out.append((row_id, prev_by.get(row_id), next_by.get(row_id), row))
 
@@ -669,7 +667,7 @@ class SqliteStore:
     def explain_by_request(
         self, conn: sqlite3.Connection, user_id: str, session_id: str, request_id: str
     ) -> str:
-        """"取一次 Add 的全部块"那条查询的 `EXPLAIN QUERY PLAN`。
+        """ "取一次 Add 的全部块"那条查询的 `EXPLAIN QUERY PLAN`。
 
         测试用：断言它**不扫全表、不额外排序**（走 `UNIQUE` 建出的那个索引）。
         """

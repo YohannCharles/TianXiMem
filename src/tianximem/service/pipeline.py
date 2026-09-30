@@ -96,6 +96,7 @@ from tianximem.store.sqlite_store import QaPair, SqliteStore
 
 __all__ = ["AddOutcome", "AddPipeline", "SearchPipeline"]
 
+
 @dataclass(frozen=True, slots=True)
 class AddOutcome:
     """一次 Add 的结果（**不进响应**——响应只有 §2.1 那三个回显字段）。"""

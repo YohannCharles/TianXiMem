@@ -176,9 +176,7 @@ class RemoteReranker:
         # ⚠ **构造期就拒绝未知信封**（而不是发出去等对面回 400/422）：它写错的表现是
         #   每次检索都静默降级，那种失败只在 §14 的计数里看得见（见 config 侧的同一条注释）。
         if envelope not in RERANK_ENVELOPES:
-            raise ValueError(
-                f"envelope 只能是 {sorted(RERANK_ENVELOPES)}，收到 {envelope!r}"
-            )
+            raise ValueError(f"envelope 只能是 {sorted(RERANK_ENVELOPES)}，收到 {envelope!r}")
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model

@@ -313,9 +313,7 @@ def _subprocess_env() -> dict[str, str]:
     return env
 
 
-def _run(
-    pipeline: Path, argv: list[str], *, timeout: float | None, attempts: int = 3
-) -> None:
+def _run(pipeline: Path, argv: list[str], *, timeout: float | None, attempts: int = 3) -> None:
     """跑一个 pipeline 子命令，**瞬时故障自动重试**。
 
     ## 为什么必须重试（2026-09-26，一次真实事故）
@@ -512,11 +510,12 @@ def _build_clbench_items(sample: Sample, hits_by_qid: dict[str, list[SearchHit]]
     | 字段 | 哪来的 / 为什么 |
     | --- | --- |
     | `idx` | `clb_pipeline.py` 的 `row_id()` **先认 `idx`**（`answer` 靠它跳过已完成） |
-    | `system_prompt` | 记录里第一条 `system` 消息——**raw 文件里没有这个顶层键**，不补就塌成空串 |
+    | `system_prompt` | 记录里第一条 `system` 消息——**raw 文件里没有这个顶层键**，
+    不补就塌成空串 |
     | `question` | 加载器切出来的任务文本（末条 user 的尾部窗口） |
     | `rubrics` | 判分标准；`official_rubrics()` 认 `item["rubrics"]` |
     | `retrieval.selected` | **每项 `created_at` + `text`**——⚠ 读的是 **`text`**，
-而且**缺 `text` 的项会被直接跳过**（`docs/contract.md` §5） |
+    而且**缺 `text` 的项会被直接跳过**（`docs/contract.md` §5） |
 
     ⚠ 记忆块**按平台的 117,760 token 前缀截断**，且**按项截**（不切半个段）——
     与 `packaging` 的"段是原子单位"同一条理由。
@@ -577,9 +576,9 @@ def _read_clbench_labels(answers_path: Path, labels_path: Path) -> list[JudgeRes
     | 文件 | 谁写的 / 读什么 |
     | --- | --- |
     | `answers.jsonl` | `answer` 步写 **`model_output`**（不是 `generated_answer`），
-行键是 **`idx`** |
+    行键是 **`idx`** |
     | `labels.jsonl` | `evaluate` 步写 `rubric_clbench_score` / `_rationale` /
-`_requirement_status` / `_requirement_ratio` |
+    `_requirement_status` / `_requirement_ratio` |
 
     ⚠ **它是严格全有全无**：`score` 只有 0 或 1 ⇒ 映射成 `is_correct = score >= 1.0`，
     并把 `requirement_ratio`（满足了几成要求）一并留进 `judge_response`——**分档信息在

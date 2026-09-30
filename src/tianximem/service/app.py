@@ -318,9 +318,7 @@ def build_embedder(config: AppConfig) -> OpenAICompatEmbedder:
     """
 
     if config.models.embedder == TEXT_EMBEDDING_V4_MODEL:
-        return TextEmbeddingV4Embedder(
-            base_url=config.embed_base_url, api_key=config.embed_api_key
-        )
+        return TextEmbeddingV4Embedder(base_url=config.embed_base_url, api_key=config.embed_api_key)
     return Qwen3EmbeddingEmbedder(
         base_url=config.embed_base_url,
         api_key=config.embed_api_key,
