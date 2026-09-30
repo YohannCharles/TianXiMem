@@ -168,8 +168,11 @@ def main(argv: list[str] | None = None) -> int:
             batch.append(item)
         results = run_judge(pipeline, batch, probe_dir / mode, dataset=args.dataset, max_tokens=256)
         got = {r.qid: r.is_correct for r in results}
-        print(f"  {mode:<8}：{sum(got.values())}/{len(failing)} 判对   "
-              f"翻正：{', '.join(q for q in failing if got.get(q)) or '（无）'}", flush=True)
+        print(
+            f"  {mode:<8}：{sum(got.values())}/{len(failing)} 判对   "
+            f"翻正：{', '.join(q for q in failing if got.get(q)) or '（无）'}",
+            flush=True,
+        )
         for qid in failing:
             if got.get(qid):
                 flips[qid].append(mode)

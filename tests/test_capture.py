@@ -242,6 +242,7 @@ def test_a_full_file_rotates_instead_of_stopping(tmp_path: Path) -> None:
     assert len(files) > 1  # **真的转过**
     assert "r.jsonl" in names  # 第 1 份就是配置里那个路径
     assert "r.part2.jsonl" in names
+
     def _seq(path: Path) -> int:
         head = path.read_text(encoding="utf-8").splitlines()[0]
         return int(json.loads(head)["file_seq"])

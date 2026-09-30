@@ -62,9 +62,7 @@ from eval.experiments.arms import verify as verify
 SPEC: Final[Spec] = Spec(
     label="T1",
     generator="t1_timestamp.py",
-    note=(
-        "#   ↑ 集合必须分开：两臂的向量不同，混在一个集合里检索到的是哪一臂**看不出来**。\n"
-    ),
+    note=("#   ↑ 集合必须分开：两臂的向量不同，混在一个集合里检索到的是哪一臂**看不出来**。\n"),
     prog="t1_timestamp.py",
     description="§13 的 T1 实验脚手架",
     compare_labels=("plain", "dated"),

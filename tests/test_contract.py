@@ -84,8 +84,9 @@ def _idx(i: int) -> int:
 def test_search_response_has_exactly_the_contract_fields(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    ids = seed_line(wired.store, [_idx(i) for i in range(3)],
-                    qa=lambda i: (f"q{i}", f"[assistant] a{i}"))
+    ids = seed_line(
+        wired.store, [_idx(i) for i in range(3)], qa=lambda i: (f"q{i}", f"[assistant] a{i}")
+    )
     wired.qdrant.by_user["u1"] = ids
 
     body = _as_wire(wired.search(top_k=5))
@@ -97,8 +98,7 @@ def test_search_response_has_exactly_the_contract_fields(
 
 
 def test_search_preserves_retrieval_order(wired: Wired, seed_pair: Callable[..., str]) -> None:
-    ids = seed_line(wired.store, [_idx(i) for i in range(3)],
-                    qa=lambda i: (f"q{i}", f"a{i}"))
+    ids = seed_line(wired.store, [_idx(i) for i in range(3)], qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     assert [i["id"] for i in _as_wire(wired.search(top_k=3))["data"]] == ids
@@ -109,8 +109,7 @@ def test_search_never_exceeds_top_k(
     wired: Wired, seed_pair: Callable[..., str], top_k: int
 ) -> None:
     """**精确计数**（§2.2 第一条）——返回超过 `top_k` 是契约错误，不会被静默截断。"""
-    ids = seed_line(wired.store, [_idx(i) for i in range(5)],
-                    qa=lambda i: (f"q{i}", f"a{i}"))
+    ids = seed_line(wired.store, [_idx(i) for i in range(5)], qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     data = _as_wire(wired.search(top_k=top_k))["data"]
@@ -128,8 +127,7 @@ def test_empty_result_is_a_list_not_null(wired: Wired) -> None:
 def test_result_shorter_than_top_k_when_fewer_pairs(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    ids = seed_line(wired.store, [_idx(i) for i in range(2)],
-                    qa=lambda i: (f"q{i}", f"a{i}"))
+    ids = seed_line(wired.store, [_idx(i) for i in range(2)], qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     assert len(_as_wire(wired.search(top_k=10))["data"]) == 2  # 不补造、不复制
@@ -142,9 +140,7 @@ def test_content_comes_from_sqlite_through_common_render(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
     """**正文只从 SQLite 取**，且走 `common/render` 的同一份渲染（不变式 I1）。"""
-    mid = seed_line(
-        wired.store, [0], qa=lambda _i: ("火车几点开？", "[assistant] 09:42。")
-    )[0]
+    mid = seed_line(wired.store, [0], qa=lambda _i: ("火车几点开？", "[assistant] 09:42。"))[0]
     wired.qdrant.by_user["u1"] = [mid]
 
     item = _as_wire(wired.search(top_k=1))["data"][0]
@@ -173,8 +169,7 @@ def test_created_at_is_day_granularity_or_empty(
 
 def test_score_is_monotonic_placeholder(wired: Wired, seed_pair: Callable[..., str]) -> None:
     """`score` = `1/(rank+1)`，严格递减。"""
-    ids = seed_line(wired.store, [_idx(i) for i in range(3)],
-                    qa=lambda i: (f"q{i}", f"a{i}"))
+    ids = seed_line(wired.store, [_idx(i) for i in range(3)], qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     scores = [i["score"] for i in _as_wire(wired.search(top_k=3))["data"]]
@@ -190,8 +185,7 @@ def test_fused_score_never_leaks_into_the_response(
     而 `Candidate` 里**根本没有**该字段（见
     `tests/test_retrieve.py::test_candidate_carries_no_score_field`）⇒ 结构上漏不出来。
     """
-    ids = seed_line(wired.store, [_idx(i) for i in range(3)],
-                    qa=lambda i: (f"q{i}", f"a{i}"))
+    ids = seed_line(wired.store, [_idx(i) for i in range(3)], qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
     body = _as_wire(wired.search(top_k=3))

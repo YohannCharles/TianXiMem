@@ -487,9 +487,7 @@ def test_lme_spread_noop_when_limit_covers_everything(tmp_path):
     entries = json.loads((_write_grouped_lme(tmp_path) / LME_JSON).read_text(encoding="utf-8"))
     assert [
         e["question_id"]
-        for e in stratified_sample(
-            entries, len(entries), key=lambda e: str(e["question_type"])
-        )
+        for e in stratified_sample(entries, len(entries), key=lambda e: str(e["question_type"]))
     ] == [e["question_id"] for e in entries]
 
 

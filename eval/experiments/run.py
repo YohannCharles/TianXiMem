@@ -215,8 +215,10 @@ def run_round(
             #   （`<out>/<user>/answers.jsonl` 与 `labels.jsonl`，逐题 flush）。
             #   ⇒ 这两行是给"现在到哪一步了"的最低限度交代，**别删**：
             #   没有它们，一轮 346 题的 run 会有几个小时零输出。
-            n = len(sample.questions) if max_questions is None else min(
-                max_questions, len(sample.questions)
+            n = (
+                len(sample.questions)
+                if max_questions is None
+                else min(max_questions, len(sample.questions))
             )
             print(
                 f"  [{index}/{len(samples)}] {sample.user_id}：语料已投喂，开始检索 {n} 题"
@@ -293,8 +295,7 @@ def truncation_note(
             head = f"⚠ **截断跑**：只加载了前 {limit} 个 sample——不可与全量比"
     if max_questions is not None:
         tail = (
-            f"⚠ **题目截断**：每个 sample 只判了前 {max_questions} 题"
-            "（语料是整份）——不可与全量比"
+            f"⚠ **题目截断**：每个 sample 只判了前 {max_questions} 题（语料是整份）——不可与全量比"
         )
         return f"{head}\n{tail}" if head else tail
     return head

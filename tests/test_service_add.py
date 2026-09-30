@@ -415,9 +415,7 @@ def test_different_sessions_write_to_sqlite_concurrently(
             # ⚠ `request_id` 里要带**这个 session 自己**的键：否则 5 个 session 的
             #   第 k 批会共用同一个 `request_id`，而幂等守卫按它判重 ⇒ 只剩一个 session 落库
             pipeline.apply(
-                _batch(
-                    _rid(k, session_id=f"s{i}"), f"Q{i}{k}", f"A{i}{k}", session_id=f"s{i}"
-                )
+                _batch(_rid(k, session_id=f"s{i}"), f"Q{i}{k}", f"A{i}{k}", session_id=f"s{i}")
             )
 
     assert run_parallel([(lambda i=i: add(i)) for i in range(n_sessions)]) == []

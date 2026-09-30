@@ -339,8 +339,15 @@ def test_arrival_order_does_not_change_the_truth_source(tmp_path) -> None:
         assert per_add == expected_per_add
         snapshots.append(
             sorted(
-                (p.id, p.request_id, p.local_index, p.question, p.answer, p.prev_memory_id,
-                 p.next_memory_id)
+                (
+                    p.id,
+                    p.request_id,
+                    p.local_index,
+                    p.question,
+                    p.answer,
+                    p.prev_memory_id,
+                    p.next_memory_id,
+                )
                 for p in _all(fresh)
             )
         )

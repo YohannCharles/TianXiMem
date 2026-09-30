@@ -108,12 +108,21 @@ def _serve(name: str, port: int, collection: str, db: Path, tag: str = "") -> su
     proc = subprocess.Popen(
         [
             str(Path.home() / ".local" / "bin" / "uv"),
-            "run", "--env-file", str(ROOT / ".env"),
-            "uvicorn", "tianximem.service.app:create_app_from_env",
-            "--factory", "--workers", "1", "--port", str(port),
+            "run",
+            "--env-file",
+            str(ROOT / ".env"),
+            "uvicorn",
+            "tianximem.service.app:create_app_from_env",
+            "--factory",
+            "--workers",
+            "1",
+            "--port",
+            str(port),
         ],
-        cwd=ROOT, env={**env, "HOME": str(Path.home())},
-        stdout=(cfg / f"serve{tag}.log").open("wb"), stderr=subprocess.STDOUT,
+        cwd=ROOT,
+        env={**env, "HOME": str(Path.home())},
+        stdout=(cfg / f"serve{tag}.log").open("wb"),
+        stderr=subprocess.STDOUT,
         # ⚠ **必须自己开一个进程组**：`uv run` 是包装进程，真正的 uvicorn 是它的**子进程**。
         #   只 `kill()` 包装进程的话，uvicorn 会活下来继续占着端口——
         #   上一版就是这样在 8131/8132 上留了两个孤儿，害得下一轮跑测错了对象。
@@ -286,9 +295,12 @@ def main(processes: int = 1) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="位置模型探针：乱序/并发投喂 vs 顺序投喂")
     parser.add_argument(
-        "--processes", type=int, default=1, metavar="N",
+        "--processes",
+        type=int,
+        default=1,
+        metavar="N",
         help="B 臂起 N 个**独立进程**共享同一套存储（默认 1）。"
-             "N>1 回答的是'uvicorn --workers N 到底安不安全'那个问题。",
+        "N>1 回答的是'uvicorn --workers N 到底安不安全'那个问题。",
     )
     args = parser.parse_args()
     if args.processes < 1:

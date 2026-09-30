@@ -135,7 +135,7 @@ def test_unique_constraint_rejects_a_duplicate_position(store: SqliteStore) -> N
 
 
 def test_by_request_query_uses_an_index(store: SqliteStore) -> None:
-    """"取一次 Add 的全部块"**不得扫全表**，也不该额外排序——它必须命中 UNIQUE 建出的索引。
+    """ "取一次 Add 的全部块"**不得扫全表**，也不该额外排序——它必须命中 UNIQUE 建出的索引。
 
     这才是 §10 扩窗的数据来源（D28 起按 `request_id` 取整批）。
     """
@@ -513,8 +513,7 @@ def _old_db(tmp_path) -> Path:  # noqa: F821 — 只在本文件用一次
         ]
         for chunk, local, question, answer, status, event_time, request_id in rows:
             old_id = hashlib.sha256(
-                f"{len('u1')}:u1{len('s1')}:s1{len(str(chunk))}:{chunk}{len(str(local))}:{local}"
-                .encode()
+                f"{len('u1')}:u1{len('s1')}:s1{len(str(chunk))}:{chunk}{len(str(local))}:{local}".encode()
             ).hexdigest()
             conn.execute(
                 "INSERT INTO qa_pairs (id, user_id, session_id, chunk_ordinal, local_index,"

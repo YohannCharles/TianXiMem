@@ -467,13 +467,9 @@ def seed_in_add(
     （D24 那条"块在写下那一刻就是最终形状"）。想造"中间缺一块"的形状，
     就**别落那一块**——它的邻居的指针仍然指着它，而它不在库里 ⇒ 段自然断开。
     """
-    ids = [
-        make_pair_id(user_id, session_id, request_id, index) for index in range(len(entries))
-    ]
+    ids = [make_pair_id(user_id, session_id, request_id, index) for index in range(len(entries))]
     complete = [i for i, (q, a) in enumerate(entries) if q is not None and a is not None]
-    links: dict[int, tuple[int | None, int | None]] = {
-        i: (None, None) for i in range(len(entries))
-    }
+    links: dict[int, tuple[int | None, int | None]] = {i: (None, None) for i in range(len(entries))}
     for position, index in enumerate(complete):
         links[index] = (
             complete[position - 1] if position else None,
@@ -524,12 +520,8 @@ def seed_line(
     wanted = list(positions)
     if not wanted:
         return []
-    entries = [
-        (f"q{i}", f"a{i}") if qa is None else qa(i) for i in range(max(wanted) + 1)
-    ]
-    ids = seed_in_add(
-        store, entries, user_id=user_id, session_id=session_id, request_id=request_id
-    )
+    entries = [(f"q{i}", f"a{i}") if qa is None else qa(i) for i in range(max(wanted) + 1)]
+    ids = seed_in_add(store, entries, user_id=user_id, session_id=session_id, request_id=request_id)
     return [ids[i] for i in wanted]
 
 

@@ -96,9 +96,7 @@ def load_clbench(
     #   它是 `"\n"` 分隔的 JSONL ⇒ **按写它的方式读**。同一条纪律见
     #   [`../harness/judge.py`](../harness/judge.py) 的 `_jsonl_line`。
     entries = [
-        json.loads(line)
-        for line in source.read_text(encoding="utf-8").split("\n")
-        if line.strip()
+        json.loads(line) for line in source.read_text(encoding="utf-8").split("\n") if line.strip()
     ]
     if limit is not None:
         entries = (
