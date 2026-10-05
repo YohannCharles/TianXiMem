@@ -16,11 +16,24 @@ samples = load_locomo(benchmark_dir())
 > [`preprocess`][eval.datasets.preprocess] 归一化后的形状。
 """
 
+from .beam import load_beam
 from .clbench import load_clbench
+from .corporatebench import load_corporatebench
 from .locomo import load_locomo
 from .longmemeval import load_longmemeval
+from .medmemorybench import load_medmemorybench
+from .memtrapbench import load_memtrapbench
+from .mquake import load_mquake
+from .personamem import load_personamem
 from .preprocess import Message, Question, Sample, Session
-from .registry import BATCHING_LOCAL, benchmark_dir, data_fingerprint, file_fingerprint
+from .registry import (
+    BATCHING_LOCAL,
+    benchmark_dir,
+    data_fingerprint,
+    file_fingerprint,
+    shape_note,
+)
+from .tempreason import load_tempreason
 
 __all__ = [
     "BATCHING_LOCAL",
@@ -31,7 +44,15 @@ __all__ = [
     "benchmark_dir",
     "data_fingerprint",
     "file_fingerprint",
+    "load_beam",
     "load_clbench",
+    "load_corporatebench",
     "load_locomo",
     "load_longmemeval",
+    "load_medmemorybench",
+    "load_memtrapbench",
+    "load_mquake",
+    "load_personamem",
+    "load_tempreason",
+    "shape_note",
 ]

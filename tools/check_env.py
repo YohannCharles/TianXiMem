@@ -115,6 +115,38 @@ def _discover_model(base: str, key: str, *, prefer: str = "") -> str:
     return ""
 
 
+#: **提交口径的嵌入窗口**：`text-embedding-v4` 官方 FAQ 原文
+#: ——"Each text can contain at most **8,192 tokens**. Content exceeding this limit is
+#: **truncated before embedding**."
+#:
+#: ⚠ **两件事都是它要紧的地方**：① 窗口是 **8,192**（不是 8B 模型的原生 32,768）；
+#: ② 超限时官方是**静默截断**，而本地网关（vLLM）是**响亮 400**
+#: ⇒ **本地这个 400 是门禁**：线上不会替我们报这个错，只会把尾巴砍掉。
+#: 所以这里盯的是"网关窗口**比提交口径宽**"——那会让本地跑出线上跑不通的东西（V16）。
+SUBMIT_WINDOW: int = 8_192
+
+
+def _model_window(base: str, key: str, model: str) -> int | None:
+    """问 `/v1/models` 里那个模型自报的 `max_model_len`（拿不到就返回 `None`）。
+
+    ⚠ **只是念出来，不参与判定**：窗口**小于**提交口径时，本地比线上更严 ⇒ 安全的一侧。
+    只有**大于**时才在结论里挂一个 ⚠（见调用处）——那才是"本地跑得通、线上下不来"的方向。
+    **这条线画在哪必须写在代码里，不能靠"没写"。**
+    """
+    with contextlib.suppress(Exception):
+        resp = httpx.get(
+            f"{base.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=TIMEOUT,
+        )
+        resp.raise_for_status()
+        for entry in resp.json().get("data") or []:
+            if isinstance(entry, dict) and entry.get("id") == model:
+                value = entry.get("max_model_len")
+                return int(value) if value else None
+    return None
+
+
 def check_embedding(base: str, key: str, model: str) -> Check:
     """**Embedding 在另一个网关上**（与 LLM 不同 host、不同 key）——调错域名只会 404。
 
@@ -139,10 +171,20 @@ def check_embedding(base: str, key: str, model: str) -> Check:
         vector = response.json()["data"][0]["embedding"]
         norm = sum(x * x for x in vector) ** 0.5
         normalized = abs(norm - 1.0) < 1e-3
+        window = _model_window(base, key, chosen)
+        note = ""
+        if window is not None:
+            note = f" max_model_len={window}（提交口径 {SUBMIT_WINDOW}）"
+            if window > SUBMIT_WINDOW:
+                note += (
+                    " ⚠ **比提交口径宽**——本地会跑出线上跑不通的块，"
+                    "而线上超限是**静默截断**不是报错（V16）"
+                )
         return Check(
             "Embedding 端点（含 V10 归一化）",
             normalized,
             f"model={chosen} dim={len(vector)} L2={norm:.6f}"
+            + note
             + (
                 ""
                 if normalized

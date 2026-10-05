@@ -16,6 +16,13 @@ with ServiceClient("http://127.0.0.1:8000") as client:
 服务内部模块（理由见 [`../CLAUDE.md`](../CLAUDE.md)）。本包只依赖 `httpx` 与标准库。
 """
 
+from .add_shape import (
+    ADD_SHAPES,
+    DEFAULT_ADD_SHAPE,
+    LABEL_RULES,
+    MAX_MESSAGE_CHARS,
+    shape_batch,
+)
 from .batching import MAX_MESSAGES_PER_BATCH, batches, request_id_for
 from .driver import REQUEST_TIMEOUT_S, SearchHit, ServiceClient
 from .judge import (
@@ -29,6 +36,10 @@ from .judge import (
 from .run_record import build_record, config_fingerprint, summarize, write_record
 
 __all__ = [
+    "ADD_SHAPES",
+    "DEFAULT_ADD_SHAPE",
+    "LABEL_RULES",
+    "MAX_MESSAGE_CHARS",
     "MAX_MESSAGES_PER_BATCH",
     "MEMORY_FIELD",
     "REQUEST_TIMEOUT_S",
@@ -43,6 +54,7 @@ __all__ = [
     "render_memories",
     "request_id_for",
     "run_judge",
+    "shape_batch",
     "summarize",
     "write_record",
 ]

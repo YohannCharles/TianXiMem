@@ -19,6 +19,11 @@ async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="
 ⚠ **归档不在场时这些用例 skip**（与 `qdrant` 夹具同一条纪律）：测试不该依赖
 `benchmark_data/` 是否取回过。但它们**在场时必须真的验**——"一个永远不会 FAIL 的检查
 等于没有检查"。
+
+## 另一半：`official-extra` 那一档的清单形状
+
+它的文件表是**紧凑格式**（一行路径、一行 sha256，见 `tools/fetch_benchmark_data.py`），
+解析在 import 时就会对哈希格式断言。这里再钉住形状本身——**格式坏了要么响亮失败，要么别写**。
 """
 
 from __future__ import annotations
@@ -121,3 +126,100 @@ def test_patch_is_idempotent() -> None:
     for entry in _PATCHED:
         _, count = _patch_async_open(_read(entry))
         assert count == 0, f"{entry['name']}：补丁不幂等"
+
+
+def test_official_extra_tier_is_well_formed() -> None:
+    """`official-extra` 那一档：条目齐、名字不重、每个都有 URL 与**格式合法的 sha256**。
+
+    ⚠ 这条**不依赖归档是否取回过**——它钉的是清单本身。紧凑文件表一旦被谁改坏
+    （少一行哈希、路径里混进空格），`_parse_file_table` 会在 import 时就抛；
+    而"整档被悄悄删空"这类不会抛的，由下面这三条兜住。
+    """
+    extra = [entry for entry in MANIFEST if entry["tier"] == "official-extra"]
+    assert extra, "official-extra 那一档空了"
+    assert len({entry["name"] for entry in extra}) == len(extra), "有重名条目"
+    for entry in extra:
+        assert entry["url"].startswith("https://"), entry["name"]
+        assert re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]), entry["name"]
+    # 8 个数据集各有一条 README——档还在，至少它们要在
+    readmes = {
+        entry["name"].split("/")[0] for entry in extra if entry["name"].endswith("README.md")
+    }
+    assert readmes == {entry["name"].split("/")[0] for entry in extra}, (
+        f"有数据集一条 README 都没登记：{ {e['name'].split('/')[0] for e in extra} - readmes }"
+    )
+
+
+# ── 取回工具的**入口行为**（2026-10-04）─────────────────────────────────────
+def test_fetch_does_not_require_the_directory_to_exist_beforehand(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """⚠ **全新 clone 上 `make fetch-data` 曾经直接失败**，而且提示里给的解法都不管用。
+
+    那道守卫原先是"归档目录不存在 ⇒ 打印 `用 --dir 或 TIANXIMEM_BENCHMARK_DIR 指定`
+    ⇒ `return 1`"——可**那两个办法指向不存在的路径同样过不了这道判断**，
+    于是"取回数据"这件**唯一能建出目录**的事，被一道"目录得先存在"的门挡住了。
+
+    ⇒ `--fetch` 现在不受它拦（目录由 `_download` 在连接成功后建）。
+    本用例把 `_download` 换成一个**立刻抛网络错**的桩：**只要它被调到，就说明越过了守卫**。
+    """
+    import urllib.error
+
+    from tools import fetch_benchmark_data as F
+
+    called: list[str] = []
+
+    def boom(url: str, dest: Path) -> None:
+        called.append(url)
+        raise urllib.error.URLError("本用例不打网络")
+
+    monkeypatch.setattr(F, "_download", boom)
+    target = tmp_path / "还没建过的归档"
+    monkeypatch.setattr(
+        "sys.argv",
+        ["fetch_benchmark_data.py", "--fetch", "--tier", "required", "--dir", str(target)],
+    )
+    assert not target.exists()
+    assert F.main() == 1, "下载全失败 ⇒ 以 1 退出"
+    assert called, "没走到下载 ⇒ 被那道守卫拦住了"
+
+
+def test_download_creates_the_directory_only_after_connecting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """⚠ **连不上时不许留下空目录。**
+
+    `tests/test_datasets.py` 的 `needs_archive` 守卫判的是【**目录在不在**】而不是
+    【归档在不在】⇒ 网络不通时先在磁盘上留一个空 `benchmark_data/`，会让那两条归档用例
+    **从 skip 变 fail**，而屏幕上看不出与网络有关（`.gitignore` 里记着这条实测教训）。
+
+    ⇒ `mkdir` 排在 `urlopen` **成功之后**。本用例让 `urlopen` 抛，断言目录**没被建**。
+    """
+    import urllib.error
+    import urllib.request
+
+    from tools import fetch_benchmark_data as F
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise urllib.error.URLError("连不上")
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    dest = tmp_path / "归档" / "某个文件.json"
+    with pytest.raises(urllib.error.URLError):
+        F._download("https://example.invalid/x.json", dest)
+    assert not dest.parent.exists(), "连不上却把目录建出来了"
+
+
+def test_check_on_a_missing_archive_points_at_the_fetch_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--check` 撞上不存在的目录时，**提示必须指向真正能解决它的那一步**。"""
+    from tools import fetch_benchmark_data as F
+
+    monkeypatch.setattr(
+        "sys.argv", ["fetch_benchmark_data.py", "--check", "--dir", str(tmp_path / "没有")]
+    )
+    assert F.main() == 1
+    text = capsys.readouterr().out
+    assert "make fetch-data" in text, text
+    assert "--dir 或 TIANXIMEM_BENCHMARK_DIR 指定" not in text, "那句建议无效（同样要求目录已存在）"

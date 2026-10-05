@@ -13,7 +13,10 @@ CL-Bench 同理（按 `context_category` 排）。
 
 组内**等间隔**取（不随机、不用 seed）⇒ 同一份文件永远给同一批题，
 所以它是**可复现的部分跑**，不是"随机抽一点"。
-组内至少取 1 题 ⇒ 实际条数**可能略多于 `limit`**（组数很小时最多多几）。
+组内至少取 1 题 ⇒ 实际条数**可能多于 `limit`**。⚠ **上界是“组数”而不是“多几”**：
+`limit` 远小于组数时，每组各取 1 题 ⇒ 例如 medmemorybench 按 persona 分 20 组，
+`--limit 4 --spread` 实际拿到 **20 个样本**。**挑分组键时要先看组数**——
+CL-Bench 那条“用 sub_category 会得到几十个组”的注记是同一个坑的第一次记录。
 """
 
 from __future__ import annotations

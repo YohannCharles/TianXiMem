@@ -171,7 +171,6 @@ class HybridRetriever:
             # 把"查询侧不做改写"变成**可断言的对象**，而不是一句文档约定）。
             query_text=lexical_query(query),
             dense_vector=dense_vector,
-            top_k=top_k,
         )
         # ★ V13（2026-09-26）：**并列分数的次序必须在这里定死。**
         #   RRF 的分数是离散的（`1/(61+名次)`），一趟里几十条并列是**常态**；而
@@ -184,7 +183,11 @@ class HybridRetriever:
         #     （更讲究的一档是拿 dense 分当次级键——同类实现有这么做——但那要求
         #     拿得到**分路**分数，而融合整个交给 Qdrant 是我们既定的形态，见 D5。）
         #   ⚠ 分数在这里**只用于排序**，排完照旧丢掉（它不是校准量，见下）。
-        ordered = sorted(hits, key=lambda h: (-h.score, h.memory_id))
+        #   ⚠ **2026-10-01 补**：只"排"还不够——store 以前**在 Qdrant 里就按 `top_k` 截了**，
+        #     于是并列**卡在截断线上**时，**谁进谁出**仍由 Qdrant 随机决定（实测同一请求
+        #     连打 12 次，第 100 位的 id 有 2 种、两条 `score` 都是 0.01）。
+        #     现在 store 回**全部**融合结果，**截断搬到这里、排在排序之后** ⇒ 边界也确定。
+        ordered = sorted(hits, key=lambda h: (-h.score, h.memory_id))[:top_k]
         # ⚠ 这里【丢掉】store 返回的融合分数：它不是校准量，且响应里的 `score`
         #    必须是最终名次的函数（由 `rank/` 现算）。丢掉是**结构性**的，
         #    不是"记得别传"——见 Candidate 的 docstring。

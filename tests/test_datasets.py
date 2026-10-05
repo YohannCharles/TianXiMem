@@ -387,8 +387,11 @@ def test_data_fingerprint_records_batching_and_files(tmp_path):
 
 
 def test_data_fingerprint_rejects_unknown_dataset(tmp_path):
+    # ⚠ 例子要真是**没登记**的名字，且**别用真实存在的数据集名**——这条已经踩过两次：
+    #   先是 `beam`、后是 `personamem-v2`，两个后来都真的接上了，用例随即变红。
+    #   ⇒ 用一个明确不存在的名字，别再让它随别的改动一起翻。
     with pytest.raises(ValueError, match="未知数据集"):
-        data_fingerprint(tmp_path, "beam", n_samples=0, n_questions=0)
+        data_fingerprint(tmp_path, "no-such-dataset", n_samples=0, n_questions=0)
 
 
 # ── 真数据（归档缺席时 skip）──
@@ -603,3 +606,282 @@ def test_clbench_reader_survives_u2028(tmp_path):
 
     samples = load_clbench(bench)
     assert any(s.user_id == "clb-u2028" for s in samples)
+
+
+# ── BEAM（`official-extra` 那份、但裁判用官方 pipeline）──────────────────────
+def _beam_row(conversation_id: str = "1") -> dict:
+    """一行 BEAM——**`time_anchor` 只挂在每个 session 的第一条上**（实测形状）。"""
+    import pyarrow as pa
+
+    def message(text: str, role: str, anchor: str | None, index: str) -> dict:
+        return {
+            "content": text,
+            "id": index,
+            "index": index,
+            "question_type": "main_question",
+            "role": role,
+            "time_anchor": anchor,
+        }
+
+    probing = {
+        "abstention": [
+            {
+                "question": "Did I mention the missing detail?",
+                "rubric": ["Say there is no information about the missing detail."],
+                "difficulty": "medium",
+            }
+        ],
+        "temporal_reasoning": [
+            {
+                "question": "How many weeks do I have?",
+                "rubric": ["State 4 weeks.", "Show the subtraction."],
+                "difficulty": "easy",
+            }
+        ],
+    }
+    return {
+        "conversation_id": conversation_id,
+        "conversation_seed": {"category": "Coding", "id": 1},
+        # `user_profile` 里那句 `Name:` 是**官方正文前缀**（`Christina Baker: …`）的来源 ⇒
+        # 加载器要拿它填 `speaker_names[0]`，缺了会响亮失败。
+        "user_profile": repr(
+            {"user_info": "USER PROFILE:\n    • Name: Craig Baker\n    • Age: 49"}
+        ),
+        "chat": [
+            [
+                message("hello", "user", "March-15-2024", "1,1"),
+                message("hi", "assistant", None, "1,2"),
+            ],
+            [message("second session, no anchor", "user", None, "2,1")],
+        ],
+        "probing_questions": repr(probing),
+        "_pa": pa.binary(),  # 占位，避免 import 提示
+    }
+
+
+def _write_beam(root: Path, *, rows: list[dict] | None = None) -> Path:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    payload = [{k: v for k, v in row.items() if k != "_pa"} for row in (rows or [_beam_row()])]
+    path = root / "beam" / "data"
+    path.mkdir(parents=True, exist_ok=True)
+    target = path / "100K-00000-of-00001.parquet"
+    pq.write_table(pa.Table.from_pylist(payload), target)
+    return target
+
+
+def test_beam_time_anchor_spreads_within_a_session(tmp_path: Path) -> None:
+    """`time_anchor` 只在 session 第一条上 ⇒ **要传播给同 session 的其余消息**。
+
+    不传播的后果是静默的：`event_time` 全空、`created_at` 一律发空串。
+    而**没有 anchor 的 session 保持 `None`**——不要拿上一个 session 的日期去填。
+    """
+    from eval.datasets import load_beam
+
+    _write_beam(tmp_path)
+    sample = load_beam(tmp_path)[0]
+    first, second = sample.sessions
+    assert [m.timestamp_ms for m in first.messages] == [1710460800000, 1710460800000]
+    assert all(m.timestamp_ms is None for m in second.messages)
+
+
+def test_beam_speaker_name_is_the_persona_name(tmp_path: Path) -> None:
+    """`speaker_names[0]` 必须是 persona 名——**官方正文前缀用的就是它**
+    （canary `Christina Baker: …`），而 `add_shape` 的 `@speaker` 规则直接读这个字段。"""
+    from eval.datasets import load_beam
+
+    _write_beam(tmp_path)
+    assert load_beam(tmp_path)[0].speaker_names == ("Craig Baker", "Assistant")
+
+
+def test_beam_without_a_persona_name_is_a_loud_failure(tmp_path: Path) -> None:
+    """解不出名字**不许静默**：少一个说话人名会让检索看不见"谁在说"，
+    而屏幕上看不出任何异常（`add_shape._label` 那边也会抛）。"""
+    from eval.datasets import load_beam
+
+    row = _beam_row()
+    del row["user_profile"]
+    _write_beam(tmp_path, rows=[row])
+    with pytest.raises(ValueError, match="persona 名"):
+        load_beam(tmp_path)
+
+
+def test_beam_gold_is_the_rubric_and_abstention_is_flagged(tmp_path: Path) -> None:
+    """金标取 `rubric`（**每组都有**；`answer` 只有 5 组有），拒答组单独标记。"""
+    from eval.datasets import load_beam
+
+    _write_beam(tmp_path)
+    questions = load_beam(tmp_path)[0].questions
+    assert [q.category for q in questions] == ["abstention", "temporal_reasoning"]
+    assert questions[0].gold == ["Say there is no information about the missing detail."]
+    assert [q.is_abstention for q in questions] == [True, False]
+    assert [q.qid for q in questions] == ["1-abstention-0", "1-temporal_reasoning-0"]
+
+
+def test_beam_missing_parquet_raises(tmp_path: Path) -> None:
+    """缺 parquet **响亮失败**——别让它退化成一格空的记忆。"""
+    from eval.datasets import load_beam
+
+    with pytest.raises(FileNotFoundError):
+        load_beam(tmp_path)
+
+
+def test_beam_group_order_is_fixed_not_dict_order(tmp_path: Path) -> None:
+    """题的顺序由 `GROUPS` 常量决定，**不跟着 dict 的插入序走**——题号一变，历史分数就不可比。"""
+    from eval.datasets import load_beam
+    from eval.datasets.beam import GROUPS
+
+    row = _beam_row()
+    # 故意把 dict 的键序倒过来
+    row["probing_questions"] = repr(
+        {
+            group: __import__("ast").literal_eval(row["probing_questions"])[group]
+            for group in reversed(GROUPS)
+            if group in ("abstention", "temporal_reasoning")
+        }
+    )
+    _write_beam(tmp_path, rows=[row])
+    questions = load_beam(tmp_path)[0].questions
+    assert [q.category for q in questions] == ["abstention", "temporal_reasoning"]
+
+
+# ── 门禁：喂给嵌入的块不能超过提交口径的窗口 ─────────────────────────────
+#
+# ⚠ **这条守的是一个线上不会报错的东西**：`text-embedding-v4` 超限时**静默截断**
+# （官方 FAQ：`Content exceeding this limit is truncated before embedding`）——
+# 模型只会看到前 8,192 token，而库里那条记忆**看起来是完整的**。
+# 本地的开发网关同窗口但会响亮 400，所以本地这个"红"是门禁，**不是故障**。
+#
+# 它由打包预算（`eval/harness/batching.py` 的 20 条 / 2,000 词）间接保证，
+# 但"间接保证"是**测出来的余量**，不是断言——改打包参数就能悄悄捅破。
+
+
+def _max_block_tokens(
+    bench_dir: Path, dataset: str, limit: int, *, max_words: int | None = None
+) -> int:
+    """跑一遍"加载 → 渲染 → 打包 → 按 D24 组块"，返回最大的那一块的 token 数。
+
+    **用的是真的 `pairing` 与真的 `render`**（不是近似）：这两个决定了模型最终读到什么，
+    自己写一份复制品只会让门禁守着一个不存在的形状。
+    """
+    from eval.experiments.run import _load
+    from eval.harness.add_shape import shape_batch
+    from eval.harness.batching import batches
+
+    from tianximem.common.render import render_pair
+    from tianximem.common.tokens import load_counter
+    from tianximem.pairing.pairing import Message as PairingMessage
+    from tianximem.pairing.pairing import compose_memory_blocks
+
+    counter = load_counter()
+    worst = 0
+    for sample in _load(dataset, bench_dir, limit, spread=True):
+        for session in sample.sessions:
+            payloads = shape_batch(
+                session.messages, dataset=sample.dataset, speaker_names=sample.speaker_names
+            )
+            budget = {} if max_words is None else {"max_words": max_words}
+            for batch in batches(payloads, **budget):
+                blocks = compose_memory_blocks(
+                    [PairingMessage(role=p["role"], content=p["content"]) for p in batch]
+                )
+                for block in blocks:
+                    # `render_pair` 收的是**鸭子类型的"一个对"**（要 `question` / `answer` /
+                    # `event_time` 三个属性），而 `MemoryBlock` 正好有 ⇒ 直接传它。
+                    worst = max(worst, counter.count(render_pair(block)))
+    return worst
+
+
+@needs_archive
+@pytest.mark.parametrize(
+    ("dataset", "limit"),
+    [
+        ("locomo-refined", 2),
+        ("longmemeval-s", 2),
+        # ⚠ clbench 必须扫**够大**：出事的块在**第 7 与第 52 个样本**上，
+        # `limit=3` 只扫前 3 个 ⇒ 门禁是真的、却从来没盖到会失败的地方
+        # （2026-10-03 实测：`limit=300` 下有两个块 38,270 / 9,824 token）。
+        #
+        # ⚠ clbench 这一格曾经挂过**严格 xfail**（V18 的缺口：全量 14/12,793 个块超窗口、
+        # 最大 45,160 token）。**D32 补上之后它 XPASS ⇒ 按设计提醒摘标记，现已摘。**
+        # ⇒ 这一格从此是**真门禁**：它盖的是冻结口径的 299 个样本，不是以前那 3 个。
+        ("clbench", 300),
+        ("beam", 3),
+        ("personamem-v2", 2),
+        ("mquake-remastered", 2),
+        ("memtrapbench", 4),
+        ("corporatebench", 2),
+        ("medmemorybench", 12),
+        ("tempreason", 3),
+    ],
+)
+def test_no_block_exceeds_the_submit_embedding_window(dataset: str, limit: int) -> None:
+    """**跑真数据**：任何一条记忆块都不得超过 `text-embedding-v4` 的 8,192 token。
+
+    超了线上**不会报错**——它把尾巴砍掉再嵌入，而返回给 AML 的 `content` 仍是完整的
+    ⇒ 一条"检索得到、但向量只代表前一半"的记忆，**没有任何信号**。
+
+    ⚠ **采样要够大**：这条一开始给 clbench 只扫 `limit=3`，而出事的块在**第 7 与第 52 个
+    样本**上——门禁是真的、却从来没盖到会失败的地方（2026-10-03 才发现）。
+    "检查能失败"与"检查盖到了会失败的地方"是两件事。
+    """
+    from tianximem.common.tokens import EMBED_MAX_TOKENS
+
+    worst = _max_block_tokens(ARCHIVE, dataset, limit)
+    assert worst <= EMBED_MAX_TOKENS, (
+        f"{dataset}: 最大块 {worst} token > 提交窗口 {EMBED_MAX_TOKENS}"
+        "——线上会**静默截断**，本地的开发网关会 400"
+    )
+
+
+def test_the_embedding_window_gate_can_actually_fail(tmp_path: Path) -> None:
+    """**门禁必须能失败**（[`CLAUDE.md`](./CLAUDE.md) 的那条纪律），**并且失败点要指对**。
+
+    ⚠ 这条改过**三次**，每次都是被实现教会的：
+
+    1. 第一版塞了一条**全 user** 的超长语料，没红——它被**打包预算**摊成多批救回来了；
+    2. 改配对规则之后（同 role 不再合并），**全 user 的批根本不会合并** ⇒ 同一个夹具
+       更救得回来（最大块 674 token）；
+    3. **D32 之后**（一段 user 只配最后一条），"超长 user + 回答"也不再撞破
+       ——user 那一侧被 8,000 字符切分**逐片摊开**了。
+
+    ⇒ **能撞破窗口的只剩一个形状：答案侧**——`U` 后面跟着**一长串连续的非 user**。
+    它们在 ① 里被并成**一个 RoleBlock**，而 D32 **没有**限制这一侧（只限了 question）
+    ⇒ 整段一起进同一个块。**这是 D32 的已知残留**：全量 clbench 上实测最大 5,541 token
+    （安全），但**结构上并没有封死**。
+    ⇒ 夹具用这个形状，**关掉预算必须超限**；而默认预算下它被摊进多批，不超。
+    """
+    from tianximem.common.tokens import EMBED_MAX_TOKENS
+
+    long_text = " ".join(["overflowing"] * 3000)
+    row = _beam_row()
+    row["chat"] = [
+        [
+            {
+                "content": "short question",
+                "id": "1,0",
+                "index": "1,0",
+                "question_type": "main_question",
+                "role": "user",
+                "time_anchor": None,
+            },
+            *[
+                {
+                    "content": long_text,
+                    "id": f"1,{i}",
+                    "index": f"1,{i}",
+                    "question_type": "main_question",
+                    "role": "assistant",
+                    "time_anchor": None,
+                }
+                for i in range(1, 7)
+            ],
+        ]
+    ]
+    _write_beam(tmp_path, rows=[row])
+
+    # ① 预算拿掉 ⇒ 6 条 assistant 并成一段、整体挂在那条 user 上 ⇒ 巨块 ⇒ 门禁必须报出来
+    assert _max_block_tokens(tmp_path, "beam", 1, max_words=10**9) > EMBED_MAX_TOKENS
+    # ② 默认预算 ⇒ 同一份语料被摊成多批，每批都在窗口内
+    assert _max_block_tokens(tmp_path, "beam", 1) <= EMBED_MAX_TOKENS

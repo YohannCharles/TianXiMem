@@ -16,12 +16,16 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Final
 
 import httpx
 
-from eval.datasets import Message, Sample
+from eval.datasets import Sample
 
+from .add_shape import DEFAULT_ADD_SHAPE, shape_batch
 from .batching import batches, request_id_for
 
 __all__ = ["SearchHit", "ServiceClient", "REQUEST_TIMEOUT_S"]
@@ -29,6 +33,23 @@ __all__ = ["SearchHit", "ServiceClient", "REQUEST_TIMEOUT_S"]
 #: 契约允许**单请求最长 30 分钟**（§2.2）。默认取满：Full run 要连续跑 0.5–2 天，
 #: 用一个"看着正常"的短超时会把**慢**伪装成**失败**，直到 Full 才炸（§15）。
 REQUEST_TIMEOUT_S = 1800.0
+
+#: `Add` 的**有界**重试次数与退避基数（秒）。
+#:
+#: **依据是契约本身，不是"想让测试好过"**：AML 对 `Add` 最多重试 **32 次**、
+#: `request_id` 与 payload 不变（§2.2），整套系统就是**按重放安全设计的**
+#: ——D28 之后位置是请求的纯函数、批次级有 `applied_batches` 守卫
+#: （`tests/test_idempotency.py` 钉着）。
+#:
+#: ⇒ **本地 harness 不重试，得到的不是"更严格"，是"更脆"**。实测：LongMemEval
+#: 一个用户要灌 **140–220 秒**（250 块左右），网关一次抖动
+#: （`peer closed connection without sending complete message body`）就能打死整轮
+#: ——而那一轮可能已经跑了几小时。2026-10-02 实测复现过，同一请求立刻重投即可成功。
+#:
+#: ⛔ **4xx 一律不重试**：那是我方 bug（尤其 **409 = 同 `request_id` 不同 payload**，
+#: D28 的响亮冲突），重试只会把它藏起来。判据与 `search_raw` 的兜底一致（`>= 500`）。
+ADD_RETRY_ATTEMPTS: Final[int] = 3
+ADD_RETRY_BACKOFF_S: Final[float] = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,10 +75,14 @@ class ServiceClient:
         timeout: float = REQUEST_TIMEOUT_S,
         client: httpx.Client | None = None,
         fallback: ServiceClient | None = None,
+        add_shape: str = DEFAULT_ADD_SHAPE,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._client = client or httpx.Client(timeout=timeout)
         self._owns_client = client is None
+        #: `Add` 正文按哪种形态渲染（[`add_shape`](./add_shape.py)）。**缺省是线上那个**
+        #: （`official`）——改它等于换输入，所以它进数据指纹、且**不同形态的分数不可互比**。
+        self.add_shape = add_shape
         #: **超限兜底**（2026-09-26，只为 B1）：同一个问题再问一次**另一个实例**。
         #:
         #: 动机：ReFind 的 agent 把历次观测累加在对话里、**没有输入 token 预算**，
@@ -76,21 +101,50 @@ class ServiceClient:
         request_id: str,
         user_id: str,
         session_id: str,
-        messages: tuple[Message, ...],
+        messages: Sequence[dict],
     ) -> dict:
-        """投一批。**非 200 一律抛**——§15 说非 200 的行为未定义，必须假设 AML 会重试，
-        所以 harness 这边**不能把失败当成功继续跑**（那会把"漏跑了"伪装成"分数低"）。"""
-        response = self._client.post(
-            f"{self.base_url}/add",
-            json={
-                "request_id": request_id,
-                "user_id": user_id,
-                "session_id": session_id,
-                "messages": [m.to_add_payload() for m in messages],
-            },
-        )
-        response.raise_for_status()
-        return response.json()
+        """投一批**已经渲染好的 payload**。**非 200 一律抛**——§15 说非 200 的行为未定义，
+        必须假设 AML 会重试，所以 harness 这边**不能把失败当成功继续跑**
+        （那会把"漏跑了"伪装成"分数低"）。
+
+        ⚠ **渲染不在这里做**：它在 [`ingest`](#ServiceClient.ingest) 里、**切批之前**——
+        因为渲染会**改变条数**（超长消息要切），先切批会让批界落在错的条数上。
+
+        ⚠ **可重试的失败会重投同一 `request_id` + 同一 payload**（`ADD_RETRY_ATTEMPTS`）——
+        这正是 AML 做的事（§2.2 的 32 次）。**4xx 不重试**，直接抛。
+        """
+        # ⚠ **body 只构造一次**：重投必须逐字相同，否则撞 409（D28）——
+        # 那正是"同 request_id 不同 payload"的响亮冲突。
+        body = {
+            "request_id": request_id,
+            "user_id": user_id,
+            "session_id": session_id,
+            "messages": list(messages),
+        }
+        for attempt in range(1, ADD_RETRY_ATTEMPTS + 1):
+            last = attempt == ADD_RETRY_ATTEMPTS
+            try:
+                response = self._client.post(f"{self.base_url}/add", json=body)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                # 4xx = 我方 bug（含 409 的冲突）⇒ **绝不重试**，立刻抛出去
+                if error.response.status_code < 500 or last:
+                    raise
+                reason = f"服务端 {error.response.status_code}"
+            except httpx.HTTPError as error:  # 网络层：连不上 / 读到一半断
+                if last:
+                    raise
+                reason = type(error).__name__
+            else:
+                return response.json()
+            print(
+                f"  ⚠ /add 第 {attempt} 次失败（{reason}）⇒ "
+                f"{ADD_RETRY_BACKOFF_S * attempt:.0f}s 后重投同一 request_id"
+                f"（§2.2：AML 也是这么重试的）",
+                flush=True,
+            )
+            time.sleep(ADD_RETRY_BACKOFF_S * attempt)
+        raise AssertionError("unreachable")  # pragma: no cover — 最后一轮必抛
 
     # ── Search ─────────────────────────────────────────────────────────
     def search_raw(self, *, user_id: str, query: str, top_k: int) -> dict:
@@ -146,12 +200,20 @@ class ServiceClient:
         """
         count = 0
         for session in sample.sessions:
-            for index, batch in enumerate(batches(session.messages)):
+            # ⚠ **先 shape、再切批**：渲染会把超长消息切成多条（官方那个 8,000 字符的上限，
+            #   见 `add_shape.MAX_MESSAGE_CHARS`），条数一变，批界就不一样了。
+            payloads = shape_batch(
+                session.messages,
+                dataset=sample.dataset,
+                speaker_names=sample.speaker_names,
+                shape=self.add_shape,
+            )
+            for index, batch in enumerate(batches(payloads)):
                 self.add(
                     request_id=request_id_for(sample.user_id, session.session_id, index),
                     user_id=sample.user_id,
                     session_id=session.session_id,
-                    messages=batch,
+                    messages=list(batch),
                 )
                 count += 1
         return count

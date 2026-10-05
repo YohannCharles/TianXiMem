@@ -71,9 +71,50 @@ def _sessions(entry: dict, *, source: Path) -> tuple[Session, ...]:
         )
 
     sessions = []
+    # ⚠ **haystack 内的 `session_id` 会重复**（2026-10-02 实测：**9 / 301 个样本**，
+    # 例如 `lme-58bf7951` 的 57 个 session 里 `07b7a667_1` 出现两次，指向**两段不同的对话**）。
+    #
+    # 不消重的后果是**两重的，且都不报错**：
+    #
+    # 1. **`request_id` 撞车**——它由 `(user_id, session_id, 批序号)` 派生
+    #    （[`harness/batching.py`](../../eval/harness/batching.py) 的 `request_id_for`），
+    #    同一 id 的第二段会话会算出**同一个 `request_id`、不同的 payload** ⇒
+    #    服务按 **D28 回 409**。**实测把整条 LME 基线链打死在 `[3/301]`**
+    #    （`lme-58bf7951|07b7a667_1|0`）。那是**响亮**的那一半。
+    # 2. **语义漂移**——`session_id` 在本仓是三个机制的作用域：配对、扩窗、
+    #    **段合并的分组键**。两段无关对话共用一个 id ⇒ 它们被当成"同一个 session"。
+    #    这一半**静默**（正是 `docs/open-questions.md` 的 S7 警告的那类）。
+    #
+    # ⇒ 首次出现原样保留，之后再出现加 `#n` 后缀。**确定性**（按数组顺序，不依赖哈希/随机），
+    # 所以同一份文件每次给出同一批 id。⚠ 这样会改变那 9 个样本的 `id` 与段合并分组
+    # ⇒ **与 2026-10-02 之前的 LME 数字严格来说不可比**（影响的题面很小，但它是比对的前提）。
+    known = set(ids)
+    seen: dict[str, int] = {}
+    renamed: list[tuple[str, str]] = []
+    out_ids: list[str] = []
+    for raw_id in ids:
+        seen[raw_id] = seen.get(raw_id, 0) + 1
+        unique = raw_id
+        if seen[raw_id] > 1:
+            suffix = seen[raw_id]
+            while unique in known:
+                suffix += 1
+                unique = f"{raw_id}#{suffix}"
+            renamed.append((raw_id, unique))
+        known.add(unique)
+        out_ids.append(unique)
+    if renamed:
+        pairs = "、".join(f"{a} → {b}" for a, b in renamed)
+        print(
+            f"⚠ {source.name}:{entry['question_id']}：haystack 内 `session_id` 重复——"
+            f"已就地消重（{pairs}）。不消重会让 `request_id` 撞车（服务回 409）、"
+            f"并让两段无关对话落进同一个段合并分组。",
+            flush=True,
+        )
+
     # `strict=True`：上面已断言长度相等，这里再钉一次——**长度不等时宁可抛，
     # 也不要 zip 静默截断到最短**（那会丢掉 session 且不报错）。
-    for session_id, date_str, turns in zip(ids, dates, sessions_raw, strict=True):
+    for session_id, date_str, turns in zip(out_ids, dates, sessions_raw, strict=True):
         ms = to_epoch_ms(parse_lme_time(date_str))
         messages = _messages(turns, session_id=session_id, timestamp_ms=ms, source=source)
         sessions.append(Session(session_id=session_id, messages=messages))

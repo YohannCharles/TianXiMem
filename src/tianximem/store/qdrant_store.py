@@ -379,22 +379,30 @@ class QdrantStore:
         user_id: str,
         query_text: str,
         dense_vector: Sequence[float],
-        top_k: int,
     ) -> list[ScoredMemoryId]:
         """两路 `prefetch`（bm25 + dense）→ RRF 融合。**只回 `memory_id`。**
+
+        ⚠ **返回【全部】融合结果**（至多 `2 × prefetch_limit`），**不在这里按 `top_k` 截**
+        ——截断由调用方在**按 `(-score, memory_id)` 排完之后**做。
+
+        **为什么**：RRF 的分数是离散的，**并列是常态**。而 Qdrant 在 `limit` 处**截在并列
+        中间**时，**谁进谁出是随机的**——实测同一个请求连打 12 次，返回都是 100 条，
+        但**第 100 位的 id 有 2 种**，而两条的 `score` 完全相同（都是 0.01）。
+        ⇒ 在 Qdrant 里截，等于把"哪 100 条"交给了一个不确定的选择；
+        在本地排完再截，**边界也确定**（同分按 `memory_id` 升序，纯确定性）。
+
 
         ⚠ **`user_id` 过滤加在【每个 `prefetch` 上】，不是加在融合之后。**
         融合后过滤会让别的用户的候选**先占掉名次**再被丢弃——既污染分数、又浪费名额，
         而且一旦有人把过滤写漏，泄漏是静默的（§2.2：`user_id` 是唯一的隔离字段，
         跨 user 检索被禁止）。
 
-        ⚠ 根级 `limit` 用请求的 `top_k`，**不写死 100**——AML 说它固定是 100，
-        但契约字段就是 `top_k`，写死会在它传更小值时变成"返回超限"，那是**契约错误**。
+        ⚠ **契约的 `top_k` 不在这里执行**（它在调用方，见上）——
+        但**"不写死 100"那条规则照旧**：这里取的 `2 × prefetch_limit` 是"融合结果的上界"，
+        与请求的 `top_k` 无关；AML 传更小的 `top_k` 时由调用方截，**不会有"返回超限"**。
 
         查询文本**原样送入**，不做任何改写——v1 没有 Query Analyzer（§7.2）。
         """
-        if top_k <= 0:
-            return []
         if not query_text.strip():
             raise ValueError("query_text 不得为空（§2.1：query 是必填字段）")
 
@@ -423,11 +431,12 @@ class QdrantStore:
                     weights=list(self._hybrid.weights),
                 )
             ),
-            limit=top_k,
+            # 两路各取 `prefetch_limit` ⇒ 融合结果至多 `2 × prefetch_limit` 条。
+            # **要全部**——在 Qdrant 里截会把边界交给不确定的选择（见 docstring）。
+            limit=self._hybrid.prefetch_limit * 2,
             with_payload=[KEY_MEMORY_ID],
         )
-        # 契约要求"精确 ≤ top_k"；这里的切片是**兜底**，正常路径由 limit 保证。
-        points = result.points[:top_k]
+        points = result.points
         out: list[ScoredMemoryId] = []
         for p in points:
             payload = p.payload or {}
