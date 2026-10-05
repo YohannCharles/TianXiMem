@@ -1,0 +1,36 @@
+models:
+  embedder: qwen3-embedding-8b
+storage:
+  sqlite:
+    busy_timeout_ms: 5000
+  qdrant:
+    collection: memories_goal_20261005
+retrieval:
+  grounded_evidence: true
+  evidence_limit: 12
+  evidence_hop_limit: 4
+  fact_backfill_limit: 1024
+  prefetch_limit: 200
+  rrf:
+    k: 61
+    weights:
+    - 0.5
+    - 0.5
+  query_instruction: ''
+neighbor:
+  expansion_seed_limit: 1000
+  radius: 0
+  seed_placement: keep
+budget:
+  max_tokens: 117760
+  tokenizer: o200k_base
+packaging:
+  inject_abs_time: true
+  annotate_relatives: true
+rerank:
+  enabled: false
+  envelope: query
+  timeout_seconds: 30.0
+capture:
+  enabled: false
+  max_bytes: 52428800

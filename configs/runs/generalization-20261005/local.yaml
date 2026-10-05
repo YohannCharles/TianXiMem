@@ -1,0 +1,7 @@
+storage:
+  qdrant:
+    collection: memories_generalization_20261005
+rerank:
+  enabled: false
+capture:
+  enabled: false

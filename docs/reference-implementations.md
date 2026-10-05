@@ -65,7 +65,7 @@ rerank_candidates=200 · reranker_max_length=512 · result_window=1 · seed_k=20
 | 维度 | 我们 | ReFind | InvMem 候选 |
 | --- | --- | --- | --- |
 | **配对时机** | **Add 时**，且**只看本批**（D24） | **Search 时**（每次从原始消息重构） | Add 时按 message 切块，**不再配对** |
-| 配对粒度 | 记忆块；连续 user 并入同一 question（D20） | 相邻 2 turn，**不看 role** | 320 token 块（可切碎一条消息） |
+| 配对粒度 | 记忆块；一段连续 user 里**只把最后一条**配上回答（**D32**），前面的各自独立 | 相邻 2 turn，**不看 role** | 320 token 块（可切碎一条消息） |
 | 记录 id | 位置派生 `hash(user_id,session_id,request_id,local_index)`（**D28**） | 位置派生 `hash(user,session,源位置)` | 位置派生 `hash(request_id:msg:chunk)` |
 | 检索后端 | Qdrant 内 RRF 融合 **dense + BM25** | **纯 BM25**（两种粒度） | dense + BM25，**加权** RRF |
 | RRF `k` | **61**（Qdrant 0-based，D5） | 代码 `1/(60+rank)` 但 **rank 从 1 起** = `1/(61+rank₀)` | `1/(60+rank+1)`，**同样等价于 61** |
@@ -175,7 +175,7 @@ ReFind 的改编说明第 3 条（`METHOD_CARD.md`）**逐字**：
 
 > The paper's seen-session filter is applied at chunk level here. **The platform may assign one `session_id` to all chunks for a sample**; excluding that whole session after the first search would incorrectly hide the remaining memory.
 
-**这是一条平台行为观察，我们没法本地验证。** 对我们的影响面：`session_id` 是我们的**组合分组键**（连续同 role 判定）、**位置作用域**（D24 起组合只看一次 Add，但**位置**仍按 session 有序；**D28** 起这个序是 Add 内显式链）、**扩窗作用域**（同 session 才扩）与**段合并分组键**。如果平台上"一个样本 = 一个 session_id"，那么这些机制全都还在跑，但"session"不再等于"一段对话"——**扩窗与段合并的语义会漂**。
+**这是一条平台行为观察，我们没法本地验证。** 对我们的影响面：`session_id` 是我们的**配对分组键**、**位置作用域**（D24 起组合只看一次 Add，但**位置**仍按 session 有序；**D28** 起这个序是 Add 内显式链）、**扩窗作用域**（同 session 才扩）与**段合并分组键**。如果平台上"一个样本 = 一个 session_id"，那么这些机制全都还在跑，但"session"不再等于"一段对话"——**扩窗与段合并的语义会漂**。
 
 > 好消息是**不致命**：三处都只要求"同一个 session 内位置有序"，这个不变量不会因粒度变粗而破。⇒ **已登记为 [S7](./open-questions.md)**（2026-09-25）。
 

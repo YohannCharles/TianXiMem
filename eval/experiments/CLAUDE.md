@@ -6,12 +6,46 @@
 
 ```text
 run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告      ✅
+recipes.py        **冻结的抽样口径**：每个数据集跑多少题的唯一声明处  ✅
 arms.py           两臂脚手架的**唯一实现**：冻结快照 / 核对 / 驱动 / 比较  ✅
 t1_timestamp.py       T1 时间戳前缀 带/不带（两臂冻结快照）        ✅ 问题已答（`t1-dated` 0.633）；**干净的两臂 A/B 未跑**
 t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）  🟡 汇总半边已就位；标注待人工
 a3_rerank.py          A3 Rerank 开/关                            ✅（首组对照见 ../reports/ledger.md）
 a4_agent.py           A4a 门控 / A4b always-on                    ⬜（v1 没有 agent，见 D13）
 ```
+
+> ## ⚠ 跑任何一个数据集，都用 **`--frozen`**
+>
+> ```bash
+> uv run python eval/experiments/run.py --dataset clbench --frozen --base-url ...
+> ```
+>
+> 它按 [`recipes.py`](./recipes.py) 取 `--limit` / `--spread`——**"这个数据集跑多少题"的唯一声明处**。
+> **不要手抄 `--limit 3` 这类数字**：10 个数据集的全量题数差着量级（mquake 69,618 vs locomo 1,382），
+> 每个的 `limit` 数的**还不是同一个东西**（对话数 / 题数 / persona 数 / QA 子集 …），
+> 而**抄错一个数的后果是分数看起来完全正常、却不可比**。
+>
+> `tests/test_experiments.py` 把表里每个 `n_questions` 都钉住（逐个加载、断言实际题数），
+> **改 k 而忘了改表，测试立刻红**。`--frozen` 与显式 `--limit` / `--spread` **互斥**。
+>
+> ⚠ **下面那几条 `--spread` 的告诫仍然成立，但不再是手抄的理由**——
+> 逐数据集的轴、分组键、覆盖度与"为什么是这个 k"，都在 `recipes.py` 里，本文件不复制。
+
+> ## ⛔ 建基线**串行跑，不要开两条链**（2026-10-02 实测）
+>
+> 开发网关在 **Cloudflare 后面**，而 CF 的源站时限是 ~125 秒：**源站超过它就回 524**，
+> 而**客户端超时调多大都没用**（实测 300 s / 900 s 同样是 524）。
+> 一道题要不要超过 125 秒，取决于**prompt 大小 × 网关当时有多忙**：
+> 同样一份 medmemorybench（每题 ~54k token），**单链下 20 题全过，双链下当场 524**。
+>
+> ⇒ **串行**。别被"本机 CPU 只用了 2%"误导——**瓶颈在远端网关，不在本机**。
+> 并发不会让总工作量变小，只会**把 524 从"不会发生"变成"随机发生"**。
+>
+> ⚠ 而且失败是**连锁**的：超大的请求会反复重试（`pipeline_beam.py` 是 6 次 ×120 s），
+> 期间把网关占满 ⇒ **同时跑的别的链**会被排到超过 harness 的 30 分钟客户端超时后死掉。
+>
+> ⚠ **`beam` 的基线本地拿不到**（每题 ~109k token，空闲网关上照样超 125 秒）。
+> 详见 [`../reports/ledger.md`](../reports/ledger.md) 的「跑一轮要多久」。
 
 > **加一个新对照 = 加一个 arm 脚本，不用碰脚手架**：定义一条 `arms.Arm` 子类
 > （字段 + `overrides()` + `switches()`）、一个 `arms.Spec`（标签、快照头部那句人话、
@@ -24,11 +58,39 @@ a4_agent.py           A4a 门控 / A4b always-on                    ⬜（v1 没
 make serve                    # 另一个终端；TIANXIMEM_PROFILE=local 时用 memories_dev 集合
 make eval                     # = DATASET=locomo-refined；ARGS='--limit 3 --skip-ingest' 可冒烟
 make eval DATASET=longmemeval-s
+make eval DATASET=mquake-remastered ARGS='--limit 1 --max-questions 2'   # official-extra 之一
 # ⚠ LongMemEval **部分跑必须加 `--spread`**：它的文件**按 `question_type` 分块**
 #   （70 个 single-session-user → 62 个 multi-session → …），`--limit 60` 不加它
 #   只会拿到**一类**题——而分数看起来完全正常。`--spread` 按比例跨类取（确定性、可复现）。
 #   例：ARGS='--limit 60 --spread'
+# ⚠ 同样要 `--spread` 的还有：**clbench**（按 context_category）、**mquake**（按 4 份 parquet）、
+#   **memtrapbench**（按 6 个场景）、**beam**（按 conversation_seed.category）。
+#   **corporatebench 不需要**——它的 `limit` 选的是 QA 子集。
+# ⚠ **beam 还有一个 `--limit` 之外的坑**：它的题**按 probing 组排序**（`abstention` 在最前），
+#   所以 `--max-questions 2` 取到的是**同两组拒答题**——看着像"跑了两题"，其实只覆盖一类。
+#   要小规模冒烟就配 `--limit 1 --max-questions 20`（整格 20 题），别用小 `--max-questions`。
 ```
+
+### `--add-shape`：本地发的 add 像不像线上
+
+`Add` 的 payload **由 AML 造，不由我们造** ⇒ 本地复现的形态决定**分数预不预测得了线上**。
+缺省 `official`（线上那个：逐数据集加 `<标签>: ` 前缀、`system` 折成 `user`）；
+`native` 是改之前的形状，**只作对照**；`alluser` 是**判分池那一簇**的形态。
+
+⚠ **它的分辨率与切批同级**：换形态 = 换输入。三个取值都写进 run record 的
+`data_fingerprint.add_shape`，**不同形态的分数不可互比**。
+细节与实测依据在 [`../harness/add_shape.py`](../harness/add_shape.py)。
+
+**十个数据集有加载器**：`locomo-refined` / `longmemeval-s` / `clbench` / **`beam`** 走
+**归档里的官方 pipeline**；`mquake-remastered` / `memtrapbench` / `corporatebench` / `medmemorybench`
+（来自 `official-extra`）**没有官方 AML pipeline**，走我们自写的
+[`../harness/extra_pipeline.py`](../harness/extra_pipeline.py)
+⇒ **这四家的分数只在仓内前后对比，别与官方分数对齐**。
+⚠ `medmemorybench` 例外一半：**判分口径是上游发布的**（`metrics/`，见 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md)），我们照它实现——但**作答侧**仍是我们自己的 prompt。
+
+⚠ **`beam` 的判分产物与那三份形状不同**：官方 `pipeline_beam.py` 写的是 `llm_judge_score`
+（逐条 rubric 三点制的均分，**没有 `is_correct`**）⇒ 二值化口径由 harness 定
+（均分 == 1.0 才算对），真分留在 `label`/`judge_response` 里。
 
 > **纯 BM25 检索是本目录的 T2 手段**（见下），**不是一条被评分的 arm**——检索只有混合一种形态，参照点由**混合主路径自身**承担（§13）。
 
@@ -55,6 +117,31 @@ make eval DATASET=longmemeval-s
 **latency / 成本只在明显变差时才追**（§13）。**不看 Recall@K**（§14）。字段清单见 [`../reports/CLAUDE.md`](../reports/CLAUDE.md)。
 
 ---
+
+## 验证一个改动：**最短路径**（2026-10-03）
+
+**目标**：手上有一个改动（换渲染 / 调打包 / 动精排），想知道**它值不值**。
+
+```bash
+make serve                                    # 另一终端，服务得先起着
+make baseline DATASET=locomo-refined          # 44 分钟 ⇒ 与 0.7659 比
+```
+
+**三条判读纪律**（都吃过亏，逐条都有实测依据）：
+
+| # | 纪律 | 为什么 |
+| --- | --- | --- |
+| 1 | **比之前先看 `config_fingerprint.snapshot_hashes.default.yaml`** | 改任何**默认值**都会让一批老数字**静默过期**——屏幕上什么都看不出来（D31 改半径那次就是靠它抓出来的） |
+| 2 | **一次只跑一条**（不并发） | 网关在 Cloudflare 后面（源站 ~125 秒 ⇒ **524**）；并发把 524 从"不会发生"变成"随机发生"，而**客户端超时调多大都没用** |
+| 3 | **1pt 以内的差读不出来** | 346 题上的噪声底 ~1pt，**而它只有单跑的样本**（要做结论得重复跑） |
+
+**选哪个数据集跑**：数字与状态在 [`../reports/ledger.md`](../reports/ledger.md) 的
+「当前缺省口径下的基线」表 + 「本机拿不到基线的数据集」表——**本文件不复制**。
+一句话：**locomo 是唯一适合每次改动都跑的哨兵**（44 分钟）；其余按改动涉及的面挑，
+`clbench` / `beam` 本机跑不了，`medmemorybench` 靠重试碰运气。
+
+> ⚠ **代理评测只覆盖 LoCoMo + LongMemEval**（§12.4 / P3）：其余数据集的契约与裁判各不相同，
+> 它们的分数**只能同数据集前后比**，**不能外推**。
 
 ## 各 arm 的定义（容易糊的地方）
 

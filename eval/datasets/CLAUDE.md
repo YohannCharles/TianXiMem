@@ -7,10 +7,33 @@
 ```text
 longmemeval.py    lme_s_cleaned.json 加载
 locomo.py         questions.jsonl + conversations.jsonl 加载与合并
+clbench.py        clbench.jsonl 加载（契约与上面两份差得最多的一份）
+beam.py           BEAM 100K（**公开 6 管线之一**；语料存在归档的 `official-extra` 档里，
+                  **裁判走官方 `pipeline_beam.py`**，不是我们自写的那一类）
+mquake.py         official-extra：MQuAKE-Remastered（**一条事实 = 一条消息**，整样本一个 session）
+memtrapbench.py   official-extra：MemTrapBench（真对话，陷阱题）
+corporatebench.py official-extra：CorporateBench（邮件/KB 文档）
+medmemorybench.py official-extra：MedMemoryBench zh（**检查点式**：记忆只喂到该次问诊）
+tempreason.py     official-extra：TempReason **L2/L3**（L1 无上下文，不是记忆任务）
+personamem.py     公开六份之一：PersonaMem-v2（⚠ **不读检索字段**，只能当回归对照）
 preprocess.py     **schema 落差预处理层**（§12.3 第 9 条）
 sampling.py       确定性分层抽样（`stratified_sample`，跨类不随机）
 registry.py       数据指纹（版本 + 切批口径）——§13 的记录要它
 ```
+
+> ⚠ **ScriptMem 与 Doc-PP 不做**（各自的理由见 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md)）：
+> 前者的**剧本正文没有任何公开来源**（上游 `data/raw/*.json` 的 `conversation` 只有 381 字符的格式示例），
+> 后者的作答端**只认 PDF 图像**、而我们的服务返回文本。
+>
+> ⚠ `personamem.py` 走**适配器**（[`../harness/`](../harness/) 的
+> `*_pipeline.py`）——官方 pipeline 的子命令形状与通用两子命令不同，适配器里**直接调官方那几个函数**。
+>
+> **`official-extra` 那几份没有官方 AML pipeline** ⇒ 它们的 answer（以及大部分 judge）
+> 是我们自写的（[`../harness/extra_pipeline.py`](../harness/extra_pipeline.py)），
+> **分数只在仓内前后对比**。⚠ 一个例外：**MedMemoryBench 的判分口径是上游发布的**
+> （`benchmark_data/medmemorybench-code/metrics/`，我们照它实现、prompt 直接从它读）——
+> 但作答侧仍是我们的。
+> 逐份的构造约定写在各自模块的 docstring 顶部——**读 loader 之前先读它**。
 
 ---
 
@@ -177,7 +200,7 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 | --- | --- |
 | **2** | **ScriptMem 做不了代理评测**——对话原文因版权原因未发布 |
 | **3** | **不要用 MemoryAgentBench 当代理**——它不在 AML 的数据集清单里，在其上调优未必迁移 |
-| **8** | **BEAM 的数据实际上不在归档里**。`beam.json` / `beam_rows.json` 是失败下载的残留（`Entry not found` / `{"error":"Unexpected error."}`）；`beam_100k.json` 是 HuggingFace datasets-server 的**分页响应**（顶层键 `features`/`rows`/`num_rows_total`，且 `num_rows_total=20`、实际只取到 1 行），**不是数据集**。（这三份已从归档删除——**归档里连"疑似数据"都没有了**。）真要覆盖 BEAM，**须先把数据取回来** |
+| **8** | **BEAM 的数据现在在归档里**（`official-extra` 的 `beam/`，**100K 档**，2026-09-30 取回）——那三份失败残留（`beam.json` / `beam_rows.json` / `beam_100k.json`）仍在清单的 `DELETED` 段里。⚠ 但**它仍然不能当代理数据集**（§12.4：契约与 LoCoMo/LME 不同），而且**只覆盖 100K 档**（500K / 1M 未取） |
 
 **第 7 条（PersonaMem）**：三个 split 的 schema 不统一——`question_type` 的词表在 32k / 128k / 1M 之间互不相同；`correct_answer` 在 32k 里是 `(c)` 这类选项字母、在 128k/1M 里是整段选项文本。**"MCQ 精确文本匹配"必须先做归一化**，harness **不要硬编码单一词表或单一答案格式**。
 
@@ -195,7 +218,8 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 | ScriptMem | **CC BY-NC 4.0** | 归档 readme |
 | PersonaMem v2 | CC BY 4.0 | 归档 readme |
 | LongMemEval | **待确认**——早先记为 MIT，但归档 readme **没有 License 章节**，归档内无依据 | —— |
-| BEAM / CL-Bench | 归档内无许可证文本 | —— |
+| CL-Bench | 归档内无许可证文本 | —— |
+| BEAM | **CC BY-SA 4.0** | 归档 `beam/README.md` 的 `## 📄 License` 段（**100K 档那一份卡**） |
 
 > **NC（非商业）这一列值得注意**：LoCoMo-Refined 与 ScriptMem 都是 CC BY-NC 4.0。**不影响参赛**，但**它意味着这两份数据不能进任何商业用途的产物**——如果后续想把系统或其中组件开源/商用，**这两份数据的评测结果是引用不了的**。
 

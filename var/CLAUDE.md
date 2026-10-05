@@ -12,11 +12,13 @@
 
 ```text
 var/
-├── tianxi.db          SQLite 真源（§6.1）——**唯一的不可重建物**
-├── qdrant_storage/    Qdrant 卷（§6.3）——**可从 tianxi.db 全量重建**
-├── embed_cache/       embedding 缓存（§7.2）——**可重建，但重建要花钱**
-├── capture/           请求原文采集（`capture.enabled`）——**诊断产物，可弃**
-└── logs/
+├── tianxi.db              SQLite 真源（§6.1）——**唯一的不可重建物**
+├── tianxi.db.pre-d25      旧库留档（2026-09-30，schema 早于 D25）
+├── tianxi.db.pre-official 旧库留档（2026-10-01，**add 形态改成 official 之前**那一代）
+├── qdrant_storage/        Qdrant 卷（§6.3）——**可从 tianxi.db 全量重建**
+├── embed_cache/           embedding 缓存（§7.2）——**可重建，但重建要花钱**
+├── capture/               请求原文采集（`capture.enabled`）——**诊断产物，可弃**
+└── logs/                  服务日志（`make serve` 重定向到这里）
 ```
 
 **整目录 gitignored**（`.gitignore` 的"运行时产物"段），**只保留本 README**，让它在 checkout 后依然存在且有说明。
@@ -49,6 +51,40 @@ var/
 
 ---
 
+## ⚠ 换库要**连 Qdrant 集合一起换**（2026-09-30）
+
+**库与集合是两个坐标系，只有一个方向会自动跟上**：`SqliteStore.open()` 只在"表里有
+`chunk_ordinal`，**或**缺 `prev_memory_id`"时自动搬一次——那是给 **D25 那代库**写的
+（它 SELECT 的列名是 `local_index`）。**D25 之前那代库（列名 `pair_idx`）没有迁移路径**：
+服务一启动就 `no such column: local_index`，**起不来**。
+
+**换库时只换 SQLite 是不够的**：旧集合里的 point 是旧库的派生索引，**新库不会覆盖它们**
+（§6.3 是按 id upsert）⇒ 检索会返回"新真源里根本不存在的记忆"，而**不报错**（这就是 **V9**）。
+
+```bash
+mv var/tianxi.db var/tianxi.db.pre-d25                          # 留档。**别删**——它是唯一不可重建的那份
+curl -X DELETE http://127.0.0.1:6333/collections/memories_dev   # 派生索引；下次 Add 会自动重建
+```
+
+> 本机（WSL）2026-09-30 已这么做过一次：`tianxi.db.pre-d25` 是 9/27 那代（schema 早于 D25）的库，
+> `memories_dev` 已删。要在它上面重建索引：把 `TIANXIMEM_SQLITE_PATH` 指回那份留档，
+> 再跑 `tools/reindex.py --drop`。
+
+**2026-10-01 又做了一次，理由不同但手法一样**：add 形态从 `native` 改成 `official`
+（逐数据集加 `<标签>: ` 前缀、`system` 折成 `user`、单条 8,000 字符切分、每条 Add 2,000 词预算）——
+**正文变了 ⇒ 渲染出来的记忆也变**，旧库是另一套坐标系。
+
+```bash
+mv var/tianxi.db var/tianxi.db.pre-official
+curl -X DELETE http://127.0.0.1:6333/collections/memories_dev
+```
+
+⚠ **换形态时必须同时换库**，理由比换 schema 更硬：`request_id` 是**确定性**的
+（`user|session|index`），而 payload 变了 ⇒ 同 `request_id` **不同 payload** ⇒
+D28 的指纹守卫会**响亮 409**（那不是重试，是两套输入撞在一起）。**不是"会串数据"，是跑不起来。**
+
+---
+
 ## 一条本地限制（别误读数字）
 
-**本地复现的批次边界与线上不一定一致**（§12.3 第 5 条："Adapter 计数的词"官方从未定义）。D24 之后它不再影响任何埋点，但**它决定有多少 QA 对被批界切成两半**——原因与实测见 [`../docs/decisions.md`](../docs/decisions.md) 的 **D24**。**本目录不重复。**
+**本地复现的批次边界与线上不一定一致**（§12.3 第 5 条：官方给的计数口径是"由冻结的 Adapter 计"，**本仓复现不了那个 Adapter**）。D24 之后它不再影响任何埋点，但**它决定有多少 QA 对被批界切成两半**——原因与实测见 [`../docs/decisions.md`](../docs/decisions.md) 的 **D24**。**本目录不重复。**

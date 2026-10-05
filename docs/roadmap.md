@@ -125,7 +125,9 @@
 
 > **Dense 与 RRF 归 Step 1**（检索一次到位，D15），本阶段只剩扩窗与预算。
 
-- [x] Neighbor Expansion：种子 `neighbor.expansion_seed_limit`（**v1 取 30**，PRD §10 的 20 只是示例算术）、窗口 `radius = ±1`（§10）
+- [x] Neighbor Expansion：种子 `neighbor.expansion_seed_limit` + 窗口 `neighbor.radius`（§10）
+      ——**具体取值不在本文件复述，以 [`config-reference.md`](./config-reference.md) §6 为准**
+      （⚠ 那两个数改过两次，且 **D31 起半径为 0 = 默认关**；在这里抄一份必然漂移）
 - [x] **全部 rerank 候选一条不删**，只对前 N 条扩窗；新扩出来的邻居 `rerank_rank = None`
 - [x] 同 `(user_id, session_id)` 才扩；**禁止跨 session**
 - [x] **Context Segment Merge**：连续块合成段，段内 `local_index` 序、段间 `best_rank` 序（§11.2）——连续性判据 = **Add 内显式链**（D28）

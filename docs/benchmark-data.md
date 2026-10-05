@@ -1,10 +1,13 @@
 # benchmark_data/ — 归档说明
 
-> 最后核对：2026-09-25，对应 PRD §12.2 / §12.3 / §12.5 与附录 B。**冲突以 PRD 为准。**
+> 最后核对：2026-09-30，对应 PRD §12.2 / §12.3 / §12.5 与附录 B。**冲突以 PRD 为准。**
 
 ## 这个目录是什么
 
 **AML 官方 pipeline 源码 + 数据集 + 各数据集 readme 的只读归档。**PRD 附录 B 的"各数据集问题类型分布、跨 session 比例、许可证"一行的来源就是这里。
+
+**归档里有两组东西**：公开仓库那 6 个管线的材料（本文件下面各节），与 **`official-extra`**——
+官方真实流量里出现过、但**不在**公开 6 管线里的 8 个数据集（见下面的专节）。
 
 **⚠ 本目录整目录被 `.gitignore` 排除**（见 `.gitignore` 的"其他"段）。因此：
 
@@ -18,7 +21,7 @@
 ## 出处链：字节从哪来
 
 **除了 `rh.md` / `rh2.md` / `rh3.md` 三份，每一份都有确定的出处，且都能按 commit / revision 钉死。**
-（逐字节核对通过：**24 份里 21 份有出处，3 份取不回来**。）机器可查的清单（出处 + sha256）在
+（逐字节核对通过；只有那 3 份取不回来。）机器可查的清单（出处 + sha256）在
 [`../tools/fetch_benchmark_data.py`](../tools/fetch_benchmark_data.py)——**哈希只写那一处，本文不重复**。
 取回 `make fetch-data`，校验 `make data-check`。
 
@@ -33,6 +36,7 @@
 | `locomo10.json` | [github.com/snap-research/locomo](https://github.com/snap-research/locomo) 的 `data/locomo10.json` | 按 commit 钉死 |
 | `pm_32k.csv`、`pm_questions_128k.csv`、`pm_questions_1M.csv` | HF [`bowen-upenn/PersonaMem-v1`](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v1) 的 `questions_{32k,128k,1M}.csv` | 按 revision 钉死。⚠ **不是 v2 仓**——v2 仓里只有 `benchmark/*.csv`，本地文件名是被改过的 |
 | `pmv2.md`、`lme_readme.md` | HF `bowen-upenn/PersonaMem-v2` 的 `README.md`；[github.com/xiaowu0162/LongMemEval](https://github.com/xiaowu0162/LongMemEval) 的 `README.md` | 分别按 revision / commit 钉死 |
+| **`official-extra` 的 8 个数据集** | 6 个 HF 数据集 + 2 个 GitHub 仓（`zjunlp/MemTrapBench`、`hwanchang00/doc-pp`），**路径清单见本文件下面的专节** | 按 revision / commit 钉死；HF 侧 `sha256 = LFS oid`（实测相等） |
 | `rh.md`、`rh2.md`、`rh3.md` | ❌ 抓取时原始 URL 已 404，是搜索引擎索引副本 | **取不回来**，只作存档 |
 
 **⇒ 因此"所有人都需要的那份"不需要住在任何人的电脑上，也不需要任何共享盘。**
@@ -68,7 +72,101 @@
 | `rh.md` | ❌ **不是数据**——14 字节的桩文件，全文只有 `404: Not Found`（失败下载的占位） |
 | `rh2.md` / `rh3.md` | ⚠️ **不是 AML 材料**——它们是第三方系统 **MemoryHub** 自己的说明与**跑分结果**（R@k / P@k / MRR / NDCG / latency 与各次 run 的清单）。**与 AML 的数据集 schema 无关，不要当成数据集的读取格式依据** |
 
-**结论（§12.3 第 8 条）**：**BEAM 的数据实际上不在归档里**——§12.4 的 BEAM 一行**只有 `pipeline_beam.py` 单方依据，没有数据可交叉核对**。真要覆盖 BEAM，**须先把数据取回来**。
+**结论（§12.3 第 8 条）**：**BEAM 的数据现在在归档里**——`official-extra` 的 `beam/`（**100K 档**，2026-09-30 取回），§12.4 的 BEAM 一行因此有数据可交叉核对。
+⚠ **只覆盖 100K**：500K / 1M 两档未取（官方流量里只出现过 `beam_100k`；上游的档位命名就是 `100K` 而不是论文散文里的 128K）。
+
+---
+
+## `official-extra`：官方流量里出现过、公开 6 管线之外的数据集
+
+**判据与出处**：官方 2026-09-29 那轮真实流量的语料普查——见
+[`../official-dataset-2026-09-29/README.md`](../official-dataset-2026-09-29/README.md) §4.2.1 / §4.2.2。
+那份报告是**唯一说明**，这里只记"归档里存了什么、缺什么"。
+
+**⚠ 三条边界，引用前必读**：
+
+1. **它不是新的评测基线**——「代理评测只覆盖 LoCoMo-Refined + LongMemEval」那条边界（§12.4）不变；
+   这批数据的用途是**复盘官方实际在跑什么**与**给采集到的官方查询补金标**。
+2. **只取流量里出现过的那一档**（下表"取的档"一列）。上游还有别的档，**不要**当成已归档。
+3. **能逐字匹配回官方 query 的只有一部分**：实测 TempReason 与 Doc-PP 的题面在 10,144 条官方
+   search 里 **0 命中**（官方问法被改写过），**不代表这些数据集没被跑过**。
+
+| 归档目录 | 取的档 | 是什么 |
+| --- | --- | --- |
+| `mquake-remastered/` | 全量（4 份） | 多跳知识更新；流量里 `Corpus: {…}` / `Corpus: UPDATE:` 两族 |
+| `beam/` | **100K** | 长对话记忆 |
+| `personamem-v2/` | text/benchmark 分片 + `data/chat_history_32k/` 的 200 份 | 隐式 persona；5,000 题 |
+| `tempreason/` | **test_*** | 时间推理 |
+| `corporatebench/` | **只 zenith** | 邮件线程 + KB 问答 |
+| `medmemorybench/` | **data/zh 干净档** | 中文医患对话 |
+| `memtrapbench/` | 整仓 | 记忆陷阱题（含它自己的评测代码） |
+| `doc-pp/` | 整仓 | 文档披露政策（PDF + 1,141 题） |
+
+许可依据**不在这张表里**——见下面的「许可证」一节。
+
+**归档里没有的**（不要把这份表读成"官方只跑这些"）：
+
+- **ScriptMem 那 4 部剧本的对话正文**——上游因版权明确不发布，**只存在于我们采集到的流量里**；
+- **中文法条**（`source: 中华人民共和国未成年人保护法`）那一族——**出处至今未识别**；
+- **Arknights 剧情**——不是评测数据集，不归档；
+- PersonaMem-v2 的 **其余 800 份** `chat_history_32k`（上游共 1,000 份 / 约 167 MB）
+  ——**我们只取了 `benchmark/text/benchmark.csv` 引用到的那 200 份**，另外 800 份没有任何题引用；
+  `chat_history_128k`（约 519 MB）与 1M 档整体未取。
+  > ⚠ **别用 HuggingFace 的 `?recursive=true` 判断"某个档在不在"**：它**静默截断在 1,000 条**，
+  > 而 PersonaMem-v2 光 `chat_history_128k` 就有 1,000 个文件 ⇒ 那次查询看不到 `32k`，
+  > 一度把它误记成"已撤下"。查子目录要单独打 `tree/main/<路径>`；
+  > 要精确查某几个路径，用 `POST /api/datasets/{repo}/paths-info/{rev}`（它不受 1,000 条截断影响）。
+- MedMemoryBench 的 `data/zh` 两个带噪变体（`dialogues_with_noise` / `noise_sessions`）
+
+### ⚠ `doc-pp/data/` 是派生物，且上游的分卷 zip 不能直接解
+
+`doc-pp/` 里注册进清单的是**仓库原文件**，其中 `data.zip` + `data.z01`–`z06` 是一个**分卷 zip**。
+解出来的 `data/`（`03_final_data.json` + 635 份 PDF）**不在清单里、也不留在磁盘上**——它是派生物
+（**doc-pp 这个数据集不做了**，理由见上一节）。要复核时才解、解完即弃：
+
+```bash
+cd benchmark_data/doc-pp
+zip -s 0 data.zip --out data_combined.zip && unzip data_combined.zip && rm data_combined.zip
+```
+
+⚠ 本机（WSL，2026-09-30）**没有 `zip`/`unzip`/`7z` 任何一个**，Python 的 `zipfile` 直接解也会在
+条目偏移上失败（`Bad magic number`）。当时的解法是「按 `z01…z06, zip` 顺序拼接 + 扫本地头签名」。
+⇒ 换机器取回时先确认有 `zip` 系工具；没有就走拼接那条路。
+
+### 这批题库的用途之一：给采集到的官方查询补金标
+
+脚本 [`../tools/recover_official_gold.py`](../tools/recover_official_gold.py) 按归一化题面把它们对回
+官方流量的 query，产物 `<采集目录>/official-gold-extra.jsonl`（**gitignored**，随采集目录一起），
+按 `seq` 与 `official-eval-questions.jsonl` join。
+
+⚠ **每一行的判分口径都不一样，而且都写在那一行的 `gold_judging` 里**——引用金标前先读它。
+两个最容易踩的：MQuAKE 有更新前/后两套答案（取哪套**逐条按记忆里有没有注入对应改写**判），
+BEAM 得用 `rubric`（10 个 probing 组的答案字段各不相同，只有 `rubric` 每组都有）。
+
+### 用途之二：这些数据集已经能当**本地评测数据集**跑
+
+`mquake-remastered` / `memtrapbench` / `corporatebench` / `medmemorybench` / `tempreason`
+现在有加载器（[`../eval/datasets/`](../eval/datasets/)）与自写的 pipeline
+（[`../eval/harness/extra_pipeline.py`](../eval/harness/extra_pipeline.py)）：
+
+```bash
+make eval DATASET=mquake-remastered ARGS='--limit 1 --spread'
+```
+
+⚠ 官方**没有发布**这几份的 pipeline ⇒ answer/judge 的 prompt 是**我们写的**，
+**分数只在仓内前后对比**（其余三份走归档里的官方 pipeline，见
+[`../eval/experiments/CLAUDE.md`](../eval/experiments/CLAUDE.md)）。
+
+**BEAM 也已经是本地评测数据集了**（`make eval DATASET=beam`）——它的记忆语料来自本目录的
+`beam/`，但**裁判走归档里的 `pipeline_beam.py`**（官方那份），所以它不属于"我们自写"那一类。
+
+**MedMemoryBench 同理**（`make eval DATASET=medmemorybench`）：语料在 `medmemorybench/data/zh`，
+**判分口径在上游发布的代码里**——本目录多了一份 `medmemorybench-code/`（只取 `metrics/` +
+`utils/prompts_judge.py` + 骨架，不取 `methods/` 那 2545 个文件）：
+`entity_exact_match → string_contain`、`multiple_choice → option_match`、其余四类 → LLM 裁判
+（多跳那条是 `llm_judge_mcd`）。`extra_pipeline.py` **照它实现，prompt 直接从它读**。
+⚠ 它的**形状是照上游评测循环复刻的**：一个 Sample = 一个（persona, 检查点），记忆只喂到该检查点
+——**不读未来**，代价是投喂量 ≈ 5.4×（见 `eval/datasets/medmemorybench.py` 的 docstring）。
 
 ---
 
@@ -131,7 +229,20 @@ async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="
 | ScriptMem | **CC BY-NC 4.0** | `scriptmem_readme.md:9` + `:183` |
 | PersonaMem v2 | **CC BY 4.0** | `pmv2.md:2` 的 YAML frontmatter：`license: cc-by-4.0` |
 | LongMemEval | **MIT** | ⚠ 归档内**仍**无依据（`lme_readme.md` 无 License 章节，`grep -ni licen` 零命中）。**从上游取到出处**：HF `xiaowu0162/longmemeval-cleaned` 数据集卡 `license: mit`，且 `github.com/xiaowu0162/LongMemEval-V2` 仓内有 `LICENSE` 文件——**两条独立出处，但都不在归档里** |
-| BEAM / CL-Bench | **归档内无许可证文本** | ❌ |
+| CL-Bench | **归档内无许可证文本** | ❌（BEAM 那份见下面的 `official-extra` 表） |
+
+**`official-extra` 那 8 个**（依据同样在本目录里逐份核过）：
+
+| 数据集 | 许可 | 归档内的原文依据 |
+| ---- | ---- | ---- |
+| MQuAKE-Remastered | **CC-BY-4.0** | `mquake-remastered/README.md` frontmatter：`license: cc-by-4.0` |
+| BEAM（100K 档） | **CC BY-SA 4.0** | `beam/README.md:73` frontmatter + `:166` `## 📄 License` 段（**上一节那份 BEAM 的"归档内无依据"到此为止**） |
+| PersonaMem-v2（text/benchmark） | **CC BY 4.0** | `personamem-v2/README.md` frontmatter（与 `pmv2.md` 同一份卡） |
+| TempReason | **CC BY-SA 3.0** | `tempreason/README.md` frontmatter：`license: cc-by-sa-3.0` |
+| CorporateBench（zenith） | **Apache-2.0** | `corporatebench/LICENSE` 文件 + README frontmatter：`license: apache-2.0` |
+| MedMemoryBench（zh） | ⚠ **两处冲突** | `medmemorybench/README.md` frontmatter 写 **CC BY-NC-SA 4.0**；流量报告记 GitHub 侧写 **CC BY 4.0**（该侧依据未落进归档） |
+| MemTrapBench | ⚠ **unknown** | ❌ 整仓**没有** LICENSE 文件，README 也无许可字样（GitHub API 的 `license` 字段同为 `None`） |
+| Doc-PP | ⚠ **归档内无依据** | ❌ README 与仓内文件都没有许可文本；流量报告记为 CC BY 4.0（**单边来源**） |
 
 ### 两条必须记住的推论
 
@@ -154,3 +265,13 @@ async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="
 | **检索结果 → `memories` 字段的映射** | ❌ **在 AML 那一侧，归档里看不到**（§11.3）——这正是 S1 只能靠 Smoke 消除的原因 |
 
 **另外**：LongMemEval 的 pipeline 文件**原归档缺失，已从上游补入**（`pipeline_longmemeval-s.py`）——PRD 里"LoCoMo-Refined / LongMemEval 契约相同"这条断言，**因此不再只靠 LoCoMo 那一份文件作证**。
+
+
+### ⛔ 两个数据集**不做本地评测**（2026-09-30，逐条查过）
+
+| 数据集 | 为什么做不了 | 查到什么程度 |
+| --- | --- | --- |
+| **ScriptMem** | **剧本正文没有任何公开来源**：上游 `README` 明写"因版权不发布对话正文"，**实测**它 `data/raw/{angry,enemy,friends,man_earth}.json` 的 `conversation` 字段只有 **252–381 字符的 `format_example`**（四份逐份核过）；HF 上搜 `scriptmem` **零命中**；仓里只有题（`data/public/questions.jsonl`，已归档） | ⛔ **唯一副本在请求采集里**——但那不是"从原链接下载"，按团队口径不采用 |
+| **Doc-PP** | 官方作答端**只认 PDF 图像**（`--doc-mode pdf\|image`），而我们的服务返回**文本证据** ⇒ 接了也测不了自己 | 数据保留在归档（`doc-pp/`，清单里 36 项），**只是不接进评测**；它解出来的 `data/` 是派生物，**不留在磁盘上** |
+
+> ⚠ 两条都**保留归档**（题目 / PDF 都在，出处与哈希照旧）——不做评测不等于把它删掉。

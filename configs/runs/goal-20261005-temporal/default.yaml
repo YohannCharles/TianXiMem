@@ -1,0 +1,36 @@
+models:
+  embedder: qwen3-embedding-8b
+storage:
+  sqlite:
+    busy_timeout_ms: 5000
+  qdrant:
+    collection: memories
+retrieval:
+  prefetch_limit: 200
+  rrf:
+    k: 61
+    weights:
+    - 0.5
+    - 0.5
+  query_instruction: ''
+  linked_source_statements: true
+  statement_source_limit: 12
+  statement_hop_limit: 4
+  scoped_temporal_statements: true
+neighbor:
+  expansion_seed_limit: 1000
+  radius: 0
+  seed_placement: keep
+budget:
+  max_tokens: 117760
+  tokenizer: o200k_base
+packaging:
+  inject_abs_time: true
+  annotate_relatives: true
+rerank:
+  enabled: true
+  envelope: query
+  timeout_seconds: 30.0
+capture:
+  enabled: true
+  max_bytes: 52428800

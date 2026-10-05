@@ -26,8 +26,9 @@ runs/              每次 run 的原始产出（**gitignored**，见下）
 | --- | --- | --- |
 | **结果** | 端到端**总分** | §13 |
 | | **七个维度子分**（逐维） | §3.2 / §14 |
+| | **`breakdown.partial_credit`（部分分，⚠ 不进总分）** | 见下 |
 | **配置指纹** | profile（`local` / `submit`）、各开关状态、**配置快照 hash** | §13 |
-| **数据指纹** | 数据集 + 版本 + **切批口径** | §13 |
+| **数据指纹** | 数据集 + 版本 + **切批口径** + **`add_shape`（add 正文形态）** | §13 |
 | **模型** | embedder / LLM / reranker 各自的标识 | §12.1 R1 |
 | **阶段** | 属于哪个 Step | §16 |
 | **§14 指标** | Agent Trigger Rate · 平均轮数 / Rewrite 次数 · latency/query · embedding API 调用数 | §14 |
@@ -37,6 +38,35 @@ runs/              每次 run 的原始产出（**gitignored**，见下）
 > `TIANXIMEM_METRICS_PATH` 的快照，runner 读进 `metrics=`）；embedding 调用数与
 > Agent Trigger Rate 的发射方还没接。**逐项状态见
 > [`../../src/tianximem/observability/CLAUDE.md`](../../src/tianximem/observability/CLAUDE.md)**——本文件不另列一份。
+
+### ⚠ `breakdown.partial_credit`：**不进总分**的那一列（2026-10-03）
+
+只对**判分方本来就给出部分分**的数据集存在（**CL-Bench / CorporateBench**）：
+`{"mean": …, "n": …}`，逐类还有 `partial`。**给不出的数据集写 `mean=None, n=0`**
+（同 `_accuracy` 的纪律：空集合不写 `0.0`，那会被读成"全错"）。
+
+CorporateBench 每题传递标量 exact-match / 列表 set-F1，完整 QA 均分另写入
+`scores.dataset_score`（带 `metric` / `mean` / `n` / 本地复现范围）。
+`overall` 保留二值完全匹配准确率，两者不能混用；它也不代表 AML 榜分。
+实现与重判记录见 [修复报告](corporatebench-fix-20261004.md)。
+
+**为什么需要它**：CL-Bench 的官方分是**全有全无**的 LLM rubric 判分
+（[`../../benchmark_data/clb_pipeline.py`](../../benchmark_data/clb_pipeline.py) 的判分 prompt 原文：
+`strict, all-or-nothing … The final score is binary`）——一道题从 0 翻到 1 要**每一条**
+rubric 都满足 ⇒ **中间的所有进展在 `overall` 里都看不见**。实测有题
+`rubric_clbench_score=0` 而 `requirement_ratio=0.50`（14 条里满足 7 条）：
+二值分下它和"一条都没满足"**完全一样**。
+
+⇒ 归档裁判本来就写着 `requirement_ratio`，本仓把它接成部分分：
+
+| 用途 | 看哪个 |
+| --- | --- |
+| **对齐榜分 / 报对外数字** | **`overall`**（二值那一列） |
+| **判断一个改动有没有效果** | **`partial_credit`**（分辨率高得多） |
+
+⛔ **它不是榜分**——别把它当"我们的分数变好了"。守它的用例在
+[`../../tests/test_harness.py`](../../tests/test_harness.py)：
+`test_partial_credit_is_aggregated_but_never_touches_overall` 钉住"它一个字都不许进 `overall`"。
 
 ### ⚠ 七个维度必须逐维记录
 

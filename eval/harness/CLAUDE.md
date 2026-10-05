@@ -7,9 +7,40 @@
 ```text
 driver.py      喂 Add、调 Search（**走 HTTP**）、收集返回
 batching.py    模拟 AML 切批（20 条那一路）
+add_shape.py   模拟 AML **正文形态**（`<标签>: …` 前缀 + `system` 折叠）——线上就是这么发的
 judge.py       包住 AML pipeline 的裁判
 run_record.py  每次 run 的配置指纹 + 数据指纹 + 结果
 ```
+
+> **`batching.py` 与 `add_shape.py` 是同一类东西**：都在回答"本地发的像不像线上"。
+> 切批决定**批界落在哪**，形态决定**正文长什么样**——两者都进数据指纹，
+> **两者都不能拿不同口径的分数互比**。
+
+---
+
+## ⚠ `Add` 的 payload 不是我们造的——它由 AML 造
+
+这是 `add_shape.py` 存在的全部理由。**全量实测**官方 43,272 条 add / 454,937 条消息：
+
+| 观测 | 数 |
+| --- | --- |
+| 正文带 `<标签>: ` 前缀 | **93.9%** |
+| ├ 标签 == `role`（`user:` / `assistant:` 小写） | 82.9% |
+| ├ 标签是说话人名或固定词（`Caroline:` / `Corpus:` / `source:` / `document:` …） | 10.9% |
+| `role` 的取值域 | **只有 `user` / `assistant`，零 `system`** |
+
+⇒ 缺省口径是 **`official`**：逐数据集加实测到的标签、`system` 折进 user 侧。
+`native`（数据集原始形状）**只作对照**，`alluser`（把 role 全折成 user）是**判分池那一簇**
+的形态——三个取值都进数据指纹。
+
+**`system` 折叠是逐字节证明的**：`benchmark_data/clbench.jsonl:24` 的 raw `messages[0]`
+是 `role="system"`，官方发的是 `role="user"` + `user: …`。它**不是排版**——D24 下
+"一段连续 user + 紧随的非 user"才合并（D29），而**折叠会把 `system` 变成那段 user 里的
+一条**、从而改变**哪一条是"最后一条"**（D32 只配最后一条）⇒ 块的个数与内容都会变。
+
+> 逐数据集的标签表、三个取值的边界、`alluser` 为什么进不了缺省值，都在
+> [`add_shape.py`](./add_shape.py) 的模块 docstring 里——**本文件不复制那张表**。
+
 
 > **"打 HTTP、不 import `src/`"这条边界在 [`../CLAUDE.md`](../CLAUDE.md)，本目录不重复。**
 
