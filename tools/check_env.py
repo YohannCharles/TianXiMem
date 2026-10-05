@@ -87,9 +87,9 @@ def check_qdrant(url: str) -> Check:
 def _discover_model(base: str, key: str, *, prefer: str = "") -> str:
     """向网关问"你这里有哪些模型"，挑一个用。
 
-    ⚠ **为什么要问而不是写死**：模型 id 是**服务端**的事，2026-09-28 的网关迁移把它
-    从 `Qwen/Qwen3-Embedding-8B` 改成了 `qwen3-embedding-8b`——写死就得到一个
-    **永远红的探针**（而"永远红"和"真的坏了"在屏幕上长得一样，最后会被人关掉）。
+    ⚠ **为什么要问而不是写死**：模型 id 是**服务端**的事，随网关部署而变——
+    写死就得到一个**永远红的探针**（而"永远红"和"真的坏了"在屏幕上长得一样，
+    最后会被人关掉）。
 
     ⚠ 也**不读配置层**（本工具的纪律：配置层自己坏了时它还得能跑）。
     `prefer` 给了就用它（例如 `.env` 里的 `TIANXIMEM_RERANKER_MODEL`），否则取 `/v1/models`
@@ -186,7 +186,7 @@ def check_reranker(base: str, key: str, model: str = "") -> Check:
         response.raise_for_status()
         body = response.json()
         # ⚠ **容器名收两个**（`results` / `data`）——与 `RemoteReranker._parse` 同一口径：
-        #   网关侧换过两次信封，而本层**只验连通性**，没有理由比客户端更严格。
+        #   网关侧的信封并不稳定，而本层**只验连通性**，没有理由比客户端更严格。
         results = body.get("results", body.get("data"))
         if not isinstance(results, list):
             return Check(

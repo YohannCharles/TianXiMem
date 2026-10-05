@@ -1,7 +1,7 @@
 """路由——**薄**。
 
 > `service/CLAUDE.md`：本层只做两件事——**钉死契约形状、保持可重试**
-> （**不串行化 Add**：位置是请求的纯函数，D25）。
+> （**不串行化 Add**：位置是请求的纯函数，D28）。
 > 所以这里只做 `HTTP/schema → 编排` 的映射，**不重新实现** pairing / embedding /
 > Qdrant / packaging 的任何逻辑（它们全在 `pipeline.py` 往下调）。
 

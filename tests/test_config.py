@@ -386,10 +386,8 @@ def test_submit_profile_changes_only_the_embedder(config_dir: Path) -> None:
     （集合 `memories`，精排开关由 `default.yaml` 定），submit 只该在上面加模型名，
     以及将来重标定出来的那几个量。集合名尤其不能在这儿改——覆盖它的是 `local.yaml`。
 
-    ⚠ **`rerank.enabled` 断言的是"继承"，不钉具体值**：它在 2026-09-29 当天被翻过两次
-    （服务端精排 OOM ⇒ 临时改 `false` ⇒ 修好后当天翻回 `true`，见 `configs/default.yaml`
-    的注释）。钉死某个值的话，基线每动一次这条用例就红一次，而它要守的从来不是那个值——
-    是"**submit.yaml 不得与基线不同**"。
+    ⚠ **`rerank.enabled` 断言的是"继承"，不钉具体值**：钉死某个值的话，基线每动一次
+    这条用例就红一次，而它要守的从来不是那个值——是"**submit.yaml 不得与基线不同**"。
     """
     base = _load(config_dir)
     submit = _load(config_dir, **{ENV_PROFILE: "submit"})

@@ -54,7 +54,6 @@ from typing import ClassVar, Final
 
 from eval.experiments.arms import Arm as ArmBase
 from eval.experiments.arms import Spec
-from eval.experiments.arms import base_drift as base_drift
 from eval.experiments.arms import freeze as freeze
 from eval.experiments.arms import main as main
 from eval.experiments.arms import verify as verify
@@ -62,9 +61,7 @@ from eval.experiments.arms import verify as verify
 SPEC: Final[Spec] = Spec(
     label="T1",
     generator="t1_timestamp.py",
-    note=(
-        "#   ↑ 集合必须分开：两臂的向量不同，混在一个集合里检索到的是哪一臂**看不出来**。\n"
-    ),
+    note=("#   ↑ 集合必须分开：两臂的向量不同，混在一个集合里检索到的是哪一臂**看不出来**。\n"),
     prog="t1_timestamp.py",
     description="§13 的 T1 实验脚手架",
     compare_labels=("plain", "dated"),

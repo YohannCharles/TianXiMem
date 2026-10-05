@@ -10,8 +10,8 @@
 
 | 目录 | 负责什么 | PRD |
 | --- | --- | --- |
-| [`service/`](./service/) | HTTP 层：两个业务端点 + `/health` 探活、请求/响应模型、Add/Search 编排 | §2.1、§15 → **D25** |
-| [`pairing/`](./pairing/) | **记忆块组合（一次 Add = 唯一边界，D24）**；**位置取自 `request_id`（D25）** + 幂等守卫 + 落库 | §6.2、§6.5（D24 后的口径）、§15 → **D25** |
+| [`service/`](./service/) | HTTP 层：两个业务端点 + `/health` 探活、请求/响应模型、Add/Search 编排 | §2.1、§15 → **D28** |
+| [`pairing/`](./pairing/) | **记忆块组合（一次 Add = 唯一边界，D24）**；**位置 = `(request_id, local_index)`（D28）** + 幂等守卫 + 落库 | §6.2、§6.5（D24 后的口径）、§15 → **D28** |
 | [`store/`](./store/) | SQLite 真源 + Qdrant 派生索引 + 邻域查询的 SQL | §6.1、§6.3 |
 | [`embed/`](./embed/) | `Embedder` 协议 + 两个实现 + **落盘向量缓存** | §7.4、§7.2 |
 | [`retrieve/`](./retrieve/) | BM25；dense；**混合检索的策略与参数所有权**；Evidence Checker（**到 rerank 为止**） | §7.1–§7.3、§8 |

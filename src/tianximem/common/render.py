@@ -144,11 +144,15 @@ def render(question: str | None, answer: str | None, *, date: str = "") -> str:
 
 
 def render_pair(pair: object, *, inject_abs_time: bool = False) -> str:
-    """**一个 QA 对（鸭子类型）→ 它的渲染文本**——索引侧与 Search 侧的**唯一入口**。
+    """**一个 QA 对（鸭子类型）→ 它的渲染文本**——索引侧与精排输入的**唯一入口**。
 
-    它存在的理由是那三个调用点（索引 / 精排输入 / content）必须**一字不差地**用同一条
-    渲染路径：日期口径只要有一处取错（比如拿 Add 的到达时间兜底），"命中的是什么"与
-    "模型读到的是什么"就分叉了——**而分叉不报错**（不变式 I1）。
+    它存在的理由是那几个调用点（索引 / 精排输入 / content）必须用**同一条日期口径**：
+    只要有一处取错（比如拿 Add 的到达时间兜底），"命中的是什么"与"模型读到的是什么"
+    就分叉了——**而分叉不报错**（不变式 I1）。
+
+    ⚠ `content` 那一路**不走本函数**：它由 `rank/neighbor.py` 的 `_build_segment._text()`
+    用 `render()` + `render_date()` 拼出（为了接上 `annotate()`）——那是 I1 的**一个声明式例外**，
+    见 [`../rank/CLAUDE.md`](../rank/CLAUDE.md) §4。
 
     只要求对象有 `question` / `answer` / `event_time` 三个属性
     （[`../store/qdrant_store.py`](../store/qdrant_store.py) 的 `index_pairs` 本来就是这个立场：

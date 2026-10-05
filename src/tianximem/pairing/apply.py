@@ -131,9 +131,7 @@ class ApplyBatchResult:
         return len(self.new_pair_ids)
 
 
-def _neighbour_id(
-    batch: AddBatch, local_index: int | None
-) -> str | None:
+def _neighbour_id(batch: AddBatch, local_index: int | None) -> str | None:
     """把"同批第几个块"翻成 `memory_id`（`None` 原样返回 = 链端）。"""
     if local_index is None:
         return None

@@ -84,47 +84,29 @@ Adapter 计数的词时确定性分段」。出处：[`contract.md`](./contract.
 ```
 
 ——**不透明、没有 `chunk-`、没有序号**；那一条的 `error` 是 `ValueError`（旧解析取不到序号），
-服务回 **500**。⇒ 也就是本表当初预言的那个形状：**Add 全挂**。
+服务回 **500**。⇒ 本表登记的那个风险成真了：**Add 全挂**。
 
 **处置**：**D28** —— `request_id` 回到 **opaque string**，位置改成 `(request_id, local_index)`，
 邻接改成 **Add 内显式链**（`prev` / `next`），扩窗与段合并都只在这条链上走。
 那条解析逻辑与 `ingest.chunk_ordinal_pattern` 一起**删除**（见 [`decisions.md`](./decisions.md) 的 D28）。
 
-> ⚠ **下面那两条"间接路子"（SQL 判据 / 问主办方）已经用不上了**，留在这里只作为沿革记录：
-> 既然不再从 `request_id` 里读任何东西，"那个序号可不可信"就不再是一个问题。
+> ⚠ **对当前实现，「序号可不可信」已经不是问题**——D28 之后不从 `request_id` 里读任何东西。
+> 留着这一节，是因为下面那条「要不要换成 ReFind 那套」仍取决于它的答案。
 
 **为什么认为它就在请求里**：ReFind 用正则从 `request_id` 里解析 chunk 序号
 （[`../eval/baselines/refind/app/store.py`](../eval/baselines/refind/app/store.py) 的 `:50-58`）——
-**那队跑过真平台** ⇒ 这是 D25 的依据。
+**那队跑过真平台** ⇒ 这曾是 D25 的依据（见下：对**我们的**平台不成立）。
 
 **本地复现不了**：harness 是自己顺序发的，send order 必然等于 arrival order（同 S5）。
 
-> ⛔ **下面这条 SQL 判据已作废**（D28 删掉了 `chunk_ordinal` 列，而且"序号语义"
-> 这个提法本身已经不存在了）——**留在这里只作为沿革记录，别照着跑**。
-> 现在要看官方发的是什么，直接读采集文件里的原文（见上）。
-
-> ⚠ **判据（旧）**：`chunk_ordinal` 的**升序**与 `event_time` 的**升序**对不对得上。
-
-```sql
-SELECT user_id, session_id, chunk_ordinal, local_index, event_time,
-       LAG(event_time) OVER (PARTITION BY user_id, session_id
-                             ORDER BY chunk_ordinal, local_index) AS prev
-FROM qa_pairs
-WHERE event_time IS NOT NULL;
--- 若 chunk 序号真的表示会话序，event_time < prev 的行应当**几乎不存在**
-```
-
-> 若这条真出现**同一 session 内连续多处**，那说明**序号不是会话序**（是别的什么计数）
-> ⇒ 要么改 `ingest.chunk_ordinal_pattern` 取别的字段，要么退回"按到达顺序"。
-> ⚠ **两种"正常"也会让它非 0**：①该 session 的 `event_time` 整段缺失；
-> ②**对话本身在时间上回跳**（回忆、倒叙）。⇒ 判据是"**连续多处**"，不是"出现一处"。
+> ⛔ **别再去解析 `request_id`**——D28 已定它是 opaque string，看官方发的是什么就
+> 直接读采集文件里的原文（见下）。
 
 **最直接的一条路：把官方发来的请求原文记下来**（`capture.enabled`，2026-09-29 落地）。
 打开它跑一轮，`/add` 与 `/search` 的**原始请求体**就落在
 `var/capture/requests.jsonl`（容器里是 `/data/capture/requests.jsonl`，在卷里可 `docker cp`）——
-每一行都有 `request_id` 与 `chunk_ordinal`，**后者为 `null` 就是"服务当前解析不出来"**。
-它比上面那条 SQL 判据直接：SQL 只能看"序号与时间对不对得上"，而这里看到的是
-**官方原样发来的那个字符串**。配置项与四条纪律见
+每一行都有**官方原样发来的 `request_id` 字符串**——这是唯一一手证据。
+配置项与四条纪律见
 [`config-reference.md`](./config-reference.md) §12 与
 [`../src/tianximem/service/capture.py`](../src/tianximem/service/capture.py)。
 

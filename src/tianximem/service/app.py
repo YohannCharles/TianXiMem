@@ -91,7 +91,6 @@ logger = logging.getLogger(__name__)
 class Services:
     """装配好的对象图。测试可以直接构造它，绕开 HTTP 与网络。"""
 
-    config: AppConfig
     store: SqliteStore
     qdrant: QdrantStore
     embedder: QueryInstructionEmbedder
@@ -163,7 +162,6 @@ def build_services(config: AppConfig) -> Services:
     dense = DenseArm(embedder)
 
     return Services(
-        config=config,
         store=store,
         qdrant=qdrant,
         embedder=embedder,
@@ -178,11 +176,11 @@ def build_services(config: AppConfig) -> Services:
             qdrant=qdrant,
             retriever=HybridRetriever(store=qdrant, dense=dense),
             # ⚠ `EvidenceChecker()` **不带 instrument** ⇒ 落到 `NullCheckerInstrument`，
-            #   即**每轮判定被丢弃**。**这是刻意的，不是漏接**：真正的聚合口
-            #   `observability/` 尚未实现，而换成 `InMemory*` 会**无界增长**
-            #   （Full run 连跑 0.5–2 天，§2.2）且那串记录没有任何读取方。
-            #   ⇒ D13 的"**每轮判定必须记录**"落在 `observability/` 落地的时候，
-            #   **在那之前别把它当成已满足。**
+            #   即**每轮判定被丢弃**。**这是刻意的，不是漏接**：聚合口 `observability/`
+            #   只承接 §14 那几个量（延迟 + rerank 计数），**没有收 checker 判定的入口**；
+            #   而换成 `InMemory*` 会**无界增长**（Full run 连跑 0.5–2 天，§2.2）
+            #   且那串记录没有任何读取方。
+            #   ⇒ D13 的"**每轮判定必须记录**"**至今未满足**，别把它当成已满足。
             checker=EvidenceChecker(),
             # ⚠ 分词器**在这里就加载**（不是第一次请求时才加载）：它要联网取 BPE 文件
             #   （`common/tokens.py`），把失败暴露在**启动时**而不是某个用户的请求里。
@@ -320,9 +318,7 @@ def build_embedder(config: AppConfig) -> OpenAICompatEmbedder:
     """
 
     if config.models.embedder == TEXT_EMBEDDING_V4_MODEL:
-        return TextEmbeddingV4Embedder(
-            base_url=config.embed_base_url, api_key=config.embed_api_key
-        )
+        return TextEmbeddingV4Embedder(base_url=config.embed_base_url, api_key=config.embed_api_key)
     return Qwen3EmbeddingEmbedder(
         base_url=config.embed_base_url,
         api_key=config.embed_api_key,

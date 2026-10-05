@@ -79,7 +79,7 @@
 
 > **检索只有混合一种形态**（D15）：参照点由**混合主路径自身**承担（§13）。
 
-**存储分工不可互换**（§6.3）：**SQLite 是真源**（QA 对正文、`status`、位置 `(chunk_ordinal, local_index)`、`event_time`），**Qdrant 是派生索引**（向量 + 过滤键 payload，**不含正文**，坏了可从 SQLite 全文重建）。
+**存储分工不可互换**（§6.3）：**SQLite 是真源**（QA 对正文、`status`、位置 `(request_id, local_index)`、`event_time`），**Qdrant 是派生索引**（向量 + 过滤键 payload，**不含正文**，坏了可从 SQLite 全文重建）。
 
 **索引单元 = 一个 QA 对**（不是一个 message），一对一个向量。一个 QA 对 = **一段连续 user 消息，加上直到下一条 user 消息为止的全部非 user 消息**（§6.2；理由见 [D20](docs/decisions.md)）。
 

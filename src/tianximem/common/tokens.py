@@ -58,7 +58,11 @@ class TokenCounter(Protocol):
 
     @property
     def name(self) -> str:
-        """分词器标识（进 run record 的配置指纹——换分词器会改变能装几条）。"""
+        """分词器标识（换分词器会改变"能装几条"）。
+
+        ⚠ **当前无消费方**——两个实现都提供它，但没有任何地方读。
+        要拿它做 run record 的配置指纹时得先真的接上（`budget.tokenizer` 是另一个家）。
+        """
         ...
 
     def count(self, text: str) -> int:

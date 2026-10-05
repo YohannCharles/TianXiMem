@@ -84,9 +84,8 @@ _STEP: Final[int] = 2 * DEFAULT_RADIUS + 3
 def _ids(store: SqliteStore, count: int, *, step: int = _STEP, session_id: str = "s1") -> list[str]:
     """`count` 个**互不相邻**的候选 ⇒ 一候选一段、彼此不扩窗。
 
-    ⚠ **D25**：落库走 `seed_line`（把 `0..max` 落满）——`seq` 在**已有的行**上现算，
-    只落 0,5,10 的话它们会挨着（= 这段对话里就这三块），那就该合并成一段了。
-    落满之后中间那些是"**存在但没被选中**"，缺口才是真的。
+    ⚠ 落库走 `seed_line`（把 `0..max` 落满，理由见它的 docstring）——只落 0,5,10 的话
+    反而是"这段对话里就这三块"。落满之后中间那些是"**存在但没被选中**"，缺口才是真的。
     """
     return seed_line(
         store,
@@ -660,9 +659,7 @@ def test_rerank_input_is_the_query_plus_every_candidate_text(wired: Wired) -> No
 
     assert fake.queries == ["火车几点开"]
     # 候选落在会话位置 0 / _STEP / 2*_STEP 上（`_ids` 的约定）⇒ 期望文本按同一约定拼
-    assert fake.documents == [
-        [render(f"q{i * _STEP}", f"a{i * _STEP}") for i in range(3)]
-    ]
+    assert fake.documents == [[render(f"q{i * _STEP}", f"a{i * _STEP}") for i in range(3)]]
     # 正文确实从真源来（不是从候选里带的）——渲染里带着库里的事实
     assert fake.documents[0][0] == "Q: q0\nA: a0"
 
@@ -743,11 +740,15 @@ def test_rank_zero_after_rerank_is_the_expansion_seed(wired: Wired) -> None:
     """
     # ⚠ 邻居必须是**同一次 Add 内**的相邻块（D28）⇒ 用 `seed_line` 一次落两条
     s1 = seed_line(
-        wired.store, range(2), session_id="s1",
+        wired.store,
+        range(2),
+        session_id="s1",
         qa=lambda i: ("n-s1", "x") if i == 0 else ("A", "a"),
     )
     s2 = seed_line(
-        wired.store, range(2), session_id="s2",
+        wired.store,
+        range(2),
+        session_id="s2",
         qa=lambda i: ("B", "b") if i == 0 else ("n-s2", "y"),
     )
     a, b = s1[1], s2[0]
@@ -955,8 +956,8 @@ def test_rerank_does_not_change_content_or_created_at(wired: Wired) -> None:
     import datetime as dt
 
     ids = _ids(wired.store, 3)
-    # ⚠ 中间那些位置要**落满**：`seq` 在已有的行上现算，不落的话 `a` 的 `seq`
-    #   会正好排在 ids[2] 的下一格 ⇒ 两者相邻 ⇒ 并进同一段（与 `_ids` 里那条同一个道理）
+    # ⚠ 中间那些位置要**落满**（与 `_ids` 里同一条道理，见 `seed_line` 的 docstring）——
+    #   不落的话 `a` 会正好接在 ids[2] 后面 ⇒ 并进同一段
     far = 4 * _STEP
     for pos in range(3 * _STEP + 1, far):
         _seed(wired.store, pos)

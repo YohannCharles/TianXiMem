@@ -146,18 +146,14 @@ RRF_K: Final[int] = 61
 #: 宽扩窗 +3.5pt 且无倒退（`eval/reports/ledger.md` 的 N1 一节）。它与 `default.yaml`
 #: 里的取值**必须一致**——两处不一致时，"代码默认值 vs 配置默认值"就又分叉了。
 DEFAULT_EXPANSION_SEED_LIMIT: Final[int] = 1000
-DEFAULT_RADIUS: Final[int] = 2  # 同日 1 → 2，与 `default.yaml` 同一条证据链
+DEFAULT_RADIUS: Final[int] = 2
 
 #: `neighbor.seed_placement` 的取值域（§11.2 的组内顺序消融，2026-09-25）。
 SEED_PLACEMENTS: Final[tuple[str, ...]] = ("keep", "front", "echo")
 
-#: ~~`ingest.chunk_ordinal_pattern`~~ —— **已删除（D28）**。
-#:
-#: 它曾经是"从 `request_id` 里正则取 chunk 序号"的那个模式（D25 的位置模型）。
-#: 平台实发的是 `r_3115…` 这种**不透明 id**（2026-09-29 用请求采集抓到的真实请求），
-#: 于是那条路在真实流量上 **100% 失败**（`ValueError` → 500 → Add 全挂）。
-#: D28 把整个 `ingest` 配置段一并删掉：`request_id` 现在是 opaque string，
-#: 位置 = `(request_id, local_index)`。**不要再加回任何"解析 request_id"的配置项。**
+#: ⛔ **本层没有任何 `ingest.*` 键**：`request_id` 是 **opaque string**，
+#: 位置 = `(request_id, local_index)`（D28）。**不要再加回任何"解析 `request_id`"的配置项**
+#: ——平台实发的是 `r_3115…` 这种不透明 id，那条路在真实流量上 100% 失败。
 
 #: §7.3 的两个检索参数初值：每路进入 RRF 的候选池大小（`N`）与 `[w_bm25, w_dense]` 权重。
 #:
@@ -185,8 +181,8 @@ DEFAULT_RERANK_TIMEOUT_S: Final[float] = 30.0
 #:
 #: 两个自托管网关的线格式**互斥**，而且**填错哪边都不报错**：
 #:
-#: * `"queries"` —— **vLLM 原生 score 形状**（`queries: [...]`，数组）。`memory3.021130.xyz`
-#:   （2026-09-28 迁移后的提交口径）。给它发 `query` ⇒ **400**。
+#: * `"queries"` —— **vLLM 原生 score 形状**（`queries: [...]`，数组）。提交期的主网关
+#:   `memory3.021130.xyz` 就是这一档。给它发 `query` ⇒ **400**。
 #: * `"query"` —— **自研封装**的形状（单数字符串）。本机自托管网关
 #:   （容器里 `host.docker.internal:9002` → 宿主机 `127.0.0.1:8082`），
 #:   给它发 `queries` ⇒ **422**。
@@ -296,10 +292,10 @@ class NeighborConfig:
     radius: int = DEFAULT_RADIUS
     #: 段内**种子放在哪**（§11.2 的"组内顺序"，明文列为可消融项）。
     #:
-    #: * `keep`（默认）：纯位置（读时稠密序 `seq`）时间序，
+    #: * `keep`（默认）：纯位置（`local_index`）时间序，
     #:   种子在它本来的时间位置上
     #: * `front`：种子移到**段首**，其余照时间序 —— ⚠ **段内时间连续性会断**，
-    #:   而"窗口是一段连续对话、按时间序读才成立"正是 §11.2 当初选时间序的理由
+    #:   而"窗口是一段连续对话、按时间序读才成立"正是 §11.2 选时间序的理由
     #: * `echo`：种子在段首**重复一遍**，下面**完整的时间序块原样保留** ——
     #:   时间是连续的，代价是多花一对的 token（实测 ≈ +3.5%）
     #:

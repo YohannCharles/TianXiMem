@@ -23,9 +23,8 @@
 | embedding API 调用数 / 缓存命中率 | ⬜ 发射方 `embed/` 还没发 |
 | Agent Trigger Rate · 平均轮数 · Rewrite 次数 | ⬜ 发射方 `agent/` 属于 v2（D13） |
 
-⚠ **为什么 rerank 那几个量非要有出口**：它们**原本只活在 `SearchPipeline` 的实例属性上**，
-而响应里装不下（契约）、`contract-check` 的 14 条**全部照样通过** ⇒
-**端点长期挂掉不会让任何东西变红**
+⚠ **为什么 rerank 那几个量非要有出口**：它们在响应里装不下（契约），所以**只看响应和
+`contract-check` 的 14 条，端点长期挂掉不会让任何东西变红**
 （[`../../../docs/open-questions.md`](../../../docs/open-questions.md) 的 **V12**）。
 本模块就是那条出口；读法见 `SnapshotMetricsSink.snapshot()` 的 `note`。
 """

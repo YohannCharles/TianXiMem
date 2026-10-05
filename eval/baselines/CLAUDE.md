@@ -37,9 +37,8 @@ invmem-candidate/     InvMem 的**候选映射**（无 LICENSE，**只研读**�
 
 ### ✅ 工作量**已估**（2026-09-26）：**不需要"包一层服务"**，因为它本身就是兼容服务
 
-> [决策记录](../../docs/decisions.md) 待决事项 #5 原先的假设是"ReFind 是方法实现，要给它包
-> 一层 Add/Search 服务"——**核过代码后发现不成立**：[`refind/app/main.py`](./refind/app/main.py)
-> 已经是一个 **AML 兼容的 Add/Search 服务**（`/add` `/search` 短别名 + `/v1/memories/*`，
+> **不需要给它包一层 Add/Search 服务**：[`refind/app/main.py`](./refind/app/main.py)
+> 本身就是一个 **AML 兼容的 Add/Search 服务**（`/add` `/search` 短别名 + `/v1/memories/*`，
 > `description="Agent Memory Leaderboard-compatible Add/Search service."`），
 > 请求/响应形状与我们的 driver **逐字段对得上** ⇒ **包装量 ≈ 0**。怎么跑：
 
