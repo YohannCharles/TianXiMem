@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import Final
 
 from eval.datasets import Sample
+from eval.datasets.beam import PIPELINE as BEAM_PIPELINE
 from eval.datasets.clbench import PIPELINE as CLB_PIPELINE
 from eval.datasets.locomo import PIPELINE as LOCOMO_PIPELINE
 from eval.datasets.longmemeval import PIPELINE as LME_PIPELINE
@@ -85,15 +86,42 @@ _PIPELINES = {
     "locomo-refined": LOCOMO_PIPELINE,
     "longmemeval-s": LME_PIPELINE,
     "clbench": CLB_PIPELINE,
+    "beam": BEAM_PIPELINE,
 }
+
+#: **我们自己写的** pipeline——官方没有发布这三份的（见
+#: [`extra_pipeline.py`](./extra_pipeline.py) 的 docstring：它不是契约，分数只在仓内比）。
+_LOCAL_PIPELINES = {
+    "mquake-remastered": "extra_pipeline.py",
+    "memtrapbench": "extra_pipeline.py",
+    "corporatebench": "extra_pipeline.py",
+    "medmemorybench": "extra_pipeline.py",
+    "tempreason": "extra_pipeline.py",
+}
+
+#: **适配器**型 pipeline：脚本住在仓库里，但**判分逻辑来自归档那份官方实现**
+#: （它的 `evaluate` 形状与通用两子命令不同，见
+#: [`personamem_pipeline.py`](./personamem_pipeline.py)）。
+#: ⚠ 它们**不在** `EXTRA_DATASETS` 里——输入项走**官方那套 `speaker_*_memories`**，
+#: 不是我们自定的 `retrieved_context`。
+_ADAPTER_PIPELINES = {
+    "personamem-v2": "personamem_pipeline.py",
+}
+
+#: 走 `_LOCAL_PIPELINES` 的数据集——`build_input_items` 也按它分派。
+EXTRA_DATASETS = frozenset(_LOCAL_PIPELINES)
 
 
 def pipeline_for(bench_dir: Path, dataset: str) -> Path:
-    """取归档里的 pipeline 脚本路径。"""
+    """取 pipeline 脚本路径：**官方的在归档里、我们写的（含适配器）在本目录**。"""
+    if dataset in _LOCAL_PIPELINES:
+        return Path(__file__).resolve().parent / _LOCAL_PIPELINES[dataset]
+    if dataset in _ADAPTER_PIPELINES:
+        return Path(__file__).resolve().parent / _ADAPTER_PIPELINES[dataset]
     try:
         name = _PIPELINES[dataset]
     except KeyError:
-        raise ValueError(f"未知数据集 {dataset!r}——没有对应的归档 pipeline") from None
+        raise ValueError(f"未知数据集 {dataset!r}——没有对应的 pipeline") from None
     return Path(bench_dir) / name
 
 
@@ -106,6 +134,19 @@ class JudgeResult:
     label: str
     judge_response: str
     generated_answer: str
+    #: **部分分**（0–1），只有**判分方本来就给出它**的数据集才有；给不出就是 `None`。
+    #:
+    #: 为什么需要它：CL-Bench 的官方分是**全有全无**的（`clb_pipeline.py` 的判分 prompt
+    #: 原文："strict, all-or-nothing … The final score is binary"）——一道题从 0 翻到 1
+    #: 要**每一条** rubric 都满足，**中间的所有进展都看不见**。实测某题
+    #: `score=0.0` 而 `requirement_ratio=0.50`（14 条里满足 7 条）⇒ 它和"一条都没满足"
+    #: 在二值分下**完全一样**。
+    #:
+    #: ⛔ **它不进 `overall`**：榜分是二值那一列，`partial` 只是**本地仪器**，
+    #: 用来让"改进有没有效果"在低分辨率的数据集上也能被看见（见 `summarize` 的
+    #: `partial_credit`）。CorporateBench 在这里传递标量 EM / 列表 set-F1，
+    #: 同时在 run record 的 `scores.dataset_score` 记录其数据集指标。
+    partial: float | None = None
 
 
 #: 日期前缀的形状——**与 `src/tianximem/common/render.py` 的 `DATE_PREFIX` 必须逐字相同**
@@ -270,6 +311,18 @@ def build_input_items(
     """
     if sample.dataset == "clbench":
         return _build_clbench_items(sample, hits_by_qid)
+    if sample.dataset == "beam":
+        return _build_beam_items(
+            sample, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
+        )
+    if sample.dataset == "personamem-v2":
+        return _build_personamem_items(
+            sample, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
+        )
+    if sample.dataset in EXTRA_DATASETS:
+        return _build_extra_items(
+            sample, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
+        )
 
     items = []
     for question in sample.questions:
@@ -292,6 +345,39 @@ def build_input_items(
             _warn_truncated(question.qid)
         item[memory_field] = text
         items.append(item)
+    return items
+
+
+def _build_extra_items(
+    sample: Sample,
+    hits_by_qid: dict[str, list[SearchHit]],
+    *,
+    date_mode: str,
+    annotate_mark: str,
+) -> list[dict]:
+    """我们自写的三份数据集（MQuAKE / MemTrapBench / CorporateBench）的输入项。
+
+    **形状是我们定的**（官方没有发布这三份的 pipeline，也就没有可对齐的契约）：
+    记忆走一个平铺的 `retrieved_context`，题目与金标原样带上，
+    `dataset` 让 `extra_pipeline.py` 知道该用哪套判分。⇒ **分数只在仓内前后对比**。
+    """
+    items: list[dict] = []
+    for question in sample.questions:
+        hits = hits_by_qid.get(question.qid, [])
+        text = render_memories(hits, date_mode=date_mode, annotate_mark=annotate_mark)
+        text, cut = truncate_to_platform_prefix(text)
+        if cut:
+            _warn_truncated(question.qid)
+        items.append(
+            {
+                "id": question.qid,
+                "dataset": sample.dataset,
+                "question": question.question,
+                "gold_answer": question.gold,
+                "category": question.category,
+                "retrieved_context": text,
+            }
+        )
     return items
 
 
@@ -494,10 +580,28 @@ def _encoder():
     return tiktoken.get_encoding(PLATFORM_TOKENIZER)
 
 
+def _encode(encoder, text: str) -> list[int]:
+    """**唯一的编码入口**——`disallowed_special=()` 只在这里给。
+
+    ⛔ **不给这个参数会让整轮跑批崩掉，而且崩在数据上、不是崩在代码上**：
+    `o200k_base` 默认把 `<|endoftext|>` 这类**字面字符串**当成特殊 token 并**抛
+    `ValueError`**。而记忆正文里出现它完全正常——**2026-10-02 实测两条链各自死在
+    这里**：LongMemEval 的 haystack（`run-lme.out`）与 CorporateBench 的邮件正文。
+    两者的共同点是"**重跑一次还死在同一题上**"（数据没变），看起来像"这一题特别慢"，
+    **极易被误判成网络/网关问题**。
+
+    ⚠ `src/tianximem/common/tokens.py` 的 `O200kCounter.count` **一直是传的**——
+    但 harness **不许 import `src/`**（[`../CLAUDE.md`](../CLAUDE.md)），
+    所以这两个字面量**故意重复了一份**（同 `PLATFORM_TOKEN_PREFIX` 那条），
+    只能靠本注释与 `tests/test_harness.py` 的用例守。
+    """
+    return encoder.encode(text, disallowed_special=())
+
+
 def truncate_to_platform_prefix(text: str) -> tuple[str, bool]:
     """按平台规则截断；返回 `(文本, 是否截过)`。"""
     encoder = _encoder()
-    ids = encoder.encode(text)
+    ids = _encode(encoder, text)
     if len(ids) <= PLATFORM_TOKEN_PREFIX:
         return text, False
     return encoder.decode(ids[:PLATFORM_TOKEN_PREFIX]), True
@@ -550,6 +654,83 @@ def _build_clbench_items(sample: Sample, hits_by_qid: dict[str, list[SearchHit]]
     return items
 
 
+def _build_personamem_items(
+    sample: Sample,
+    hits_by_qid: dict[str, list[SearchHit]],
+    *,
+    date_mode: str,
+    annotate_mark: str,
+) -> list[dict]:
+    """PersonaMem-v2 的项——**字段名以官方 pipeline 为准**（它认 `chat_history` 与
+    `correct_answer`/`incorrect_answers`，**不认任何检索字段**）。
+
+    ⚠ **`speaker_1_memories` 照常填**（把命中放进去），但官方 pipeline **一个字节都不会读**——
+    填它只是为了让"这个数据集也走同一条 harness 流水线"，而不是假装它在用检索。
+    """
+    items: list[dict] = []
+    history = [
+        {"role": message.role, "content": message.content}
+        for session in sample.sessions
+        for message in session.messages
+    ]
+    for question in sample.questions:
+        gold = question.gold if isinstance(question.gold, dict) else {}
+        items.append(
+            {
+                "id": question.qid,
+                "question": question.question,
+                "persona_id": gold.get("persona_id"),
+                "correct_answer": gold.get("correct_answer", ""),
+                "incorrect_answers": gold.get("incorrect_answers", []),
+                "chat_history": history,
+                # 下面两个只是"形状一致"，官方不看（见 docstring）
+                "speaker_1_memories": render_memories(
+                    hits_by_qid.get(question.qid, []),
+                    date_mode=date_mode,
+                    annotate_mark=annotate_mark,
+                ),
+                "speaker_2_memories": "",
+            }
+        )
+    return items
+
+
+def _build_beam_items(
+    sample: Sample,
+    hits_by_qid: dict[str, list[SearchHit]],
+    *,
+    date_mode: str,
+    annotate_mark: str,
+) -> list[dict]:
+    """BEAM 的项——**金标是 `rubric` 列表**，记忆走 `context`。
+
+    | 字段 | 哪来的 / 为什么 |
+    | --- | --- |
+    | `id` | `answer` 步靠它跳过已完成 |
+    | `context` | `context_text()` 的**首选**键（回退链见它的实现：`context` → … → speaker 块） |
+    | `rubric` | `rubric_items()` 认的三个键之一——**判决逐条三点制**，缺了它这条直接崩 |
+    | `question_type` | 判分结果里带上（`event_ordering` 那一组另走对齐分支） |
+
+    ⚠ 记忆块按平台的 117,760 token 前缀截断，**按项截**（不切半个段）——与
+    `packaging` 的"段是原子单位"同一条理由。
+    """
+    items: list[dict] = []
+    for question in sample.questions:
+        hits, cut = _prefix_within_budget(hits_by_qid.get(question.qid, []))
+        if cut:
+            _warn_truncated(question.qid)
+        items.append(
+            {
+                "id": question.qid,
+                "question": question.question,
+                "context": render_memories(hits, date_mode=date_mode, annotate_mark=annotate_mark),
+                "rubric": list(question.gold or []),
+                "question_type": question.category,
+            }
+        )
+    return items
+
+
 def _prefix_within_budget(
     hits: list[SearchHit], budget: int = PLATFORM_TOKEN_PREFIX
 ) -> tuple[list[SearchHit], bool]:
@@ -562,7 +743,7 @@ def _prefix_within_budget(
     kept: list[SearchHit] = []
     used = 0
     for hit in hits:
-        cost = len(encoder.encode(hit.content))
+        cost = len(_encode(encoder, hit.content))
         if used + cost > budget:
             return kept, True
         kept.append(hit)
@@ -610,6 +791,56 @@ def _read_clbench_labels(answers_path: Path, labels_path: Path) -> list[JudgeRes
                     f"{str(row.get('rubric_clbench_rationale') or '')[:1500]}"
                 ),
                 generated_answer=generated.get(ident, ""),
+                # **部分分**：归档裁判本来就写 `rubric_clbench_requirement_ratio`
+                # （满足条数 / 总条数）。二值分把它扔了，`partial_credit` 把它捡回来。
+                partial=ratio,
+            )
+        )
+    return results
+
+
+def _read_beam_labels(answers_path: Path, labels_path: Path) -> list[JudgeResult]:
+    """读 BEAM 的判分产物——**它既没有 `is_correct` 也没有 `label`**。
+
+    `pipeline_beam.py` 的 `evaluate` 写的是 `llm_judge_score`（**逐条 rubric 三点制
+    0 / 0.5 / 1 的均分**）与逐条 `rubric_scores`。
+
+    ⇒ **二值化口径是我们定的**（数据集与官方 pipeline 都只报均分）：
+    **均分 == 1.0 才算 CORRECT**（逐条全中），真分原样进 `label`（`SCORE=0.50`）与
+    `judge_response` ⇒ **换阈值不用重跑裁判**——与 `extra_pipeline` 里 MemTrapBench 同一条处置。
+
+    ⚠ **`max_tokens` 从 256 提到 1024**（2026-10-03）：256 会把**裁判自己的回答**截断——
+    MemTrapBench 实测 **129/250 条的 JSON 断在中间**（129/129 根括号未闭合），
+    而解析失败一律记错 ⇒ **那一半分数是截断的产物，不是模型不会**。
+    它同时传给 `answer` 与 `evaluate` 两步（见 `run_judge` 末尾）。
+
+
+    ⚠ 它的 `evaluate` 以**追加**模式写、按 `llm_judge_score` 跳过已完成（与其余几份
+    `"w"` 覆盖不同）⇒ 被强杀会留半行，所以读之前先 `_sanitize_jsonl`。
+    """
+    generated = {
+        str(row["id"]): str(row.get("generated_answer") or "")
+        for row in (
+            json.loads(line)
+            for line in answers_path.read_text(encoding="utf-8").split("\n")
+            if line.strip()
+        )
+    }
+    _sanitize_jsonl(labels_path)
+    results: list[JudgeResult] = []
+    for line in labels_path.read_text(encoding="utf-8").split("\n"):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        ident = str(row["id"])
+        score = float(row.get("llm_judge_score") or 0.0)
+        results.append(
+            JudgeResult(
+                qid=ident,
+                is_correct=score >= 1.0,
+                label=f"SCORE={score:.2f}",
+                judge_response=str(row.get("judge_response") or ""),
+                generated_answer=generated.get(ident, ""),
             )
         )
     return results
@@ -621,7 +852,7 @@ def run_judge(
     out_dir: Path,
     *,
     dataset: str = "locomo-refined",
-    max_tokens: int = 256,
+    max_tokens: int = 1024,
     timeout: float | None = None,
 ) -> list[JudgeResult]:
     """跑 `answer` → `evaluate` 两步，返回逐题结果。
@@ -653,12 +884,16 @@ def run_judge(
 
     # `--model` / `--base-url` / `--api-key-env` 都**是死的**：这两个子命令在协程开头
     # 就用 `api_config` 的常量重写 `args.*`。所以这里一个都不传（传了只会让人以为生效了）。
-    # ⚠ **`clb_pipeline.py` 的两个子命令都不收 `--max-tokens`**（它的 `argparse` 里没有
-    #   这个选项，传了会直接 `unrecognized arguments` 退出）——**按 pipeline 代码为准**。
-    extra = [] if dataset == "clbench" else ["--max-tokens", str(max_tokens)]
+    # ⚠ **`--max-tokens` 三份收得都不一样**（**按 pipeline 代码为准**）：
+    #   · `clb_pipeline.py`：**两个子命令都不收** ⇒ 一个都别传，传了会 `unrecognized arguments`
+    #   · `pipeline_beam.py`：`answer` 收 `--max-tokens`，`evaluate` 收的是 `--judge-max-tokens`
+    #     ⇒ **只给 answer**（evaluate 那个我们沿用它的默认值）
+    #   · 其余：两个子命令都收
+    answer_extra = [] if dataset == "clbench" else ["--max-tokens", str(max_tokens)]
+    evaluate_extra = ["--max-tokens", str(max_tokens)] if dataset not in ("clbench", "beam") else []
     _run(
         pipeline,
-        ["answer", "--input", str(input_path), "--output", str(answers_path), *extra],
+        ["answer", "--input", str(input_path), "--output", str(answers_path), *answer_extra],
         timeout=timeout,
     )
     _run(
@@ -671,13 +906,15 @@ def run_judge(
             str(answers_path),
             "--output",
             str(labels_path),
-            *extra,
+            *evaluate_extra,
         ],
         timeout=timeout,
     )
 
     if dataset == "clbench":
         return _read_clbench_labels(answers_path, labels_path)
+    if dataset == "beam":
+        return _read_beam_labels(answers_path, labels_path)
 
     generated = {
         row["id"]: row["generated_answer"]
@@ -702,6 +939,7 @@ def run_judge(
                     label=row["label"],
                     judge_response=row["judge_response"],
                     generated_answer=generated.get(row["id"], ""),
+                    partial=row.get("partial"),
                 )
             )
     return results

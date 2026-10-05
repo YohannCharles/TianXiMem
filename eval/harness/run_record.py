@@ -88,6 +88,14 @@ def summarize(results: list[JudgeResult], samples: list[Sample]) -> dict[str, An
 
     **拒答题单列**：`question_id` 以 `_abs` 结尾的题**行为与其他题不同**
     （正确答案是拒答），混进总分会让一个分类的数字失真（§12.2）。
+
+    ## `partial_credit`：**不进 `overall`** 的那一列
+
+    只有判分方本来就给出部分分的数据集才有（CL-Bench / CorporateBench，见
+    [`JudgeResult.partial`](./judge.py)）。它的存在理由是**分辨率**：CL-Bench 的官方分是
+    **全有全无**的，一道题从 0 翻到 1 要每一条 rubric 都满足 ⇒ **中间进展完全看不见**
+    （实测有题 `score=0` 而 `ratio=0.50`）。⇒ 本地拿它当**更灵敏的仪器**，
+    而**榜分照旧是 `overall` 那一列**。
     """
     category_of = {q.qid: q.category for s in samples for q in s.questions}
     abstention_of = {q.qid: q.is_abstention for s in samples for q in s.questions}
@@ -95,26 +103,55 @@ def summarize(results: list[JudgeResult], samples: list[Sample]) -> dict[str, An
     by_category: dict[str, list[bool]] = {}
     abstention: list[bool] = []
     overall: list[bool] = []
+    partial_all: list[float] = []
+    partial_by_category: dict[str, list[float]] = {}
+    partial_abstention: list[float] = []
     for result in results:
         overall.append(result.is_correct)
+        if result.partial is not None:
+            partial_all.append(result.partial)
         if abstention_of.get(result.qid, False):
             abstention.append(result.is_correct)
+            if result.partial is not None:
+                partial_abstention.append(result.partial)
             continue
-        by_category.setdefault(category_of.get(result.qid, "unknown"), []).append(result.is_correct)
+        category = category_of.get(result.qid, "unknown")
+        by_category.setdefault(category, []).append(result.is_correct)
+        if result.partial is not None:
+            partial_by_category.setdefault(category, []).append(result.partial)
+
+    def _entry(correct: list[bool], partials: list[float]) -> dict[str, Any]:
+        """一个分类的明细。**`partial` 只在有数时出现**——空集合不写 0.0（同 `_accuracy`）。"""
+        entry: dict[str, Any] = {"accuracy": _accuracy(correct), "n": len(correct)}
+        mean = _accuracy_float(partials)
+        if mean is not None:
+            entry["partial"] = mean
+        return entry
 
     return {
         "overall": _accuracy(overall),
         "n": len(overall),
+        "partial_credit": {
+            "mean": _accuracy_float(partial_all),
+            "n": len(partial_all),
+        },
         "breakdown": {
-            category: {"accuracy": _accuracy(values), "n": len(values)}
+            category: _entry(values, partial_by_category.get(category, []))
             for category, values in sorted(by_category.items())
         },
-        "abstention": {"accuracy": _accuracy(abstention), "n": len(abstention)},
+        "abstention": _entry(abstention, partial_abstention),
     }
 
 
 def _accuracy(values: list[bool]) -> float | None:
     """**空集合返回 `None` 而不是 0**——`0.0` 会被读成"全错"，而它其实是"没测到"。"""
+    if not values:
+        return None
+    return round(sum(values) / len(values), 6)
+
+
+def _accuracy_float(values: list[float]) -> float | None:
+    """同 `_accuracy`，但收的是**部分分**（连续值）。空集合同样返回 `None`。"""
     if not values:
         return None
     return round(sum(values) / len(values), 6)
@@ -144,6 +181,14 @@ def build_record(
         "by_dimension_note": PROXY_SCORE_NOTE,
         **{dimension: None for dimension in DIMENSIONS},
     }
+    if {sample.dataset for sample in samples} == {"corporatebench"} and summary["partial_credit"][
+        "n"
+    ]:
+        scores["dataset_score"] = {
+            "metric": "scalar exact match / list set-F1",
+            **summary["partial_credit"],
+            "scope": "local CorporateBench QA reproduction",
+        }
     record = RunRecord(
         run_id=run_id,
         step=step,
@@ -152,7 +197,8 @@ def build_record(
         data_fingerprint=data_fingerprint,
         models=models,
         scores=scores,
-        breakdown=summary["breakdown"] | {"abstention": summary["abstention"]},
+        breakdown=summary["breakdown"]
+        | {"abstention": summary["abstention"], "partial_credit": summary["partial_credit"]},
         metrics=metrics or {},
         counters=counters or _unavailable_counters(),
         archive=archive,
