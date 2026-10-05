@@ -29,6 +29,7 @@ from typing import Final, Protocol
 
 __all__ = [
     "DEFAULT_TOKENIZER",
+    "EMBED_MAX_TOKENS",
     "MAX_INPUT_TOKENS",
     "O200kCounter",
     "TokenCounter",
@@ -43,6 +44,19 @@ DEFAULT_TOKENIZER: Final[str] = "o200k_base"
 #: ⚠ **A 类外部契约常量**：AML 定的，**我们无权改**；写进配置只为追溯，不是为了调。
 #: 见 config-reference §7（`budget.max_tokens`）。
 MAX_INPUT_TOKENS: Final[int] = 117_760
+
+#: **提交口径的嵌入窗口**：`text-embedding-v4` 单条文本最多 **8,192 token**
+#: （官方 FAQ 原文：`Each text can contain at most 8,192 tokens`）。
+#:
+#: ⚠ **它比窗口本身更值得记住的是超限行为**：官方原文是
+#: `Content exceeding this limit is truncated before embedding`——
+#: **静默截断，不报错**。本地那个开发网关（vLLM）同窗口但会**响亮 400**，
+#: 所以本地这一侧的响亮失败是**门禁**：线上不会有这个错。
+#:
+#: ⇒ **"一个记忆块不能超这个数"这条线只能由本仓自己守**。它由打包预算
+#: （`eval/harness/batching.py` 的 20 条 / 2,000 词）间接保证，而
+#: `tests/test_datasets.py` 有一条**跑真数据**的用例把它钉住。
+EMBED_MAX_TOKENS: Final[int] = 8_192
 
 
 class TokenCounterError(RuntimeError):

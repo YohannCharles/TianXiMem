@@ -2,18 +2,39 @@
 
 ```text
 一次 Add 的消息（按原序）
-  → ① 连续同 role 合并成一个 RoleBlock
-  → ② 一个 UserBlock + 紧随其后的**全部**非 UserBlock 配成一个 MemoryBlock
-  → ③ 开头的非 UserBlock（前面没有 user）各自独立成块
+  → ① 一段连续 user + **紧随其后的一段连续非 user** ⇒ 配成一个 MemoryBlock
+       ⚠ 但只有该 user 段的**最后一条**进配对块（**D32**）——前面的每条各自独立
+  → ② **其余消息：每条各自独立成块**——同 role 相邻也不并
   → 每个 MemoryBlock 恰好一次 embedding
 ```
+
+> **只有"配得上对"才合并。** 合并曾经是独立的一条规则（①连续同 role 相并），
+> 现在它只是配对的一步：**配不上对的，一条都不并**。
+>
+> **为什么改**（2026-10-01 实测）：官方**判分池**的 Add 实测是 **100% `role: user`、零 assistant**
+> ⇒ 旧规则把一次 Add（≤20 条）**整个塌成 1 块**：locomo 412 块 → 55 块、medmemorybench
+> 1,562 → 200，而且**配对的块一个不剩** ⇒ `link_blocks` 只连配对块 ⇒ **邻接链全空**
+> ⇒ 扩窗（§10）与段合并（§11.2）在那个池子上**一行都不执行**。
+> 新规则下同一条数据是 4 条各自独立的消息，**粒度与链路都回来了**。
+>
+> **为什么 ① 只吃"最后一条"**（2026-10-03，**D32**）：平台的切分按 **8,000 字符**、
+> 批预算按 **2,000 词**，而嵌入窗口按 **token**——对密集内容（数值 / 表格）三者
+> **不成比例**。CL-Bench 某样本 14 条 × 8,000 字符**只算 1,378 词**（远低于 2,000，
+> 被放行）⇒ 合成一个 **38,270 token** 的块（`question` 83,641 字符）
+> ⇒ **线上静默截断、本地网关 400**。只配最后一条之后，同一份全量实测
+> **最大块 5,541 token**，块数只涨 **+2.2%**。
+>
+> ⚠ **代价是 D20 那个取舍被反过来了**：`q q q a` 现在产出 `[q] [q] [q+a]`，
+> 前面那些 `q` **有问无答**。D20 当初合并它们，正是为了让被切碎的文档"问题完整"；
+> 而合起来的代价是**块大到嵌不进去**——两条路都错，只是错的地方不同 ⇒ 选"块小"这一侧。
+> 实测依据见 [`../../../docs/open-questions.md`](../../../docs/open-questions.md) 的 **S5**。
 
 > **为什么 ② 吃掉的是"全部"而不是"一个"**：§6.2 承认"一条 user 后跟多条 assistant
 > 消息（工具调用等）"，那几条必须留在**同一个**块里。只吃一个的话
 > `Q0 / assistant / tool / assistant` 会碎成 `[Q0+A0] [T0] [A1]`——把一段回答劈开。
 > 在**只有 user / assistant** 的输入上（所有真实数据集），两种写法**逐字相同**。
-> ⚠ 反过来，**开头的非 user 段不合并**：`assistant assistant` 作为 Add 的开头就是两个
-> 独立的块（"连续同 role 合并"只发生在 ① 里，那个合并按 role 走的正是这里）。
+> ⚠ 反过来，**配不上的段一律不合并**：`assistant assistant` 开头就是**两个**独立的块，
+> 一段没有回答的 `user user user` 也是**三个**（合并只在配对时发生，见上）。
 
 **不同 Add 之间永不组合**：不拼 QA、不合并连续 assistant、不等下一个 chunk、
 不 repair、不重新 embedding。即使 A 与 B 属于同一 session，也各自独立成块。
@@ -179,14 +200,24 @@ def compose_memory_blocks(messages: Sequence[Message]) -> tuple[MemoryBlock, ...
 
     | 输入 | 输出 |
     | --- | --- |
-    | `U A U A` | `[U+A] [U+A]` |
-    | `U U A A A U A` | `[UU+AAA] [U+A]` |
+    | `U A` | `[U+A]` |
+    | `U U A A A U A` | `[U] [UU+AAA] [U+A]` |
     | `A U A` | `[A] [U+A]`（首个 A 配不上，独立成块） |
     | `U A U` | `[U+A] [U]`（末尾的 U 配不上，独立成块） |
     | `A` / `U` | `[A]` / `[U]` |
     | `U assistant tool assistant` | `[U+A0+T+A1]`（工具调用序列**不劈开**） |
+    | `U U U`（全 user，**没有任何非 user**） | `[U] [U] [U]`（**各自独立**） |
+    | `A A`（全 assistant） | `[A] [A]`（**各自独立**） |
 
-    ⚠ **不判断"是不是超长消息截断"**：配不上的块**就是**独立块，原因是什么无关紧要。
+    ⚠ **合并只在"配得上对"时发生**：一段连续 user 后面**没有**非 user 时，那段**不合并**，
+    每条各自成块。理由见模块 docstring（判分池全是 `role: user`）。
+
+    ⚠ **配对时也只配这一段 user 的【最后一条】**（**D32**，2026-10-03）——前面的各自独立。
+    这是被**嵌入窗口**逼出来的：一段长 user 全进一个 question 会到 **38,270 token**
+    （窗口 8,192）⇒ 线上静默截断、本地 400。**代价**：`q q q a` 里前面的 `q` 变得
+    **有问无答**（D20 正是为此才合并的）——两条路都错，D32 选了"块不超窗口"那一侧。
+
+    ⚠ **不判断"是不是超长消息截断"**：配不上的消息**就是**独立块，原因是什么无关紧要。
     任何"等下一个 Add 来补齐"的设计都会重新引入跨 Add 状态（D24 取消的正是它）。
 
     ⚠ **空输入返回空元组**——调用方（`apply_batch`）在此之前就该抛错，见那里的注释。
@@ -196,15 +227,50 @@ def compose_memory_blocks(messages: Sequence[Message]) -> tuple[MemoryBlock, ...
     i = 0
     while i < len(role_blocks):
         if not role_blocks[i].is_user:
-            # ③ 开头的非 user 段：前面没有 user 可配 ⇒ 独立成块
-            blocks.append(_block_from(role_blocks[i]))
+            # 非 user 段：配不上对（前面没有 user 段，或那段已经被配走了）⇒ **各自独立**
+            blocks.extend(_standalone(role_blocks[i]))
             i += 1
             continue
-        # ② 一个 user 段 + 紧随其后的全部非 user 段（工具调用序列等）
         end = i + 1
         while end < len(role_blocks) and not role_blocks[end].is_user:
             end += 1
-        blocks.append(_block_from(*role_blocks[i:end]))
+        if end > i + 1:
+            # 后面跟着非 user ⇒ 配对。**但只有这一段 user 的【最后一条】配上**，
+            # 前面的各自独立（**D32**，2026-10-03）。
+            #
+            # 为什么（实测，见 `eval/reports/ledger.md` 的 V18 一节）：平台的 8,000 **字符**
+            # 切分会把**一份长文档**切成十几条连续的 user 消息。原来"整段 user 进同一个
+            # question"会让 question 涨到 **83,641 字符 / 38,270 token**，而
+            # `text-embedding-v4` 的窗口是 **8,192 token** ⇒ 线上**静默截断**（尾巴搜不到）、
+            # 本地开发网关 **400**（跑批直接死）。CL-Bench 全量实测：**14/12,793 个块超窗口**，
+            # 最大 **45,160 token**。
+            #
+            # 改成"只配最后一条"之后（同一份全量实测）：**最大块 5,541 token**，
+            # 块数只涨 **+2.2%**（12,793 → 13,080）。
+            #
+            # ⚠ **代价是 D20 那个取舍被反过来了**：`q q q a` 现在产出 `[q] [q] [q+a]`，
+            # 前面那些 `q` **有问无答**。D20 当初合并它们，正是为了让被切碎的文档"问题完整"；
+            # 而合起来的代价是**块大到嵌不进去**——两条路都错，只是错的地方不同。
+            # ⇒ 选"块小"这一侧，理由在 D32。
+            head = role_blocks[i]
+            blocks.extend(
+                _standalone(
+                    RoleBlock(
+                        role=head.role,
+                        messages=head.messages[:-1],
+                        source_idxs=head.source_idxs[:-1],
+                    )
+                )
+            )
+            last = RoleBlock(
+                role=head.role,
+                messages=(head.messages[-1],),
+                source_idxs=(head.source_idxs[-1],),
+            )
+            blocks.append(_block_from(last, *role_blocks[i + 1 : end]))
+        else:
+            # 后面没有非 user ⇒ 这段 user 各自独立，**不合并**
+            blocks.extend(_standalone(role_blocks[i]))
         i = end
     return tuple(blocks)
 
@@ -253,6 +319,18 @@ def _merge_consecutive_roles(messages: Sequence[Message]) -> tuple[RoleBlock, ..
         else:
             blocks.append(RoleBlock(role=message.role, messages=(message,), source_idxs=(idx,)))
     return tuple(blocks)
+
+
+def _standalone(role_block: RoleBlock) -> tuple[MemoryBlock, ...]:
+    """**配不上对的一段 → 每条消息各自一个块**（不合并）。
+
+    这是"合并只在配对时发生"的落点：`A A` 是两块、`U U U` 是三块。
+    ⚠ **`source_idxs` 逐条带出来**——合并没了，但"这条块来自哪几条原消息"仍要可追。
+    """
+    return tuple(
+        _block_from(RoleBlock(role=role_block.role, messages=(message,), source_idxs=(index,)))
+        for message, index in zip(role_block.messages, role_block.source_idxs, strict=True)
+    )
 
 
 def _block_from(*role_blocks: RoleBlock) -> MemoryBlock:

@@ -2,7 +2,7 @@
 
 ```text
 一次 Add 的消息
-  → ① 连续同 role 合并成 RoleBlock
+  → ① 一段连续 user + 紧随的非 user 才配对（合并只是这一步）
   → ② 相邻 UserBlock + 非UserBlock 配成一个 MemoryBlock
   → ③ 配不上的 RoleBlock 独立成块
 ```
@@ -61,7 +61,12 @@ def test_1_user_assistant_user_assistant(M: Callable[..., Message]) -> None:
 
 
 def test_2_runs_merge_within_one_memory(M: Callable[..., Message]) -> None:
-    """Test 2：`U U A A A U A` ⇒ `[UU+AAA] [U+A]`——**不拆成 5 块**。"""
+    """Test 2：`U U A A A U A` ⇒ **3 块**（**D32**）——一段 user 只把**最后一条**配进去。
+
+    ⚠ D32（2026-10-03）之前这条断言的是 2 块（`[UU+AAA] [U+A]`）。改成"只配最后一条"
+    是因为**嵌入窗口**：一段长 user 全进 question 会到 38,270 token（窗口 8,192）
+    ⇒ 线上静默截断、本地 400。代价是前面的 `Q0` 变成**有问无答**。
+    """
     blocks = compose_memory_blocks(
         [
             M("user", "Q0"),
@@ -74,10 +79,11 @@ def test_2_runs_merge_within_one_memory(M: Callable[..., Message]) -> None:
         ]
     )
     assert [_text(b) for b in blocks] == [
-        "Q: Q0\nQ1\nA: [assistant] A0\n[assistant] A1\n[assistant] A2",
+        "Q: Q0",
+        "Q: Q1\nA: [assistant] A0\n[assistant] A1\n[assistant] A2",
         "Q: Q2\nA: [assistant] A3",
     ]
-    assert len(blocks) == 2  # 7 条消息 ⇒ 2 个块，**不是** 5 个
+    assert len(blocks) == 3  # 7 条消息 ⇒ 3 个块（多出来的那个是配不上的 Q0）
 
 
 def test_3_leading_assistant_stands_alone(M: Callable[..., Message]) -> None:
@@ -112,7 +118,12 @@ def test_6_lone_user(M: Callable[..., Message]) -> None:
 
 
 def test_adjacent_same_role_runs_alternate_strictly(M: Callable[..., Message]) -> None:
-    """块序列里**不会出现相邻同 role 的块**——这是 ① 的直接推论。"""
+    """⚠ **D32 之后这条不变量不再成立**：会出现相邻的 user-only 块。
+
+    改之前：段内所有 user 都进同一个 question ⇒ 块序列里不可能有相邻同 role 的块。
+    改之后（只配最后一条），一段 `U U A` 产出 `[U] [U+A]`——那两个 U **是独立的两条
+    消息**，不是什么"漏合并"。这条改成钉住**新的**形状，而不是删掉：形状变了要有人知道。
+    """
     blocks = compose_memory_blocks(
         [
             M("user", "Q0"),
@@ -125,17 +136,57 @@ def test_adjacent_same_role_runs_alternate_strictly(M: Callable[..., Message]) -
         ]
     )
     assert [_roles(b) for b in blocks] == [
-        ("user", "user", "assistant"),
-        ("user", "user", "user", "assistant"),
+        ("user",),  # Q0 配不上（它后面还有 user）
+        ("user", "assistant"),  # Q1 + A0 —— 这段 user 的**最后一条**
+        ("user",),  # Q2 配不上
+        ("user",),  # Q3 配不上
+        ("user", "assistant"),  # Q4 + A1
     ]
+    # 只有**完整的对**能连成链（`link_blocks` 的口径），落单的 Q0/Q2/Q3 不进链
+    assert [b.is_paired for b in blocks] == [False, True, False, False, True]
 
 
-def test_wholly_non_user_batch_is_one_block(M: Callable[..., Message]) -> None:
-    """整批没有 user ⇒ **一个** question 为空的块（不是每角色一块，也不是每条一块）。"""
+def test_wholly_non_user_batch_splits_per_message(M: Callable[..., Message]) -> None:
+    """整批没有 user ⇒ **每条各自一块**（2026-10-01：合并只在"配得上对"时发生）。
+
+    ⚠ 旧规则这里是**一个**块。改的理由见模块 docstring——判分池那种全 `user` 的批
+    在旧规则下会整个塌成一块，而这里同一条规则的另一半。
+    """
     blocks = compose_memory_blocks([M("assistant", "A0"), M("assistant", "A1")])
-    assert len(blocks) == 1
-    assert blocks[0].question is None
-    assert blocks[0].answer == "[assistant] A0\n[assistant] A1"
+    assert len(blocks) == 2
+    assert all(b.question is None for b in blocks)
+    assert [b.answer for b in blocks] == ["[assistant] A0", "[assistant] A1"]
+
+
+def test_a_user_run_without_a_reply_does_not_merge(M: Callable[..., Message]) -> None:
+    """**判分池那种形状**：`U U U U` ⇒ **4 个独立的 Q-only 块**，不是一个巨块。
+
+    这正是这次改规则要解决的问题：官方**判分池**的 Add 实测是 100% `role: user`，
+    旧规则把一次 Add（≤20 条）整个塌成 1 块，而且**一个配对的块都没有**
+    ⇒ `link_blocks` 只连配对块 ⇒ 邻接链全空 ⇒ 扩窗与段合并**一行都不执行**。
+    """
+    blocks = compose_memory_blocks([M("user", f"Q{i}") for i in range(4)])
+    assert [b.question for b in blocks] == ["Q0", "Q1", "Q2", "Q3"]
+    assert all(b.answer is None for b in blocks)
+    assert all(not b.is_paired for b in blocks)
+
+
+def test_a_user_run_pairs_only_its_last_message(M: Callable[..., Message]) -> None:
+    """**D32**：`U U U A` ⇒ `[U] [U] [U+A]`——只有**最后一条**进对。
+
+    ⚠ 这正是 **S5** 那个形状（平台把一条超长 user 消息切成多片，2026-10-01 实测：
+    会切、硬上限 ≈8,000 字符）。**D20 当初把整段并进一个 question**，正是为了让被切碎的
+    文档"问题完整"；**D32 把它反过来了**——因为合起来会让块到 38,270 token，
+    超过 `text-embedding-v4` 的 8,192 窗口。
+
+    ⇒ **两条路都错，只是错的地方不同**：合并 ⇒ 块嵌不进去（线上静默截断）；
+    不合并 ⇒ 前面那些 `q` **有问无答**。D32 选了后者，这条用例钉住这个取舍。
+    """
+    blocks = compose_memory_blocks([M("user", f"Q{i}") for i in range(3)] + [M("assistant", "A")])
+    assert len(blocks) == 3
+    assert [b.question for b in blocks] == ["Q0", "Q1", "Q2"]
+    assert [b.answer for b in blocks] == [None, None, "[assistant] A"]
+    assert [b.is_paired for b in blocks] == [False, False, True]
 
 
 def test_alternating_roles_never_pair_across_a_run(M: Callable[..., Message]) -> None:
@@ -215,12 +266,17 @@ def test_source_indexes_cover_every_message_exactly_once(M: Callable[..., Messag
 
 
 def test_source_metadata_is_kept_verbatim(M: Callable[..., Message]) -> None:
-    """`messages` / `roles` / `timestamps` 与原始输入**逐条对应**。"""
+    """`messages` / `roles` / `timestamps` 与原始输入**逐条对应**。
+
+    ⚠ D32 之后 `U U A` 产出**两块**（`[Q0]` 与 `[Q1+A0]`）⇒ 断言要跨两块收集，
+    不能只取一个块。`source_idxs` 合起来仍必须是 `0..n-1` 的排列（不丢不重）。
+    """
     m0, m1, m2 = M("user", "Q0", 100), M("user", "Q1", 200), M("assistant", "A0", 300)
-    (block,) = compose_memory_blocks([m0, m1, m2])
-    assert block.messages == (m0, m1, m2)
-    assert block.roles == ("user", "user", "assistant")
-    assert block.timestamps == (100, 200, 300)
+    blocks = compose_memory_blocks([m0, m1, m2])
+    assert [b.messages for b in blocks] == [(m0,), (m1, m2)]
+    assert [b.roles for b in blocks] == [("user",), ("user", "assistant")]
+    assert [b.timestamps for b in blocks] == [(100,), (200, 300)]
+    assert sorted(i for b in blocks for i in b.source_idxs) == [0, 1, 2]
 
 
 def test_event_time_is_the_first_message_of_the_block(M: Callable[..., Message]) -> None:
