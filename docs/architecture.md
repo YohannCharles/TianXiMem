@@ -126,15 +126,15 @@ query → BM25 ┐
 | 目录 | 负责什么 | PRD |
 | --- | --- | --- |
 | `facts/` | 共同事实记录、来源句法、问题计划、当前输入依赖；不分业务表或开关 | 当前共同取证结构 |
-| `service/` | HTTP 层：`POST /add`、`POST /search`（+ `GET /health` 探活）；请求/响应模型 | §2.1、§15 → **D28** |
-| `pairing/` | **记忆块组合（一次 Add = 唯一边界，D24）**；幂等守卫 + 位置分配 + 落库；**§15 写入路径的唯一所有者** | §6.2、§6.5（D24 后的口径）、§15 |
-| `store/` | SQLite 真源（`qa_pairs` + `applied_batches`）；Qdrant 派生索引；邻域查询的 SQL | §6.1、§6.3 |
+| `service/` | HTTP 层：`POST /add`、`POST /search`（+ `GET /health` 探活）；请求/响应模型；**共同取证分支的编排与整体回退** | §2.1、§15 → **D28** |
+| `pairing/` | **记忆块组合（一次 Add = 唯一边界，D24）**；幂等守卫 + 位置分配 + 落库（+ 同一事务内的**共同事实索引**）；**§15 写入路径的唯一所有者** | §6.2、§6.5（D24 后的口径）、§15 |
+| `store/` | SQLite 真源（`qa_pairs` + `applied_batches`；另有**可重建的派生事实表** `memory_facts` / `evidence_coverage`）；Qdrant 派生索引；邻域查询的 SQL | §6.1、§6.3 |
 | `embed/` | `Embedder` 协议 + 两个实现；**落盘的向量缓存** | §7.4、§7.2 |
-| `retrieve/` | BM25；dense；**混合检索的策略与参数所有权**；Evidence Checker（**到 rerank 为止**） | §7.1–§7.3、§8 |
+| `retrieve/` | BM25；dense；**混合检索的策略与参数所有权**；Evidence Checker；**共同证据执行器**（计划不适用 / 索引未扫完 / 冲突 / 超限 ⇒ 回原链）（**到 rerank 为止**） | §7.1–§7.3、§8 |
 | `rank/` | rerank → **Neighbor Expansion（§10）** → Context Packaging —— "排序 → 扩窗 → 打包"三连环 | §10、§11 |
 | `agent/` | Conditional Agentic Search 循环与三个工具 | §9 |
 | `llm/` | LLM 后端抽象（`gpt-4o-mini` / qwen3.5-9b） | §2.3、§12.1 |
-| `common/` | **渲染模板的唯一实现**；token 计数；配置加载 + **开关校验** | §11.3、§6.4、§15 |
+| `common/` | **渲染的唯一实现**（QA 对与事实片段）；token 计数；配置加载 + **开关校验** | §11.3、§6.4、§15 |
 | `observability/` | §14 指标（**各层发射、本层聚合**） | §14 |
 
 ### 四处容易摆错的位置
@@ -160,19 +160,24 @@ query → BM25 ┐
    ↓        ↓        ↓          ↓
 pairing  retrieve   rank      agent
    │        │        │          │
-   │        ├→ embed │          ├→ llm
+   │        ├→ facts │          ├→ llm
+   │        ├→ embed │          │
    │        │        │          │
    └────────┴────────┴──────────┘
             ↓
-          store/                     ← 唯一触碰 SQLite / Qdrant 的地方
+          store/                     ← 唯一触碰业务真源（SQLite）与 Qdrant 的地方
             ↑
         common/                      ← 被所有层依赖，**自己不依赖任何业务层**
         observability/               ← 被所有层调用（埋点），不反向依赖
 ```
 
+> ⚠ 图是简化的：`facts/`（共同事实记录与来源句法、问题计划）还被 `pairing/`（写入时抽取）
+> 与 `service/`（编译计划）调用；它自己**不 import 任何业务层**、不写 SQL、不调模型，
+> 只依赖 `common/render`。
+
 **三条硬性边界：**
 
-1. **`store/` 是唯一接触 SQLite 与 Qdrant 的目录。** §6.3 的分工表（真源 vs 派生索引、谁能做什么谁不能做什么）只有在所有读写都收口到一处时才守得住。上层拿到的是领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`。
+1. **`store/` 是唯一接触「业务真源」（SQLite）与 Qdrant 的目录。** §6.3 的分工表（真源 vs 派生索引、谁能做什么谁不能做什么）只有在所有读写都收口到一处时才守得住。上层拿到的是领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`。（限定词是必要的——[`../src/tianximem/embed/base.py`](../src/tianximem/embed/base.py) 的 `DiskVectorCache` 也直接开 SQLite。）
 2. **`common/render` 是渲染的唯一实现。** §7.2 与 §11.3 要求 **embedding 的输入**与**返回给 AML 的 `content`** 是**同一份渲染**——两处一旦不一致，"检索命中的是什么"与"模型读到的是什么"就会漂移，**而且这种漂移不会报错**。这是 `common/` 存在的全部理由：它不是工具箱，是一条不变式的落地点。
 3. **`observability` 不反向依赖业务层。** 埋点是被调用的，不是去拉取的。**每个指标由产生它的那一层发射**（embedding 调用数由 `embed/` 发、Agent Trigger Rate 由 `agent/` 发、rerank 的 `degraded`/`disabled` 与 latency/query 由 `service/` 在 Search 的请求边界发——**计数住在 `SearchPipeline`**，因为"降级 / 没开"这个判定就在那里做），本目录只聚合。**接了哪些、没接哪些**逐项见 [`../src/tianximem/observability/CLAUDE.md`](../src/tianximem/observability/CLAUDE.md)。
 

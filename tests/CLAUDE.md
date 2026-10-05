@@ -112,7 +112,7 @@ test_idempotency.py  批次级守卫
 | 每项含 `id` / `content` / **`created_at`** | `created_at` **始终存在**：日粒度或 `""`（§11.3） |
 | `score` 单调递减 | 且**不是**原始 RRF 分数（§11.3） |
 | 200 响应原样回显三个字段 | `request_id` / `user_id` / `session_id` |
-| **根级 `limit` 取 `2 × prefetch_limit`，`top_k` 截断在 [`fusion.py`](../src/tianximem/retrieve/fusion.py) 排序之后** | **任何一层都没写死 100**；契约 `len(data) <= top_k` 仍成立，截断点后移的理由见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md) 的 V13（§7.3） |
+| **根级 `limit` 取 `2 × prefetch_limit`，`top_k` 截断在 [`fusion.py`](../src/tianximem/retrieve/fusion.py) 排序之后** | **任何一层都没写死 100**；契约 `len(data) <= top_k` 仍成立，截断点后移的理由见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md) 的「V13 补完」（§7.3） |
 
 ### ⚠ 段模型改了四件事——写用例前必须知道
 

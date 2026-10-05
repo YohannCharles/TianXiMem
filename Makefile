@@ -227,6 +227,7 @@ clean:  ## 清运行时产物（不动 benchmark_data/）
 	rm -rf .pytest_cache .mypy_cache .ruff_cache
 # ⚠ 真源是 var/tianxi.db，**不是 data/**（2026-09-24 修正：这条目标原先删的是 data/*.db，
 #    而没有那个目录——于是它一直静默地什么也没删）。为什么不叫 data/ 见 var/CLAUDE.md。
-# ⚠ **tianxi.db 是 var/ 里唯一不可重建的东西**（qdrant_storage/ 与 embed_cache/ 都能重建，
-#    后者只是要重付一遍 embedding 的钱）——本目标清得了它，**跑之前想清楚**。
-#    刻意不清 embed_cache/ 与 qdrant_storage/：它们是"暂时不用"，不是"要扔掉"。
+# ⚠ **tianxi.db 是 var/ 里唯一不可重建的东西**（embed_cache/ 能重建，只是要重付一遍 embedding
+#    的钱；Qdrant 卷是 deploy/compose.yaml 的 Docker 命名卷、不在 var/ 下，也能从真源全量重建）
+#    ——本目标清得了它，**跑之前想清楚**。
+#    刻意不清 embed_cache/：它是"暂时不用"，不是"要扔掉"。

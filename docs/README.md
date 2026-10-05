@@ -34,7 +34,7 @@
 | [submission.md](./submission.md) | Smoke/Full 还剩几次、版本冻结在哪、S 未知清了没有 | 每次发 Smoke / Full 之前 |
 | [benchmark-data.md](./benchmark-data.md) | 归档里哪些文件是真数据、schema 落差在哪、许可证什么情况 | 写 harness / 加载器时 |
 | [reference-implementations.md](./reference-implementations.md) | 榜单前两名（InvMem / ReFind）的代码里有什么可学、什么别学、代码在哪（含 commit） | 想"看别人怎么解同一道题"时 |
-| [add-search-improvement-plan.md](./add-search-improvement-plan.md) | 如何在 Add/Search 内增加可查证的事实、条件检索及对象／事件证据选择（待实现） | 评估文档类列表与计数的改进时 |
+| [add-search-improvement-plan.md](./add-search-improvement-plan.md) | 如何在 Add/Search 内增加可查证的事实、条件检索及对象／事件证据选择（**已实施，2026-10-05**；正文为方案底稿，最终形态见共同取证整理） | 评估文档类列表与计数的改进时 |
 
 > **[`benchmark-data.md`](./benchmark-data.md) 尤其要看**：归档目录 `benchmark_data/` **整目录被 `.gitignore` 排除**，所以**不能在那里放任何文档**（不会被提交）——关于归档的一切说明都在那份文档里。
 

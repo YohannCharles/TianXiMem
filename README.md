@@ -15,7 +15,7 @@
 把 AML 榜单分数做到**优于 ReFind 的 44.97**。
 
 - **不写论文**，所以不做"为了讲清楚贡献"的实验，**只做能改变下一步动作的对照**（PRD §13）。
-- **核心判断**：检索不是瓶颈（LongMemEval 召回已 96–99%），**选择和排序才是**。因此 Rerank + Context Packaging 是主线（PRD §4 / §11）。
+- **核心判断**：检索不是瓶颈（LongMemEval 召回已 96–99%），**选择和排序才是**。因此 Rerank + Context Packaging 是主线（PRD §4 / §11）；另有已落地的**有来源的共同事实取证**（见下方「架构」）。
 - **核心 claim**：不让所有 Query 都进昂贵的 Agentic Search，**只有证据不足时才触发多轮搜索**（PRD §3.1 / §9）。
 
 **资源**：3 人 / 4–6 周。运行形态已定（D12）：**模型三段全部经自建网关远程访问；检索服务与 Qdrant 跑在本机**——本机不需要 GPU。
@@ -31,9 +31,9 @@
 | 1 | **`top_k` 由 AML 固定为 100**，返回超过它是**契约错误**、**不会被静默截断**——必须精确计数 |
 | 2 | **答案阶段按返回顺序取 117,760 token 前缀**——排在后面的证据整段作废 |
 | 3 | **`user_id` 是唯一的检索隔离字段**；`session_id` 不是 Search 的过滤器 |
-| 4 | **幂等分两层**：内容层"填空 + 追加"，但**位置分配不幂等**——批次级必须查 `applied_batches` 旁表 |
+| 4 | **幂等**：块写下即最终形状（D24）、位置是**请求的纯函数**（D28）⇒ 重试必然算出同一位置；但**批次级仍必须查 `applied_batches`** 旁表（重试是正常行为，不能靠撞 `UNIQUE` 兜），且**同 `request_id` 不同 payload ⇒ 409** |
 | 5 | **Qdrant RRF 的 `k` 默认是 2**，必须显式设 **61**；**local 模式会静默丢弃 payload 索引** |
-| 6 | **不要在 content 里注入绝对时间戳前缀**——裁判 TIME 块有两条独立规则都会因此判负 |
+| 6 | **`content` 里只许带日粒度日期**（`[YYYY-MM-DD]`，D21）——**秒级绝不许出现**，也别加星期 |
 
 **模型规定**（§2.3）：Embedding 只能用 `text-embedding-v4`，LLM 只能用 `gpt-4o-mini`，**Reranker 不作规定**。
 **法律约束**（§12.5）：**数据不得用于训练，「微调模型」不是暂不实现、是不允许。**
@@ -54,29 +54,32 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 名单与计数共用证据，不在 Search 生成答案。模块分工见 [当前架构](docs/architecture.md)。
 
 ```text
-                    User Query
-                        │
-                        ↓
-        ┌──────── Hybrid Retrieval ────────┐
-        │                                  │
-     BM25                                Dense
-        │                                  │
-        └──────── Weighted RRF ────────────┘
-                        │
-                        ↓
-                 Initial Candidates
-                        │
-                        ↓
-             Evidence Checker 【v1：空实现】
-                        │
-                        ↓
-                    Rerank（远程 API）
-                           ↓
-                  Neighbor Expansion（按名次依次扩窗，直到 Top-K 用尽）
-                           ↓
-                   Context Packaging
-                           ↓
-                  ≤ Top-K（精确计数）
+                              User Query
+                                  │
+        ┌─────────────────────────┴─────────────────────────┐
+        │ 共同取证（retrieval.grounded_evidence，默认开）        │
+        │ 问题 → 共同计划：条件筛选 / 有限连接 / 显式区间比较      │
+        └─────────────────────────┬─────────────────────────┘
+     命中：原文或独立事实片段           不适用 / 索引未扫完 / 冲突 / 超限
+     （不 rerank、半径 0）                          │
+                  │                                ▼
+                  │              ┌──────── Hybrid Retrieval ────────┐
+                  │              │          BM25   +   Dense        │
+                  │              └──────── Weighted RRF ────────────┘
+                  │                              │
+                  │                       Initial Candidates
+                  │                              │
+                  │                Evidence Checker 【v1：空实现】
+                  │                              │
+                  │                     Rerank（远程 API）
+                  │                              │
+                  │         Neighbor Expansion（默认 radius=0 ⇒ 不扩窗）
+                  │                              │
+                  └──────────────┬───────────────┘
+                                 ▼
+                   Context Packaging（同一份槽位 + token 双预算）
+                                 ▼
+                        ≤ Top-K（精确计数）
 
         ═══ 以下整块为 v2，v1 不实现（见 docs/decisions.md D13）═══
           Evidence Weak → Agentic Search
@@ -84,15 +87,15 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
             - Multi-round Search / Temporal Search / Evidence Note
 ```
 
-> **v1 是直通的**：Evidence Checker 恒返回「证据充足」，因此**没有证据补充路径**——正确的 QA 对不在初始候选里就永久丢了。这把 v1 的全部重量压在**排序 + token 预算分配**上（§4 / §8）。
+> **v1 是直通的**：Evidence Checker 恒返回「证据充足」，因此**没有证据补充路径**——正确的 QA 对不在初始候选里就永久丢了。这把 v1 的全部重量压在**排序 + token 预算分配**上（§4 / §8）。共同取证链是一条**短路**：只在问题被共同计划覆盖、且当前用户来源扫描齐全时命中；不覆盖的问题仍走上面这条链。
 >
-> v1 的 Checker 是**带日志的空实现**：它不做门控，但**必须记录每轮的判定**——不是为了留接口，是为了给 Step 4 攒下反事实分布（`docs/experiments.md` 的 A4）。
+> v1 的 Checker 是**恒返回「充足」的空实现**（D13），判定结果被丢弃；**A4 已移出 v1**（D26）⇒ 那份反事实分布现在不攒（要补它得先给 `store/` 加一个单路查询——已登记、未实现）。
 
 > **基础检索采用混合检索**（D15）；共同事实计划不适用时沿用这条链。
 
-**存储分工不可互换**（§6.3）：**SQLite 是真源**（QA 对正文、`status`、位置 `(request_id, local_index)`、`event_time`），**Qdrant 是派生索引**（向量 + 过滤键 payload，**不含正文**，坏了可从 SQLite 全文重建）。
+**存储分工不可互换**（§6.3）：**SQLite 是真源**（QA 对正文、`status`、位置 `(request_id, local_index)`、`event_time`；另有**可由正文重建的派生事实表** `memory_facts` / `evidence_coverage`），**Qdrant 是派生索引**（向量 + 过滤键 payload，**不含正文**，坏了可从 SQLite 全文重建）。
 
-**索引单元 = 一个 QA 对**（不是一个 message），一对一个向量。一个 QA 对 = **一段连续 user 消息，加上直到下一条 user 消息为止的全部非 user 消息**（§6.2；理由见 [D20](docs/decisions.md)）。
+**索引单元 = 一个 QA 对**（不是一个 message），一对一个向量。一个 QA 对 = **一段连续 user 消息的最后一条 + 紧随其后的非 user 消息段**（§6.2；D20 → **D32**：前面几条 user 各自独立成块，`U U U A` ⇒ `[U] [U] [U+A]`）。
 
 ---
 
@@ -119,10 +122,10 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 
 | 阶段 | 交付 | 状态 |
 | ---- | ---- | ---- |
-| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | 🟡 主体已建，**T2 未跑** |
-| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF） | 🟡 `src/` 已落，**T2 未跑** |
+| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | 🟡 加载层 + harness + 契约预检 + runner 已就位，链路已跑通多轮；剩 S1–S3 三个真-Smoke 探针 |
+| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） | 🟡 `src/` 已落；T2 脚手架就位、人工标注未做 |
 | Step 2 | Neighbor Expansion + 双预算截断 | ✅ 已完成 |
-| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 rerank 已接 + 打包已落地 + 渲染模板定稿；**T1 两臂未跑** |
+| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 rerank 已接 + 打包已落地 + 渲染模板定稿；**T1 的问题已回答**，干净的两臂 A/B 未跑 |
 | Step 4 | Conditional Agentic Search | ⬜ |
 | **Step 5** | **切换到提交模型**，重标定全部阈值，重跑 T2 | ⬜ |
 | Step 6 | 对照实验（§13）+ Smoke 验证 + Full 定稿 | ⬜ |
@@ -147,7 +150,7 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 
 > **本项目没有"跑一遍看看"的余地。** 所有迭代必须在自建代理评测上完成，Smoke 用于验证契约合规，Full 只用于最终定稿。
 
-**代理评测的边界**：只覆盖 LoCoMo-Refined + LongMemEval——而这两份恰好是全部六份数据集里**唯一共用同一套契约**的。其余四份的记忆注入字段与裁判规则各不相同（PersonaMem 甚至**根本不读检索字段**），因此**代理分数不能线性外推到全赛道**（§12.4）。
+**代理评测的边界**：只覆盖 LoCoMo-Refined + LongMemEval——而这两份恰好是全部数据集里**唯一共用同一套契约**的。其余各份的记忆注入字段与裁判规则各不相同（PersonaMem 甚至**根本不读检索字段**），因此**代理分数不能线性外推到全赛道**（§12.4）。
 
 ---
 
@@ -165,7 +168,7 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 | 2 | **归档 `benchmark_data/`** | ✅ **已解决**：已在本机（**349 项 / 1.5GB**，其中 `official-extra` 那 325 项占 1.1GB）；**且不需要任何共享副本**——每一份都能按 commit / revision 从公开源取回，**出处 + sha256 进版本库**：`make fetch-data` 取回、`make data-check` 校验，清单在 [`tools/fetch_benchmark_data.py`](./tools/fetch_benchmark_data.py)。见 [`docs/benchmark-data.md`](./docs/benchmark-data.md) |
 | 3 | **Windows 那台机器的 `tmp_path` 故障** | ⬜ **仍开着，且与代码无关**（是机器状态）。绕法见 [`docs/roadmap.md`](./docs/roadmap.md) 的 Step 0 |
 
-**reranker 点尚未部署**（部署不在本项目范围内，后续进行）。它是 Step 3 及之后的**基础设施前置项**，不是代码任务——而 v1 不做 agentic 之后，**唯一的新增价值就是 Rerank + Context Packaging**，所以这条前置项直接压在主线上。
+**reranker 走自建网关**（`TIANXIMEM_RERANKER_BASE_URL` + `rerank.envelope` 两半必须配套，观测点与两种信封见 [`src/tianximem/rank/CLAUDE.md`](./src/tianximem/rank/CLAUDE.md)）。它是 Step 3 及之后的**基础设施前置项**，不是代码任务——而 v1 不做 agentic 之后，**Rerank + Context Packaging 就是主线上的新增价值**，所以这条前置项直接压在主线上。开发期由 `configs/local.yaml` 显式关掉（墙钟约 3×）；关掉时链路照常（记 `rerank_disabled`）。
 
 本机默认 Python 3.14.4，已按 `>=3.11,<3.14` 保守钉在 3.12（torch / qdrant-client 的 wheel 覆盖通常滞后）。
 
