@@ -128,6 +128,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `rrf` | 不融合，只用单路 | —— | —— | §7.3 | ⛔ **无下游依赖**（D15 删掉了 A1/A2 ⇒ **没有实验需要它**） |
 | `neighbor` | 不扩窗 | —— | **种子集合不变** | §10 | 🟡 **`radius` 已接线、且默认就是 `0`（D31，2026-10-01）**⇒ 现在这一行**默认即关**；`neighbor.enabled` 这个键**仍未落地**（见 §6 末） |
 | `rerank` | 直接用融合名次 | —— | **候选数量不变**（只是顺序变了） | §11.2 | ✅ `rerank.enabled` |
+| **共同取证** | 不走共同取证：Search 一律回原混合检索链；Add 不写事实索引 | —— | **原混合链的候选 / 段 / 打包 / 响应形状逐字不变**；真源、幂等重放与 Qdrant 索引不变 | §2.1 / §11.3（共同结构见 [`architecture.md`](./architecture.md)） | ✅ `retrieval.grounded_evidence`（`configs/default.yaml` 为 `true`；⚠ **加载器对键缺失取 `false`**，与上面两行同型） |
 | `packaging` | 不做打包策略 | —— | —— | §11.3 |
 | **T1** | 正文**不带**日期前缀（消融臂） | —— | **名次 / 段数 / `created_at` / `score` 全不变**（只有 `content` 多一段 `[YYYY-MM-DD] `） | §11.3 / **D21** | ✅ `packaging.inject_abs_time`（**默认 `true`**） |
 | **相对时间注解** | 正文里的相对表达**照原样**留着（`last Tues`） | —— | **名次 / 段数 / `id` / `created_at` / `score` / token 口径全不变**（只有 `content` 多出括号注）；**embedding 输入也不变**（它只走 `content` 这一条路） | D21 的延伸（原文保留、日期是**额外锚点**） | ✅ `packaging.annotate_relatives`（**默认 `true`**——`configs/default.yaml` 里写死；⚠ **加载器对"键缺失"取 `false`**，与 `inject_abs_time` 的缺失约定**相反**，所以 D22 之前冻结的快照仍按"无注解"跑） |

@@ -8,6 +8,7 @@
 pairing.py   本批消息 → 记忆块（组合规则的**唯一实现**，纯函数）
               + `link_blocks()`（Add 内邻接链：只连完整 QA，D28）
 apply.py     幂等守卫（含 payload 指纹）→ 组合 → 连链 → 按位置写入（一个事务）
+              + `index_pair_facts()`：同一写事务里索引共同事实（`grounded_evidence` 打开时）
 ```
 
 > ⛔ **不实现"批次续接"**：块在写下那一刻就是最终形状，跨 Add 不合并、不补全。
@@ -125,6 +126,12 @@ id           hash(user_id, session_id, request_id, local_index)
 **与幂等正交**：守卫仍查 `applied_batches`（D4），`BEGIN IMMEDIATE` 仍保留
 （它现在是**数据库级写者串行**的唯一落点——应用层锁已经没有了，并发全在这一处排队）。
 
+**守卫命中且指纹相同 ⇒ 真源一行不动**：`grounded_evidence` 打开时，重放还会经
+`index_pair_facts()` **同一入口**给这一批补共同事实索引（只写派生的 `memory_facts` /
+`evidence_coverage`）——补的正是「SQLite 已提交、事实索引还缺失」那个失败窗口；
+Qdrant 一侧的缺失由 `service/` 的 Add 编排按同一 `request_id` 重建。命中**但指纹不同** ⇒
+`PayloadMismatchError`（响亮冲突，**不是**重放）。
+
 ⚠ **失败模式是响的**：位置是请求的纯函数 ⇒ 同一批重放必然算出**同一位置**，
 于是重放撞 `UNIQUE` 而**不是**静默落成重复记录。守卫仍然必须留（AML 重试是正常行为，
 不能每次都靠撞约束失败）。
@@ -133,7 +140,11 @@ id           hash(user_id, session_id, request_id, local_index)
 
 ## 写完之后先测什么
 
-测试用例清单见 [`../../tests/CLAUDE.md`](../../../tests/CLAUDE.md)。**本目录的关键用例只有一条
-要在这里记住**：幂等测试必须模拟"**事务已提交、响应未发出**"的中间态（**只测"重复 POST 两次"
-太弱**）。位置是纯函数、重放必然算出同一位置，所以这一步抓的是**重放撞 `UNIQUE`**
+测试用例清单见 [`../../tests/CLAUDE.md`](../../../tests/CLAUDE.md)。**本目录的关键用例有两条
+要在这里记住**。其一：幂等测试必须模拟"**事务已提交、响应未发出**"的中间态（**只测"重复 POST
+两次"太弱**）。位置是纯函数、重放必然算出同一位置，所以这一步抓的是**重放撞 `UNIQUE`**
 ——守卫若被删掉，表现为**重放把整批写成 500**（`IntegrityError`），而不是静默重复。
+
+其二：重放补索引这条路径（重放后 `qa_pairs` 逐字不变、事实不重复），见
+[`../../tests/test_grounded_evidence.py`](../../../tests/test_grounded_evidence.py) 的
+`test_replay_backfill_and_source_bounds_never_change_raw_memory`。

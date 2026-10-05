@@ -5,11 +5,17 @@
 ## 要写什么
 
 ```text
-driver.py      喂 Add、调 Search（**走 HTTP**）、收集返回
-batching.py    模拟 AML 切批（20 条那一路）
-add_shape.py   模拟 AML **正文形态**（`<标签>: …` 前缀 + `system` 折叠）——线上就是这么发的
-judge.py       包住 AML pipeline 的裁判
-run_record.py  每次 run 的配置指纹 + 数据指纹 + 结果
+driver.py                  喂 Add、调 Search（**走 HTTP**）、收集返回
+batching.py                模拟 AML 切批（20 条消息 + 2,000 词的**空白分词近似**）
+add_shape.py               模拟 AML **正文形态**（`<标签>: …` 前缀 + `system` 折叠 + 单条 8,000 字符切分）——线上就是这么发的
+judge.py                   包住 pipeline 的裁判（`run_judge` 跑 `answer`→`evaluate` 两步）
+extra_pipeline.py          我们自写的五份 `official-extra` 数据集的 answer / evaluate——官方没有发布它们的 pipeline
+personamem_pipeline.py     PersonaMem-v2 适配器——两个子命令都直接调归档里那份的函数（官方 CLI 形状不同）
+scriptmem_pipeline.py      ScriptMem 适配器——**到不了裁判**（加载层与 pipeline 表里都没有它），保留作参考
+corporatebench_pipeline.py CorporateBench 的答案 prompt 与纯函数判分——被 `extra_pipeline.py` 调用
+api_config.py              归档 pipeline 要 `import` 的端点配置——`run_judge` 经 `PYTHONPATH` 注入本目录这份（见下文）
+annotate.py                相对时间就地注解——`--memory-date annotate` 那一档的 harness 侧实现
+run_record.py              每次 run 的配置指纹 + 数据指纹 + 结果
 ```
 
 > **`batching.py` 与 `add_shape.py` 是同一类东西**：都在回答"本地发的像不像线上"。
@@ -149,7 +155,7 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 
 | 症状 | 修法 |
 | --- | --- |
-| 半行 JSON 让续跑卡死 | `_drop_trailing_partial_line()`——每次 `answer` 之前**丢掉末尾不完整的行**（⚠ **只在末尾删**：中途的坏行说明别的问题，不该被静默吞掉） |
+| 半行 JSON 让续跑卡死 | `_sanitize_jsonl()`——每次 `answer` 之前**丢掉末尾不完整的行**（⚠ **只在末尾删**：中途的坏行说明别的问题，不该被静默吞掉），并**就地转义**会被 `splitlines()` 劈开的行分隔符 |
 | 一次抖动打死整轮 | `_run(..., attempts=3)`——**子命令级退避重试**。安全，因为两个子命令都幂等（`answer` 追加 + 跳过已完成、`evaluate` 覆盖）。**重试有界**，失败信息原样带出去 |
 
 > **另一条同源的运维事实**：`HTTPS_PROXY` 指向本地代理时，**打网关的那条路也在走代理**
@@ -160,7 +166,7 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 
 ## 切批模拟（§6.5 / §12.3 第 5 条）
 
-**本地只能按 20 条复现**——原因见 [`../datasets/CLAUDE.md`](../datasets/CLAUDE.md) 与 §12.3 第 5 条（本目录不重复）。
+**本地两条预算都实现**（20 条消息 + 2,000 词）——词数用**空白分词近似**（线上按"冻结 Adapter 计的词"，那个组件本仓没有）⇒ **本地测出的批界与线上不保证一致**（口径与后果见 [`batching.py`](./batching.py) 与 §12.3 第 5 条）。
 
 **为什么这件事 D24 之后仍然重要**：组合的边界是**一次 Add**，所以**批界落在哪里直接决定有多少 QA 对被切成两个半块**（实测 LoCoMo 全量 63/3,075）。而批界**线上是 AML 造的、本地是我们造的** ⇒ "切批会不会打断对"**只能在 Smoke 上用真实的 20 条复现**，本地测不出来。
 

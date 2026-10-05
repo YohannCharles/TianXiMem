@@ -8,7 +8,7 @@
 app.py        FastAPI 实例 + 对象图装配（`--factory` 入口）、lifespan
 routes.py     POST /add、POST /search、GET /health（薄路由，只做形状映射）
 schemas.py    请求与响应模型（pydantic）= §2.1 的字面翻译
-pipeline.py   Add / Search 的**编排**（"按什么顺序调"）
+pipeline.py   Add / Search 的**编排**（"按什么顺序调"；Search 先试共同取证，不适用则回退原链）
 errors.py     异常 → 保持"可重试"的边界处理
 capture.py    请求**原文**采集（诊断旁路，默认关）—— **S6** 的唯一直接观察口
 ```
@@ -26,7 +26,7 @@ capture.py    请求**原文**采集（诊断旁路，默认关）—— **S6** 
 >
 > ⇒ 本目录拿到的是一个 [`AppConfig`](../common/config.py) 对象；**它不知道那些值从哪来**。
 
-> **为什么有 `pipeline.py`**：本层"不做检索、不做配对、不碰存储"指的是**不重新实现**那些逻辑（全部往下调用）。而 Search 的链横跨 `retrieve/` 与 `rank/`、Add 的链横跨 `pairing/`、`store/`、`embed/`——**没有任何单个下层模块能拥有整条链**，所以"顺序"必须有人拥有，就在这里（路由仍然是薄的，`routes.py` 只有形状映射）。
+> **为什么有 `pipeline.py`**：本层"不做检索、不做配对、不碰存储"指的是**不重新实现**那些逻辑（全部往下调用）。而 Search 的链横跨 `facts/`、`retrieve/` 与 `rank/`、Add 的链横跨 `pairing/`、`facts/`、`store/`、`embed/`——**没有任何单个下层模块能拥有整条链**，所以"顺序"必须有人拥有，就在这里（路由仍然是薄的，`routes.py` 只有形状映射）。
 
 ## 这一层只做两件事
 
@@ -49,6 +49,27 @@ capture.py    请求**原文**采集（诊断旁路，默认关）—— **S6** 
 | 4 | **位置 = `(request_id, local_index)`**（D28）——`request_id` 是 **opaque string**：**不许解析它**，也不许回退到"按到达顺序分配"。同 session 并发与乱序到达都安全 | §15 → **D28** |
 | 5 | **非 200 的行为未定义，必须假设 AML 会重试**——内部异常应让本批保持"可重试"（事务未提交），**而不是返回一个"部分成功"** | §15 |
 | 6 | **`user_id` 是唯一隔离字段**；`session_id` 不是 Search 的过滤条件 | §2.2 |
+
+---
+
+## 共同取证分支（`retrieval.grounded_evidence`）
+
+Search 在开关打开时**先试共同取证**，不适用就**整体回退**到原混合检索链，
+**不半途混用**。本层拥有的是"先试哪条、何时退回"这个顺序决策；**回退判据的唯一
+声明处**在 [`../retrieve/CLAUDE.md`](../retrieve/CLAUDE.md) 的「不齐全 ⇒ `None`」节
+（键语义在 [`../../../docs/config-reference.md`](../../../docs/config-reference.md)）——
+注意计划编译不出来、索引未扫完或超限时，本层**根本不进取证路径**，
+而不是"执行器返回了 `None`"。
+
+命中时**只做取证与打包**：原文或有来源的独立事实片段复用既有的段结构、
+槽位与 token 双预算（此路径半径恒为 0），**不调用 rerank**。
+
+Add 侧：`apply_batch` 在**同一个写事务**里逐行索引事实（开关打开时）；
+**幂等重放**（守卫命中）也经同一入口补写事实索引——真源不变。
+
+四个配置键由 `build_services()` 从 `AppConfig` 注入两条 pipeline，**本层不读环境变量**：
+`retrieval.grounded_evidence`（两条都收）、`retrieval.evidence_limit` /
+`retrieval.evidence_hop_limit` / `retrieval.fact_backfill_limit`（只进 Search）。
 
 ---
 
@@ -95,4 +116,4 @@ capture.py    请求**原文**采集（诊断旁路，默认关）—— **S6** 
 
 跑 Smoke 之前逐条过 [`../../../docs/contract.md`](../../../docs/contract.md) §4 的清单。**Smoke 次数有限（每轨道 ≤30 次），不要拿它当调试器。**
 
-`make contract-check` 指 [`../../eval/smoke/preflight.py`](../../../eval/smoke/preflight.py)——**尤其是"No.1 精确计数"和"No.3 created_at 始终存在"这两条**，它们最容易在加了邻域扩展之后悄悄破掉。
+`make contract-check` 指 [`../../../eval/smoke/preflight.py`](../../../eval/smoke/preflight.py)——**尤其是"精确计数 ≤ `top_k`"与"`created_at` 始终存在"这两条检查**，它们最容易在加了邻域扩展之后悄悄破掉。

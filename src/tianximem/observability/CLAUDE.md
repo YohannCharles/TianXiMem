@@ -69,9 +69,9 @@ runner 读进 run record 的 `metrics=`——**不是 `counters=`**，那份是 
 
 ## ⚠ 本地数字与线上对不上（必读）
 
-> **本地复现不了词数那一路**（§6.5 / §12.3 第 5 条）：AML 按"20 条消息**或** 2,000 个 **Adapter 计数的词**"切分，而**计数口径官方是给了的**（`2,000 **Adapter-counted** words`）——**本仓复现不了的是那个 Adapter 本身**（平台侧冻结组件），所以本地只能按 20 条复现。
+> **词数那一路只能近似**（§6.5 / §12.3 第 5 条）：AML 按"20 条消息**或** 2,000 个 **Adapter 计数的词**"切分，而**计数口径官方是给了的**（`2,000 **Adapter-counted** words`）——**本仓复现不了的是那个 Adapter 本身**（平台侧冻结组件），本地那一路只能用**空白分词近似**。
 
-**这只影响 [`../../eval/harness/batching.py`](../../../eval/harness/batching.py)**（它已声明只复现 20 条那一路）——
+**这只影响 [`../../eval/harness/batching.py`](../../../eval/harness/batching.py)**（它已声明两条预算都做、词数那半是近似）——
 本目录没有依赖切批口径的计数器。S2 本身仍是 [`../../../docs/open-questions.md`](../../../docs/open-questions.md) 里的一条未决事项。
 
 ---

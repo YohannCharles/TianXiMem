@@ -15,22 +15,22 @@ var/
 ├── tianxi.db              SQLite 真源（§6.1）——**唯一的不可重建物**
 ├── tianxi.db.pre-d25      旧库留档（2026-09-30，schema 早于 D25）
 ├── tianxi.db.pre-official 旧库留档（2026-10-01，**add 形态改成 official 之前**那一代）
-├── qdrant_storage/        Qdrant 卷（§6.3）——**可从 tianxi.db 全量重建**
 ├── embed_cache/           embedding 缓存（§7.2）——**可重建，但重建要花钱**
 ├── capture/               请求原文采集（`capture.enabled`）——**诊断产物，可弃**
-└── logs/                  服务日志（`make serve` 重定向到这里）
+├── logs/                  服务日志（如 `serve.log`）
+└── <实验与跑批的临时目录、日志>  快照库、逐题答案——**可弃**
 ```
 
-**整目录 gitignored**（`.gitignore` 的"运行时产物"段），**只保留本 README**，让它在 checkout 后依然存在且有说明。
+**整目录 gitignored**（`.gitignore` 的"运行时产物"段），**只保留本文件**，让它在 checkout 后依然存在且有说明。
 
 ---
 
-## ⚠ 三样东西的可重建性完全不同
+## ⚠ 四样东西的可重建性完全不同
 
 | 物 | 丢了会怎样 |
 | --- | --- |
 | **`tianxi.db`** | **没了就没了。**它是真源，**备份对象只有它** |
-| `qdrant_storage/` | 可从 `tianxi.db` 的正文全量重建（这正是"Qdrant 是派生读存储"的意思，§6.3） |
+| **Qdrant 卷**（`deploy/compose.yaml` 的 Docker 命名卷，**不在本目录**） | 可从 `tianxi.db` 的正文全量重建（这正是"Qdrant 是派生读存储"的意思，§6.3） |
 | `embed_cache/` | 可重建，**但要重付一遍 embedding 的钱**——本地模型是电费，线上是 API 账单 |
 | `capture/` | **丢了就丢了，不用重建**——它是诊断产物（要再来一次就再打开开关跑一遍），而且**不进备份**（`deploy/CLAUDE.md` §4 的 runbook 只备份 SQLite） |
 
@@ -47,7 +47,7 @@ var/
 | **不要往这里提交任何东西** | 整目录被忽略，提交了也看不见——**若你写的东西需要入库，它就不属于 `var/`**（派生【产物】的归属见 `.gitignore` 里那条说明） |
 | **embedding 缓存必须落盘**（§7.2） | 不是优化项，是**成本结构**：v1 的 Add 阶段不调用任何 LLM，embedding 是唯一的 Add 侧成本，**且只与内容有关——缓存后即成为一次性成本，与迭代次数无关**（实现要求见 [`../src/tianximem/embed/CLAUDE.md`](../src/tianximem/embed/CLAUDE.md)） |
 
-> **缓存键是"渲染后文本的哈希"，不含模型标识**。所以 Step 5 切模型时**必须主动作废整个缓存目录**——否则旧向量会**静默命中**，而维度不同的表现只是"检索结果很差"，**不会报错**。
+> **缓存条目键 = "渲染后文本的哈希"**（不能用 `id`）；**一个坐标系一个缓存文件**——坐标系 = 模型名 + 渲染模板版本，写进文件名与文件内（见 [`../src/tianximem/embed/CLAUDE.md`](../src/tianximem/embed/CLAUDE.md)）。Step 5 切模型时按 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的 runbook 第 3 步**作废整个缓存目录**。
 
 ---
 

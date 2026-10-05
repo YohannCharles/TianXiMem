@@ -82,10 +82,12 @@ make eval DATASET=mquake-remastered ARGS='--limit 1 --max-questions 2'   # offic
 细节与实测依据在 [`../harness/add_shape.py`](../harness/add_shape.py)。
 
 **十个数据集有加载器**：`locomo-refined` / `longmemeval-s` / `clbench` / **`beam`** 走
-**归档里的官方 pipeline**；`mquake-remastered` / `memtrapbench` / `corporatebench` / `medmemorybench`
+**归档里的官方 pipeline**；`personamem-v2` 走**本仓的适配器**
+（[`../harness/personamem_pipeline.py`](../harness/personamem_pipeline.py)——**作答与判分都直接调官方那份的函数**）；
+`mquake-remastered` / `memtrapbench` / `corporatebench` / `medmemorybench` / **`tempreason`**
 （来自 `official-extra`）**没有官方 AML pipeline**，走我们自写的
 [`../harness/extra_pipeline.py`](../harness/extra_pipeline.py)
-⇒ **这四家的分数只在仓内前后对比，别与官方分数对齐**。
+⇒ **这五家的分数只在仓内前后对比，别与官方分数对齐**。
 ⚠ `medmemorybench` 例外一半：**判分口径是上游发布的**（`metrics/`，见 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md)），我们照它实现——但**作答侧**仍是我们自己的 prompt。
 
 ⚠ **`beam` 的判分产物与那三份形状不同**：官方 `pipeline_beam.py` 写的是 `llm_judge_score`
@@ -124,7 +126,7 @@ make eval DATASET=mquake-remastered ARGS='--limit 1 --max-questions 2'   # offic
 
 ```bash
 make serve                                    # 另一终端，服务得先起着
-make baseline DATASET=locomo-refined          # 44 分钟 ⇒ 与 0.7659 比
+make baseline DATASET=locomo-refined          # 44 分钟 ⇒ 与 ledger 的「当前缺省口径下的基线」比
 ```
 
 **三条判读纪律**（都吃过亏，逐条都有实测依据）：

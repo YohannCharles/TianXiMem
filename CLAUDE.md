@@ -18,13 +18,13 @@
 
 | 状态 | 模块 |
 | --- | --- |
-| ✅ **已实现** | [`store/`](src/tianximem/store/)（SQLite 真源 + Qdrant + schema）· [`pairing/`](src/tianximem/pairing/)（**记忆块组合 / 一次 Add = 唯一边界，D24**）· [`embed/`](src/tianximem/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + **`text-embedding-v4`**（提交口径，2026-09-28）+ 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianximem/common/) 的 **`render.py`**（渲染唯一实现）、**`annotate.py`**（**相对时间就地注解**，只改 `content`、不碰索引，**D22**）、**`config.py`**（**全包唯一读环境变量的地方**，③-d）与 **`tokens.py`**（`o200k_base` 计数，§6.4）· [`retrieve/`](src/tianximem/retrieve/)（**策略与参数所有权** + §8 判据 + `dedup_candidates`）· [`rank/`](src/tianximem/rank/) 的 **`reranker.py`**（**远端精排接入**）、**`neighbor.py`**（**扩窗 + 段合并**，§10/§11.2）与 **`packaging.py`**（**段级打包 + 双预算**）· [`service/`](src/tianximem/service/)（HTTP 层 + **Add/Search 端到端编排**，③-c + **`GET /health` 探活**，S4 + **请求原文采集**（诊断旁路，默认关；**S6** 的唯一直接观察口））· [`observability/`](src/tianximem/observability/) 的 **`metrics.py`**（**§14 的出口**：latency + rerank 计数 → run record；⚠ **`embed/` 与 `agent/` 两个发射方还没接**）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` + **`submit.yaml`**（提交期 profile，2026-09-28 建；**由模型派生的阈值待 Step 5 重标定**） · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）· [`eval/datasets/`](eval/datasets/)（**加载层 + schema 落差预处理**）· [`eval/harness/`](eval/harness/)（**HTTP 驱动（含 `Add` 的有界重试）/ 切批 / **正文形态 `add_shape.py`** / 裁判包装（含 `extra_pipeline.py` 等适配器）/ run record + `api_config.py` + `annotate.py` 注解原型**）· [`eval/reports/schema.py`](eval/reports/schema.py)（**run record 的形状**）· [`tools/check_env.py`](tools/check_env.py)（**环境自检，含 V7 探针**）、[`tools/probe_reranker.py`](tools/probe_reranker.py)（**精排探针**）、[`tools/t2_retrieval_dump.py`](tools/t2_retrieval_dump.py)（**T2 的纯 BM25 转储**）与 [`tools/reindex.py`](tools/reindex.py)（**从 SQLite 全量重建 Qdrant**）、[`tools/diagnose_run.py`](tools/diagnose_run.py)（**跑批诊断：把「低分」与「模型不行」分开**——判读树 + **「证据在不在」那条判据的自校准**）与 [`tools/ab_answer_prompt.py`](tools/ab_answer_prompt.py)（**答案 prompt 的 A/B：只重答拒答题**）· [`eval/experiments/`](eval/experiments/)（**通用 runner `run.py`** + **冻结口径 [`recipes.py`](eval/experiments/recipes.py)** + T1/T2/A3 三个 arm）· [`eval/reports/ledger.md`](eval/reports/ledger.md)（**结果台账**）· [`configs/runs/`](configs/runs/)（**各 arm 的冻结配置**）· [`deploy/`](deploy/) 的 `Dockerfile` + `compose.yaml`（**整栈容器：服务 + Qdrant**）+ `.env.example`（**服务器形态，2026-09-28 起**）——测试在 [`tests/`](tests/) |
+| ✅ **已实现** | [`store/`](src/tianximem/store/)（SQLite 真源 + **派生事实表**（`memory_facts` / `evidence_coverage`，可由正文重建）+ Qdrant + schema）· [`pairing/`](src/tianximem/pairing/)（**记忆块组合 / 一次 Add = 唯一边界，D24**；共同事实索引在同一写事务内写入）· [`facts/`](src/tianximem/facts/)（**有逐字来源的确定性事实记忆**：来源句法抽取 + 问题计划 + 当前输入检查——不调 LLM、不生成答案、不做名单与计数）· [`embed/`](src/tianximem/embed/)（`Embedder` 协议 + Qwen3-Embedding-8B + **`text-embedding-v4`**（提交口径，2026-09-28）+ 落盘缓存 + 查询侧 instruction 兼容层）· [`common/`](src/tianximem/common/) 的 **`render.py`**（渲染唯一实现）、**`annotate.py`**（**相对时间就地注解**，只改 `content`、不碰索引，**D22**）、**`config.py`**（**全包唯一读环境变量的地方**，③-d）与 **`tokens.py`**（`o200k_base` 计数，§6.4）· [`retrieve/`](src/tianximem/retrieve/)（**策略与参数所有权** + §8 判据 + `dedup_candidates` + **共同证据执行器 `evidence.py`**——计划不适用 / 索引未扫完 / 存在未解释的相关声明或冲突 / 超限 ⇒ 回退原混合检索）· [`rank/`](src/tianximem/rank/) 的 **`reranker.py`**（**远端精排接入**）、**`neighbor.py`**（**扩窗 + 段合并**，§10/§11.2）与 **`packaging.py`**（**段级打包 + 双预算**）· [`service/`](src/tianximem/service/)（HTTP 层 + **Add/Search 端到端编排**（Search 先试**共同取证分支**，不适用则整体回退原链），③-c + **`GET /health` 探活**，S4 + **请求原文采集**（诊断旁路，默认关；**S6** 的唯一直接观察口））· [`observability/`](src/tianximem/observability/) 的 **`metrics.py`**（**§14 的出口**：latency + rerank 计数 → run record；⚠ **`embed/` 与 `agent/` 两个发射方还没接**）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` + **`submit.yaml`**（提交期 profile，2026-09-28 建；**由模型派生的阈值待 Step 5 重标定**） · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）· [`eval/datasets/`](eval/datasets/)（**加载层 + schema 落差预处理**）· [`eval/harness/`](eval/harness/)（**HTTP 驱动（含 `Add` 的有界重试）/ 切批 / **正文形态 `add_shape.py`** / 裁判包装（含 `extra_pipeline.py` 等适配器）/ run record + `api_config.py` + `annotate.py` 注解原型**）· [`eval/reports/schema.py`](eval/reports/schema.py)（**run record 的形状**）· [`tools/check_env.py`](tools/check_env.py)（**环境自检，含 V7 探针**）、[`tools/probe_reranker.py`](tools/probe_reranker.py)（**精排探针**）、[`tools/t2_retrieval_dump.py`](tools/t2_retrieval_dump.py)（**T2 的纯 BM25 转储**）与 [`tools/reindex.py`](tools/reindex.py)（**从 SQLite 全量重建 Qdrant**）、[`tools/diagnose_run.py`](tools/diagnose_run.py)（**跑批诊断：把「低分」与「模型不行」分开**——判读树 + **「证据在不在」那条判据的自校准**）与 [`tools/ab_answer_prompt.py`](tools/ab_answer_prompt.py)（**答案 prompt 的 A/B：只重答拒答题**）、[`tools/targeted_eval.py`](tools/targeted_eval.py)（**固定失败案例的小样本 HTTP 评测**：manifest 驱动、逐题落盘可续跑、复用 harness 的答案与裁判）· [`eval/experiments/`](eval/experiments/)（**通用 runner `run.py`** + **冻结口径 [`recipes.py`](eval/experiments/recipes.py)** + T1/T2/A3 三个 arm）· [`eval/reports/ledger.md`](eval/reports/ledger.md)（**结果台账**）· [`configs/runs/`](configs/runs/)（**各 arm 的冻结配置**）· [`deploy/`](deploy/) 的 `Dockerfile` + `compose.yaml`（**整栈容器：服务 + Qdrant**）+ `.env.example`（**服务器形态，2026-09-28 起**）——测试在 [`tests/`](tests/) |
 | ⬜ **未实现** | [`llm/`](src/tianximem/llm/) · **`eval/` 还没写的**：`datasets/contracts.py`、`experiments/` 的 **A0 一个 arm**（A4 已移出 v1——它要 agent 真的存在，而 v1 不做 agentic，D13）、`baselines/`（**两个参考实现的代码已 Vendor 就位，B1 包装仍未做**——[`refind/`](eval/baselines/refind/) 是 MIT 的 B1，[`invmem-candidate/`](eval/baselines/invmem-candidate/) **只读、不是基线**）、`smoke/` 的 S1/S2/S3 探针与 `quota.py` · 尚未接线的消融开关（**逐项状态以 [`docs/config-reference.md`](docs/config-reference.md) §2 的表为准**——`checker.*` / `agent.*` / `rrf` 未接，`neighbor` 只有 `radius` 可关，而它**默认就是 0**（**D31**，2026-10-01）） |
 | ⛔ **v1 不做** | [`agent/`](src/tianximem/agent/)（D13） |
 
 > **⚠ 状态描述是本仓最易过期的东西**：改动状态时，**连同搜一遍所有声称"未实现 / 未开始"的地方**——本表是唯一权威，别处只应指回这里。
 
-**目标**：AML 榜分优于 ReFind 的 44.97。核心判断是**检索不是瓶颈（召回已 96–99%）、选择与排序才是**，所以主线是 Rerank + Context Packaging（§4 / §11）。
+**目标**：AML 榜分优于 ReFind 的 44.97。核心判断是**检索不是瓶颈（召回已 96–99%）、选择与排序才是**，所以主线是 Rerank + Context Packaging（§4 / §11），外加**有来源的共同事实取证**（[`facts/`](src/tianximem/facts/) + [`retrieve/evidence.py`](src/tianximem/retrieve/evidence.py)：把原文明示的关系 / 容器 / 时段编译成可逐条取证的独立事实，名单与计数共用同一证据计划；§2.1 的红线照旧）。
 
 ---
 
@@ -33,6 +33,7 @@
 | 要动的东西 | 先读 |
 | --- | --- |
 | `src/tianximem/<模块>/` 下任何代码 | 该目录的 `CLAUDE.md`（要写什么、边界在哪、本层的坑） |
+| 共同事实取证（`facts/`、`memory_facts`、`retrieval.grounded_evidence`） | [`src/tianximem/facts/CLAUDE.md`](src/tianximem/facts/CLAUDE.md) + [`docs/architecture.md`](docs/architecture.md) 的「当前共同事实取证结构」 |
 | 契约层（service、Add/Search 形状） | [`docs/contract.md`](docs/contract.md) |
 | 任何阈值 / 权重 / 开关 | [`docs/config-reference.md`](docs/config-reference.md)（**开关的唯一声明处**）+ [`configs/CLAUDE.md`](configs/CLAUDE.md)（**每个键住在 `.env` 还是 yaml**）。**全包只有 [`common/config.py`](src/tianximem/common/config.py) 读环境变量**——有静态测试钉住 |
 | 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（逐条 `Dn` + 待决事项——**编号别在这里列范围，它会过期**） |
@@ -141,7 +142,7 @@
 | **Smoke** | 验证契约合规、端到端连通 | 每轨道 **≤30 次**，每小时 1 次，**不进榜** |
 | **Full** | 最终定稿 | 每 Key 每轨道 **2 次**，第二次隔 30 天；**一旦接受即版本冻结** |
 
-**没有"跑一遍看看"的余地。** 任何能在代理评测上回答的问题，都不该花 Smoke 的额度。Smoke 只做两件事：验证契约合规、消除本地无从验证的未知（§17.1 的 S1–S3）。
+**没有"跑一遍看看"的余地。** 任何能在代理评测上回答的问题，都不该花 Smoke 的额度。Smoke 只做两件事：验证契约合规、消除本地无从验证的未知（§17.1 的 S 系列——逐条现状见 [`docs/open-questions.md`](docs/open-questions.md)）。
 
 **代理评测的边界**：只覆盖 LoCoMo-Refined + LongMemEval——这两份恰好是六份数据集里**唯一共用同一套契约**的。其余四份的记忆注入字段与裁判规则各不相同（PersonaMem 甚至**根本不读检索字段**），所以**代理分数不能线性外推到全赛道**（§12.4）。只在代理上做**相对**比较。
 
@@ -154,8 +155,8 @@
 - **数字只住在 [`eval/reports/`](eval/reports/)**——其余文档引用数字时**指回去**，不要复制。
 - **单数来源**：一条约束只有一个家。写了第二遍就是漂移的开始——发现重复，改成指针。
 - **配置化 ≠ 可调**。`rrf.k = 61` 与 `top_k = 100` 都是**正确性常量**，写进配置是为了追溯与切换，**不是为了调**。
-- **编号纪律**：`S1`–`S3` 属 §17.1（**`S4`–`S7` 是按同一系列增补的**，逐条出处见 [`docs/open-questions.md`](docs/open-questions.md)——**别以为 `S4+` 是空的**）、`P1`–`P3` 属 §17.3、`R1` 属 §12.1、`E1`–`E7` 属 §17.2（**E2 已随 D15 删除，该号不再启用**），**不要挪作他用**；Step 5 专属事项用 `S5-*`。
-- **任何"顺手在写入时抽个摘要 / 抽事实 / 归并实体"的想法都属于 v2**——它会同时破坏 Add 侧的成本属性与 §11.3 的"原文优先"（v1 不产生任何合成文本）。
+- **编号纪律**：`S1`–`S5` 属 §17.1（**`S6`–`S8` 是按同一系列增补的**，逐条出处见 [`docs/open-questions.md`](docs/open-questions.md)——**别以为 `S6+` 是空的**）、`P1`–`P3` 属 §17.3、`R1` 属 §12.1、`E1`–`E7` 属 §17.2（**E2 已随 D15 删除，该号不再启用**），**不要挪作他用**；Step 5 专属事项用 `S5-*`。
+- **事实必须由原文支持**：`facts/` 产生的是**有逐字来源的独立事实**（引句必须存在于声明的 `question` / `answer` 侧；确定性解析、**不调用 LLM**、不生成答案、不做名单 / 计数 / 汇总）。**任何"让模型在写入时抽摘要 / 归并实体"的想法仍然属于 v2**——它会同时破坏 Add 侧的成本属性与 §11.3 的"原文优先"。边界见 [`src/tianximem/facts/CLAUDE.md`](src/tianximem/facts/CLAUDE.md)。
 
 ```bash
 cp .env.example .env      # 填密钥与路径

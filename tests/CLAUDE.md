@@ -26,6 +26,18 @@ test_datasets_extra.py  `official-extra` 各份 + PersonaMem 的加载层（合�
                         **纯函数判分**（MQuAKE 别名表 / CorporateBench 标量·布尔·集合 /
                         MedMemoryBench 的字符串·选项集合 / 三处裁判 JSON 解析：**嵌套**那条、
                         **未转义引号**那条、**非布尔 `is_correct`** 那条）+ TempReason 的**切句**
+test_grounded_evidence.py 共同取证的 Add→Search 闭环：来源与问题**共用同一关系绑定**、
+                        库存/数量证据保原文顺序、不确定/计划/引用/他人声明不构成正向事实、
+                        冲突或超限退回原文
+test_evidence_operators.py 原专用路径按共同算子回归（**不发真请求**）：filter / walk / interval
+                        的选择与回退、引用解析、显式更正与未解析编辑保原文、
+                        新库仅四张表 + **首次表示冻结**
+test_fact_index_coverage.py 事实索引的覆盖与**有界补扫**：冷 Search 补出与 Add 时一致的证据、
+                        **补不满绝不返回半份集合**、失败回滚、真源与旧派生表一字不动
+test_chinese_evidence.py 中文显式表达复用同一套共同字段与算子：角色/动词/数量归一、
+                        **部分抽取不得冒充完整集合**（物理扫描齐全 ≠ 语义齐全）、单位与原文顺序不丢
+test_current_payload.py 当前字面输入的依赖检查：payload 齐全且开关开 ⇒ **不检索、直接空结果**；
+                        缺项/变量/冲突/历史依赖 ⇒ 照常检索（原混合链）
 ```
 
 > ⚠ **§13 的开关纯度没有独立文件**。断言住在**各自开关所在的模块**里：
@@ -51,7 +63,7 @@ test_idempotency.py  批次级守卫
 | 用例 | 覆盖 | 住在哪 |
 | --- | --- | --- |
 | `U A U A` / `U U A A A U A` / `A U A` / `U A U` / `A` / `U` | 六个形状逐字对照 | `test_pairing.py`（**Test 1–6**） |
-| 相邻 U+A 配对、**配不上的各自独立**（同 role 相邻也不并，D29）、工具调用序列**不劈开** | 见 `test_pairing.py`；S5 的形状（`U U U A` 仍合并）单独有用例 | `test_pairing.py` |
+| 相邻 U+A 配对、**配不上的各自独立**（同 role 相邻也不并，D29）、工具调用序列**不劈开** | 见 `test_pairing.py`；S5 的形状（`U U U A` ⇒ `[U] [U] [U+A]`：只有**最后一条** user 进配对块，**D32**）单独有用例 | `test_pairing.py` |
 | 未知 role（`system` / `tool` …） | **不得丢消息**——判据只依赖"是不是 `user`"，**不要枚举白名单** | `test_pairing.py` |
 | 来源元数据 | `source_idxs` 合起来是 `0..n-1` 的**排列**（无丢失、无重复） | `test_pairing.py` |
 | **跨 Add 不拼接** | `Add0=[U A U]` + `Add1=[A U A]` ⇒ **不出现 U(Add0)+A(Add1)** | `test_apply.py`（**Test 7**） |
@@ -100,7 +112,7 @@ test_idempotency.py  批次级守卫
 | 每项含 `id` / `content` / **`created_at`** | `created_at` **始终存在**：日粒度或 `""`（§11.3） |
 | `score` 单调递减 | 且**不是**原始 RRF 分数（§11.3） |
 | 200 响应原样回显三个字段 | `request_id` / `user_id` / `session_id` |
-| **根级 `limit` 取自请求的 `top_k`** | **没写死 100**——写死会在 AML 传更小值时变成"返回超限"，那是**契约错误**（§7.3） |
+| **根级 `limit` 取 `2 × prefetch_limit`，`top_k` 截断在 [`fusion.py`](../src/tianximem/retrieve/fusion.py) 排序之后** | **任何一层都没写死 100**；契约 `len(data) <= top_k` 仍成立，截断点后移的理由见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md) 的 V13（§7.3） |
 
 ### ⚠ 段模型改了四件事——写用例前必须知道
 
@@ -116,6 +128,9 @@ test_idempotency.py  批次级守卫
 > **这就是"一个永远不会 FAIL 的检查等于没有检查"的又一次具体教训**：
 > 预检里"`top_k` 真的会截断"那条一度**静默空过**（3 条相邻记忆 = 1 段，
 > `top_k=1` 返回 1 条成了必然）。⇒ **凡是"要多条才能验"的检查都要回头看一眼**。
+>
+> 共同取证的断言还有**另一种空过**：断言"这次输出的是回退原文"常写成
+> `all("Memory fact" not in ...)`——**空结果也满足它**。⇒ **先钉非空 / 条数，再断 `content` 形状**。
 
 ### 隔离（§2.2）
 
@@ -125,7 +140,7 @@ test_idempotency.py  批次级守卫
 | `session_id` **没有**被当成 Search 的过滤条件 | 它是分组字段，不是过滤器 |
 
 **隔离要按"路径"逐个测**，不能只测主检索路径——**邻域扩展是 SQL 查询，很容易忘记带 `user_id` 条件**。
-⇒ ✅ 已覆盖：`test_neighbor.py::test_expansion_never_crosses_sessions`（**同位置**、不同 session / 不同 user
+⇒ ✅ 已覆盖：`test_neighbor.py::test_expansion_never_crosses_sessions_or_users`（**同位置**、不同 session / 不同 user
 三种行同时摆在库里，只有同 `(user_id, session_id)` 的那条能进）。
 
 ---
@@ -158,6 +173,7 @@ test_idempotency.py  批次级守卫
 | `neighbor: false` | 种子集合不变（只是没有扩窗） |
 | `packaging.annotate_relatives: false` | **名次 / `id` / `created_at` / `score` / 段数 / token 口径全不变**，而且**被索引的文本逐字相同**（只是 `content` 少了那层括号注） |
 | `dense: false` | ——（**无下游依赖**：D15 删掉了裸 BM25 模式与"验证后再加 dense"的分阶段，所以没有任何东西依赖它） |
+| `retrieval.grounded_evidence: false` | **整条共同取证不执行**：Search **原混合检索链逐字不变**（候选 / 段 / 打包 / 响应形状照旧）；Add **不写事实索引**（真源与幂等重放不变） |
 
 > ✅ **`rerank` 的纯度断言**：
 > `test_reranker.py::test_candidate_set_is_unchanged_by_rerank` 断言"精排把顺序整个倒过来之后，

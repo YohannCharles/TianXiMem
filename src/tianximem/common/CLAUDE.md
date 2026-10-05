@@ -5,7 +5,7 @@
 ## 本模块的构成
 
 ```text
-render.py    ✅ 已实现——渲染模板的**唯一实现**
+render.py    ✅ 已实现——渲染的**唯一实现**（QA 对与事实片段）
 annotate.py  ✅ 已实现——正文里的相对时间**就地注解**（只改 `content`、不碰索引）
 config.py    ✅ 已实现——**全包唯一**读环境变量的地方（③-d）
 tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
@@ -28,17 +28,18 @@ tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 - [`../rank/`](../rank/) 的 packaging **也不**自己拼
 - 两处都调 `render.py`，传同一个 QA 对
 
-**渲染规则（模板、role 标记、自定界）的唯一声明处是 [`../rank/CLAUDE.md`](../rank/CLAUDE.md) §4**——本文件不重复，避免两处规则描述漂移（**同样的理由**）。
+**QA 对的渲染规则（模板、role 标记、自定界）的唯一声明处是 [`../rank/CLAUDE.md`](../rank/CLAUDE.md) §4**——本文件不重复，避免两处规则描述漂移（**同样的理由**）。
 
 **⚠ 「贵」消融项**：改渲染模板 = 改变 embedding 输入 = **整个向量索引要重建**（[`../../../tools/reindex.py`](../../../tools/reindex.py)）。模板现为 `v1` + **日粒度日期前缀**（**D21**，2026-09-25）——**推翻它要付重建索引的钱**。
 
-**三个入口都在本模块**（一个对 → 它的文本只该有一条路）：
+**四个入口都在本模块**（一个对 / 一条事实 → 它的文本只该有一条路）：
 
 | 名字 | 用途 |
 | --- | --- |
 | `render(q, a, *, date="")` | 逐对的唯一拼装（`date` 非空 ⇒ 前缀 `[YYYY-MM-DD] `） |
 | `render_pair(pair, *, inject_abs_time)` | **两个调用点的入口**（索引侧 / 精排输入）——日期口径只此一处。⚠ **`content` 是那个声明式例外**：它走 `render` + `render_date` + 可选的 `annotate()`（见 [`../rank/CLAUDE.md`](../rank/CLAUDE.md) §4 与不变式 I1） |
 | `render_date(...)` · `day_granularity(...)` · `event_day(...)` | T1 的开关落点、日期格式（`created_at` 与 `content` **共用同一个格式**）与**时间换算的唯一一处** |
+| `render_evidence(*, statement, source_date, source_quote, quantitative=False)` | **共同事实的渲染入口**（`Memory fact` 首行 + `Statement` / `Source record date` / `Source quotation` 标记行）——数量观察不在正文重复数值（`quantitative=True` 时省略 `Source quotation` 行），完整引句仍存在事实索引里。它同属"文本拼装只有一处实现"的纪律：事实片段在抽取时经它渲染并落库，Search 直接取用；**事实不进向量索引**，所以它不走 I1 的 embedding↔content 比对 |
 
 ⇒ **T1 的"带日期"臂**（`packaging.inject_abs_time`）不是三处各改一遍，而是这一条路上的一个开关。
 ⛔ 反过来：**不要在别处再拼一次日期**——那会同时踩中"两处渲染漂移不报错"与"两臂同时在两个维度上不同"。

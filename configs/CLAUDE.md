@@ -2,9 +2,7 @@
 
 > **状态**：`default.yaml` 与 `local.yaml` **已建**，由
 > [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py) 加载。
-> **`runs/` 已建**：`configs/runs/{t1-plain,t1-dated,a3-on,a3-off}/` 是各对照臂的冻结快照（由
-> [`../eval/experiments/t1_timestamp.py`](../eval/experiments/t1_timestamp.py) 与
-> [`a3_rerank.py`](../eval/experiments/a3_rerank.py) 的 `--freeze` 生成）。
+> **`runs/` 已建**：**43 个目录**的对照臂配置快照（分类与重放注意见下节）。
 > `submit.yaml` **已建**（2026-09-28）——**现在只有 `models.embedder` 一项**
 > （`text-embedding-v4`）；**由模型派生的量（token 预算实测量、全部标定阈值）待 Step 5 重标定后往这里补**。
 > **完整配置项清单见 [`../docs/config-reference.md`](../docs/config-reference.md)**（每个配置项、默认值、出处 §）。本文件只说**为什么这么组织**。
@@ -16,7 +14,7 @@
 | 层 | 拥有哪些键 | 例子 |
 | --- | --- | --- |
 | **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXIMEM_SQLITE_PATH`、`TIANXIMEM_METRICS_PATH`、`TIANXIMEM_WORKERS` |
-| **`configs/*.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.rrf.k`、`models.embedder`、`pairing.batch_max_messages` |
+| **`configs/*.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.rrf.k`、`models.embedder`、`storage.qdrant.collection` |
 
 **两者不重叠，也不许重叠。** 两处都能设的值，最终会变成"跑出来的结果和 yaml 里写的不一样，
 而没人知道为什么"。在 yaml 里写一个 env 拥有的键（比如 `storage.sqlite.path`）会**直接报错**，
@@ -58,28 +56,53 @@
 
 ```text
 configs/
-├── default.yaml     # 基线：全部有消费方的阈值与模型名（§15 的七个消融项接完后才齐）
+├── default.yaml     # 基线：全部有消费方的阈值与模型名（含共同取证的四个检索键）
 ├── local.yaml       # 开发期覆盖（**只写与基线不同的键**）
 ├── submit.yaml      # 提交期覆盖（🟡 已建：模型名；阈值待 Step 5 重标定）
-└── runs/            # 每次对照实验的配置快照（哪个实验、什么时候、哪套模型）✅ T1 两臂 + A3 两臂已建
+└── runs/            # 每次对照实验的配置快照（哪个实验、什么时候、哪套模型）✅ 43 个目录
 ```
 
 `runs/` 的用途：`docs/experiments.md` 要求记录**配置指纹**。让每个实验留下**冻结的配置副本**，而不是"当时的 local.yaml 大概是这样"——**后者在 Step 5 之后就无法重建了**。
 （跑某个 arm 用 `TIANXIMEM_CONFIG_DIR=configs/runs/<arm>` 指向那份快照。）
 
-> ⛔ **2026-09-28 网关迁移后，这些快照里的 `models.embedder` 已经过期**
-> （`Qwen/Qwen3-Embedding-8B` → `qwen3-embedding-8b`，见
-> [`../docs/config-reference.md`](../docs/config-reference.md) §9）。
+43 个目录大致分三类，重放前先确认手上这份落在哪一类：
+
+- **2026-09 的对照臂**：`t1-*` / `a3-*` / `annotate` / `seed-*` / `cov-wide` / `clbench` / `lme`——
+  T1/A3 四份由 [`../eval/experiments/t1_timestamp.py`](../eval/experiments/t1_timestamp.py) 与
+  [`a3_rerank.py`](../eval/experiments/a3_rerank.py) 的 `--freeze`（脚手架 `arms.py`）生成；其余几份是一次性冻结
+  （各份 `local.yaml` 头部写着当时动了哪几件事）；数字在 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。
+- **两个外部基线**：`refind`（B1）与 `invmem-qwen`（候选仓库 + 我们的 embedding shim）——这两份记的是
+  **另一个服务**的启动环境变量，不是我们的 yaml（loader 读不了它们）；口径见
+  [`../eval/baselines/CLAUDE.md`](../eval/baselines/CLAUDE.md)。
+- **共同取证的各阶段臂**（`*-20261005`）：
+  - **加载得起来**：`chinese-evidence-20261005`、`unified-evidence-20261005/{candidate,generalization}`、
+    `facts-benchmark-20261005/{on,off}`（本轮冻结配置；`grounded_evidence` 的开 / 关两臂），以及
+    `goal-20261005-{baseline,employment,subject}`（这三份的 `retrieval` 段不含已删除的业务键；
+    其中 `-baseline` 还缺 `grounded_evidence` 键 ⇒ 事实取证按**关闭**跑）。
+  - **加载会报错、只供对应旧提交复现**：其余带业务专用键的 `goal-20261005-*`、
+    `generalization-20261005`、`generic-evidence-20261005/*`、`unified-evidence-20261005/baseline`——
+    那些业务专用键（`employment_facts` / `statement_source_limit` / …）**不在当前键集里**，
+    **当前代码遇到它们拒绝启动**。
+  - 报告见 [`../eval/reports/`](../eval/reports/) 的 `*-20261005.md`。
+
+> ⛔ **2026-09 那批快照的 `models.embedder` 是旧网关 id**（`Qwen/Qwen3-Embedding-8B`；现役 id
+> `qwen3-embedding-8b`，对照表见 [`../docs/config-reference.md`](../docs/config-reference.md) §9）。
 > **故意不改**：它们是**历史记录**，改了就等于伪造"当时跑的是什么"。
-> ⇒ **重放任何 arm 之前必须先把 `models.embedder` 覆盖成当前 id**，否则第一步 embedding 就 404。
-> 另外**维度也从 1024 变成了 4096** ⇒ 那些 arm 产出的集合与缓存**全部作废**
-> （动作见 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4）。
+> ⇒ **重放那一批之前必须先把 `models.embedder` 覆盖成当前 id**，否则第一步 embedding 就 404。
+> 另外**维度也从 1024 变成了 4096** ⇒ 那批 arm 产出的集合与缓存**作废**
+> （动作见 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4）。**20261005 起冻结的快照已是当前 id**——
+> 重放它们不用覆盖。
 
 > ⚠ **`default.yaml` 只收"有代码消费方"的键**（③-d）。`checker.*` / `agent.*` 的落点已写在
-> [`../docs/config-reference.md`](../docs/config-reference.md)，但**没有搬进 yaml**——消费方还没接线，
-> 收进来等于预留字段。⇒ **`default.yaml` 不是"§15 七个消融项都在这里"。**
-> `neighbor.*` / `budget.*` / `rerank.*` 已搬进来（扩窗 + 段合并 + token 预算 + 远端精排各自的
-> consumer 都在）——⚠ `rerank` 段**只有开关与超时**：端点 / 密钥 / 模型名在 `.env`（那是端点身份，不是阈值）。
+> [`../docs/config-reference.md`](../docs/config-reference.md)，但**没有搬进 yaml**——消费方还没接线
+> （`checker` / `agent` 是 v2 的事，D26 / D13），收进来等于预留字段。
+> ⇒ **`default.yaml` 不是"§15 七个消融项都在这里"。**
+> `neighbor.*` / `budget.*` / `rerank.*` 与**共同取证的四个检索键**（`retrieval.grounded_evidence` /
+> `evidence_limit` / `evidence_hop_limit` / `fact_backfill_limit`——语义与回退条件见
+> [`../docs/config-reference.md`](../docs/config-reference.md) 顶部）都已在，各自有 consumer。
+> ⚠ `rerank` 段**只有开关、超时与 `envelope`**：端点 / 密钥 / 模型名在 `.env`（那是端点身份，不是阈值）。
+> ⚠ `grounded_evidence` 的**代码内置缺省是 `false`**（`default.yaml` 写的是 `true`）——缺这个键的快照
+> 就按"事实取证关闭"跑。
 
 ---
 
@@ -90,7 +113,6 @@ configs/
 2. **先分清常量与阈值**：见 [`../docs/config-reference.md`](../docs/config-reference.md) §1.5 的 A / B / C 三分类。**"配置化"不等于"可调"**——`top_k = 100` 与 `k = 61` 都是写进配置但**不许动**的。
 3. **每个开关在"关"分支下只影响它命名的那一件事**——否则 §13 的对照不成立，**而结果看起来完全正常，只是结论错了**（§13）。
 
-   **开关的依赖图与"关掉时不得改变什么"一处声明在 [`../docs/config-reference.md`](../docs/config-reference.md) §2**，本文件不另列一份。对应测试见 [`../tests/CLAUDE.md`](../tests/CLAUDE.md)。
-   ⚠ **那两条 `dense → checker` / `dense → rrf` 的依赖边已随 D15 删除**，别再按旧图接。
+   **开关的依赖图、"关掉时不得改变什么"与"不要实现"的连带项一处声明在 [`../docs/config-reference.md`](../docs/config-reference.md) §2**（`dense` / `rrf` **没有下游依赖**，§8 的 Checker 退化路径不存在，D15），本文件不另列一份。对应测试见 [`../tests/CLAUDE.md`](../tests/CLAUDE.md)。
 
-**⚠ 一条待补的开关**：`checker.enabled` 必须是配置项（§13 的 A4 要关它做对照）——落点见 [`../docs/config-reference.md`](../docs/config-reference.md) §2。
+**⚠ 还没接线的开关**（`checker.*` / `agent.*` / `rrf` 等）**逐项状态见 [`../docs/config-reference.md`](../docs/config-reference.md) §2 的"接线"列**——`checker` / `agent` 是 v2 的事（D26 / D13），`rrf` 没有实验需要它（D15）；`neighbor` 只有 `radius` 可关，而它默认就是 `0`（D31）。本文件不另列。

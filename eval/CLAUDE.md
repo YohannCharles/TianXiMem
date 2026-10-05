@@ -10,10 +10,10 @@
 
 | 目录 | 是什么 |
 | --- | --- |
-| [`datasets/`](./datasets/) | **数据怎么进来**：两个计分数据集的加载器 + **schema 落差预处理层** |
+| [`datasets/`](./datasets/) | **数据怎么进来**：十个数据集的加载器 + **schema 落差预处理层** |
 | [`harness/`](./harness/) | **怎么跑一轮**：模拟 AML 切批喂 Add、调 Search、接裁判 |
 | [`experiments/`](./experiments/) | **怎么跑一个对照**：A3 / A4 / T1 / T2 的 arm 定义 + T2 的标注产物 |
-| [`baselines/`](./baselines/) | A0 recency sanity · B1 ReFind（**Vendor，禁止被 `src/` import**） |
+| [`baselines/`](./baselines/) | B1 ReFind（**Vendor，禁止被 `src/` import**）· 只读参考 `invmem-candidate/` 与 `serve_invmem_qwen.py`（**不是基线**） |
 | [`smoke/`](./smoke/) | **只打真 AML 的那一层**：配额/节流、契约预检（✅ `preflight.py`）、S1/S2/S3 判别实验 |
 | [`reports/`](./reports/) | **数字的唯一落点**：结果台账 + 每次 run 的归档 |
 
@@ -45,17 +45,20 @@
 | ScriptMem | **只用** `speaker_*_memories`，缺失时**静默渲染成空串，不报错** | **无 LLM 裁判**，选项精确匹配 |
 | CL-Bench | 嵌套的 `retrieval.selected` / `msp_retrieval.selected`，每项含 `created_at` + `text` | 严格全有全无 rubric，**且 API/JSON 失败一律记 0** |
 | PersonaMem v2 | **没有记忆注入**——消费 `chat_history` / `messages`，**忽略全部检索字段** | MCQ 精确文本匹配 |
-| **MQuAKE / MemTrapBench / CorporateBench**（`official-extra`） | **我们自定**：平铺的 `retrieved_context`（这三份没有官方 pipeline，见 [`harness/extra_pipeline.py`](./harness/extra_pipeline.py)） | MQuAKE / CorporateBench：纯函数（别名表 / 标量·集合）；MemTrapBench：LLM 四维均分（阈值我们定） |
+| **MQuAKE / MemTrapBench / CorporateBench / MedMemoryBench / TempReason**（`official-extra`） | **我们自定**：平铺的 `retrieved_context`（这五份没有官方 pipeline，见 [`harness/extra_pipeline.py`](./harness/extra_pipeline.py)） | MQuAKE / CorporateBench：纯函数（别名表 / 标量·集合）；MemTrapBench：LLM 四维均分（阈值我们定）；MedMemoryBench：照上游发布的 `metrics/`；TempReason：纯函数（可接受答案串命中，口径我们定） |
 
-> **最后一行的边界**：前三行的口径**逐字来自归档 pipeline**；最后一行是我们**自己写的**，
-> 所以那三家的分数**只能在仓内前后对比**，不能与官方分数对齐（§12.4 的理由照旧）。
+> **最后一行的边界**：**除最后一行外**，口径**逐字来自归档实现**（含 CL-Bench 与 PersonaMem
+> 适配器——后者直接调官方那份的函数）；最后一行**没有官方 AML pipeline**——answer 侧多为自写
+> （**MemTrapBench 例外**：逐字用官方 prompt），判分口径多为自定（**MedMemoryBench 例外**：
+> 照上游发布的 `metrics/`；MemTrapBench 按官方四维改写）。
+> 所以这五家的分数**只能在仓内前后对比**，不能与官方分数对齐（§12.4 的理由照旧）。
 
 > ### ⚠ 还有一边不止"注入字段"：**送进去的 `Add` 本身**
 >
 > 上表说的是**我们返回什么**。反过来的那一半是**AML 送什么进来**——`Add` 的 payload
 > 由 AML 造，本地由 harness 造 ⇒ **本地发的像不像线上，决定分数预不预测得了线上**。
-> 实测（全量 43,272 条 add / 454,937 条消息）：**93.9% 的正文带 `<标签>: ` 前缀**
-> （`Caroline:` / `Corpus:` / `user:` …），且**`role` 取值域零 `system`**。
+> 实测官方 add 的正文**绝大多数带 `<标签>: ` 前缀**（`Caroline:` / `Corpus:` / `user:` …），
+> 且**`role` 取值域零 `system`**——**数字与样本量见 [`reports/ledger.md`](./reports/ledger.md)**。
 > 缺省按这个渲染（`--add-shape official`），依据与逐数据集表在
 > [`harness/add_shape.py`](./harness/add_shape.py)——**本文件不复制那张表**。
 

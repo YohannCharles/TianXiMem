@@ -7,7 +7,7 @@
 ```text
 ledger.md          **结果台账**（人工维护，**提交进 git**）
 schema.py          run record 的 schema
-runs/              每次 run 的原始产出（**gitignored**，见下）
+runs/              每次 run 的原始产出与复现脚本（**原始数据 gitignored、复现脚本提交**，见下）
 ```
 
 ---
@@ -80,14 +80,11 @@ rubric 都满足 ⇒ **中间的所有进展在 `overall` 里都看不见**。�
 6. Rules and process execution
 7. **Epistemic safety and privacy**
 
-> **第 4、7 两维要显式回应**（§3.2，映射见 [`../../../docs/architecture.md`](../../docs/architecture.md)）——**报告里这两维为空的 run，等于没测。**
+> **第 4、7 两维要显式回应**（§3.2，映射见 [`../../docs/architecture.md`](../../docs/architecture.md)）——**报告里这两维为空的 run，等于没测。**
 
 ### 切分有没有切坏 QA 对（D24 起）
 
-**没有计数器**：块在写下那一刻就是最终形状，**不存在"被补全"这种归宿**。**别为它写聚合代码。**
-
-> **替代信号**：**一次读库就能算**——`SELECT count(*) FROM qa_pairs WHERE answer IS NULL`
-> （只剩 question 的半块数），分母是总行数。不需要任何跨请求状态。
+**口径见 [`../../src/tianximem/observability/CLAUDE.md`](../../src/tianximem/observability/CLAUDE.md) 的"切分是否切坏了 QA 对"一节**——**本文件不另列一份**。
 
 ---
 
@@ -98,6 +95,7 @@ rubric 都满足 ⇒ **中间的所有进展在 `overall` 里都看不见**。�
 | `ledger.md` | ✅ **提交** | 它是结论本身 |
 | `schema.py` | ✅ 提交 | 代码 |
 | `runs/**/*.json` `*.jsonl` `*.csv` | ❌ **忽略** | 体积大、可重跑；且逐题结果可能含受许可约束的数据内容（§12.5） |
+| `runs/**/*.py` | ✅ **提交** | 复现用的探针 / 审计脚本（`probe.py` / `audit.py` …）——重跑与复核要它们 |
 | **T2 的人工标注** | ✅ **提交**（但它不在这里，在 [`../experiments/`](../experiments/)） | **133 行人工劳动，丢了要重做** |
 
 **规则的形状**：**派生产物入库，原始数据与运行时状态不入库。** 后者由 `.gitignore` 覆盖；若你新增一类产物，先问它属于哪一边。
@@ -111,4 +109,4 @@ rubric 都满足 ⇒ **中间的所有进展在 `overall` 里都看不见**。�
 | **latency / 成本只在明显变差时才追** | §13 |
 | **不记 Recall@K，不做按问题类型的收益归因** | §14——前者已接近天花板，**后者是论文的事** |
 
-**另外**：`docs/experiments.md` 的结论列要求写清**怎么清掉的**（哪个实验、什么数字、哪次 Smoke）。**结论比状态有用**——状态是"✅"，结论是"因为 X 所以 Y"。
+**另外**：结论怎么写见 [`./ledger.md`](./ledger.md) 的"怎么记一条"——**本文件不另列一份**。

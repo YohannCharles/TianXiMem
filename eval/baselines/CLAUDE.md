@@ -5,7 +5,7 @@
 ## 要写什么
 
 ```text
-recency_only/         A0 —— 不检索，直接按时间倒序返回最近 N 对（可选 sanity）
+recency_only/         A0 —— 不检索，直接按时间倒序返回最近 N 对（⬜ **未实现**，成本约等于零）
 refind/               B1 —— ReFind 原版（MIT，**Vendor，不改动**）
 invmem-candidate/     InvMem 的**候选映射**（无 LICENSE，**只研读**，不是基线）
 ```
@@ -17,9 +17,12 @@ invmem-candidate/     InvMem 的**候选映射**（无 LICENSE，**只研读**�
 
 ---
 
-## A0 — recency-only sanity check（可选，成本约等于零）
+## A0 — recency-only sanity check（⬜ **未实现**，成本约等于零）
 
 把**主路径**换成"**不检索，直接按时间倒序返回最近 N 对**"。
+
+> ⚠ 目录里还没有 `recency_only/`；根 `CLAUDE.md` 的状态表把这一个 arm 记在
+> [`../experiments/`](../experiments/) 的待写清单下——**实现时把落点收敛到一处**。
 
 > **如果它逼近全系统，说明 §4 那条核心判断要重写。**（§13）
 
@@ -93,7 +96,7 @@ uv run --env-file .env python -m eval.experiments.run --dataset locomo-refined -
 
 > **它不因此变成一条基线。** 上表四条事实一条都没变——**无 LICENSE ⇒ 不能分发、不能声称、不能依赖**；从它读出来的结论要写成"某候选实现"，**不能写成"InvMem 的做法"**（PRD §1 的"不可作为参考实现依赖"仍然有效）。
 >
-> 也**不要因为它进了这个目录就给它包 Add/Search 服务**——B1 的隔离边界（下节）是给 MIT 许可、映射确凿的 `refind/` 定的。
+> 也**不要因为它进了这个目录就给它包 Add/Search 服务**——B1 的隔离边界（见上）是给 MIT 许可、映射确凿的 `refind/` 定的。
 
 ### ✅ 2026-09-26：**用户明确授权跑它作参考**（上面那条规则没有失效，是**被显式覆盖一次**）
 
@@ -101,7 +104,7 @@ uv run --env-file .env python -m eval.experiments.run --dataset locomo-refined -
 上面四条事实**一条都没变**——它**仍然不是基线**、**仍然不可声称**：台账里它的身份照旧是
 "**候选映射仓库**（第三方推断的映射）"，不是"InvMem"。**引用它时要照旧写"某候选实现"。**
 
-**怎么跑的**（[`../../reports/ledger.md`](../../eval/reports/ledger.md) 有数字）：
+**怎么跑的**（[`../reports/ledger.md`](../reports/ledger.md) 有数字）：
 
 ```bash
 # 1) 独立 venv（依赖重：torch CPU + sentence-transformers + faiss）
