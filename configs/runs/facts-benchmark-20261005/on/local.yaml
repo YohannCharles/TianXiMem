@@ -1,0 +1,5 @@
+storage:
+  qdrant:
+    collection: memories_facts_benchmark_20261005
+rerank:
+  enabled: false
