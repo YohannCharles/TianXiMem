@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
 
-from tianximem.facts.conversation import named_utterances
+from tianximem.facts.conversation import SPEAKER, named_utterances, sentences
 from tianximem.facts.evidence import EvidenceFact, Qualifier, key, relation_key, words_key
 from tianximem.facts.query import QueryPlan
 
@@ -63,6 +63,9 @@ def _quantities(facts: Sequence[EvidenceFact]) -> list[EvidenceFact] | None:
                 )
             ].append(fact)
     for group in groups.values():
+        if len({key(str(f.get("unit", ""))) for f in group}) > 1:
+            # 相同数值也不能消除瓶/个等不同单位的歧义。
+            return None
         amounts = {f.get("quantity") for f in group}
         if len(amounts) > 1:
             if any(f.event_time is None for f in group):
@@ -209,14 +212,12 @@ def sources_supported(
             continue
         handled = False
         for _, utterance in named_utterances(residue):
-            speaker = re.fullmatch(
-                r"(?:\[assistant\]\s*)?([A-Z][A-Za-z'-]*(?: [A-Z][A-Za-z'-]*){0,3}):\s*(.+)",
-                utterance.strip(),
-                re.S,
-            )
+            speaker = SPEAKER.fullmatch(utterance.strip())
             if speaker is None:
                 continue
             body, actor = speaker[2], key(speaker[1])
+            if actor in {"user", "用户"}:
+                actor = "i"
             relevant = needle in key(body)
             if not relevant:
                 continue
@@ -224,7 +225,8 @@ def sources_supported(
             unexplained = re.search(
                 r"\bI(?:'m| am)\s+(?!not\b|no longer\b)|"
                 r"\bI\s+(?:currently\s+)?(?:work|study|volunteer|belong|live|teach|coach|train)\b|"
-                r"\bMy\b[^.!?\n]*\b(?:has|contains)\b",
+                r"\bMy\b[^.!?\n]*\b(?:has|contains)\b|"
+                r"我(?:目前|现在|仍然|仍)?(?:是|在|的[^。！？\n]*(?:有|装着|包含|放着))",
                 body,
                 re.I,
             )
@@ -234,16 +236,26 @@ def sources_supported(
             )
             if unexplained and (not negated or positive):
                 return False
-            first_sentence = re.split(r"(?<=[.!?])\s+", body)[0]
+            first_sentence = sentences(body)[0]
             if (
-                re.match(r"(?:A fictional example|I (?:hope|plan|want|will))\b", body, re.I)
+                re.match(
+                    r"(?:A fictional example|I (?:hope|plan|want|will))\b|"
+                    r"我(?:计划|打算|希望|想要|准备|将会|将要)|"
+                    r"(?:这是|一个|某个)?(?:虚构|示例|例子|假设)",
+                    body,
+                    re.I,
+                )
                 and needle in key(first_sentence)
                 and key(body).count(needle) == 1
             ):
                 handled = True
                 continue
             negative = re.search(
-                r"\bI (?:am not|do not|have not|no longer|left|stopped)\b", body, re.I
+                r"\bI (?:am not|do not|have not|no longer|left|stopped)\b|"
+                r"我(?:目前|现在|仍然|已经|还)?"
+                r"(?:不是|并非|没有|不在|不再|未曾|从未|已经离开|离开了|已经退出|退出了)",
+                body,
+                re.I,
             )
             if negative:
                 if actor in subjects:

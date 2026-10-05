@@ -682,6 +682,13 @@ class SqliteStore:
                 or fact.source_quote not in (parent[fact.source_side] or "")
             ):
                 raise ValueError("事实引句必须逐字来自声明的原始来源侧")
+            item_quote = fact.get("item_quote")
+            if item_quote is not None and (
+                not isinstance(item_quote, str)
+                or not item_quote
+                or item_quote not in fact.source_quote
+            ):
+                raise ValueError("物品定位引句必须逐字存在于事实来源引句中")
             conn.execute(
                 "INSERT INTO memory_facts(id,parent_memory_id,user_id,subject,subject_key,"
                 "relation,relation_key,object,object_key,qualifiers,source_side,source_quote,"
@@ -745,9 +752,10 @@ class SqliteStore:
             "p.local_index AS source_index,"
             "instr(coalesce(p.question,'') || coalesce(p.answer,''),f.source_quote)"
             " AS source_offset,"
-            "instr(f.source_quote,f.object) AS item_offset,"
+            "instr(f.source_quote,coalesce(json_extract(f.qualifiers,'$.item_quote'),f.object))"
+            " AS item_offset,"
             "ROW_NUMBER() OVER (PARTITION BY f.subject_key,f.relation_key,f.object_key,"
-            "json_remove(f.qualifiers,'$.match_object','$.direct')"
+            "json_remove(f.qualifiers,'$.match_object','$.direct','$.item_quote')"
             ",CASE WHEN json_extract(f.qualifiers,'$.observation')=1"
             " OR json_extract(f.qualifiers,'$.snapshot')=1"
             " THEN f.parent_memory_id ELSE '' END"

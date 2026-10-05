@@ -11,14 +11,14 @@ from typing import Literal
 
 from tianximem.common.render import day_granularity, render_evidence
 
-EVIDENCE_VERSION = "memory-facts-v2"
+EVIDENCE_VERSION = "memory-facts-v3"
 Qualifier = str | int | bool
 SourceSide = Literal["question", "answer"]
 
 
 def key(value: str) -> str:
     """保留标点身份，不能把 C++ 与 C# 合成同一实体。"""
-    return " ".join(unicodedata.normalize("NFKC", value).casefold().split()).strip(" ?.!")
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split()).strip(" ?.!。！？")
 
 
 def words_key(value: str) -> str:
@@ -50,6 +50,26 @@ _ALIASES = {
     "volunteer": "volunteer",
     "volunteers": "volunteer",
     "volunteering": "volunteer",
+    "员工": "employee",
+    "雇员": "employee",
+    "工作": "employee",
+    "上班": "employee",
+    "任职": "employee",
+    "学生": "student",
+    "就读": "student",
+    "念书": "student",
+    "学习": "student",
+    "志愿者": "volunteer",
+    "做志愿者": "volunteer",
+    "当志愿者": "volunteer",
+    "会员": "member",
+    "成员": "member",
+    "患者": "patient",
+    "病人": "patient",
+    "老师": "teacher",
+    "教师": "teacher",
+    "任教": "teacher",
+    "教练": "coach",
 }
 
 

@@ -113,6 +113,100 @@ _UNSAFE_SCOPE = re.compile(
     ),
     re.I,
 )
+
+_ZH_UNSAFE_SCOPE = re.compile(
+    r"不是|没有|不在|不再|除了|除外|排除|之前|之后|以前|曾经|去年|前年|上个月|"
+    r"计划|打算|希望|将会|将要|下周|下个月|明年|如果|假如|\d{4}年"
+)
+_ZH_VERBS = r"工作|上班|任职|就读|念书|学习|做志愿者|当志愿者|任教"
+
+
+def _chinese_plan(text: str) -> QueryPlan | None:
+    """中文只绑定共同字段；同一范围的名单与计数复用一份证据。"""
+    text = re.sub(r"^请问\s*", "", text).rstrip("呢")
+    listed = bool(re.match(r"^(?:请)?列出", text))
+    plain = re.sub(r"^(?:请)?列出", "", text)
+    owned = re.fullmatch(rf"(我|{NAME})的(.+?)(?:里|中|内)(?:面)?(.*)", plain)
+    if owned:
+        owner, container, intent = owned[1], owned[2], owned[3].lstrip("的")
+        all_items = bool(
+            re.fullmatch(
+                r"(?:有)?(?:哪些|什么)(?:物品|东西|物件|物品种类)|"
+                r"(?:一共|总共)?(?:有)?(?:多少|几)(?:件|个)?(?:物品|东西|物件)|"
+                r"物品(?:种类)?",
+                intent,
+            )
+        )
+        quantity = re.fullmatch(
+            r"(?:一共|总共)?(?:有)?(?:多少|几)([个本支把件台张只条瓶枚块根顶])(.+)", intent
+        )
+        if all_items or (listed and intent in {"东西", "物件"}) or quantity:
+            return QueryPlan(
+                "filter",
+                (
+                    FactPattern(
+                        ("contain",),
+                        subject="i" if owner == "我" else key(owner),
+                        object=key(quantity[2]) if quantity and not all_items else "",
+                        qualifiers=(("container", key(container)),),
+                    ),
+                ),
+                guard_literal=key(container),
+            )
+    frames = (
+        rf"在(.+?)({_ZH_VERBS})的人(?:有多少|有哪些|都有谁|有谁)",
+        rf"(?:哪些人|有哪些人|谁|有多少人)在(.+?)({_ZH_VERBS})",
+    )
+    match = re.fullmatch(rf"在(.+?)({_ZH_VERBS})的人", plain) if listed else None
+    if match is None:
+        match = next((m for p in frames if (m := re.fullmatch(p, plain))), None)
+    if match:
+        return QueryPlan(
+            "filter",
+            (
+                FactPattern(
+                    (relation_key(match[2]),),
+                    object=key(match[1]),
+                ),
+            ),
+            guard_literal=key(match[1]),
+        )
+    noun_patterns = (
+        r"(.+?)(?:的)?(?:有)?(?:哪些|哪几位|多少名|多少位|多少个|几名|几位)(.+)",
+        r"(.+?)的(.+?)(?:一共|总共|目前|现在)?(?:有)?"
+        r"(?:多少(?:人|名|位)?|几(?:人|名|位)|有哪些|都有谁|有谁|名单(?:是什么)?)",
+    )
+    for pattern in noun_patterns:
+        match = re.fullmatch(pattern, plain)
+        if match:
+            org, role = match[1].strip(), match[2].strip()
+            if org and role:
+                return QueryPlan(
+                    "filter",
+                    (
+                        FactPattern(
+                            (relation_key(role),),
+                            object=key(org),
+                        ),
+                    ),
+                    guard_literal=key(org),
+                )
+    if listed:
+        match = re.fullmatch(r"(.+?)的([^的]+?)(?:名单)?", plain)
+        if match:
+            return QueryPlan(
+                "filter",
+                (
+                    FactPattern(
+                        (relation_key(match[2]),),
+                        object=key(match[1]),
+                    ),
+                ),
+                guard_literal=key(match[1]),
+            )
+    return None
+
+
 _LIST_PREFIX = re.compile(
     (
         r"^(?:who(?: are)?|which are|list|name|give me|show me|how many|what is the (?:total )"
@@ -125,7 +219,13 @@ _LIST_PREFIX = re.compile(
 def compile_query(query: str) -> QueryPlan | None:
     if input_complete(query):
         return QueryPlan("current")
-    text = query.strip().rstrip("?.!")
+    text = query.strip().rstrip("?.!。！？")
+    if re.search(r"[\u4e00-\u9fff]", text):
+        if _ZH_UNSAFE_SCOPE.search(text):
+            return None
+        chinese = _chinese_plan(text)
+        if chinese is not None:
+            return chinese
     # 显式区间问题：只有原文起止月份参与比较，绝不用消息日期补区间。
     at = re.fullmatch(rf"(.+?) in ({MONTH})", text, re.I)
     relative = re.fullmatch(r"(.+?) (before|after) (.+)", text, re.I)

@@ -6,7 +6,7 @@ import calendar
 import re
 from email.utils import parseaddr
 
-from tianximem.facts.conversation import named_utterances
+from tianximem.facts.conversation import NAME, SPEAKER, named_utterances, sentences
 from tianximem.facts.evidence import (
     EvidenceFact,
     SourceSide,
@@ -16,12 +16,17 @@ from tianximem.facts.evidence import (
     title_key,
 )
 
-NAME = r"[A-Z][A-Za-z'-]*(?: [A-Z][A-Za-z'-]*){0,3}"
-_SPEAKER = re.compile(rf"^(?:\[assistant\]\s*)?(?P<actor>{NAME}):\s*(?P<body>.+)$", re.S)
 _UNSAFE = re.compile(
-    r'["“”>]|\b(?:not|never|no|if|would|might|fictional|imagining|said|says|quoted)\b', re.I
+    r'["“”>]|‘[^‘’]*’|\b(?:not|never|no|if|would|might|fictional|imagining|said|says|quoted)\b'
+    r"|不是|并非|没有|不在|不再|从未|未曾|如果|假如|假设|虚构|示例|例子|例如|据说|听说"
+    r"|说[：:]|写道[：:]",
+    re.I,
 )
-_PLANNED = re.compile(r"\b(?:will|hope|plan|want|gonna|going to)\b", re.I)
+_PLANNED = re.compile(
+    r"\b(?:will|hope|plan|want|gonna|going to)\b"
+    r"|计划|打算|希望|想要|准备成为|准备去|将会|将要|下周|下个月|明年|曾经|以前",
+    re.I,
+)
 _ROLE = re.compile(
     (
         r"^I(?: am|'m)\s+(?:(?:currently|still|now)\s+)?(?:enrolled as\s+)?(?:a|an)\s"
@@ -110,6 +115,91 @@ _LABEL = re.compile(r"^[\w -]{1,40}:\s*")
 _REPLACEMENT = re.compile(r"\s*\(this replaces the earlier value\)\.?$", re.I)
 MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec),\s*\d{1,4}"
 _INTERVAL = re.compile(rf"(.+?) from ({MONTH}) to ({MONTH})\.?", re.I)
+
+_ZH_MODIFIER = r"(?:(?:目前|现在|仍然|仍|现在仍然)\s*)?"
+_ZH_ROLE = re.compile(
+    rf"^我{_ZH_MODIFIER}是(?:一[名个位])?([^,，;；。！？\n]+)的([^的,，;；。！？\n]{{1,24}})$"
+)
+_ZH_VERB = re.compile(
+    rf"^我{_ZH_MODIFIER}在([^,，;；。！？\n]+?)(工作|上班|任职|就读|念书|学习|"
+    r"做志愿者|当志愿者|任教)$"
+)
+_ZH_CONTAINER = re.compile(
+    rf"^我的(?P<container>[^,，;；。！？\n]{{1,90}}?)(?:里|中|内)?{_ZH_MODIFIER}"
+    r"(?:有|装着|包含|放着)(?P<items>[^。！？\n]+)[。！？]?$"
+)
+_ZH_ITEM = re.compile(
+    r"(?P<amount>\d+|[零〇一二两三四五六七八九十百千万]+)\s*"
+    r"(?P<unit>[个本支把件台张只条瓶枚块根顶])\s*(?P<object>[^,，、;；。！？\n]+)"
+)
+
+
+def chinese_quantity(text: str) -> int | None:
+    """只接受确切整数；拒绝两三、十几、一百二等模糊或省略写法。"""
+    text = key(text)
+    if text.isdigit():
+        value = int(text)
+        return value if 0 <= value <= 10000 else None
+    digits = {word: i for i, word in enumerate("零一二三四五六七八九")}
+    normalized = text.replace("两", "二").replace("〇", "零")
+    if normalized == "一万":
+        return 10000
+    value, digit = 0, 0
+    for word in normalized:
+        if word in digits:
+            digit = digits[word]
+        elif word in "十百千":
+            value += (digit or 1) * {"十": 10, "百": 100, "千": 1000}[word]
+            digit = 0
+        else:
+            return None
+    value += digit
+    if not 0 <= value <= 9999:
+        return None
+    if value == 0:
+        canonical = "零"
+    else:
+        remaining, parts, needs_zero = value, [], False
+        for base, unit in ((1000, "千"), (100, "百"), (10, "十"), (1, "")):
+            amount, remaining = divmod(remaining, base)
+            if amount:
+                if needs_zero:
+                    parts.append("零")
+                parts.extend(("零一二三四五六七八九"[amount], unit))
+                needs_zero = False
+            elif parts and remaining:
+                needs_zero = True
+        canonical = "".join(parts)
+        if canonical.startswith("一十"):
+            canonical = canonical[1:]
+    alternatives = {canonical, canonical.replace("零一十", "零十")}
+    if 10 <= value <= 19:
+        alternatives.add("一" + canonical)
+    return value if normalized in alternatives else None
+
+
+def _chinese_role(sentence: str, actor: str) -> tuple[str, str, str, str] | None:
+    text = sentence.strip().rstrip("。！？")
+    if actor == "I":
+        if text.startswith(("我", "你", "他", "她", "它")):
+            return None
+        named = re.fullmatch(rf"({NAME})((?:目前|现在|仍然)?(?:是|在).+)", text)
+        if not named:
+            return None
+        actor, text = named[1], "我" + named[2]
+    role = _ZH_ROLE.fullmatch(text)
+    verb = _ZH_VERB.fullmatch(text)
+    if role:
+        org, surface = role[1].strip(), role[2].strip()
+    elif verb:
+        org, surface = verb[1].strip(), verb[2]
+    else:
+        return None
+    if re.search(r"和|与|或|以及|、", surface):
+        return None
+    statement = f"{actor}是{org}的{surface}。" if role else f"{actor}在{org}{surface}。"
+    return actor, relation_key(surface), org, statement
+
 
 # 同一关系的名词/动词表面形式。任意显式三元组的关系仍直接来自原文。
 PREFIX_FORMS = ("author", "capital", "official language", "head of state", "head of government")
@@ -359,21 +449,26 @@ def extract_evidence(
     )
     for side, source in sources:
         for _, utterance in named_utterances(source):
-            speaker = _SPEAKER.fullmatch(utterance.strip())
+            speaker = SPEAKER.fullmatch(utterance.strip())
             if speaker:
                 actor, body = speaker["actor"], speaker["body"]
-                if actor == "Assistant":
+                if actor in {"Assistant", "助手", "系统"}:
                     continue
-                if actor == "User" and side == "question":
+                if actor in {"User", "用户"} and side == "question":
                     actor = "I"
             elif side == "question":
                 actor, body = "I", utterance
             else:
                 continue
             safe_attributes = not (_UNSAFE.search(body) or _PLANNED.search(body))
-            for sentence in re.split(r"(?<=[.!?])\s+", body):
+            for sentence in sentences(body):
+                sentence = sentence.strip()
                 if _UNSAFE.search(sentence) or _PLANNED.search(sentence):
                     continue
+                chinese_role = _chinese_role(sentence, actor) if safe_attributes else None
+                if chinese_role:
+                    subject, relation, org, statement = chinese_role
+                    emit(subject, relation, org, sentence, statement, side=side)
                 role = (
                     (_ROLE.fullmatch(sentence) or _VERB.fullmatch(sentence))
                     if speaker and actor != "I" and safe_attributes
@@ -429,6 +524,35 @@ def extract_evidence(
                             container=container,
                             quantity=amount,
                             name=name,
+                            snapshot=True,
+                        )
+                chinese_inventory = _ZH_CONTAINER.fullmatch(sentence)
+                if chinese_inventory:
+                    container = chinese_inventory["container"].strip()
+                    entries_chinese: list[tuple[str, int, str, str]] = []
+                    for part in re.split(r"[、，,]|以及|和|及", chinese_inventory["items"]):
+                        item = _ZH_ITEM.fullmatch(part.strip())
+                        chinese_amount = chinese_quantity(item["amount"]) if item else None
+                        if item is None or chinese_amount is None:
+                            entries_chinese = []
+                            break
+                        entries_chinese.append(
+                            (item["object"].strip(), chinese_amount, item["unit"], part.strip())
+                        )
+                    for obj, quantity, unit, item_quote in entries_chinese:
+                        owner = "我" if actor == "I" else actor
+                        emit(
+                            actor,
+                            "contains",
+                            obj,
+                            chinese_inventory[0],
+                            f"{owner}的{container}包含{obj}，数量为{quantity}{unit}。",
+                            side=side,
+                            container=container,
+                            quantity=quantity,
+                            unit=unit,
+                            item_quote=item_quote,
+                            name="",
                             snapshot=True,
                         )
                 if not speaker or actor == "I":
