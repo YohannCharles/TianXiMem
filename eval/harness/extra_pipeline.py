@@ -49,6 +49,9 @@ if str(_REPO_ROOT) not in sys.path:
 
 from eval.datasets.registry import benchmark_dir  # noqa: E402
 from eval.harness.corporatebench_pipeline import (  # noqa: E402
+    build_answer_prompt as build_corporatebench_answer_prompt,
+)
+from eval.harness.corporatebench_pipeline import (  # noqa: E402
     judge_corporatebench,
     score_corporatebench,
 )
@@ -591,6 +594,22 @@ MEMTRAP_ANSWER_PROMPT = (
 #: ⚠ **这是 MQuAKE 的接法问题，不是"通用 prompt 该改"**：通用那份还被
 #: medmemorybench / CorporateBench 的单值查询仍沿用；CorporateBench 聚合任务已独立。
 #: （tempreason 一度也在名单里，**10-04 起它有自己那份 `TEMPR_ANSWER_PROMPT`**。）
+MQUAKE_ANSWER_PROMPT = (
+    "You are an assistant answering a question using the memories provided below.\n\n"
+    "The memories may contain **updates**: a statement marked as replacing an earlier one.\n"
+    "When two statements conflict, **the replacement is the current truth** — use it.\n\n"
+    "Rules:\n"
+    "1. Prefer the memories. If a step of the reasoning chain is missing from them,\n"
+    "   you may fill it with what you already know.\n"
+    "2. Do not reply that you cannot determine the answer unless the memories are\n"
+    "   genuinely unhelpful — a conflict between an old and a replacing statement is\n"
+    "   **not** a reason to refuse.\n"
+    "3. Answer concisely — one short sentence or the value itself.\n\n"
+    "Memories:\n"
+    "{memories}\n\n"
+    "Question: {question}\n\n"
+    "Answer:"
+)
 
 
 #: **TempReason 专用**的答案 prompt（2026-10-04 加，A/B 定版）。
@@ -614,6 +633,22 @@ MEMTRAP_ANSWER_PROMPT = (
 #:
 #: ⚠ **B2 那次是"想当然更对症"的反例**：单题探针上它就答错了（把 May 1991 答成
 #: `Real Madrid Fc`），76 条上仍然不如 B1。**别按"哪份 prompt 更贴近任务"选，按数字选。**
+TEMPR_ANSWER_PROMPT = (
+    "You are an assistant that answers a question using the memories provided below.\n"
+    "\n"
+    "Rules:\n"
+    "1. Use only the information in the memories. Do not use outside knowledge.\n"
+    "2. The question is always answerable from the memories — commit to the best\n"
+    "   answer they support, even if you must reason across time intervals.\n"
+    "3. Answer concisely — one short sentence or the value itself.\n"
+    "\n"
+    "Memories:\n"
+    "{memories}\n"
+    "\n"
+    "Question: {question}\n"
+    "\n"
+    "Answer:"
+)
 
 
 #: MemTrapBench 的裁判 prompt。**按官方 4 维改写**（官方那份在
@@ -668,14 +703,20 @@ def cmd_answer(args: argparse.Namespace) -> int:
         for item in items:
             if item["id"] in done:
                 continue
-            template = (
-                MEMTRAP_ANSWER_PROMPT if item.get("dataset") == "memtrapbench"
-                else ANSWER_PROMPT
-            )
-            prompt = template.format(
-                memories=item.get("retrieved_context") or "(no memories)",
-                question=item["question"],
-            )
+            # **逐数据集挑 prompt**（判据是 item 里那个 `dataset` 字段，与 evaluate 同一口径）。
+            # 分派理由见各自模板注释及 CorporateBench 的独立适配器。
+            template = {
+                "memtrapbench": MEMTRAP_ANSWER_PROMPT,
+                "mquake-remastered": MQUAKE_ANSWER_PROMPT,
+                "tempreason": TEMPR_ANSWER_PROMPT,
+            }.get(item.get("dataset"), ANSWER_PROMPT)
+            if item.get("dataset") == "corporatebench":
+                prompt = build_corporatebench_answer_prompt(item, scalar_template=ANSWER_PROMPT)
+            else:
+                prompt = template.format(
+                    memories=item.get("retrieved_context") or "(no memories)",
+                    question=item["question"],
+                )
             generated = _chat(
                 base, key, model, prompt, max_tokens=args.max_tokens, timeout=ANSWER_TIMEOUT
             )

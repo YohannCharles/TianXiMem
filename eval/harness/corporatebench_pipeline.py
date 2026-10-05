@@ -12,7 +12,7 @@ import math
 import re
 import unicodedata
 
-__all__ = ["judge_corporatebench", "score_corporatebench"]
+__all__ = ["build_answer_prompt", "judge_corporatebench", "score_corporatebench"]
 
 
 def _norm(value: object) -> str:
@@ -237,3 +237,68 @@ def judge_corporatebench(generated: str, gold: object) -> tuple[bool, str]:
     return score == 1.0, reason
 
 
+_ANSWER_FORMATS = {
+    "int": "one JSON integer, with no sentence or date",
+    "bool": "one JSON boolean: true or false",
+    "str": "one JSON string containing only the requested value or name",
+    "date": "one JSON string containing only the requested date",
+    "list[str]": "one JSON array of strings, including every distinct matching name or title",
+}
+
+_AGGREGATE_RULES = {
+    "int": (
+        "Count distinct entities or events across the documents, not emails or mentions. "
+        "An agenda and an email about the same event count once; distinguish occurrences "
+        "by their event identity and date/time. Check the requested time range.\n"
+    ),
+    "list[str]": (
+        "Enumerate every supported matching name or title across all supplied documents. "
+        "Do not stop at the first match. Deduplicate names and preserve their exact spelling. "
+        "Check every relation and time constraint; a meeting merely mentioning a project "
+        "does not necessarily belong to that project's meeting series.\n"
+    ),
+    "bool": (
+        "Check all constraints together: entity, relation, meeting type, topic and time. "
+        "A project meeting is not a team or direct-report meeting; a related topic alone "
+        "does not establish a matching event.\n"
+    ),
+}
+
+
+def build_answer_prompt(item: dict, *, scalar_template: str | None = None) -> str:
+    """只消费题目、检索正文和 answer_type 元数据，不消费金标答案。"""
+    metadata = item.get("gold_answer")
+    kind = str(
+        item.get("answer_type")
+        or (metadata.get("answer_type") if isinstance(metadata, dict) else "")
+        or ""
+    ).lower()
+    if kind not in _ANSWER_FORMATS:
+        raise ValueError(f"CorporateBench：未知答案类型 {kind!r}")
+    if kind in {"str", "date"} and scalar_template is not None:
+        # 单值事实查询保留已验证的模板；聚合规则不应改变其作答行为。
+        return scalar_template.format(
+            memories=item.get("retrieved_context") or "(no memories)",
+            question=item["question"],
+        )
+    task_rules = _AGGREGATE_RULES.get(kind, "")
+    if kind in _AGGREGATE_RULES:
+        task_rules += (
+            "A negative answer ([], 0, or false) needs evidence ruling out matches or "
+            "complete coverage of the requested scope. Missing a fact in retrieved "
+            "documents alone does not establish its absence.\n"
+        )
+    return (
+        "You are an assistant that answers a corporate question using only the memories "
+        "provided below.\n\n"
+        "Rules:\n"
+        "1. Use only the information in the memories. Do not use outside knowledge.\n"
+        "2. Reason from the evidence even when the answer is not stated verbatim. "
+        "If the evidence cannot establish the requested answer, reply exactly: "
+        "Cannot determine from the memories.\n"
+        f"{task_rules}"
+        f"3. Otherwise output {_ANSWER_FORMATS[kind]}. "
+        "Do not add Markdown, explanations, or additional keys.\n\n"
+        f"Memories:\n{item.get('retrieved_context') or '(no memories)'}\n\n"
+        f"Question: {item['question']}\n\nAnswer:"
+    )
