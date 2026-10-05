@@ -117,7 +117,7 @@ pairing  retrieve   rank      agent
 
 1. **`store/` 是唯一接触 SQLite 与 Qdrant 的目录。** §6.3 的分工表（真源 vs 派生索引、谁能做什么谁不能做什么）只有在所有读写都收口到一处时才守得住。上层拿到的是领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`。
 2. **`common/render` 是渲染的唯一实现。** §7.2 与 §11.3 要求 **embedding 的输入**与**返回给 AML 的 `content`** 是**同一份渲染**——两处一旦不一致，"检索命中的是什么"与"模型读到的是什么"就会漂移，**而且这种漂移不会报错**。这是 `common/` 存在的全部理由：它不是工具箱，是一条不变式的落地点。
-3. **`observability` 不反向依赖业务层。** 埋点是被调用的，不是去拉取的。**每个指标由产生它的那一层发射**（embedding 调用数由 `embed/` 发、Agent Trigger Rate 由 `agent/` 发、rerank 的 `degraded`/`disabled` 与 latency/query 由 `service/` 在 Search 的请求边界发——**计数住在 `SearchPipeline`**，因为"降级 / 没开"这个判定就在那里做），本目录只聚合。**接了哪些、没接哪些**逐项见 [`../src/tianxi_am/observability/CLAUDE.md`](../src/tianxi_am/observability/CLAUDE.md)。
+3. **`observability` 不反向依赖业务层。** 埋点是被调用的，不是去拉取的。**每个指标由产生它的那一层发射**（embedding 调用数由 `embed/` 发、Agent Trigger Rate 由 `agent/` 发、rerank 的 `degraded`/`disabled` 与 latency/query 由 `service/` 在 Search 的请求边界发——**计数住在 `SearchPipeline`**，因为"降级 / 没开"这个判定就在那里做），本目录只聚合。**接了哪些、没接哪些**逐项见 [`../src/tianximem/observability/CLAUDE.md`](../src/tianximem/observability/CLAUDE.md)。
 
 ---
 
@@ -185,7 +185,7 @@ pairing  retrieve   rank      agent
 > **例外到什么程度**（这句话是 I1 松动的边界，别再往外推）：
 > `content` = 被索引的文本 **+ 一层纯函数注解**，剥掉注解后**逐字相同**——
 > 不是"两份渲染各写各的"，而是**一份渲染 + 一个可逆的确定性后处理**。
-> 实现 [`src/tianxi_am/common/annotate.py`](../src/tianxi_am/common/annotate.py)；
+> 实现 [`src/tianximem/common/annotate.py`](../src/tianximem/common/annotate.py)；
 > 投影性质由 [`tests/test_annotate.py`](../tests/test_annotate.py) 的两条断言钉住
 > （"开关不碰索引" + "剥掉注解逐字相同"）。
 >

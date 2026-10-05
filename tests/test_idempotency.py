@@ -21,8 +21,8 @@ import sqlite3
 import pytest
 from tests.conftest import rd
 
-from tianxi_am.pairing import AddBatch, Message, PayloadMismatchError, apply_batch
-from tianxi_am.store.sqlite_store import STATUS_COMPLETE, SqliteStore
+from tianximem.pairing import AddBatch, Message, PayloadMismatchError, apply_batch
+from tianximem.store.sqlite_store import STATUS_COMPLETE, SqliteStore
 
 
 def _msg(role: str, content: str) -> Message:
@@ -266,7 +266,7 @@ def test_guard_is_per_request_id_not_per_session(store: SqliteStore) -> None:
 
 def test_payload_hash_is_recorded_and_readable(store: SqliteStore) -> None:
     """旁表里真的存下了指纹，而且**重放时读得回来**（守卫要靠它判冲突）。"""
-    from tianxi_am.pairing import payload_fingerprint
+    from tianximem.pairing import payload_fingerprint
 
     batch = _batch(_rid(0))
     _apply(store, batch)

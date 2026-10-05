@@ -245,9 +245,9 @@
 
 ---
 
-## D16 · 数据路径统一走 `TIANXI_BENCHMARK_DIR`；LoCoMo 的 Add 对话源支持两种布局（2026-09-23）
+## D16 · 数据路径统一走 `TIANXIMEM_BENCHMARK_DIR`；LoCoMo 的 Add 对话源支持两种布局（2026-09-23）
 
-**决策一 —— 路径口径**：**数据路径一律通过 `TIANXI_BENCHMARK_DIR` 读取，代码中不得硬编码 `benchmark_data/` 或 `eval/datasets/`。** 默认值仍是 `benchmark_data/`；本地开发通过 `.env` 指向实际数据目录。
+**决策一 —— 路径口径**：**数据路径一律通过 `TIANXIMEM_BENCHMARK_DIR` 读取，代码中不得硬编码 `benchmark_data/` 或 `eval/datasets/`。** 默认值仍是 `benchmark_data/`；本地开发通过 `.env` 指向实际数据目录。
 
 **边界**：`eval/datasets/LoCoMo-Refined/data/` 是**开发与自测用**的数据，**不是最终要跑的数据集**——归档才是。两者不可混为一谈，**也不得让代码依赖任何一边**。
 
@@ -393,13 +393,13 @@ helper 自己 `commit()` 则让"半批"落库。**两种情况都不报错。**
 > ⚠ 新 host 上 reranker **可用**，但 **id 换了**（`qwen3-reranker-4b`），而且**不在 `/v1/models` 里**；
 > 同一天网关侧**又只改了一次 nginx.conf**（`/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`）
 > ⇒ **请求与响应两个信封都换了**（`queries: [...]` / `data[].score`）。
-> 三版信封与逐条实测见 [`../src/tianxi_am/rank/reranker.py`](../src/tianxi_am/rank/reranker.py) 顶部的表。
+> 三版信封与逐条实测见 [`../src/tianximem/rank/reranker.py`](../src/tianximem/rank/reranker.py) 顶部的表。
 
 | 变量 | 指向 | 谁读它 |
 | --- | --- | --- |
-| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` | **主网关** `memory3.021130.xyz`（**Embedding**） | [`common/config.py`](../src/tianxi_am/common/config.py) 的 `load_config()`（**全包唯一读环境变量的地方**，③-d） |
+| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` | **主网关** `memory3.021130.xyz`（**Embedding**） | [`common/config.py`](../src/tianximem/common/config.py) 的 `load_config()`（**全包唯一读环境变量的地方**，③-d） |
 | `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` | **memory2** `memory2.021130.xyz`（**LLM 对话**） | harness / 归档 pipeline（经 `api_config.py` 适配器） |
-| `TIANXI_RERANKER_BASE_URL` / `_API_KEY` / `_MODEL` | **主网关**（**Reranker**） | [`rank/reranker.py`](../src/tianxi_am/rank/reranker.py) 的 `RemoteReranker`（**已接线**，2026-09-24） |
+| `TIANXIMEM_RERANKER_BASE_URL` / `_API_KEY` / `_MODEL` | **主网关**（**Reranker**） | [`rank/reranker.py`](../src/tianximem/rank/reranker.py) 的 `RemoteReranker`（**已接线**，2026-09-24） |
 
 > ⚠ **`AML_EMB_MODEL` 这个变量不存在**：embedding 的**模型名**住在
 > `configs/*.yaml` 的 `models.embedder`——它是 profile 之间唯一真正该变的东西，
@@ -595,7 +595,7 @@ role 均一；标记会一并进 embedding（§7.2 同一份渲染），而这�
 （与响应里的 `created_at` **同一个格式、同一个 `event_time`**）。
 
 **它推翻了什么**：根 `CLAUDE.md` 那条「**不要在 content 里注入绝对时间戳前缀**」，
-以及 [`rank/CLAUDE.md`](../src/tianxi_am/rank/CLAUDE.md) §4 的"v1 定稿＝正文不含任何绝对时间戳"。
+以及 [`rank/CLAUDE.md`](../src/tianximem/rank/CLAUDE.md) §4 的"v1 定稿＝正文不含任何绝对时间戳"。
 §11.3 的理由是：裁判 TIME 块有两条独立规则（**粒度变细** / **相对↔绝对互转**）都会因此判负。
 
 **反例（3 段 346 题，`eval/reports/ledger.md`）**：
@@ -820,7 +820,7 @@ message。组合规则只剩三步：
 > —— `chunk_ordinal` 从 `request_id` 解析，`local_index` 是这一批组合出的块的 0-based 序号。
 
 ⇒ 同一 `(user_id, session_id)` 的 Add **不再需要串行化**：删掉
-`src/tianxi_am/service/locks.py` 的 `SessionLocks`（**该文件已随本条删除**，所以这里是字面路径、不是链接）。
+`src/tianximem/service/locks.py` 的 `SessionLocks`（**该文件已随本条删除**，所以这里是字面路径、不是链接）。
 
 ### 它推翻了什么
 
@@ -949,8 +949,8 @@ agent 才存在**，那是另一个 Step 的事。⇒ 把它标出 v1，免得 S
 
 ## D27 · 提交期**不设专用的环境变量对**：`AML_EMB_*` 就是 embedding 端点，值随部署变（2026-09-28）
 
-**决定**：删掉 `.env.example` 里骨架期留下的两组"提交期专用"变量（`TIANXI_EMBED_API_KEY` /
-`TIANXI_EMBED_BASE_URL`、`TIANXI_LLM_API_KEY` / `TIANXI_LLM_BASE_URL`）。
+**决定**：删掉 `.env.example` 里骨架期留下的两组"提交期专用"变量（`TIANXIMEM_EMBED_API_KEY` /
+`TIANXIMEM_EMBED_BASE_URL`、`TIANXIMEM_LLM_API_KEY` / `TIANXIMEM_LLM_BASE_URL`）。
 **embedding 的端点与密钥只有一个家**：`AML_EMB_*`——那两个名字是**"embedding 端点"这个位置**的名字，
 **值随部署而变**（开发期 = 自建主网关，提交期 = DashScope 的 OpenAI 兼容端点）；**模型名**仍住
 `configs/submit.yaml`（D18 的既定口径）。
@@ -959,9 +959,9 @@ agent 才存在**，那是另一个 Step 的事。⇒ 把它标出 v1，免得 S
 
 | # | 理由 |
 | --- | --- |
-| 1 | **同一个东西能两处设 ⇒ 填错的那一处不报错。** 填了 `TIANXI_*` 而忘了 `AML_EMB_*`，服务照旧连开发网关、**跑得好好的**——"我明明填的是 DashScope"要到很后面才以别的形状暴露。这正是 [`configs/CLAUDE.md`](../configs/CLAUDE.md) 点名要避免的那类歧义 |
+| 1 | **同一个东西能两处设 ⇒ 填错的那一处不报错。** 填了 `TIANXIMEM_*` 而忘了 `AML_EMB_*`，服务照旧连开发网关、**跑得好好的**——"我明明填的是 DashScope"要到很后面才以别的形状暴露。这正是 [`configs/CLAUDE.md`](../configs/CLAUDE.md) 点名要避免的那类歧义 |
 | 2 | **它们从来没有消费方**：09-23 的骨架提交就把它们写进 `.env.example` 了，**早于 D18 锁定 `AML_EMB_*`**。是"收一个没有消费方的键等于预留字段"那条纪律的现成反例 |
-| 3 | `TIANXI_LLM_*` 更没有存在理由：**v1 没有 LLM 调用点**（`Add` 侧完全不调用；`Search` 只在 `agent/` 里调用，而 v1 不做 agentic，**D13**）|
+| 3 | `TIANXIMEM_LLM_*` 更没有存在理由：**v1 没有 LLM 调用点**（`Add` 侧完全不调用；`Search` 只在 `agent/` 里调用，而 v1 不做 agentic，**D13**）|
 
 **⚠ 由此暴露的一条静默风险（要认，还没对冲）**：`AML_EMB_BASE_URL` 一换，**声明与事实就可能不符**——
 `text-embedding-v4` 与开发期的 Qwen3-Embedding-8B **同为 1024 维**（前者是官方默认值，

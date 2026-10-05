@@ -13,7 +13,7 @@ invmem-candidate/     InvMem 的**候选映射**（无 LICENSE，**只研读**�
 **出处、commit SHA 与逐项对照见 [`../../docs/reference-implementations.md`](../../docs/reference-implementations.md)。** 两个克隆目录**都 gitignored**（[`.gitignore`](../../.gitignore) 的"参考实现"一节）——上游是别人的仓库，本地副本不入库。
 
 > **裸 BM25 不是这里的一条基线**——检索只有混合一种形态，参照点由**混合主路径自身**承担（§13）。
-> **纯 BM25 检索的代码仍然存在**，但身份是 [T2 的检索手段](../experiments/)与 [Checker 判据的一路](../../src/tianxi_am/retrieve/CLAUDE.md)。
+> **纯 BM25 检索的代码仍然存在**，但身份是 [T2 的检索手段](../experiments/)与 [Checker 判据的一路](../../src/tianximem/retrieve/CLAUDE.md)。
 
 ---
 
@@ -37,7 +37,7 @@ invmem-candidate/     InvMem 的**候选映射**（无 LICENSE，**只研读**�
 
 ### ✅ 工作量**已估**（2026-09-26）：**不需要"包一层服务"**，因为它本身就是兼容服务
 
-> [决策记录](../../../docs/decisions.md) 待决事项 #5 原先的假设是"ReFind 是方法实现，要给它包
+> [决策记录](../../docs/decisions.md) 待决事项 #5 原先的假设是"ReFind 是方法实现，要给它包
 > 一层 Add/Search 服务"——**核过代码后发现不成立**：[`refind/app/main.py`](./refind/app/main.py)
 > 已经是一个 **AML 兼容的 Add/Search 服务**（`/add` `/search` 短别名 + `/v1/memories/*`，
 > `description="Agent Memory Leaderboard-compatible Add/Search service."`），
@@ -73,7 +73,7 @@ uv run --env-file .env python -m eval.experiments.run --dataset locomo-refined -
 
 ### 隔离边界（两条，别破）
 
-1. **`refind/` 只能被 [`../harness/`](../harness/) 当"另一个 Add/Search 服务"来调**——**任何 `src/tianxi_am/` 里的代码都不得 import 它**。§1 明确"本项目从零搭建，不复用任何既有代码"；B1 是**外部基线**，不是代码来源。
+1. **`refind/` 只能被 [`../harness/`](../harness/) 当"另一个 Add/Search 服务"来调**——**任何 `src/tianximem/` 里的代码都不得 import 它**。§1 明确"本项目从零搭建，不复用任何既有代码"；B1 是**外部基线**，不是代码来源。
 2. **Vendor 进来时保持原样**，不修改。改了就不再是 B1 了——**而"我们赢了吗"这个问题的答案依赖于它没被改过**。
 
 **⚠ 一条归因纪律**：ReFind 的消融数据（BM25 93.2/89.3 vs dense 91.3/82.2 vs hybrid 91.3/86.7）出自 **GPT-5-mini backbone 的 matched 子集**——**它证明的是"检索后端之间 BM25 不输"，不能直接推及 §9 的 `gpt-4o-mini` 场景。引用时别把两者混在一起**（§4 第 3 条）。

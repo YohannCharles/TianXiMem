@@ -1614,7 +1614,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tianxi-am"
+name = "tianximem"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [

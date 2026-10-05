@@ -486,12 +486,12 @@ def test_write_record_lands_in_runs_dir(tmp_path):
 
 
 def test_harness_does_not_import_src():
-    """**全目录最硬的一条边界**：harness 打 HTTP，**不 import `src/tianxi_am`**。
+    """**全目录最硬的一条边界**：harness 打 HTTP，**不 import `src/tianximem`**。
 
     走进程内调用会让 B1（ReFind）变成特例、两条基线不可比，而且**碰不到契约层**
     （[`../../eval/CLAUDE.md`](../../eval/CLAUDE.md)）。
 
-    用 AST 扫 **import 语句**而不是扫文本——docstring 里提到 `src/tianxi_am`
+    用 AST 扫 **import 语句**而不是扫文本——docstring 里提到 `src/tianximem`
     （比如 `api_config` 解释"embedding 配置只属于哪一边"）是说明，不是依赖。
     """
     harness = Path(__file__).resolve().parents[1] / "eval" / "harness"
@@ -506,7 +506,7 @@ def test_harness_does_not_import_src():
             else:
                 continue
             offenders += [
-                f"{path.name}:{node.lineno}: {name}" for name in names if "tianxi_am" in name
+                f"{path.name}:{node.lineno}: {name}" for name in names if "tianximem" in name
             ]
     assert not offenders, "harness 依赖了 src/：\n" + "\n".join(offenders)
 

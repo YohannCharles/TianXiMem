@@ -1,6 +1,6 @@
 # 基线配置 —— 所有 profile 的父级
 #
-# 加载顺序（见 src/tianxi_am/common/config.py）：
+# 加载顺序（见 src/tianximem/common/config.py）：
 #
 #     本文件 ← configs/<profile>.yaml ← 环境变量
 #
@@ -96,7 +96,7 @@ budget:
   tokenizer: o200k_base
 
 # ══ 打包与渲染变体（§11.3）═════════════════════════════════════════════
-# 渲染规则（模板本身）一处声明在 `src/tianxi_am/rank/CLAUDE.md` §4，**不在配置里**——
+# 渲染规则（模板本身）一处声明在 `src/tianximem/rank/CLAUDE.md` §4，**不在配置里**——
 # 这里只有那个"贵"对照项（T1）的开关。
 packaging:
   # C —— 正文里**带不带**会话日期前缀（每对渲染文本前加 `[YYYY-MM-DD] `，与 `created_at` 同格式）。
@@ -112,7 +112,7 @@ packaging:
   inject_abs_time: true
 
   # C —— 正文里的**相对时间就地注解**成绝对日期：`last Tues` → `last Tues (July 18, 2023)`。
-  # 实现与口径（含"推不出就不动"那条硬纪律）在 `src/tianxi_am/common/annotate.py`。
+  # 实现与口径（含"推不出就不动"那条硬纪律）在 `src/tianximem/common/annotate.py`。
   # ⚠ **它与上面那个键有一处根本区别**：`inject_abs_time` 改的是 embedding 输入
   #   （改它要重建索引），**本键只改 `content`** ⇒ 随时开关，不用重建索引、不用换集合。
   #   代价是 `content` 不再逐字等于被索引的文本——这是不变式 I1 的**一个声明式例外**：
@@ -124,7 +124,7 @@ packaging:
   annotate_relatives: true
 
 # ══ 精排（§11.2 / D12）════════════════════════════════════════════════════
-# ⚠ **端点 / 密钥 / 模型名不在这里**——它们在 `.env` 的 `TIANXI_RERANKER_*`（②层分工）。
+# ⚠ **端点 / 密钥 / 模型名不在这里**——它们在 `.env` 的 `TIANXIMEM_RERANKER_*`（②层分工）。
 #    本段只有"开不开"与"等多久"这两个**阈值**。
 rerank:
   # C —— §15 的消融开关之一。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。
@@ -132,7 +132,7 @@ rerank:
   #
   # ⚠⚠ **默认 `false`（团队决定）**：实测单题 100 篇要 5–12s 且抖动大
   #   （墙钟与分类明细见 `eval/reports/ledger.md`），而我们本地是**串行**跑题的
-  #   ⇒ 它直接决定迭代速度。**打开它 = 改这一行 + 配 `.env` 的 `TIANXI_RERANKER_*`。**
+  #   ⇒ 它直接决定迭代速度。**打开它 = 改这一行 + 配 `.env` 的 `TIANXIMEM_RERANKER_*`。**
   #   「它值不值这份算力」是 §13 的 **A3**，不是这里的默认值能回答的——A3 的两臂见
   #   `configs/runs/a3-{on,off}/`（冻结快照），别用"改默认值跑一遍"当对照。
   enabled: false

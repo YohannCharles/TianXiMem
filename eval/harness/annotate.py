@@ -30,7 +30,7 @@ I've taught for 7 years →  I've taught for 7 years (since 2016)
 
 ## ⚠ 这是**原型**，不是生产实现（S1 那条代理假设的又一次使用）
 
-生产形态要落在 `src/tianxi_am/common/render.py`（`render_pair` 的入口 + 一个 `annotate` 开关），
+生产形态要落在 `src/tianximem/common/render.py`（`render_pair` 的入口 + 一个 `annotate` 开关），
 而且**只在 `content` 侧调用、索引侧一个字不改**——理由与实测（`per-pair` 0.627 vs
 `t1-dated` 0.633，差在噪声内 ⇒ 日期进向量**没有贡献**）见
 [`../reports/ledger.md`](../reports/ledger.md)。

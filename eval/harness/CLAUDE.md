@@ -27,11 +27,11 @@ from api_config import (ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL,
                         JUDGE_API_BASE, JUDGE_API_KEY, JUDGE_MODEL, JUDGE_VERSION)
 ```
 
-`__file__` 在 `benchmark_data/` 下，所以 `parents[2]` 解析到 **`/home/buptc/project`**——**不是 `TianXi_AM/`，是它的上一级**。
+`__file__` 在 `benchmark_data/` 下，所以 `parents[2]` 解析到 **`/home/buptc/project`**——**不是 `TianXiMem/`，是它的上一级**。
 
 **⚠ 不要在仓库外创建它。** 那份就是本目录里的 [`api_config.py`](./api_config.py)（AML 公开的那份是 520 字节、无凭据），由 `judge.run_judge()` 起 subprocess 时把**本目录**放进 `PYTHONPATH` 找到（`judge._subprocess_env`）——`sys.path.insert(0, <不存在路径>)` 只是塞进一个没有该模块的条目，**import 会继续往后找到 `PYTHONPATH` 里的那份**，于是归档保持只读、`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。
 
-**两边的名字不一样**——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组：**适配器负责接上**（`JUDGE_*` 留空即回落 `ANSWER_*`——网关只有一个对话模型）。**那七个名字里不含 embedding**：归档 pipeline 不向量化，Qwen3-Embedding-8B 只属于 `src/tianxi_am`。
+**两边的名字不一样**——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组：**适配器负责接上**（`JUDGE_*` 留空即回落 `ANSWER_*`——网关只有一个对话模型）。**那七个名字里不含 embedding**：归档 pipeline 不向量化，Qwen3-Embedding-8B 只属于 `src/tianximem`。
 
 > **回归用例**：`tests/test_harness.py` 里那个桩 pipeline **真的 `import api_config`**——这条路径断了会立刻红。
 

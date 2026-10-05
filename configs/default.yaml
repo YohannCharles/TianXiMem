@@ -1,6 +1,6 @@
 # 基线配置 —— 所有 profile 的父级
 #
-# 加载顺序（见 src/tianxi_am/common/config.py）：
+# 加载顺序（见 src/tianximem/common/config.py）：
 #
 #     本文件 ← configs/<profile>.yaml ← 环境变量
 #
@@ -96,7 +96,7 @@ budget:
   tokenizer: o200k_base
 
 # ══ 打包与渲染变体（§11.3）═════════════════════════════════════════════
-# 渲染规则（模板本身）一处声明在 `src/tianxi_am/rank/CLAUDE.md` §4，**不在配置里**——
+# 渲染规则（模板本身）一处声明在 `src/tianximem/rank/CLAUDE.md` §4，**不在配置里**——
 # 这里只有那个"贵"对照项（T1）的开关。
 packaging:
   # C —— 正文里**带不带**会话日期前缀（每对渲染文本前加 `[YYYY-MM-DD] `，与 `created_at` 同格式）。
@@ -112,7 +112,7 @@ packaging:
   inject_abs_time: true
 
   # C —— 正文里的**相对时间就地注解**成绝对日期：`last Tues` → `last Tues (July 18, 2023)`。
-  # 实现与口径（含"推不出就不动"那条硬纪律）在 `src/tianxi_am/common/annotate.py`。
+  # 实现与口径（含"推不出就不动"那条硬纪律）在 `src/tianximem/common/annotate.py`。
   # ⚠ **它与上面那个键有一处根本区别**：`inject_abs_time` 改的是 embedding 输入
   #   （改它要重建索引），**本键只改 `content`** ⇒ 随时开关，不用重建索引、不用换集合。
   #   代价是 `content` 不再逐字等于被索引的文本——这是不变式 I1 的**一个声明式例外**：
@@ -124,7 +124,7 @@ packaging:
   annotate_relatives: true
 
 # ══ 精排（§11.2 / D12）════════════════════════════════════════════════════
-# ⚠ **端点 / 密钥 / 模型名不在这里**——它们在 `.env` 的 `TIANXI_RERANKER_*`（②层分工）。
+# ⚠ **端点 / 密钥 / 模型名不在这里**——它们在 `.env` 的 `TIANXIMEM_RERANKER_*`（②层分工）。
 #    本段只有"开不开"与"等多久"这两个**阈值**。
 rerank:
   # C —— §15 的消融开关之一。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。
@@ -136,7 +136,7 @@ rerank:
   # ⚠⚠ **代价**：单题 100 篇 5–12s、抖动大 ⇒ **整轮墙钟约 3×**。所以**开发期在
   #   `configs/local.yaml` 里显式关掉**（那里是覆盖，不是"本来没有"）。
   #   **别在这里改回去**：这一份是提交口径，开发期的差别只该写在 `local.yaml` 里。
-  # ⚠ **要端点才真的跑得起来**：`TIANXI_RERANKER_BASE_URL` / `_API_KEY` 缺了 ⇒
+  # ⚠ **要端点才真的跑得起来**：`TIANXIMEM_RERANKER_BASE_URL` / `_API_KEY` 缺了 ⇒
   #   不构造 reranker、记 `rerank_disabled`、启动时留一条 WARNING（D12 的降级形态，不是配置错误）。
   # ⚠ 「它值不值这份算力」是 §13 的 **A3** 回答的问题，而目前**只有一段对话**的证据
   #   （两臂快照 `configs/runs/a3-{on,off}/`）——**别拿默认值当结论**，也别用
@@ -183,8 +183,8 @@ rerank:
 # （`docs/open-questions.md` 的 S6 记着"来源是团队告知、不是一手文档"）。
 # 打开它跑一轮，就有官方真实请求的样本可核验；`/health` 刻意不记。
 #
-# 落地形态、四条纪律与文件格式见 `src/tianxi_am/service/capture.py`；
-# 路径在 `.env` 的 `TIANXI_CAPTURE_PATH`（路径归 env，见 configs/CLAUDE.md）。
+# 落地形态、四条纪律与文件格式见 `src/tianximem/service/capture.py`；
+# 路径在 `.env` 的 `TIANXIMEM_CAPTURE_PATH`（路径归 env，见 configs/CLAUDE.md）。
 capture:
   # C —— 开关。`false` ⇒ **连中间件都不装**（零开销、零行为差异）。
   # ⚠ **基线保持 `false`**：它按设计是"跑前打开、跑完关掉"的一次性诊断开关

@@ -95,13 +95,13 @@ def reorder(segments: list[str], query: str, *, mode: str) -> list[str]:
 
 def _rerank_order(segments: list[str], query: str) -> list[str]:
     """用远端 reranker 打分后重排（分数降序）。**不发请求就抛**——宁可炸也不静默降级。"""
-    from tianxi_am.rank.reranker import RemoteReranker
+    from tianximem.rank.reranker import RemoteReranker
 
-    base = os.environ.get("TIANXI_RERANKER_BASE_URL", "")
-    key = os.environ.get("TIANXI_RERANKER_API_KEY", "")
-    model = os.environ.get("TIANXI_RERANKER_MODEL", "qwen3-reranker-4b")
+    base = os.environ.get("TIANXIMEM_RERANKER_BASE_URL", "")
+    key = os.environ.get("TIANXIMEM_RERANKER_API_KEY", "")
+    model = os.environ.get("TIANXIMEM_RERANKER_MODEL", "qwen3-reranker-4b")
     if not base or not key:
-        raise SystemExit("重排臂要 `TIANXI_RERANKER_BASE_URL` / `_API_KEY`（.env 里有）")
+        raise SystemExit("重排臂要 `TIANXIMEM_RERANKER_BASE_URL` / `_API_KEY`（.env 里有）")
     reranker = RemoteReranker(base_url=base, api_key=key, model=model, timeout=120.0)
     scores = reranker.score(query=query, documents=segments)
     order = sorted(range(len(segments)), key=lambda i: -scores[i])

@@ -1,7 +1,7 @@
 [project]
-name = "tianxi-am"
+name = "tianximem"
 version = "0.0.0"
-description = "TianXi_AM — AML (Agent Memory Leaderboard) 参赛系统：Add/Search 两个 HTTP 端点"
+description = "TianXiMem — AML (Agent Memory Leaderboard) 参赛系统：Add/Search 两个 HTTP 端点"
 readme = "README.md"
 
 # 3.14 是本机默认解释器，但 torch / qdrant-client 的 wheel 覆盖通常滞后一个大版本，
@@ -47,16 +47,16 @@ dev = [
 ]
 
 # ── 打包设置：本仓库可打包 ────────────────────────────────────────────────
-# `uv sync` 以 **editable** 方式装上本仓库 ⇒ `uvicorn tianxi_am.service.app:app`、
+# `uv sync` 以 **editable** 方式装上本仓库 ⇒ `uvicorn tianximem.service.app:app`、
 # `python -m ...` 以及任何入口**都不需要再设 PYTHONPATH**。
 #
-# ⚠ src 布局必须显式声明包位置，否则 hatchling 找不到 `tianxi_am`。
+# ⚠ src 布局必须显式声明包位置，否则 hatchling 找不到 `tianximem`。
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tianxi_am"]
+packages = ["src/tianximem"]
 
 [tool.uv]
 package = true

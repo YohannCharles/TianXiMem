@@ -1,4 +1,4 @@
-"""查询侧 instruction 兼容层（§7.2 / `src/tianxi_am/embed/query_instruction.py`）。
+"""查询侧 instruction 兼容层（§7.2 / `src/tianximem/embed/query_instruction.py`）。
 
 **这组测试守的是一条静默失败的边界**：前缀加错位置时结果依然"看起来正常"，
 所以必须由测试来钉——而不是靠读代码。
@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from tianxi_am.embed.base import CachingEmbedder, DiskVectorCache, EmbeddingCoordinate
-from tianxi_am.embed.query_instruction import (
+from tianximem.embed.base import CachingEmbedder, DiskVectorCache, EmbeddingCoordinate
+from tianximem.embed.query_instruction import (
     DEFAULT_TASK,
     DEFAULT_TEMPLATE,
     QueryInstructionEmbedder,

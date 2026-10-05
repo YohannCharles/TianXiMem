@@ -1,6 +1,6 @@
 """Qdrant 派生索引：建集合、写点、payload、混合检索、隔离、可重建。
 
-⚠ 需要**在跑的 Qdrant**（`TIANXI_QDRANT_URL`，默认 `http://localhost:6333`）。
+⚠ 需要**在跑的 Qdrant**（`TIANXIMEM_QDRANT_URL`，默认 `http://localhost:6333`）。
 不可达时整组 skip——**不静默通过**。集合名每个用例一份、用完即删，
 **绝不写进 `memories`**（那是开发/线上共用的集合）。
 """
@@ -13,8 +13,8 @@ import uuid
 import pytest
 from tests.conftest import FakeEmbedder, rd, unit_vector
 
-from tianxi_am.common.render import render_pair
-from tianxi_am.store.qdrant_store import (
+from tianximem.common.render import render_pair
+from tianximem.store.qdrant_store import (
     BM25_MODEL,
     COLLECTION_DEFAULT,
     DENSE_VECTOR,
@@ -462,7 +462,7 @@ def test_rebuild_from_sqlite_reproduces_search(store, make_store, emb: FakeEmbed
     ⚠ 这里给每条渲染文本**预设互不相同的 dense 向量**。若两路都出现并列，
     名次的抖动会掩盖"重建是否真的复现"这个要测的东西。
     """
-    from tianxi_am.pairing import AddBatch, Message, apply_batch
+    from tianximem.pairing import AddBatch, Message, apply_batch
 
     msgs = tuple(
         Message(role="user" if i % 2 == 0 else "assistant", content=f"alpha beta {i}")
@@ -524,7 +524,7 @@ def test_equal_weights_do_not_change_ranking(make_store, emb: FakeEmbedder) -> N
 
 def test_index_pairs_renders_through_common_render(store, make_store, emb: FakeEmbedder) -> None:
     """索引侧的文本必须是渲染后的——**同一个 render 函数**，不是这里另拼一份。"""
-    from tianxi_am.pairing import AddBatch, Message, apply_batch
+    from tianximem.pairing import AddBatch, Message, apply_batch
 
     apply_batch(
         store,

@@ -28,7 +28,7 @@ from api_config import (ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL,
 但**全部实验固定同一个裁判，§13 的相对对照仍然成立**（`.env.example` 已记）。
 
 ⚠ **那七个名字里没有 embedding。** 归档 pipeline 是纯 LLM 的 answer/judge 驱动、
-不做任何向量化——Qwen3-Embedding-8B 的配置不经过这里，它只属于 `src/tianxi_am`。
+不做任何向量化——Qwen3-Embedding-8B 的配置不经过这里，它只属于 `src/tianximem`。
 """
 
 from __future__ import annotations

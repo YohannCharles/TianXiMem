@@ -20,8 +20,8 @@ import time
 import pytest
 from tests.conftest import rd, run_parallel, seed_in_add, seed_pair_in
 
-from tianxi_am.pairing import AddBatch, Message, apply_batch
-from tianxi_am.store.sqlite_store import (
+from tianximem.pairing import AddBatch, Message, apply_batch
+from tianximem.store.sqlite_store import (
     STATUS_COMPLETE,
     SqliteStore,
     make_pair_id,

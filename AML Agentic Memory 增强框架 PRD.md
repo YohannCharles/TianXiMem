@@ -1,4 +1,4 @@
-# TianXi_AM — AML Agentic Memory 系统 PRD
+# TianXiMem — AML Agentic Memory 系统 PRD
 
 > **文档定位**：**可直接照着写代码的实现规格**。凡是"待验证"的判断都显式标注，不写成已知。
 >

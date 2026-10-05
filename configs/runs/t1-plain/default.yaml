@@ -1,6 +1,6 @@
 # 基线配置 —— 所有 profile 的父级
 #
-# 加载顺序（见 src/tianxi_am/common/config.py）：
+# 加载顺序（见 src/tianximem/common/config.py）：
 #
 #     本文件 ← configs/<profile>.yaml ← 环境变量
 #
@@ -78,7 +78,7 @@ budget:
   tokenizer: o200k_base
 
 # ══ 打包与渲染变体（§11.3）═════════════════════════════════════════════
-# 渲染规则（模板本身）一处声明在 `src/tianxi_am/rank/CLAUDE.md` §4，**不在配置里**——
+# 渲染规则（模板本身）一处声明在 `src/tianximem/rank/CLAUDE.md` §4，**不在配置里**——
 # 这里只有那个"贵"对照项（T1）的开关。
 packaging:
   # C —— §13 的 T1：**时间戳前缀 带 / 不带**（`config-reference.md` §2 要求它可配）。
@@ -91,7 +91,7 @@ packaging:
   inject_abs_time: false
 
 # ══ 精排（§11.2 / D12）════════════════════════════════════════════════════
-# ⚠ **端点 / 密钥 / 模型名不在这里**——它们在 `.env` 的 `TIANXI_RERANKER_*`（②层分工）。
+# ⚠ **端点 / 密钥 / 模型名不在这里**——它们在 `.env` 的 `TIANXIMEM_RERANKER_*`（②层分工）。
 #    本段只有"开不开"与"等多久"这两个**阈值**。
 rerank:
   # C —— §15 的消融开关之一。`false` ⇒ 不构造 reranker，Search 直接用融合名次。

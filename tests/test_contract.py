@@ -24,9 +24,9 @@ import pytest
 from pydantic import ValidationError
 from tests.conftest import FUSED_SCORE, Wired, seed_line, seed_pair_in
 
-from tianxi_am.common.config import DEFAULT_RADIUS
-from tianxi_am.common.render import render
-from tianxi_am.service.schemas import (
+from tianximem.common.config import DEFAULT_RADIUS
+from tianximem.common.render import render
+from tianximem.service.schemas import (
     AddMessage,
     AddRequest,
     AddResponse,
@@ -341,7 +341,7 @@ def test_http_search_round_trip(wired: Wired, seed_pair: Callable[..., str]) -> 
     """**HTTP 那一跳**：路由 + 状态码 + 响应项的字段集合。"""
     from fastapi.testclient import TestClient
 
-    from tianxi_am.service import create_app
+    from tianximem.service import create_app
 
     wired.qdrant.by_user["u1"] = [seed_pair(wired.store, 0, "q", "a")]
     with TestClient(create_app(wired.services)) as client:
@@ -353,7 +353,7 @@ def test_http_search_round_trip(wired: Wired, seed_pair: Callable[..., str]) -> 
 def test_http_add_round_trip_echoes_fields(wired: Wired) -> None:
     from fastapi.testclient import TestClient
 
-    from tianxi_am.service import create_app
+    from tianximem.service import create_app
 
     payload = {
         # ⚠ `request_id` **必须取得出 chunk 序号**（D25 的位置来源）——
@@ -373,7 +373,7 @@ def test_http_rejects_illegal_request_at_the_boundary(wired: Wired) -> None:
     """边界校验在**真的 HTTP 上**是 422。"""
     from fastapi.testclient import TestClient
 
-    from tianxi_am.service import create_app
+    from tianximem.service import create_app
 
     with TestClient(create_app(wired.services)) as client:
         resp = client.post("/search", json={"user_id": "u1", "query": "q", "top_k": 0})
@@ -387,7 +387,7 @@ def test_http_health_is_an_unauthenticated_2xx(wired: Wired) -> None:
     """
     from fastapi.testclient import TestClient
 
-    from tianxi_am.service import create_app
+    from tianximem.service import create_app
 
     with TestClient(create_app(wired.services)) as client:
         resp = client.get("/health")
