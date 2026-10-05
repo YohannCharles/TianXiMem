@@ -285,6 +285,11 @@ def test_default_profile_loads_the_repo_yaml(config_dir: Path) -> None:
     # 2026-09-25 起默认为 True（**D21 推翻了 §11.3 的"不加"**，有 346 题的反例）——
     # 这条断言是那个决定在本仓的**回归位**：谁把它改回去，这里立刻红。
     assert cfg.packaging.inject_abs_time is True
+    # 2026-10-01 起默认为 0（**D31：扩窗 + 段合并未挣到自己的位置**）——同上，
+    # 这是那个决定在本仓的**回归位**：谁把它改回非 0，这里立刻红。
+    # ⚠ 与 `common/config.py::DEFAULT_RADIUS` **必须相等**（两处不等就又分叉了）；
+    # 代码常量那一侧由 `test_reranker.py` 的 `_MAX_RADIUS_UNDER_TEST` 注释说明为何解耦。
+    assert cfg.neighbor.radius == 0
 
 
 def test_packaging_switch_rejects_a_non_bool(config_dir: Path) -> None:

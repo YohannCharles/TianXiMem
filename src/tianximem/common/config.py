@@ -136,17 +136,28 @@ DEFAULT_ENV_FILE: Final[str] = ".env"
 #: `tests/test_config.py::test_rrf_k_is_the_same_constant_in_both_places` 钉住。
 RRF_K: Final[int] = 61
 
-#: Neighbor Expansion 的 v1 初值（§10）。**值的家在这里**（不是 `rank/neighbor.py`）：
+#: Neighbor Expansion 的初值（§10）。**值的家在这里**（不是 `rank/neighbor.py`）：
 #: `common/` 是**最底层**、被所有层依赖，反过来（`common/` import `rank/`）是分层错误；
 #: 由消费方**引用**，也就不存在"代码默认值 vs 配置默认值"两处漂移。
+#: 它们与 `default.yaml` 里的取值**必须一致**——两处不一致时，"代码默认值 vs
+#: 配置默认值"就又分叉了。
+#:
+#: ⛔ **`DEFAULT_RADIUS = 0`（2026-10-01，D31）：扩窗 + 段合并未挣到自己的位置。**
+#: 两条依据：① 判分池 100% `role: user` ⇒ D29 之后链是 0 ⇒ **扩窗在那里根本不执行**
+#: （结构性事实）；② 唯一能测的地方（locomo `official` 346 题）读出 −0.87pt，
+#: 落在 ~1pt 噪声底之内。"条件不对所以看不出好"这条路已堵死：那次对照里链几乎不断
+#: （跨 Add 只 4.4%）、上下文**翻了一倍**、而预算**只用到 12%**（没被截断）。
+#: ⚠ **代码保留**（`rank/neighbor.py` 一行未删）⇒ 开回来只需把这两个常量与
+#: `default.yaml` 一起改回去。数字见 `eval/reports/ledger.md` 的「扩窗为什么是 0」。
+#:
+#: ⚠ **`DEFAULT_EXPANSION_SEED_LIMIT = 1000` 在 `DEFAULT_RADIUS = 0` 下空转**
+#: （没有扩窗，种子数就没有含义）。它当年那个依据（N1，+3.5pt）**早于 D28**，
+#: **没有被重跑过，不要引用它**。
 #:
 #: ⚠ 这两个量**不是调参项**：§10 明确"种子数、窗口大小、Top-K、token 预算**是同一道题**，
 #: 任何一项调整都要重算其余三项"⇒ 改它们之前要有消融数据（§12.1 R1 对冲 3；config-reference §6）。
-#: ⚠ **2026-09-25 由 30 改成 1000**（= 全部候选当种子）：3 段 346 题的 A/B 显示
-#: 宽扩窗 +3.5pt 且无倒退（`eval/reports/ledger.md` 的 N1 一节）。它与 `default.yaml`
-#: 里的取值**必须一致**——两处不一致时，"代码默认值 vs 配置默认值"就又分叉了。
 DEFAULT_EXPANSION_SEED_LIMIT: Final[int] = 1000
-DEFAULT_RADIUS: Final[int] = 2
+DEFAULT_RADIUS: Final[int] = 0
 
 #: `neighbor.seed_placement` 的取值域（§11.2 的组内顺序消融，2026-09-25）。
 SEED_PLACEMENTS: Final[tuple[str, ...]] = ("keep", "front", "echo")

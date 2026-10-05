@@ -30,7 +30,6 @@ import pytest
 from tests.conftest import Wired, seed_line
 from tests.conftest import seed_pair_in as _seed
 
-from tianximem.common.config import DEFAULT_RADIUS
 from tianximem.common.render import render
 from tianximem.rank import RemoteReranker, RerankUnavailable
 from tianximem.retrieve import EvidenceChecker
@@ -76,9 +75,16 @@ class FakeReranker:
         return [float(len(documents) - rank_of[i]) for i in range(len(documents))]
 
 
-#: 候选之间的间隔，**由扩窗半径推出**：必须 **> 2 × radius + 1**（理由见
+#: 本文件**显式传过**的最大扩窗半径（`_wire(..., radius=1)` 那两条用例）。
+#: ⚠ **不要从 `DEFAULT_RADIUS` 推导**：那是**产品默认值**，会随产品决策变
+#: （2026-10-01 起为 0）；而这里的间距要求只跟**本文件自己的用例传了什么**有关。
+#: 从产品默认值推导的话，"把默认改成 0"会顺手把这个间距缩到 3，而 `radius=1`
+#: 需要 **> 3** ⇒ 两个窗口首尾相接、候选塌成一段——**不报错，只是段数少了**。
+_MAX_RADIUS_UNDER_TEST: Final[int] = 1
+
+#: 候选之间的间隔：必须 **> 2 × radius + 1**（理由见
 #: `test_contract.py` 同名常量的注释——尤其第 3 条"窗口首尾相接"）。
-_STEP: Final[int] = 2 * DEFAULT_RADIUS + 3
+_STEP: Final[int] = 2 * _MAX_RADIUS_UNDER_TEST + 3
 
 
 def _ids(store: SqliteStore, count: int, *, step: int = _STEP, session_id: str = "s1") -> list[str]:
@@ -737,6 +743,8 @@ def test_rank_zero_after_rerank_is_the_expansion_seed(wired: Wired) -> None:
 
     ⚠ `seed_limit=1` 是**必须的**：默认 30 会让 A 和 B **都**是种子，
     于是两边的邻居都会进来，本用例就什么也证明不了（那是"两条都过"的假绿）。
+    ⚠ `radius=1` 也是**必须显式的**：产品默认是 **0 = 不扩窗**（**D31**），
+    继承它则两条断言都不成立——而那是"**两条都不过**"，至少不假绿。
     """
     # ⚠ 邻居必须是**同一次 Add 内**的相邻块（D28）⇒ 用 `seed_line` 一次落两条
     s1 = seed_line(
@@ -755,13 +763,13 @@ def test_rank_zero_after_rerank_is_the_expansion_seed(wired: Wired) -> None:
     wired.qdrant.by_user["u1"] = [a, b]  # RRF：A 在前
 
     # ① 对照组：不接 reranker（`None`）⇒ 种子 = A（RRF 名次 0）⇒ 进来的是 s1 的邻居
-    _wire(wired, None, seed_limit=1)
+    _wire(wired, None, seed_limit=1, radius=1)
     without = _content(wired, top_k=5)
     assert "n-s1" in without
     assert "n-s2" not in without
 
     # ② 精排把 B 顶到名次 0 ⇒ 进来的是 s2 的邻居（**换了人**）
-    _wire(wired, FakeReranker(want=[1, 0]), seed_limit=1)
+    _wire(wired, FakeReranker(want=[1, 0]), seed_limit=1, radius=1)
     with_rerank = _content(wired, top_k=5)
     assert "n-s2" in with_rerank
     assert "n-s1" not in with_rerank

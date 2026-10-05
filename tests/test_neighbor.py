@@ -65,8 +65,16 @@ def _by_id(selected: tuple[SelectedMemory, ...]) -> dict[str, SelectedMemory]:
     return {m.memory_id: m for m in selected}
 
 
-def _expand(store: SqliteStore, ranked: list[Candidate], **kwargs) -> tuple[SelectedMemory, ...]:
-    return expand_neighbors(ranked, store=store, **kwargs).selected
+def _expand(
+    store: SqliteStore, ranked: list[Candidate], *, radius: int = 1, **kwargs
+) -> tuple[SelectedMemory, ...]:
+    """⚠ **半径在这里显式给（默认 1），不要吃 `DEFAULT_RADIUS`。**
+
+    本文件测的**就是**扩窗，而产品默认是 **`radius=0`（= 不扩窗）**（**D31**）——
+    继承它会让整个文件**静默地什么都不测**：返回的段照样合法、`id` 照样对，
+    只有"邻居有没有进来"这一件事没了。要关扩窗的用例**自己写 `radius=0`**。
+    """
+    return expand_neighbors(ranked, store=store, radius=radius, **kwargs).selected
 
 
 def _idx(store: SqliteStore, session_id: str, index: int, *, user_id: str = "u1") -> str:
@@ -645,12 +653,13 @@ def test_every_segment_has_a_real_candidate(store: SqliteStore, counter: FakeCou
 # ══ 五、整条链上的位置：`top_k` 在合并**之后** ═══════════════════════════
 
 
-def test_raw_memory_count_can_exceed_top_k(wired: Wired) -> None:
+def test_raw_memory_count_can_exceed_top_k(wired_expanding: Wired) -> None:
     """扩窗会把 raw 数抬到 `top_k` 之上——**`top_k` 约束的是段数，不是 raw 数**。
 
     这里 1 个候选扩出 2 个邻居 = 3 条 raw，`top_k=1` 仍然合法地返回 1 段。
     若在扩窗**之前**按 raw 数截断，邻居会被砍掉，返回的段就**比该有的少**。
     """
+    wired = wired_expanding
     ids = seed_line(wired.store, range(3))
     wired.qdrant.by_user["u1"] = [ids[1]]  # 只有一个候选
 
@@ -677,12 +686,13 @@ def test_top_k_applies_to_segments_after_merging(wired: Wired) -> None:
     assert got.items[0].id == ids[0]
 
 
-def test_anchor_drives_id_and_created_at_end_to_end(wired: Wired) -> None:
+def test_anchor_drives_id_and_created_at_end_to_end(wired_expanding: Wired) -> None:
     """端到端：响应的 `id` 与 `created_at` 都来自**锚点**（= `best_rank` 那条候选）。
 
     锚点不是段里第一条——第 0 块是扩出来的邻居，它**没有** `event_time`；
     日期必须来自第 1 块（真实候选、名次 0）。
     """
+    wired = wired_expanding
     ids = seed_line(wired.store, range(3))
     _set_event_time(wired.store, ids[1], 1683525360000)
     wired.qdrant.by_user["u1"] = [ids[1]]
@@ -731,13 +741,14 @@ def test_a_budget_too_small_for_the_first_segment_yields_no_data(
     assert got.considered_segments == 1
 
 
-def test_expanded_content_is_identical_to_a_direct_render(wired: Wired) -> None:
+def test_expanded_content_is_identical_to_a_direct_render(wired_expanding: Wired) -> None:
     """**不变式 I1 的端到端版**：邻居进段走的也是 `common/render`，
     与直接渲染同一对的结果**逐字相同**。
 
     两处渲染一旦分叉，"检索命中的是什么"与"模型读到的是什么"就漂移了，
     而**这种漂移不会报错**。
     """
+    wired = wired_expanding
     ids = seed_line(wired.store, range(3))
     wired.qdrant.by_user["u1"] = [ids[1]]
 

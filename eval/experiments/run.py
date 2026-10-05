@@ -54,11 +54,25 @@ from eval.datasets import (
     Sample,
     benchmark_dir,
     data_fingerprint,
+    load_beam,
     load_clbench,
+    load_corporatebench,
     load_locomo,
     load_longmemeval,
+    load_medmemorybench,
+    load_memtrapbench,
+    load_mquake,
+    load_personamem,
+    load_tempreason,
+    shape_note,
 )
+
+# ⚠ **绝对 import**：本文件是**当脚本跑的**（`python eval/experiments/run.py`），
+# 相对 import 在那种调用方式下会抛 `ImportError: no attempt relative import...`。
+from eval.experiments.recipes import recipe_for
 from eval.harness import (
+    ADD_SHAPES,
+    DEFAULT_ADD_SHAPE,
     ServiceClient,
     build_input_items,
     build_record,
@@ -73,6 +87,16 @@ EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1
 EXIT_PRECONDITION_FAILED: Final[int] = 2
 
+
+class EmptyDatasetError(RuntimeError):
+    """`--dataset` 加载出**零个样本**——几乎总是"归档没取回"或 `bench_dir` 指错了。
+
+    ⚠ **它得是自己的类型，不能借用裸 `ValueError`**：`run_round` 里另有一个
+    `ValueError`（"未知数据集"），那是**用法错误**、提示完全不同；两者混在一起
+    会让"数据集名打错了"收到一句"请先 `make fetch-data`"。
+    """
+
+
 #: §2.2：AML 固定传 `top_k=100`。**这里也用它**——预检要验的就是线上那个值。
 DEFAULT_TOP_K: Final[int] = 100
 
@@ -80,7 +104,18 @@ DEFAULT_TOP_K: Final[int] = 100
 DEFAULT_BASE_URL: Final[str] = "http://127.0.0.1:8000"
 
 #: 有加载器的数据集——**三个**（不只是代理评测那两个；CL-Bench 也在加载层里，§12.4）。
-DATASETS: Final[tuple[str, ...]] = ("clbench", "locomo-refined", "longmemeval-s")
+DATASETS: Final[tuple[str, ...]] = (
+    "beam",
+    "clbench",
+    "corporatebench",
+    "locomo-refined",
+    "longmemeval-s",
+    "medmemorybench",
+    "memtrapbench",
+    "mquake-remastered",
+    "personamem-v2",
+    "tempreason",
+)
 
 
 def _load(
@@ -105,6 +140,21 @@ def _load(
         return load_longmemeval(bench_dir, limit=limit, spread=spread)
     if dataset == "clbench":
         return load_clbench(bench_dir, limit=limit, spread=spread)
+    if dataset == "beam":
+        return load_beam(bench_dir, limit=limit, spread=spread)
+    # ↓ 这三份**没有官方 pipeline**（`extra_pipeline.py` 是我们自写的）⇒ 分数只在仓内比。
+    if dataset == "tempreason":
+        return load_tempreason(bench_dir, limit=limit, spread=spread)
+    if dataset == "personamem-v2":
+        return load_personamem(bench_dir, limit=limit, spread=spread)
+    if dataset == "mquake-remastered":
+        return load_mquake(bench_dir, limit=limit, spread=spread)
+    if dataset == "medmemorybench":
+        return load_medmemorybench(bench_dir, limit=limit, spread=spread)
+    if dataset == "memtrapbench":
+        return load_memtrapbench(bench_dir, limit=limit, spread=spread)
+    if dataset == "corporatebench":
+        return load_corporatebench(bench_dir, limit=limit, spread=spread)
     raise ValueError(f"未知数据集 {dataset!r}——只有 {' / '.join(DATASETS)} 有加载器")
 
 
@@ -172,6 +222,24 @@ def _count_questions(samples: list[Sample]) -> int:
     return sum(len(sample.questions) for sample in samples)
 
 
+def missing_pipeline(dataset: str, bench_dir: Path) -> Path | None:
+    """裁判脚本在不在？**在跑之前查**。
+
+    ⚠ 与 `judge_preconditions` 是**同一类**（都是"跑之前就该失败"），但它更贵：
+    `run_judge` 起 subprocess 时**不会**因为脚本不存在而立刻失败——整轮的 `Add` 与
+    `Search` 会**全部正常跑完**（embedding 的钱已经付了），然后**第一个样本**的裁判
+    那一步才以 `RuntimeError` 炸（子进程重试 3 次后抛，stderr 里只有一句 python 的
+    `can't open file`）。⇒ 检查放在加载之前，一行都不用跑。
+
+    只可能缺**归档里那几份**（locomo / lme / clbench / beam）——另两类的路径在本仓内。
+    """
+    try:
+        path = pipeline_for(bench_dir, dataset)
+    except ValueError:
+        return None  # 未知数据集：`--dataset` 的更早一处已经拦了，别在这里报重复的错
+    return None if path.exists() else path
+
+
 def run_round(
     *,
     dataset: str,
@@ -186,6 +254,7 @@ def run_round(
     spread: bool = False,
     max_questions: int | None = None,
     fallback_base_url: str | None = None,
+    add_shape: str = DEFAULT_ADD_SHAPE,
     client: ServiceClient | None = None,
 ) -> tuple[list[Sample], list]:
     """跑一轮的**机制部分**：加载 → 投喂 → 检索 → 裁判。返回 `(samples, results)`。
@@ -198,13 +267,14 @@ def run_round(
         raise ValueError(f"未知数据集 {dataset!r}——只有 {' / '.join(DATASETS)} 有加载器")
     samples = _load(dataset, bench_dir, limit, spread=spread)
     if not samples:
-        raise ValueError(f"{dataset}：一个 sample 都没加载到——bench_dir={bench_dir} 对吗？")
+        raise EmptyDatasetError(f"{dataset}：一个 sample 都没加载到——bench_dir={bench_dir} 对吗？")
 
     owns_client = client is None
     client = client or ServiceClient(
         base_url,
         # 超限兜底（只为 B1）：见 `driver.ServiceClient.__init__` 的注释。
         fallback=ServiceClient(fallback_base_url) if fallback_base_url else None,
+        add_shape=add_shape,
     )
     try:
         results: list = []
@@ -341,6 +411,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--skip-ingest", action="store_true", help="跳过 Add，复用已有语料")
     parser.add_argument(
+        "--frozen",
+        action="store_true",
+        help=(
+            "用**冻结口径**（`eval/experiments/recipes.py`）取 `--limit` / `--spread`——"
+            '"这个数据集跑多少题"的唯一声明处。**与显式的 `--limit` / `--spread` 互斥**。'
+            "要判断改动值不值，两次 run 必须同口径 ⇒ 用这个，别手抄数字"
+        ),
+    )
+    parser.add_argument(
         "--spread",
         action="store_true",
         help=(
@@ -362,6 +441,17 @@ def build_parser() -> argparse.ArgumentParser:
         choices=MARKS,
         default="paren",
         help="`--memory-date annotate` 的记号：paren（`last Tues (…2023)`）/ tag（`[= …]`）",
+    )
+    parser.add_argument(
+        "--add-shape",
+        choices=ADD_SHAPES,
+        default=DEFAULT_ADD_SHAPE,
+        help=(
+            "`Add` 正文按哪种形态渲染。**缺省 official = 线上那个**（逐数据集加 `<标签>: ` "
+            "前缀、`system` 折成 `user`）；`native` = 数据集的原始形状（改之前的，只作对照）；"
+            "`alluser` = 再把 role 全折成 user（**判分池的形态**，只在 LoCoMo/ScriptMem 那一簇"
+            "实测到）。⚠ 不同形态的分数**不可互比**，它会写进数据指纹"
+        ),
     )
     parser.add_argument("--run-id", default=None, help="缺省 <dataset>-<UTC 时间戳>")
     parser.add_argument("--step", default="step-0", help="这次 run 属于哪个 Step（§16）")
@@ -434,6 +524,17 @@ def _exit_for_error(error: Exception, *, base_url: str) -> int:
     if isinstance(error, httpx.TransportError):
         print(_unreachable_hint(base_url, error), file=sys.stderr)
         return EXIT_PRECONDITION_FAILED
+    if isinstance(error, EmptyDatasetError):
+        print(
+            f"{error}\n"
+            "  ⇒ 按顺序查两件事：\n"
+            "     1) `bench_dir` 指对了没有（`TIANXIMEM_BENCHMARK_DIR`，"
+            "默认 `benchmark_data/`）；\n"
+            "     2) 归档取回来了没有——**新机器上 clone 完一个数据文件都没有**：\n"
+            "        `make fetch-data`（公开源，不需要凭据），见 docs/benchmark-data.md",
+            file=sys.stderr,
+        )
+        return EXIT_PRECONDITION_FAILED
     # 剩下的只可能是 FileNotFoundError（调用点的 except 元组钉着）
     print(
         f"归档里缺文件：{error}\n先 `make fetch-data`（见 docs/benchmark-data.md）",
@@ -456,6 +557,7 @@ def _assemble_record(args, *, run_id: str, bench_dir: Path, samples, results, no
             args.dataset,
             n_samples=len(samples),
             n_questions=_count_questions(samples),
+            add_shape=args.add_shape,
             note=note,
         ),
         models=models_fingerprint(
@@ -535,7 +637,39 @@ def main(argv: list[str] | None = None) -> int:
     run_id = args.run_id or derive_run_id(args.dataset)
     out_dir = reports_dir / "runs" / run_id
 
-    note = truncation_note(args.limit, max_questions=args.max_questions, spread=args.spread)
+    if args.frozen:
+        # **冻结口径**（[`recipes.py`](./recipes.py)）——"这个数据集跑多少题"的唯一声明处。
+        # ⚠ 与显式的 `--limit` / `--spread` **不许混用**：两处同时给就会出现
+        # "记录的口径"与"实际跑的口径"分家，而那是**不可比**里最难查的一种。
+        clashing = [
+            name for name, given in (("--limit", args.limit), ("--spread", args.spread)) if given
+        ]
+        if clashing:
+            print(
+                f"⚠ `--frozen` 与 {' / '.join(clashing)} 不能同时给——"
+                "冻结口径就是为了让'跑的是什么'只有一个来源。",
+                file=sys.stderr,
+            )
+            return EXIT_PRECONDITION_FAILED
+        chosen = recipe_for(args.dataset)
+        args.limit, args.spread = chosen.limit, chosen.spread
+        print(f"  冻结口径 {args.dataset}: {chosen.flags()}  ⇒ 预期 {chosen.n_questions} 题")
+
+    # ⚠ `note` 由两半拼成，**两半都是"不可比"的警示**：
+    #   · 截断（`--limit` / `--max-questions`）——跑了一小撮
+    #   · 数据集的**形状是我们造的**那些约定（`shape_note`）——改它会改分数，
+    #     而两次 run 的 record 否则长得一模一样
+    note = "\n".join(
+        part
+        for part in (
+            truncation_note(args.limit, max_questions=args.max_questions, spread=args.spread),
+            "**冻结口径**（`eval/experiments/recipes.py`）——与同口径的历史 run 可比。"
+            if args.frozen
+            else "",
+            shape_note(args.dataset),
+        )
+        if part
+    )
 
     missing = judge_preconditions()
     if missing:
@@ -545,6 +679,20 @@ def main(argv: list[str] | None = None) -> int:
             "或自己加 `uv run --env-file .env`。\n"
             "  ⚠ `.env` 是 `common/config.py` 自己读的，**不会**进环境变量——"
             "而裁判是 subprocess，只继承环境变量。",
+            file=sys.stderr,
+        )
+        return EXIT_PRECONDITION_FAILED
+
+    absent = missing_pipeline(args.dataset, bench_dir)
+    if absent is not None:
+        print(
+            f"裁判脚本不在：{absent}\n"
+            "  ⇒ 归档里那几份 pipeline 是**跟着数据集一起取回**的：`make fetch-data`"
+            "（见 docs/benchmark-data.md）。\n"
+            "  ⚠ 查在这里是因为**再不查就来不及了**：脚本缺了不会被「起进程」拦下，"
+            "整轮的\n"
+            "     `Add` 与 `Search` 会全部跑完（embedding 的钱已经付了），"
+            "到第一个样本的裁判那步才炸。",
             file=sys.stderr,
         )
         return EXIT_PRECONDITION_FAILED
@@ -563,8 +711,14 @@ def main(argv: list[str] | None = None) -> int:
             annotate_mark=args.annotate_mark,
             spread=args.spread,
             fallback_base_url=args.fallback_base_url,
+            add_shape=args.add_shape,
         )
-    except (httpx.HTTPStatusError, httpx.TransportError, FileNotFoundError) as error:
+    except (
+        httpx.HTTPStatusError,
+        httpx.TransportError,
+        FileNotFoundError,
+        EmptyDatasetError,
+    ) as error:
         return _exit_for_error(error, base_url=args.base_url)
 
     record = _assemble_record(

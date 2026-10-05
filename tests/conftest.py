@@ -250,13 +250,15 @@ class FakeQdrantSearch:
     def exists(self) -> bool:
         return self.exists_flag
 
-    def hybrid_search(self, *, user_id: str, query_text: str, dense_vector, top_k: int):
+    def hybrid_search(self, *, user_id: str, query_text: str, dense_vector):
+        # ⚠ **不收 `top_k`**（2026-10-01）：真 store 现在回**全部**融合结果，
+        #   截断搬到 `fusion.search` 里、排在确定性的排序之后（并列卡在截断线上时
+        #   Qdrant 选谁是不确定的）。
         self.calls.append(
             {
                 "user_id": user_id,
                 "query_text": query_text,
                 "dense_vector": list(dense_vector),
-                "top_k": top_k,
             }
         )
         ids = self.by_user.get(user_id, [])
@@ -266,9 +268,11 @@ class FakeQdrantSearch:
         #   按 id 重排，用例断言的"返回的就是我给的顺序"就不成立了。
         #   ⇒ 递减分数既忠实于真实现，也让"顺序 = 我给的顺序"这条断言继续有效。
         #   ⚠ 仍然是**刻意刺眼**的值：它绝不允许出现在响应里（`test_contract.py` 钉着）。
+        # ⚠ **不截断**：真 store 现在回全部融合结果，截断在 `fusion.search` 里做
+        #   （排在按 `(-score, memory_id)` 的确定性排序之后）。
         return [
             ScoredMemoryId(mid, FUSED_SCORE - index * FUSED_SCORE_STEP)
-            for index, mid in enumerate(ids[:top_k])
+            for index, mid in enumerate(ids)
         ]
 
     def index_pairs(self, pairs, embedder, *, renderer=render_pair, wait=True) -> int:
@@ -347,8 +351,34 @@ def wired_annotated(tmp_path) -> Iterator[Wired]:
     yield from _wire(own, inject_abs_time=False, annotate_relatives=True)
 
 
-def _wire(tmp_path, *, inject_abs_time: bool, annotate_relatives: bool = False) -> Iterator[Wired]:
-    """`wired` / `wired_dated` / `wired_annotated` 的**同一份**装配代码。**不要复制第二份。**"""
+@pytest.fixture
+def wired_expanding(tmp_path) -> Iterator[Wired]:
+    """同 `wired`，但**显式开着扩窗**（`radius=1`）。
+
+    ⚠ **为什么需要它**（2026-10-01，**D31**）：产品默认是 `radius=0`
+    （扩窗 + 段合并未挣到自己的位置），而 `wired` 刻意**继承内置默认值**
+    ⇒ 拿 `wired` 写"扩窗会怎样"的用例会**静默地什么都不测**：
+    返回的段照样合法、`id` 照样对，只有"邻居有没有进来"这一件事没了——
+    而只数段数、只比 `id` 的断言**照过**。
+
+    ⇒ **凡断言里出现"邻居 / 扩窗 / 段里有几条记忆"的用例，用这个夹具**，
+    让它**自己钉住半径**，不跟产品默认值走。
+    """
+    yield from _wire(tmp_path, inject_abs_time=False, radius=1)
+
+
+def _wire(
+    tmp_path,
+    *,
+    inject_abs_time: bool,
+    annotate_relatives: bool = False,
+    radius: int | None = None,
+) -> Iterator[Wired]:
+    """`wired` / `wired_dated` / `wired_annotated` 的**同一份**装配代码。**不要复制第二份。**
+
+    `radius=None` ⇒ **不传**，让 `SearchPipeline` 吃它自己的默认值
+    （= `common/config.py` 的产品默认，两处一致由 `test_config.py` 钉住）。
+    """
     config = AppConfig(
         # 不传 env ⇒ 不碰真实环境；只给必需的那几项，其余走 config.py 的内置默认值
         storage=StorageConfig(
@@ -375,6 +405,7 @@ def _wire(tmp_path, *, inject_abs_time: bool, annotate_relatives: bool = False) 
     #: 命名的那件事（契约形状 / 隔离 / 计数），而不是撞上预算提前停止。
     #: 预算本身的行为在 `test_packaging.py` 与 `test_neighbor.py` 里**单独**测。
     budget_tokens = 100_000
+    expansion: dict[str, object] = {} if radius is None else {"radius": radius}
     services.search = SearchPipeline(
         store=services.store,
         qdrant=qdrant,
@@ -384,6 +415,7 @@ def _wire(tmp_path, *, inject_abs_time: bool, annotate_relatives: bool = False) 
         budget_tokens=budget_tokens,
         inject_abs_time=inject_abs_time,
         annotate_relatives=annotate_relatives,
+        **expansion,  # type: ignore[arg-type]
     )
     services.add = AddPipeline(
         store=services.store,

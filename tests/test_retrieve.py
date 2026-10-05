@@ -36,16 +36,17 @@ class _StubStore:
     hits: list[ScoredMemoryId] = field(default_factory=list)
     seen: list[dict] = field(default_factory=list)
 
-    def hybrid_search(self, *, user_id, query_text, dense_vector, top_k):
+    def hybrid_search(self, *, user_id, query_text, dense_vector):
+        # 真 store 回**全部**融合结果、**不截**——截断在 `fusion.search` 里
+        # （排在确定性排序之后，理由见 `qdrant_store.hybrid_search` 的 docstring）。
         self.seen.append(
             {
                 "user_id": user_id,
                 "query_text": query_text,
                 "dense_vector": list(dense_vector),
-                "top_k": top_k,
             }
         )
-        return list(self.hits[:top_k])
+        return list(self.hits)
 
 
 @dataclass
@@ -240,11 +241,18 @@ def test_candidate_carries_no_score_field() -> None:
     assert {f.name for f in fields(Candidate)} == {"memory_id", "rank"}
 
 
-def test_search_passes_top_k_from_the_request_not_100() -> None:
-    """**`top_k` 来自请求、不写死 100**（§7.3）——写死会在 AML 传更小值时变成契约错误。"""
+def test_search_honours_top_k_from_the_request_not_100() -> None:
+    """**`top_k` 来自请求、不写死 100**（§7.3）——写死会在 AML 传更小值时变成契约错误。
+
+    ⚠ **断言的是"返回几条"，不是"传给 store 几条"**（2026-10-01）：截断从
+    `store.hybrid_search` 搬到了这里，因为 Qdrant 在并列卡住 `limit` 时**选谁是不确定的**
+    （实测同一请求连打 12 次，第 100 位的 id 有 2 种）。契约没变，执行点变了。
+    """
     store = _StubStore(hits=[ScoredMemoryId(f"m{i}", 1.0 - i * 0.1) for i in range(10)])
-    _retriever(store, FakeEmbedder(dim=4)).search(user_id="u1", query="q", top_k=3)
-    assert store.seen[0]["top_k"] == 3
+    got = _retriever(store, FakeEmbedder(dim=4)).search(user_id="u1", query="q", top_k=3)
+    assert len(got) == 3
+    # 而且截断发生在**排序之后**：留下的是分数最高的三条（名次连续 0-based）。
+    assert [c.rank for c in got] == [0, 1, 2]
 
 
 def test_search_calls_dense_exactly_once_per_query() -> None:

@@ -88,7 +88,7 @@ def _index(store: QdrantStore, embedder: FakeEmbedder, records) -> int:
 
 def _search(store: QdrantStore, user_id: str, query_text: str, top_k: int = 5):
     return store.hybrid_search(
-        user_id=user_id, query_text=query_text, dense_vector=unit_vector(DIM, 0), top_k=top_k
+        user_id=user_id, query_text=query_text, dense_vector=unit_vector(DIM, 0)
     )
 
 
@@ -413,27 +413,22 @@ def test_rrf_k_default_of_qdrant_really_is_2(qdrant_client, emb: FakeEmbedder) -
 # ── 契约：返回数量 ─────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("top_k", [1, 3, 5])
-def test_returned_count_never_exceeds_top_k(make_store, emb: FakeEmbedder, top_k: int) -> None:
-    """`len(结果) <= top_k` **精确成立**——返回超过是契约错误，不会被静默截断（§2.2）。"""
+def test_store_returns_every_fused_candidate(make_store, emb: FakeEmbedder) -> None:
+    """**store 不按 `top_k` 截**——它回全部融合结果（至多 `2 × prefetch_limit`）。
+
+    契约的 `len(data) <= top_k` 仍然成立，但由 `fusion.search` 在**排序之后**执行。
+    ⚠ 为什么搬：RRF 并列是常态，而 Qdrant 在**并列卡住 `limit`** 时选谁是不确定的
+    （实测同一请求连打 12 次，第 100 位的 id 有 2 种、两条 `score` 都是 0.01）。
+    """
     store = make_store()
     records = [_rec(_mid(f"count-{i}"), "u1", f"alpha beta gamma {i}") for i in range(8)]
     _index(store, emb, records)
 
     hits = store.hybrid_search(
-        user_id="u1",
-        query_text="alpha beta gamma",
-        dense_vector=unit_vector(DIM, 0),
-        top_k=top_k,
+        user_id="u1", query_text="alpha beta gamma", dense_vector=unit_vector(DIM, 0)
     )
-    assert len(hits) <= top_k
-    assert len(hits) == min(top_k, len(records))
-
-
-def test_top_k_zero_and_negative_return_empty(qdrant_store: QdrantStore, emb: FakeEmbedder) -> None:
-    _index(qdrant_store, emb, [_rec(_mid("zero-k"), "u1", "alpha")])
-    for k in (0, -1):
-        assert _search(qdrant_store, "u1", "alpha", top_k=k) == []
+    assert len(hits) == 8, "八条都命中 ⇒ 八条都要回来，由调用方截"
+    assert len(hits) <= store._hybrid.prefetch_limit * 2
 
 
 def test_empty_query_is_rejected(qdrant_store: QdrantStore, emb: FakeEmbedder) -> None:

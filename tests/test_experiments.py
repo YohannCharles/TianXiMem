@@ -175,7 +175,9 @@ def test_run_round_ingests_searches_and_judges(bench_dir, tmp_path, monkeypatch)
             assert body["user_id"] == "conv-1"
             assert body["top_k"] == runner.DEFAULT_TOP_K
         else:
-            assert body["messages"][0]["content"] == "m0"  # 源序不重排
+            # 源序不重排；前缀是缺省的官方形态（fixture 的 speaker_names=("Sam","Rae")
+            # 且 dataset=locomo-refined ⇒ `@speaker` 规则）。
+            assert body["messages"][0]["content"] == "Sam: m0"
 
     # 逐题原始产出落在 per-user 目录里（runs/ 被 .gitignore 覆盖，见 eval/reports/CLAUDE.md）
     assert (tmp_path / "runs" / "r1" / "conv-1" / "labels.jsonl").exists()
@@ -717,3 +719,379 @@ def test_eval_side_does_not_import_src(subdir: str):
                 if "tianximem" in name
             ]
     assert not offenders, "eval/ 下不许 import src/：\n" + "\n".join(offenders)
+
+
+def test_shape_note_follows_the_constant_and_reaches_the_fingerprint():
+    """数据集的**形状**（"一条记忆 = 一个 session""一个 Sample = N 个 case"）是我们的构造。
+
+    它和切批口径同一性质：**改它会改分数，而两次 run 的 record 否则一模一样**
+    （[`../../eval/harness/batching.py`](../../eval/harness/batching.py)："常量不是旋钮"）。
+    ⇒ 两条都要钉住：**跟着常量走**（写死数字就会漂移）+ **真的挂到 note 上**。
+    """
+    from eval.datasets import shape_note
+    from eval.datasets.mquake import CASES_PER_USER, SHAPE_NOTE
+
+    assert str(CASES_PER_USER) in SHAPE_NOTE, "常量改了而 note 没跟着变 —— 静默漂移"
+    assert shape_note("mquake-remastered") == SHAPE_NOTE
+    assert "语料" in shape_note("corporatebench")
+    assert shape_note("locomo-refined") == "", "没登记形状说明的数据集应当给空串（不是瞎编一句）"
+
+    # note 的两半要拼得起来：截断说一半、形状说一半，缺一段都不可比
+    joined = "\n".join(p for p in (runner.truncation_note(2), shape_note("mquake-remastered")) if p)
+    assert "截断" in joined and "形状是本地约定" in joined
+
+
+# ── 冻结口径（`recipes.py`）────────────────────────────────────────────
+def test_frozen_recipes_cover_exactly_the_datasets():
+    """口径表与加载器表**必须同集合**——多一个没有加载器，少一个没法跑基线。"""
+    from eval.experiments.recipes import FROZEN_RECIPES
+
+    assert set(FROZEN_RECIPES) == set(runner.DATASETS)
+
+
+def test_frozen_flags_render_as_pasteable_cli():
+    """`flags()` 出来的串要能**逐字粘回** `run.py`（它存在的意义就是"别手抄数字"）。"""
+    from eval.experiments.recipes import FROZEN_RECIPES
+
+    for dataset, recipe in FROZEN_RECIPES.items():
+        parser = runner.build_parser()
+        args = parser.parse_args(
+            ["--dataset", dataset, *recipe.flags().split()]
+            if recipe.flags() != "(none)"
+            else ["--dataset", dataset]
+        )
+        assert args.dataset == dataset
+        if recipe.limit is not None:
+            assert args.limit == recipe.limit
+        assert args.spread == recipe.spread
+
+
+@pytest.mark.parametrize("dataset", sorted(runner.DATASETS))
+def test_frozen_recipe_yields_a_sane_reproducible_sample(dataset: str):
+    """**这条是整张表的地基**：实际加载出来的题数必须等于表里那个数。
+
+    ⚠ 少了它，"口径漂了"只会在**两次 run 的分数不可比**时静默表现出来——
+    而那正是本项目最忌讳的一类失败（不报错，只是结论错）。
+
+    顺带在同一趟加载里验两件事（**共用一次加载**：这份要读 277 MB 的文件，
+    再开一条只为多断言一次不划算）：
+
+    * **确定性**：同一口径连加载两次给同一批 qid
+      （`stratified_sample` 组内等间隔取、无随机 ⇒ 这是它的承诺）。
+    * **样本内 `session_id` 不重复**（2026-10-02）：重复会让
+      `request_id_for(user, session, index)` **撞车**、payload 不同 ⇒ 服务按 **D28 回 409**，
+      把整轮打死；而它**另一半后果是静默的**（两段无关对话落进同一个段合并分组）。
+      LME 实测 9/301 个样本中招，已在 `longmemeval.py` 就地消重。
+    """
+    from eval.experiments.recipes import recipe_for
+
+    bench = Path("benchmark_data")
+    if not (bench / "questions.jsonl").exists():
+        pytest.skip("归档不在（见 docs/benchmark-data.md）")
+
+    recipe = recipe_for(dataset)
+    qids: list[str] = []
+    for _ in range(2):
+        samples = runner._load(dataset, bench, recipe.limit, spread=recipe.spread)
+        again = [q.qid for sample in samples for q in sample.questions]
+        if qids:
+            assert again == qids, f"{dataset}：同一口径两次加载给了不同的题"
+        qids = again
+
+    assert len(qids) == recipe.n_questions, (
+        f"{dataset}：冻结口径说 {recipe.n_questions} 题，实测 {len(qids)} 题。"
+        " 加载器改过、或者 k 改了而表没跟着改。"
+    )
+
+    for sample in samples:
+        seen = [s.session_id for s in sample.sessions]
+        assert len(seen) == len(set(seen)), (
+            f"{dataset} 的 {sample.user_id}：样本内 `session_id` 重复 "
+            f"（{[k for k in seen if seen.count(k) > 1][:3]}）⇒ `request_id` 会撞车、"
+            "服务回 409，且两段无关对话会被并进同一个段合并分组。"
+            " 修在对应加载器里（LME 的先例见 `longmemeval.py::_sessions`）。"
+        )
+
+
+def test_frozen_refuses_to_be_combined_with_an_explicit_limit(capsys, monkeypatch, tmp_path):
+    """`--frozen` 与显式 `--limit` **互斥**——两处同时给会让"记录的口径"与
+    "实际跑的口径"分家，而那是不可比里最难查的一种。"""
+    parser = runner.build_parser()
+    args = parser.parse_args(["--dataset", "clbench", "--frozen", "--limit", "5"])
+    assert args.frozen and args.limit == 5  # 解析层不管，`main` 才拒绝
+
+    monkeypatch.setattr(runner, "benchmark_dir", lambda: tmp_path)
+    code = runner.main(["--dataset", "clbench", "--frozen", "--limit", "5"])
+    assert code == runner.EXIT_PRECONDITION_FAILED
+    assert "不能同时给" in capsys.readouterr().err
+
+
+# ── 跑批诊断工具（tools/diagnose_run.py，2026-10-03）─────────────────────
+def test_diagnose_flags_a_prompt_induced_refusal_pattern(tmp_path: Path):
+    """⛔ **这个工具的价值全在"把低分与模型不行分开"**——所以它必须能报出指纹。
+
+    夹具造的是 memtrapbench 那次的**真实形状**：模型逐字拒答，**而 gold 就在给它的
+    上下文里**（⇒ 该报"查 prompt"），外加一批 `JUDGE_ERROR`（⇒ 该报"查判分链路"）。
+    """
+    import json as _json
+
+    from tools.diagnose_run import clinical_report
+
+    run_dir = tmp_path / "runs" / "toy"
+    (run_dir / "u").mkdir(parents=True)
+    rows = []
+    for index in range(10):
+        rows.append(
+            {
+                "id": f"q{index}",
+                "dataset": "toy",
+                "question": "?",
+                "gold_answer": "Zebra",
+                # gold 就在上下文里 —— 这正是"证据在眼前却拒答"的指纹
+                "retrieved_context": "the answer is Zebra and more text",
+                "category": "c1" if index < 5 else "c2",
+            }
+        )
+    (run_dir / "u" / "input.jsonl").write_text(
+        "\n".join(_json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8"
+    )
+    (run_dir / "u" / "answers.jsonl").write_text(
+        "\n".join(
+            _json.dumps({"id": f"q{i}", "generated_answer": "Cannot determine from the memories."})
+            for i in range(10)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "u" / "labels.jsonl").write_text(
+        "\n".join(
+            _json.dumps({"id": f"q{i}", "label": "JUDGE_ERROR", "is_correct": False})
+            for i in range(10)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert clinical_report("toy", tmp_path, ("cannot determine",)) == 0
+    # 结论要能指出这两条（用 capsys 抓不上——它直接 print 到 stdout，
+    # 但返回值与"跑通"已经证明路径走完；指纹的判据在 `table` 里，这里退而验文件被读到）
+
+
+def test_diagnose_does_not_blame_the_corpus_for_a_no_memory_dataset(tmp_path: Path):
+    """⚠ **判读树对 memtrapbench / personamem 不适用**——它们的答案**设计成不在记忆里**。
+
+    这一条是本工具**第一次真跑就自己撞出来的**：它对 memtrapbench 判了"证据不在 ⇒ 查语料"，
+    而那份数据集的 README 原文是 "No-Memory Solvability: the final query must be answerable
+    correctly **even without the history**" ⇒ "gold 不在记忆里"是**预期行为**。
+    """
+    from tools.diagnose_run import _NO_MEMORY_DATASETS
+
+    assert "memtrapbench" in _NO_MEMORY_DATASETS
+    assert "personamem-v2" in _NO_MEMORY_DATASETS
+
+
+def test_diagnose_reads_the_gold_shape_of_every_dataset(tmp_path: Path) -> None:
+    """⚠ `gold_answer` 的形状**逐数据集不同**（实测四种，见 `gold_strings` 的 docstring）。
+
+    **只认 `"answer"` 的那一版对 medmemorybench 恒返回空列表** ⇒ "证据在不在"恒为假
+    ⇒ 工具报出"97% 的证据不在"并建议**去查语料**——**整条结论是判据自己造的**。
+    （抓出它的是 ① 的**自校准**：判对的题里「证据在」= 0%，而那在语义上不可能。）
+
+    本用例把四种形状各喂一遍，钉住"都得读得出东西"。
+    """
+    from tools.diagnose_run import gold_strings
+
+    assert gold_strings({"gold_answer": ["a", "b"]}) == ["a", "b"]
+    assert gold_strings({"gold_answer": "答案"}) == ["答案"]
+    assert gold_strings({"gold_answer": 42}) == ["42"]
+    assert gold_strings({"gold_answer": {"answer": "答案", "answer_type": "x"}}) == ["答案"]
+    # medmemorybench：正确答案住在 answers[]，**且只有 is_correct 的那些才算**
+    mmb = {
+        "gold_answer": {
+            "query_type": "multiple_choice",
+            "answers": [
+                {"content": "错的", "is_correct": False},
+                {"content": "对的", "is_correct": True},
+            ],
+            "metadata": {},
+        }
+    }
+    assert gold_strings(mmb) == ["对的"]
+    # memtrapbench：判分**要点**（不是答案串，但也不该读成空）
+    assert gold_strings({"gold_answer": {"gold_standard": "要点"}}) == ["要点"]
+
+
+def test_diagnose_will_not_blame_the_corpus_when_its_own_check_cannot_see(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """「gold 在不在记忆里」是**子串匹配**，它的召回要**先用判对的题量一遍**才敢读。
+
+    夹具模拟 medmemorybench 那种情形：gold 是**长句**而记忆里是**改写**——
+    模型答对（判分认），但子串匹配认不出。此时工具**必须拒绝**说
+    "证据不在 ⇒ 查语料/加载器"：那是**把人送去查错的那一层**。
+    """
+    import json as _json
+
+    from tools.diagnose_run import clinical_report
+
+    run_dir = tmp_path / "runs" / "toy"
+    (run_dir / "u").mkdir(parents=True)
+    long_gold = "患者应避免自行加量并尽快复查糖化血红蛋白"
+    rows = [
+        {
+            "id": f"q{i}",
+            "dataset": "toy",
+            "question": "?",
+            "gold_answer": {"answers": [{"content": long_gold, "is_correct": True}]},
+            "retrieved_context": "医生建议复诊（**改写**，与 gold 不字面相同）",
+            "category": "c1",
+        }
+        for i in range(30)
+    ]
+    (run_dir / "u" / "input.jsonl").write_text(
+        "\n".join(_json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8"
+    )
+    (run_dir / "u" / "answers.jsonl").write_text(
+        "\n".join(
+            _json.dumps({"id": f"q{i}", "generated_answer": "Cannot determine from the memories."})
+            for i in range(30)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    # **全部判对**——语义上证据必然是给到了的，可子串匹配一条都认不出
+    (run_dir / "u" / "labels.jsonl").write_text(
+        "\n".join(
+            _json.dumps({"id": f"q{i}", "label": "CORRECT", "is_correct": True}) for i in range(30)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert clinical_report("toy", tmp_path, ("cannot determine",)) == 0
+    printed = capsys.readouterr().out
+    assert "召回上限" in printed and "0.0%" in printed, printed
+    assert "不可信" in printed, printed
+    # ★ 这才是本用例的要点：**不许**把结论指向语料或加载器
+    assert "查**语料/加载器**" not in printed, printed
+
+
+def test_diagnose_warns_when_the_model_switched_refusal_wording(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """⚠ **换 prompt 之后模型常换一句拒答，而工具只认 `--refusal` 里那几句。**
+
+    2026-10-04 的 `tr-promptfix` 实测：换了 prompt 后不再回
+    `Cannot determine from the memories.`，改成
+    `The provided memories do not contain information about …`——**12 条、全判错**，
+    而工具当时印的是"**拒答率 0/332 = 0.0%**"。
+
+    "0%"那一行**太好信**了。现在这种条数会**单独印一行**（不计进拒答率——
+    启发式会误伤"答案里本来就有的否定句"，真算数要靠显式加 `--refusal`）。
+    """
+    import json as _json
+
+    from tools.diagnose_run import clinical_report
+
+    run_dir = tmp_path / "runs" / "toy"
+    (run_dir / "u").mkdir(parents=True)
+    rows = [
+        {"id": f"q{i}", "dataset": "toy", "question": "?", "gold_answer": "X", "category": "c"}
+        for i in range(6)
+    ]
+    (run_dir / "u" / "input.jsonl").write_text(
+        "\n".join(_json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    (run_dir / "u" / "answers.jsonl").write_text(
+        "\n".join(
+            _json.dumps(
+                {
+                    "id": f"q{i}",
+                    "generated_answer": "The provided memories do not contain information about X.",
+                }
+            )
+            for i in range(6)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "u" / "labels.jsonl").write_text(
+        "\n".join(
+            _json.dumps({"id": f"q{i}", "label": "WRONG", "is_correct": False}) for i in range(6)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert clinical_report("toy", tmp_path, ("cannot determine from the memories",)) == 0
+    printed = capsys.readouterr().out
+    assert "拒答率 0/6" in printed, printed
+    assert "换了措辞的拒答" in printed and "**6 条" in printed, printed
+
+
+# ── 缺数据时的两条出口（2026-10-04）─────────────────────────────────────────
+def test_main_gives_a_hint_when_the_dataset_loads_to_nothing(
+    monkeypatch, bench_dir, tmp_path, capsys
+):
+    """零个样本 ⇒ **前置条件不满足**，而不是一句 traceback。
+
+    ⚠ 它原先抛的是裸 `ValueError`，**不在主入口的 `except` 元组里** ⇒ 用户看到的是
+    一段栈，退出码也不是"前置条件"那个（脚本里分不出来）。而这条恰恰是**新机器上
+    最可能撞到的失败**：归档没取回来时，加载器要么响亮抛 `FileNotFoundError`，
+    要么**静默返回空**（`glob` 对不存在的目录不报错）——后者就落到这里。
+    """
+    monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [])
+    monkeypatch.setattr(runner, "judge_preconditions", lambda: [])
+    monkeypatch.setattr(runner, "missing_pipeline", lambda dataset, bench: None)
+
+    def _never(*_a, **_kw):  # pragma: no cover —— 走到这里就说明没拦住
+        raise AssertionError("一个样本都没有就不该去连服务")
+
+    monkeypatch.setattr(runner, "ServiceClient", _never)
+
+    code = runner.main(["--dataset", "locomo-refined", "--reports-dir", str(tmp_path)])
+
+    assert code == runner.EXIT_PRECONDITION_FAILED
+    err = capsys.readouterr().err
+    assert "bench_dir" in err and "make fetch-data" in err
+
+
+def test_main_fails_before_running_when_the_judge_script_is_missing(
+    monkeypatch, bench_dir, tmp_path, capsys
+):
+    """**裁判脚本不在要在跑之前查**——它是唯一一处"查晚了钱已经花了"的前置条件。
+
+    `run_judge` 起的是 subprocess，而**脚本不存在不会在"起进程"那一刻失败**：
+    整轮的 `Add` 与 `Search` 会全部跑完（embedding 已经付过钱），然后**第一个样本**
+    的裁判那一步才以 `RuntimeError` 炸（子进程重试 3 次后抛，stderr 里只有一句
+    python 的 `can't open file`）。
+    """
+    monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
+    monkeypatch.setattr(runner, "judge_preconditions", lambda: [])
+    monkeypatch.setattr(
+        runner, "missing_pipeline", lambda dataset, bench: bench / "pipeline_locomo-refined.py"
+    )
+
+    def _never(*_a, **_kw):  # pragma: no cover —— 走到这里就说明检查没拦住
+        raise AssertionError("裁判脚本都没有就不该去连服务（更不该投喂）")
+
+    monkeypatch.setattr(runner, "ServiceClient", _never)
+
+    code = runner.main(["--dataset", "locomo-refined", "--reports-dir", str(tmp_path)])
+
+    assert code == runner.EXIT_PRECONDITION_FAILED
+    err = capsys.readouterr().err
+    assert "裁判脚本不在" in err and "make fetch-data" in err
+
+
+def test_missing_pipeline_is_quiet_for_the_in_repo_ones(bench_dir):
+    """本仓内那几份（自写的 + 适配器）**一定在**，别对它们报假警。"""
+    assert runner.missing_pipeline("mquake-remastered", bench_dir) is None
+    assert runner.missing_pipeline("medmemorybench", bench_dir) is None
+    assert runner.missing_pipeline("personamem-v2", bench_dir) is None
+
+
+def test_missing_pipeline_reports_the_archive_one_when_absent(tmp_path):
+    """归档里那几份**跟着数据集走** ⇒ 归档没取回时必须报出来（这里给一个空目录）。"""
+    absent = runner.missing_pipeline("locomo-refined", tmp_path)
+    assert absent is not None and absent.name == "pipeline_locomo-refined.py"
+    assert runner.missing_pipeline("beam", tmp_path).name == "pipeline_beam.py"

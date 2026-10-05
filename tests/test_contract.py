@@ -248,17 +248,23 @@ def test_checker_is_passthrough_in_v1(wired: Wired, seed_pair: Callable[..., str
     assert wired.instrument.decisions[0].enough is True
 
 
-def test_top_k_from_request_is_forwarded_not_hardcoded(
+def test_top_k_from_request_is_honoured_not_hardcoded(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    """**`top_k` 来自请求、不写死 100**（§7.3）。"""
+    """**`top_k` 来自请求、不写死 100**（§7.3）。
+
+    ⚠ **断言的是响应条数，不是"转发给 store 的值"**（2026-10-01）：截断从
+    `store.hybrid_search()` 搬到了 `fusion.search`——因为 RRF 并列是常态，而 Qdrant 在
+    并列卡住 `limit` 时**选谁是不确定的**。契约没变，执行点变了。
+    """
     wired.qdrant.by_user["u1"] = [
         seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(5)
     ]
 
-    wired.search(top_k=3)
-
-    assert wired.qdrant.calls[0]["top_k"] == 3
+    assert len(wired.search(top_k=3).items) == 3
+    # 传更大的 `top_k` 不会凭空多出来——写死 100 的话这里也不会露馅，
+    # 所以上面那条"精确等于 3"才是真正钉住 §7.3 的断言。
+    assert len(wired.search(top_k=100).items) == 5
 
 
 # ── 边界校验（**schema 层**，不需要 HTTP）──────────────────────────────

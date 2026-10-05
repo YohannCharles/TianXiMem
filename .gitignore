@@ -108,3 +108,4 @@ benchmark_data/
 #   ⇒ 建一个只装这个 jsonl 的空目录，会让两条归档用例从 **skip 变 fail**。
 #   （要真把归档取回来才是动那条守卫的时候：`make fetch-data`。）
 official-add-bodies-*.jsonl
+official-dataset-*
