@@ -165,6 +165,16 @@ def render_pair(pair: object, *, inject_abs_time: bool = False) -> str:
     )
 
 
+def render_evidence(
+    *, statement: str, source_date: str, source_quote: str, quantitative: bool = False
+) -> str:
+    """来源支持的一条事实。数量不在正文重复，完整引句仍存于共同事实索引。"""
+    lines = ["Memory fact", f"Statement: {statement}", f"Source record date: {source_date}"]
+    if not quantitative:
+        lines.append(f"Source quotation: {source_quote}")
+    return "\n".join(lines)
+
+
 def render_segment(pair_texts: Sequence[str]) -> str:
     """把若干**已渲染**的 QA 对拼成一个 Context Segment 的 `content`。
 

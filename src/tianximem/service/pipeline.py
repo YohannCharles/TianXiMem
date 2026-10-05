@@ -7,6 +7,9 @@
 
 ## Search 链
 
+启用共同取证时先将问题编译为字段条件/有限连接/显式区间计划，并统一返回原文或
+有来源的独立事实。索引未齐、冲突、超限或句法不适用时沿用下列混合检索链。
+
 ```text
 User Query → DenseArm（每 query 恰好 1 次）
            → HybridRetriever（BM25 + Dense + RRF）
@@ -69,6 +72,9 @@ canonical AddRequest
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from time import monotonic
@@ -79,8 +85,11 @@ from tianximem.common.config import (
 )
 from tianximem.common.render import render_pair
 from tianximem.common.tokens import TokenCounter
+from tianximem.facts.evidence import EVIDENCE_VERSION
+from tianximem.facts.query import FactPattern, compile_query
 from tianximem.observability import MetricsSink, NullMetricsSink, SearchObservation
 from tianximem.pairing import AddBatch, ApplyBatchResult, apply_batch
+from tianximem.pairing.apply import index_pair_facts
 from tianximem.rank import (
     PackagedResponse,
     Reranker,
@@ -89,7 +98,9 @@ from tianximem.rank import (
     merge_segments,
     package,
 )
+from tianximem.rank.neighbor import ContextSegment
 from tianximem.retrieve import EvidenceChecker, HybridRetriever, dedup_candidates
+from tianximem.retrieve.evidence import EvidenceSelection, select_evidence
 from tianximem.retrieve.fusion import Candidate
 from tianximem.store.qdrant_store import QdrantStore
 from tianximem.store.sqlite_store import QaPair, SqliteStore
@@ -120,6 +131,7 @@ class AddPipeline:
         qdrant: QdrantStore,
         embedder: object,
         inject_abs_time: bool = False,
+        grounded_evidence: bool = False,
     ) -> None:
         self._store = store
         self._qdrant = qdrant
@@ -127,6 +139,7 @@ class AddPipeline:
         #: T1 的渲染变体（`packaging.inject_abs_time`）——**索引侧也要用它**：
         #: 正文一变，embedding 输入就变（§7.2 的"同一份渲染"）。
         self._inject_abs_time = inject_abs_time
+        self._grounded_evidence = grounded_evidence
 
     def apply(self, batch: AddBatch) -> AddOutcome:
         """应用一批。**不持 session 锁**。
@@ -140,7 +153,11 @@ class AddPipeline:
         SQLite 已提交而 Qdrant 失败 ⇒ 抛出去（客户端重试时会走修复路径）。
         **不要在这里 catch 后返回成功**——那会让那批记忆永远检索不到。
         """
-        result = apply_batch(self._store, batch)
+        result = apply_batch(
+            self._store,
+            batch,
+            grounded_evidence=self._grounded_evidence,
+        )
         pairs, repaired = self._pairs_to_index(batch, result)
         # ⚠ **这一步有副作用**（真的写 Qdrant），不是"算一个计数"——别因为它没有返回值就删掉。
         if pairs:
@@ -230,6 +247,10 @@ class SearchPipeline:
         inject_abs_time: bool = False,
         seed_placement: str = "keep",
         annotate_relatives: bool = False,
+        grounded_evidence: bool = False,
+        evidence_limit: int = 12,
+        evidence_hop_limit: int = 4,
+        fact_backfill_limit: int = 1024,
         metrics: MetricsSink | None = None,
     ) -> None:
         self._store = store
@@ -253,6 +274,12 @@ class SearchPipeline:
         #: 所以开它**不改 embedding 输入**（不用重建索引）。理由与实测见
         #: [`neighbor.py`](../rank/neighbor.py) 的 `_build_segment`。
         self._annotate_relatives = annotate_relatives
+        self._grounded_evidence = grounded_evidence
+        self._evidence_limit = evidence_limit
+        self._evidence_hop_limit = evidence_hop_limit
+        if fact_backfill_limit <= 0:
+            raise ValueError("fact_backfill_limit 必须为正")
+        self._fact_backfill_limit = fact_backfill_limit
         #: 观测值的出口（§14）。**没配就是 `Null`**——与 reranker 同一套口径：缺省不是错误。
         self._metrics = metrics if metrics is not None else NullMetricsSink()
         #: 诊断计数（§14）。**不进响应**——响应的形状是契约，一个字段都不能多。
@@ -263,6 +290,25 @@ class SearchPipeline:
         self.rerank_calls = 0
         self.rerank_degraded = 0
         self.rerank_disabled = 0
+
+    @contextmanager
+    def _fact_snapshot(self, user_id: str) -> Iterator[sqlite3.Connection | None]:
+        """同一版本只补扫描一次；覆盖未齐全时继续普通检索。"""
+        with self._store.read_snapshot() as conn:
+            if self._store.has_fact_index_coverage(conn, user_id, version=EVIDENCE_VERSION):
+                yield conn
+                return
+        with self._store.transaction() as conn:
+            for pair in self._store.fetch_unindexed_pairs(
+                conn, user_id, version=EVIDENCE_VERSION, limit=self._fact_backfill_limit
+            ):
+                index_pair_facts(self._store, conn, pair)
+        with self._store.read_snapshot() as conn:
+            yield (
+                conn
+                if self._store.has_fact_index_coverage(conn, user_id, version=EVIDENCE_VERSION)
+                else None
+            )
 
     @property
     def reranker(self) -> Reranker | None:
@@ -315,7 +361,57 @@ class SearchPipeline:
         顺带也**不为一次必然空的检索付远程 embedding 调用**。
         ⚠ 注意这里的短路**早于** token 计数——空库时不该去加载分词器。
         """
-        if top_k <= 0 or not self._qdrant.exists():
+        if top_k <= 0:
+            return PackagedResponse(items=())
+        if self._grounded_evidence:
+            plan = compile_query(query)
+            if plan is not None:
+                if plan.operator == "current":
+                    return PackagedResponse(items=())
+                fetch_limit = self._evidence_limit * 8
+                patterns = plan.patterns
+                if plan.resolve_references:
+                    patterns = tuple(FactPattern(subject=p.subject) for p in patterns)
+                if plan.operator == "walk":
+                    patterns = (*patterns, FactPattern(("explicit replacement",)))
+                with self._fact_snapshot(user_id) as conn:
+                    evidence = (
+                        []
+                        if conn is None
+                        else self._store.fetch_evidence(
+                            conn, user_id, patterns, limit=fetch_limit + 1
+                        )
+                    )
+                    sources = []
+                    audit = []
+                    if conn is not None and plan.guard_literal:
+                        sources = self._store.fetch_evidence_sources(
+                            conn, user_id, plan.guard_literal, limit=self._evidence_limit + 1
+                        )
+                        if sources:
+                            audit = self._store.fetch_evidence(
+                                conn,
+                                user_id,
+                                (FactPattern(source_ids=tuple(p.id for p in sources)),),
+                                limit=fetch_limit + 1,
+                                deduplicate=False,
+                            )
+                if (
+                    len(evidence) <= fetch_limit
+                    and len(audit) <= fetch_limit
+                    and len(sources) <= self._evidence_limit
+                ):
+                    selected = select_evidence(
+                        evidence,
+                        plan,
+                        source_limit=self._evidence_limit,
+                        hop_limit=self._evidence_hop_limit,
+                        sources=sources,
+                        audit_facts=audit,
+                    )
+                    if selected is not None:
+                        return self._package_evidence(selected, top_k=top_k)
+        if not self._qdrant.exists():
             return PackagedResponse(items=())
 
         # ① 混合检索（DenseArm 内部保证每 query 恰好 1 次 embedding）
@@ -350,6 +446,52 @@ class SearchPipeline:
             max_tokens=self._budget_tokens,
             dropped_missing=expansion.missing_rows,
         )
+
+    def _package_evidence(self, selection: EvidenceSelection, *, top_k: int) -> PackagedResponse:
+        """原文/原子事实共用出处验证、段结构与双预算；此路径半径始终为零。"""
+        facts = selection.facts
+        with self._store.read() as conn:
+            parents = {
+                p.id: p
+                for p in self._store.fetch_pairs_by_ids(conn, [f.parent_memory_id for f in facts])
+            }
+        valid = [
+            f
+            for f in facts
+            if f.parent_memory_id in parents and parents[f.parent_memory_id].user_id == f.user_id
+        ]
+        if selection.projection == "source":
+            expansion = expand_neighbors(
+                [Candidate(memory_id=f.parent_memory_id, rank=i) for i, f in enumerate(valid)],
+                store=self._store,
+                seed_limit=0,
+                radius=0,
+            )
+            segments = merge_segments(
+                expansion.selected,
+                counter=self._counter,
+                inject_abs_time=self._inject_abs_time,
+                annotate_relatives=self._annotate_relatives,
+            )
+        else:
+            segments = [
+                ContextSegment(
+                    anchor_memory_id=f.id,
+                    anchor_event_time=f.event_time,
+                    content=f.content,
+                    token_count=self._counter.count(f.content),
+                    source_memory_ids=(f.parent_memory_id,),
+                    user_id=f.user_id,
+                    session_id=parents[f.parent_memory_id].session_id,
+                    request_id=parents[f.parent_memory_id].request_id,
+                    start_local_index=parents[f.parent_memory_id].local_index,
+                    end_local_index=parents[f.parent_memory_id].local_index,
+                    best_rank=i,
+                    rerank_member_count=1,
+                )
+                for i, f in enumerate(valid)
+            ]
+        return package(segments, top_k=top_k, counter=self._counter, max_tokens=self._budget_tokens)
 
     def _maybe_rerank(self, *, query: str, ranked: list[Candidate]) -> list[Candidate]:
         """对候选做**一次** rerank；不可用就退回原顺序。

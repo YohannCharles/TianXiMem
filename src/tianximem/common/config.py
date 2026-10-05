@@ -289,6 +289,11 @@ class RetrievalConfig:
     #: 查询侧的 instruction 前缀。`""` ⇒ **与"原样送"逐字节相同**（v1 现状）。
     #: 要不要开是**待定的规格问题**，见 `embed/query_instruction.py`。
     query_instruction: str = ""
+    #: 所有来源支持的事实共用一个同步索引/查询执行器。
+    grounded_evidence: bool = False
+    evidence_limit: int = 12
+    evidence_hop_limit: int = 4
+    fact_backfill_limit: int = 1024
     rrf: RrfConfig = field(default_factory=RrfConfig)
 
 
@@ -638,8 +643,23 @@ def _models(raw: object) -> ModelsConfig:
 
 
 def _retrieval(raw: object) -> RetrievalConfig:
-    g = _group(raw, where="retrieval", allowed={"prefetch_limit", "query_instruction", "rrf"})
+    g = _group(
+        raw,
+        where="retrieval",
+        allowed={
+            "prefetch_limit",
+            "query_instruction",
+            "grounded_evidence",
+            "evidence_limit",
+            "evidence_hop_limit",
+            "fact_backfill_limit",
+            "rrf",
+        },
+    )
     r = _group(g.get("rrf"), where="retrieval.rrf", allowed={"k", "weights"})
+    evidence = g.get("grounded_evidence", False)
+    if not isinstance(evidence, bool):
+        raise ConfigError("`retrieval.grounded_evidence` 必须是布尔值")
     return RetrievalConfig(
         prefetch_limit=_int(
             g.get("prefetch_limit"),
@@ -648,6 +668,14 @@ def _retrieval(raw: object) -> RetrievalConfig:
         ),
         query_instruction=_str(
             g.get("query_instruction"), where="retrieval.query_instruction", default=""
+        ),
+        grounded_evidence=evidence,
+        evidence_limit=_int(g.get("evidence_limit"), where="retrieval.evidence_limit", default=12),
+        evidence_hop_limit=_int(
+            g.get("evidence_hop_limit"), where="retrieval.evidence_hop_limit", default=4
+        ),
+        fact_backfill_limit=_int(
+            g.get("fact_backfill_limit"), where="retrieval.fact_backfill_limit", default=1024
         ),
         rrf=RrfConfig(
             k=_int(r.get("k"), where="retrieval.rrf.k", default=RRF_K),
@@ -774,6 +802,9 @@ def validate(cfg: AppConfig) -> AppConfig:
         )
     if cfg.retrieval.prefetch_limit <= 0:
         raise ConfigError(f"`retrieval.prefetch_limit` 必须为正：{cfg.retrieval.prefetch_limit}")
+    for name in ("evidence_limit", "evidence_hop_limit", "fact_backfill_limit"):
+        if getattr(cfg.retrieval, name) <= 0:
+            raise ConfigError(f"`retrieval.{name}` 必须为正")
     if cfg.retrieval.rrf.k != RRF_K:
         raise ConfigError(
             f"`retrieval.rrf.k` 必须是 {RRF_K}，收到 {cfg.retrieval.rrf.k}。\n"

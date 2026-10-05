@@ -170,6 +170,7 @@ def build_services(config: AppConfig) -> Services:
             qdrant=qdrant,
             embedder=embedder,
             inject_abs_time=config.packaging.inject_abs_time,
+            grounded_evidence=config.retrieval.grounded_evidence,
         ),
         search=SearchPipeline(
             store=store,
@@ -192,6 +193,10 @@ def build_services(config: AppConfig) -> Services:
             inject_abs_time=config.packaging.inject_abs_time,
             seed_placement=config.neighbor.seed_placement,
             annotate_relatives=config.packaging.annotate_relatives,
+            grounded_evidence=config.retrieval.grounded_evidence,
+            evidence_limit=config.retrieval.evidence_limit,
+            evidence_hop_limit=config.retrieval.evidence_hop_limit,
+            fact_backfill_limit=config.retrieval.fact_backfill_limit,
             metrics=build_metrics_sink(config),
         ),
         # ⚠ 采集**在装配时就打开**（见 `build_capture`）：写不了要在启动日志里说，

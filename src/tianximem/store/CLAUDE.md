@@ -5,12 +5,18 @@
 ## 本模块的构成（**实现已存在**）
 
 ```text
-schema.sql        qa_pairs + applied_batches 的 DDL（§6.1）
-sqlite_store.py   真源读写、事务、批次守卫、邻域查询（§10 的 SQL 也在这里）
+schema.sql        qa_pairs + applied_batches（真源）及 memory_facts + evidence_coverage（派生）
+sqlite_store.py   真源读写、事务、批次守卫、邻域查询、共同事实索引
 qdrant_store.py   collection 建/写/查、payload 过滤、**按传入参数执行** prefetch+RRF
 ```
 
 **这是唯一接触业务真源（SQLite）与 Qdrant 的目录。** 上层拿到的是领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`——§6.3 的分工表只有在读写收口到一处时才守得住。
+
+2026-10-05 起事实索引只使用共同 `memory_facts` 与版本覆盖表 `evidence_coverage`。
+事实逐字引句必须来自声明的 question/answer 侧，所属用户必须与原文一致。
+旧业务派生表在已有库中封存，不再读写；新库不创建这些表。抽取器共用于 Add、
+幂等重放及有界补索引；任何重建不得修改 `qa_pairs` 或 `applied_batches`。
+字段与操作边界见 [当前架构](../../../docs/architecture.md)。
 
 > ⚠ 那句限定词"业务真源"是必要的：`embed/` 的 `DiskVectorCache` **也直接开 SQLite**，
 > 但它是一个**可重建的派生缓存**（另一个库文件、另一套 PRAGMA），

@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import sqlite3
 import time
@@ -32,6 +33,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
+
+from tianximem.facts.evidence import EVIDENCE_VERSION, EvidenceFact, key, relation_key
+from tianximem.facts.query import FactPattern
 
 logger = logging.getLogger(__name__)
 
@@ -370,6 +374,16 @@ class SqliteStore:
         finally:
             conn.close()
 
+    @contextmanager
+    def read_snapshot(self) -> Iterator[sqlite3.Connection]:
+        """覆盖检查和事实读取共享只读快照；不会阻塞 WAL 写者。"""
+        with self.read() as conn:
+            conn.execute("BEGIN")
+            try:
+                yield conn
+            finally:
+                conn.rollback()
+
     def init_schema(self) -> None:
         """执行 `schema.sql`（`IF NOT EXISTS`，可重复调用）。
 
@@ -623,6 +637,163 @@ class SqliteStore:
         by_id = {r["id"]: _to_pair(r) for r in rows}
         # 保持调用方给来的顺序（检索名次顺序），而不是数据库返回的顺序
         return [by_id[pid] for pid in pair_ids if pid in by_id]
+
+    def fetch_unindexed_pairs(
+        self, conn: sqlite3.Connection, user_id: str, *, version: str, limit: int
+    ) -> list[QaPair]:
+        if limit <= 0:
+            return []
+        rows = conn.execute(
+            f"SELECT {_COLUMNS} FROM qa_pairs WHERE user_id=? AND NOT EXISTS"
+            " (SELECT 1 FROM evidence_coverage c WHERE c.parent_memory_id=qa_pairs.id"
+            " AND c.user_id=qa_pairs.user_id AND c.version=?) ORDER BY id LIMIT ?",
+            (user_id, version, limit),
+        ).fetchall()
+        return [_to_pair(row) for row in rows]
+
+    def has_fact_index_coverage(
+        self, conn: sqlite3.Connection, user_id: str, *, version: str
+    ) -> bool:
+        return not self.fetch_unindexed_pairs(conn, user_id, version=version, limit=1)
+
+    def mark_fact_index_coverage(
+        self, conn: sqlite3.Connection, pair: QaPair, *, version: str
+    ) -> None:
+        parent = conn.execute("SELECT user_id FROM qa_pairs WHERE id=?", (pair.id,)).fetchone()
+        if parent is None or parent["user_id"] != pair.user_id:
+            raise ValueError("扫描覆盖的原始来源缺失或属于其他用户")
+        conn.execute(
+            "INSERT INTO evidence_coverage(parent_memory_id,user_id,version) VALUES (?,?,?)"
+            " ON CONFLICT(parent_memory_id,version) DO NOTHING",
+            (pair.id, pair.user_id, version),
+        )
+
+    def insert_evidence(self, conn: sqlite3.Connection, facts: Sequence[EvidenceFact]) -> None:
+        """同一事务写原子事实；逐字引句、来源侧及用户必须可核对。首次表示冻结。"""
+        for fact in facts:
+            parent = conn.execute(
+                "SELECT user_id,question,answer FROM qa_pairs WHERE id=?", (fact.parent_memory_id,)
+            ).fetchone()
+            if parent is None or parent["user_id"] != fact.user_id:
+                raise ValueError("共同事实的来源缺失或属于其他用户")
+            if (
+                fact.source_side not in {"question", "answer"}
+                or not fact.source_quote
+                or fact.source_quote not in (parent[fact.source_side] or "")
+            ):
+                raise ValueError("事实引句必须逐字来自声明的原始来源侧")
+            conn.execute(
+                "INSERT INTO memory_facts(id,parent_memory_id,user_id,subject,subject_key,"
+                "relation,relation_key,object,object_key,qualifiers,source_side,source_quote,"
+                "statement,content,event_time,source_date,version)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(id) DO NOTHING",
+                (
+                    fact.id,
+                    fact.parent_memory_id,
+                    fact.user_id,
+                    fact.subject,
+                    key(fact.subject),
+                    fact.relation,
+                    relation_key(fact.relation),
+                    fact.object,
+                    key(str(fact.get("match_object", fact.object))),
+                    json.dumps(dict(fact.qualifiers), ensure_ascii=False, sort_keys=True),
+                    fact.source_side,
+                    fact.source_quote,
+                    fact.statement,
+                    fact.content,
+                    fact.event_time,
+                    fact.source_date,
+                    fact.version,
+                ),
+            )
+
+    def fetch_evidence(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        patterns: Sequence[FactPattern],
+        *,
+        limit: int,
+        deduplicate: bool = True,
+    ) -> list[EvidenceFact]:
+        """共同字段约束 + 去除完全同义重复。超限须回退，不能装作扫描完整。"""
+        conditions: list[str] = []
+        params: list[str | int] = [user_id, user_id, EVIDENCE_VERSION]
+        for pattern in patterns:
+            clauses = []
+            if pattern.relations:
+                clauses.append(
+                    "f.relation_key IN (" + ",".join("?" for _ in pattern.relations) + ")"
+                )
+                params.extend(pattern.relations)
+            if pattern.source_ids:
+                clauses.append(
+                    "f.parent_memory_id IN (" + ",".join("?" for _ in pattern.source_ids) + ")"
+                )
+                params.extend(pattern.source_ids)
+            for column, value in (("subject_key", pattern.subject), ("object_key", pattern.object)):
+                if value:
+                    clauses.append(f"f.{column}=?")
+                    params.append(value)
+            conditions.append("(" + " AND ".join(clauses or ["1"]) + ")")
+        constraint = " OR ".join(conditions or ["1"])
+        params.append(max(0, limit))
+        rows = conn.execute(
+            "WITH scoped AS (SELECT f.*, p.request_id AS source_request,"
+            "p.local_index AS source_index,"
+            "instr(coalesce(p.question,'') || coalesce(p.answer,''),f.source_quote)"
+            " AS source_offset,"
+            "instr(f.source_quote,f.object) AS item_offset,"
+            "ROW_NUMBER() OVER (PARTITION BY f.subject_key,f.relation_key,f.object_key,"
+            "json_remove(f.qualifiers,'$.match_object','$.direct')"
+            ",CASE WHEN json_extract(f.qualifiers,'$.observation')=1"
+            " OR json_extract(f.qualifiers,'$.snapshot')=1"
+            " THEN f.parent_memory_id ELSE '' END"
+            " ORDER BY coalesce(json_extract(f.qualifiers,'$.direct'),1) DESC,"
+            "p.event_time IS NULL,p.event_time,p.request_id,p.local_index,"
+            "instr(coalesce(p.question,'') || coalesce(p.answer,''),f.source_quote),f.id)"
+            " AS duplicate_rank"
+            " FROM memory_facts f JOIN qa_pairs p ON p.id=f.parent_memory_id"
+            f" WHERE f.user_id=? AND p.user_id=? AND f.version=? AND ({constraint}))"
+            f" SELECT * FROM scoped WHERE {'duplicate_rank=1' if deduplicate else '1'}"
+            " ORDER BY event_time IS NULL,event_time,source_request,source_index,"
+            "source_offset,item_offset,id LIMIT ?",
+            tuple(params),
+        ).fetchall()
+        return [
+            EvidenceFact(
+                id=row["id"],
+                parent_memory_id=row["parent_memory_id"],
+                user_id=row["user_id"],
+                subject=row["subject"],
+                relation=row["relation"],
+                object=row["object"],
+                source_quote=row["source_quote"],
+                source_side=row["source_side"],
+                statement=row["statement"],
+                content=row["content"],
+                event_time=row["event_time"],
+                source_date=row["source_date"],
+                qualifiers=tuple(sorted(json.loads(row["qualifiers"]).items())),
+                version=row["version"],
+            )
+            for row in rows
+        ]
+
+    def fetch_evidence_sources(
+        self, conn: sqlite3.Connection, user_id: str, literal: str, *, limit: int
+    ) -> list[QaPair]:
+        """审查同一字面范围的原文；规范化必须与事实/问题一致。"""
+        conn.create_function("memory_key", 1, lambda value: key(value or ""), deterministic=True)
+        rows = conn.execute(
+            f"SELECT {_COLUMNS} FROM qa_pairs WHERE user_id=?"
+            " AND instr(memory_key(coalesce(question,'') || '\n' || coalesce(answer,'')),?)>0"
+            " ORDER BY event_time IS NULL,event_time,request_id,local_index LIMIT ?",
+            (user_id, key(literal), max(0, limit)),
+        ).fetchall()
+        return [_to_pair(row) for row in rows]
 
     def iter_pairs(self, conn: sqlite3.Connection, *, user_id: str | None = None) -> list[QaPair]:
         """枚举全部块（可选按 `user_id` 限定），按

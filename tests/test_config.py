@@ -281,6 +281,7 @@ def test_default_profile_loads_the_repo_yaml(config_dir: Path) -> None:
     assert cfg.retrieval.rrf.k == RRF_K
     assert cfg.retrieval.rrf.weights == (0.5, 0.5)
     assert cfg.retrieval.query_instruction == ""
+    assert cfg.retrieval.grounded_evidence is True
     assert cfg.server.workers == 1
     # 2026-09-25 起默认为 True（**D21 推翻了 §11.3 的"不加"**，有 346 题的反例）——
     # 这条断言是那个决定在本仓的**回归位**：谁把它改回去，这里立刻红。
@@ -308,6 +309,22 @@ def test_packaging_switch_rejects_a_non_bool(config_dir: Path) -> None:
     )
     with pytest.raises(ConfigError, match="packaging.inject_abs_time"):
         load_config({"TIANXIMEM_SQLITE_PATH": "x.db", "AML_EMB_API_KEY": "k"}, config_dir=other)
+
+
+@pytest.mark.parametrize("value", ["'true'", "1", "null"])
+def test_grounded_evidence_switch_rejects_non_bool(config_dir: Path, value: str) -> None:
+    (config_dir / "default.yaml").write_text(
+        f"retrieval:\n  grounded_evidence: {value}\n", encoding="utf-8"
+    )
+    with pytest.raises(ConfigError, match="retrieval.grounded_evidence"):
+        _load(config_dir)
+
+
+def test_grounded_evidence_can_be_disabled_in_yaml(config_dir: Path) -> None:
+    (config_dir / "local.yaml").write_text(
+        "retrieval:\n  grounded_evidence: false\n", encoding="utf-8"
+    )
+    assert _load(config_dir, TIANXIMEM_PROFILE="local").retrieval.grounded_evidence is False
 
 
 def test_config_dir_env_redirects_where_yaml_is_read(config_dir: Path) -> None:

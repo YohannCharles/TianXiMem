@@ -1,9 +1,9 @@
 -- 真源 DDL —— **D28 起位置 = `(request_id, local_index)`，`request_id` 是 opaque string**
 --（这是对 PRD §6.1 的**有意偏离**，逐条记在 docs/decisions.md）
 --
--- 两张表：qa_pairs（业务正文）+ applied_batches（唯一旁表 = 批次级幂等守卫）。
+-- 真源两张表 + 可重建的共同事实及扫描覆盖。
 --
--- ⚠ 这张 schema 里【没有 CHECK 约束】——不是遗漏，是继承 §6.1 的那条纪律。
+-- ⚠ 真源表【没有 CHECK 约束】——不是遗漏，是继承 §6.1 的那条纪律。
 --    `status` 的取值域由 Python 侧保证（store/sqlite_store.py 的 Status），数据库层不拦。
 --    ⚠ **D24 之后写入恒为 'complete'**（块在写下那一刻就是最终形状，没有 pending、没有 repair）
 --    ——`'pending'` 仍然在取值域里只是因为**按旧规则写过的库还能读**。
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS qa_pairs (
     UNIQUE(user_id, session_id, request_id, local_index)
 );
 
--- 唯一的旁表：批次级幂等守卫（§6.5 / D4）。每批一行，【只增不改】。
+-- 真源旁表：批次级幂等守卫（§6.5 / D4）。每批一行，【只增不改】。
 --
 -- ⚠ 为什么不能省掉它、改用 qa_pairs.request_id 判重：
 --   守卫要回答的是"这批**被应用过吗**"，而 `qa_pairs.request_id` 记的是
@@ -49,3 +49,38 @@ CREATE TABLE IF NOT EXISTS applied_batches (
                                          -- ⚠ **NULL = 未知**（D28 之前写下的行没有这一列）⇒ 只能放行
     applied_at   INTEGER NOT NULL        -- Unix 毫秒（与 event_time 同单位）
 );
+
+-- 所有来源支持的原子事实共用一张派生表；限定条件只来自同一条原文。
+CREATE TABLE IF NOT EXISTS memory_facts (
+    id TEXT PRIMARY KEY,
+    parent_memory_id TEXT NOT NULL REFERENCES qa_pairs(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    subject_key TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    relation_key TEXT NOT NULL,
+    object TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    qualifiers TEXT NOT NULL,
+    source_side TEXT NOT NULL CHECK(source_side IN ('question','answer')),
+    source_quote TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    content TEXT NOT NULL,
+    event_time INTEGER,
+    source_date TEXT NOT NULL,
+    version TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS memory_fact_subject
+    ON memory_facts(user_id,version,subject_key,relation_key);
+CREATE INDEX IF NOT EXISTS memory_fact_object
+    ON memory_facts(user_id,version,object_key,relation_key);
+
+-- 空抽取同样记扫描版本；旧版/专用索引的覆盖不能代替本版扫描。
+CREATE TABLE IF NOT EXISTS evidence_coverage (
+    parent_memory_id TEXT NOT NULL REFERENCES qa_pairs(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    version TEXT NOT NULL,
+    PRIMARY KEY(parent_memory_id,version)
+);
+CREATE INDEX IF NOT EXISTS evidence_coverage_user
+    ON evidence_coverage(user_id,version,parent_memory_id);

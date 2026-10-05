@@ -117,10 +117,14 @@ def test_consecutive_assistants_still_merge_within_one_add(store: SqliteStore) -
 # ── `request_id` 是 opaque string（D28）────────────────────────────────
 
 
-def test_consecutive_roles_merge_into_two_qa_blocks(store: SqliteStore) -> None:
-    """`Q Q A A Q A` ⇒ 逻辑上是 `Q A Q A` ⇒ **2 个完整 QA**，且两个互连（D28）。
+def test_a_user_run_pairs_only_its_last_message(store: SqliteStore) -> None:
+    """**D32**：`Q Q A A Q A` ⇒ `[Q0a] [Q0b+AA] [Q1+A1]` ⇒ **3 行、2 个完整 QA**。
 
-    ⚠ 合并**不丢内容**：第二段的 `question` 是两条 user 消息的拼接、`answer` 每条带 `[role]`。
+    ⚠ 改之前是 **2 行**（`[Q0a Q0b + AA] [Q1+A1]`）——两条 user 并进一个 question。
+    并起来会让块大到超过嵌入窗口（实测最长 38,270 token vs 窗口 8,192）⇒ 拆开，
+    代价是 `Q0a` **有问无答**（它不是"漏了"，是配不上）。
+
+    ⚠ 链只连**完整的对**（`link_blocks` 的口径）⇒ `Q0a` 不进链。
     """
     _apply(
         store,
@@ -136,12 +140,15 @@ def test_consecutive_roles_merge_into_two_qa_blocks(store: SqliteStore) -> None:
     )
 
     rows = _all(store)
-    assert len(rows) == 2
-    assert rows[0].question == "Q0a" + chr(10) + "Q0b"
-    assert rows[0].answer == "[assistant] A0a" + chr(10) + "[assistant] A0b"
-    assert rows[1].question == "Q1"
-    assert rows[0].next_memory_id == rows[1].id
-    assert rows[1].prev_memory_id == rows[0].id
+    assert len(rows) == 3
+    assert rows[0].question == "Q0a" and rows[0].answer is None  # 配不上 ⇒ 有问无答
+    assert rows[1].question == "Q0b"
+    assert rows[1].answer == "[assistant] A0a" + chr(10) + "[assistant] A0b"
+    assert rows[2].question == "Q1"
+    # 链只串完整的对：落单的 Q0a 两侧都是 None
+    assert rows[0].prev_memory_id is None and rows[0].next_memory_id is None
+    assert rows[1].next_memory_id == rows[2].id
+    assert rows[2].prev_memory_id == rows[1].id
 
 
 def test_request_id_is_opaque_and_any_shape_works(store: SqliteStore) -> None:
@@ -286,9 +293,13 @@ def test_all_questions_or_all_answers_are_all_isolated(store: SqliteStore) -> No
     _apply(store, _rid(1), (_msg("assistant", "A0"), _msg("assistant", "A1")))
 
     rows = _all(store)
+    # 2026-10-01：**合并只在"配得上对"时发生** ⇒ 同 role 相邻不再并，每条各自一块。
     assert [(p.question, p.answer) for p in rows] == [
-        ("Q0\nQ1\nQ2", None),  # 连续同 role 合并成一块
-        (None, "[assistant] A0\n[assistant] A1"),
+        ("Q0", None),
+        ("Q1", None),
+        ("Q2", None),
+        (None, "[assistant] A0"),
+        (None, "[assistant] A1"),
     ]
     assert all(p.prev_memory_id is None and p.next_memory_id is None for p in rows)
 
@@ -370,9 +381,10 @@ def test_sessions_are_independent(store: SqliteStore) -> None:
 
 def test_every_row_is_complete_at_write_time(store: SqliteStore) -> None:
     """D24：没有 pending、没有 repair —— **没有任何后台任务会回头改这些行**。"""
+    # ⚠ D32：`U U A` 现在产出 **2** 块（`[Q0]` 与 `[Q1+A0]`），加上第二批的 1 块共 3 行
     _apply(store, _rid(0), (_msg("user", "Q0"), _msg("user", "Q1"), _msg("assistant", "A0")))
     _apply(store, _rid(1), (_msg("assistant", "A1"),))
-    assert [p.status for p in _all(store)] == [STATUS_COMPLETE, STATUS_COMPLETE]
+    assert [p.status for p in _all(store)] == [STATUS_COMPLETE] * 3
 
 
 # ── 空批次仍要响亮失败 ──────────────────────────────────────────────────

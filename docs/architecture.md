@@ -1,6 +1,52 @@
 # 架构：数据流与模块边界
 
-> 最后核对：2026-09-25，对应 PRD v1 规格。**冲突以 PRD 为准。**
+> 最后核对：2026-10-05。原文存储和 HTTP 契约沿用 PRD v1；Add/Search 内部共同事实索引按本节实现。
+
+---
+
+## 当前共同事实取证结构
+
+事实不再按任职、库存、活动等业务类别拆成平行路径。所有派生事实使用同一条记录：
+`主体 / 关系 / 客体 / 原文限定条件 / 来源侧与逐字引句 / 来源记录日期`。
+原文明确给出的数量、容器、时段等放进限定条件；没有来源的推断不入库。
+
+```text
+Add 原始记忆 → 配对与幂等事务 → qa_pairs（原文）
+                            └→ facts/grammar → memory_facts + evidence_coverage
+Search 问题 → facts/query → 共同字段计划 → retrieve/evidence
+                                      ├ 条件筛选
+                                      ├ 有限关系连接（只取各条原文边）
+                                      └ 显式时间区间比较
+                                    → 原文/事实投影 → 双预算打包 → 记忆片段
+                 无适用计划、索引未齐、冲突或取证超限 → 原混合检索链
+```
+
+`facts/evidence.py` 定义共同记录与版本，`facts/grammar.py` 处理来源句法，
+`facts/query.py` 处理问题句法，`facts/input.py` 检查当前字面输入是否完整。
+来源的语义词仍需识别，但只用于绑定字段与计划，不创建业务专用执行器。
+`retrieve/evidence.py` 只执行上述共同操作与来源覆盖审查；
+`store/sqlite_store.py` 统一保存、筛选事实，`service/pipeline.py` 统一编排和打包。
+
+同义事实的来源选择也共用一条规则：明确的本人归属陈述优先于间接同行描述，
+全部原始来源仍保留；不同客体或时段的冲突不据此消失。这个来源标记仅用于去重和
+呈现排序，不当作事件值返回。非数量集合按主体稳定排列，数量观察保持原文物品顺序。
+带引用的事实先返回该陈述，再返回独立的支持事实，不合成关系答案。
+
+新库只有 `qa_pairs`、`applied_batches`、`memory_facts`、`evidence_coverage` 四张表。
+前两张是真源，后两张可由原文重建。旧库里的历史派生表保持封存，新代码不读写它们。
+Add、重放和有界旧库补索引共用抽取器；索引尚未覆盖当前用户全部来源时沿用原检索。
+物理覆盖标记只表示已扫描，不表示语义已经全部识别。
+
+名单与计数使用同一证据计划。例如“谁在学校任教”和“有多少人任教”，都选择独立的
+`人物—teacher—学校` 事实，由既有答案模型生成名单或数字。关系连接同样只返回
+独立证据：`Alex 的家乡国家是 Sweden` 与 `Alex 提到从自己的家乡国家搬走` 分开返回，
+不合成为“Alex 从 Sweden 搬走”的新记忆。单项数量保留原文数值，不预先求和。
+来源日期不冒充实际事件日期；原文区间比较只使用原文明确的起止月份。
+
+原文投影不扩邻域，事实投影复用 `common/render` 与原槽位/token 双预算。
+只有当前问题的全部输入已明确且无须历史时返回空记忆，判定器不生成答案。
+对外 Add/Search 请求响应、答案 prompt 与评分流水线保持原接口。
+共同开关及取证上限见 [配置项参考](config-reference.md)。
 
 ---
 
@@ -12,18 +58,19 @@
 
 ```text
 1. payload 指纹      canonical(user_id, session_id, messages) → sha256（**D28**）
-2. 幂等守卫         查 applied_batches；命中且指纹相同 → 直接 200，不写任何东西
+2. 幂等守卫         查 applied_batches；命中且指纹相同 → 重放索引修复，不改真源
                                  命中但指纹不同 → **409**（同 id 不同 payload，不是重放）
 3. 组合 + 连链       compose_memory_blocks(messages)   ← 只看本批，无跨 Add 状态（**D24**）
                     link_blocks(blocks)               ← Add 内邻接，只连完整 QA（**D28**）
 4. 同一事务         INSERT qa_pairs（每块一行、`(request_id, local_index=i)`、`prev` / `next`、status 恒为 complete）
+                    + memory_facts / evidence_coverage（启用共同取证时）
                     + 向 applied_batches 插入本批记录（含指纹）
 5. 同步 upsert      Qdrant（wait=true）
 6. 返回 200
 ```
 
 **第 3 步没有跨批分支**——组合与邻接的边界都是**一次 Add**（D24 / D28）。
-**第 2 步不读库**——位置是**请求的纯函数**（D28）：`request_id` 原样（**不解析**）、
+**位置分配不读库**——位置是**请求的纯函数**（D28）：`request_id` 原样（**不解析**）、
 `local_index` 是本批块序号，所以既没有读-改-写，也没有业务锁；同 session 的 Add 可以并发，
 而"到达顺序"**根本没有被表达过**（跨 Add 不存在顺序，也不建立邻接）。
 **第 1 步不能省**：位置虽然幂等了，但 AML 的重试是**正常行为**，不能每次都靠撞 `UNIQUE` 兜
@@ -35,6 +82,7 @@
 ### Search 路径（§5 流程图）
 
 ```text
+（共同取证不适用时）
 query → BM25 ┐
              ├→ Weighted RRF → memory_id 稳定去重 → Evidence Checker
      dense  ─┘                              ├ 证据足够 → 直接返回
@@ -69,6 +117,7 @@ query → BM25 ┐
 
 | 目录 | 负责什么 | PRD |
 | --- | --- | --- |
+| `facts/` | 共同事实记录、来源句法、问题计划、当前输入依赖；不分业务表或开关 | 当前共同取证结构 |
 | `service/` | HTTP 层：`POST /add`、`POST /search`（+ `GET /health` 探活）；请求/响应模型 | §2.1、§15 → **D28** |
 | `pairing/` | **记忆块组合（一次 Add = 唯一边界，D24）**；幂等守卫 + 位置分配 + 落库；**§15 写入路径的唯一所有者** | §6.2、§6.5（D24 后的口径）、§15 |
 | `store/` | SQLite 真源（`qa_pairs` + `applied_batches`）；Qdrant 派生索引；邻域查询的 SQL | §6.1、§6.3 |
@@ -139,7 +188,7 @@ pairing  retrieve   rank      agent
 
 | # | 维度 | 由什么机制回应 | 在哪 |
 | --- | --- | --- | --- |
-| 1 | Explicit fact recall | 索引单元 = **完整 QA 对**（不是 message）；**原文优先**，v1 不产生任何合成文本 | `store/` · `rank/packaging` |
+| 1 | Explicit fact recall | 索引单元 = **完整 QA 对**（不是 message）；**原文或逐字来源支持的独立事实**，不生成答案 | `store/` · `rank/packaging` |
 | 2 | Relational and multi-hop reasoning | `agent/` 的多轮检索（**合并而非替换**）；`retrieve/` 的 hybrid + RRF | §9 · §7.3 |
 | 3 | Temporal and event understanding | `event_time` 列负责**筛选**；正文**保留原始时间表述**；`created_at` 日粒度 | §11.3 |
 | 4 | **Memory governance** | ① **批次级幂等守卫**（`applied_batches`）② **块写下即最终**、此后再无改写路径（**D24**）③ 索引损坏时可从真源全量重建（`tools/reindex.py`） | §6.1 · §6.5（**D24** 后的口径） |

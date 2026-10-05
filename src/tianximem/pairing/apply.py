@@ -41,21 +41,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from dataclasses import dataclass
 
-from tianximem.pairing.pairing import (
-    MemoryBlock,
-    Message,
-    compose_memory_blocks,
-    link_blocks,
-)
-from tianximem.store.sqlite_store import STATUS_COMPLETE, SqliteStore, make_pair_id
+from tianximem.facts.evidence import EVIDENCE_VERSION
+from tianximem.facts.grammar import extract_evidence
+from tianximem.store.sqlite_store import STATUS_COMPLETE, QaPair, SqliteStore, make_pair_id
+
+from .pairing import MemoryBlock, Message, compose_memory_blocks, link_blocks
 
 __all__ = [
     "AddBatch",
     "ApplyBatchResult",
     "PayloadMismatchError",
     "apply_batch",
+    "index_pair_facts",
     "payload_fingerprint",
 ]
 
@@ -138,7 +138,27 @@ def _neighbour_id(batch: AddBatch, local_index: int | None) -> str | None:
     return make_pair_id(batch.user_id, batch.session_id, batch.request_id, local_index)
 
 
-def apply_batch(store: SqliteStore, batch: AddBatch) -> ApplyBatchResult:
+def index_pair_facts(store: SqliteStore, conn: sqlite3.Connection, pair: QaPair) -> None:
+    """Add/重放/旧来源补索引共用一个入口，并在同一事务记版本覆盖。"""
+    store.insert_evidence(
+        conn,
+        extract_evidence(
+            parent_memory_id=pair.id,
+            user_id=pair.user_id,
+            question=pair.question,
+            answer=pair.answer,
+            event_time=pair.event_time,
+        ),
+    )
+    store.mark_fact_index_coverage(conn, pair, version=EVIDENCE_VERSION)
+
+
+def apply_batch(
+    store: SqliteStore,
+    batch: AddBatch,
+    *,
+    grounded_evidence: bool = False,
+) -> ApplyBatchResult:
     """应用一批 `Add` 消息。**幂等**：同一 `request_id` 至多被应用一次。
 
     整个写入在**一个事务**里：崩溃或异常 ⇒ 整批回滚 ⇒ 保持"可重试"，
@@ -169,6 +189,11 @@ def apply_batch(store: SqliteStore, batch: AddBatch) -> ApplyBatchResult:
                     "  ⚠ 这不是重放，**不能静默挑一份落库**（另一份记忆会凭空消失，"
                     "而检索侧看不出来）。要么换一个新的 request_id，要么把 payload 改回去。"
                 )
+            if grounded_evidence:
+                for pair in store.fetch_by_request(
+                    conn, batch.user_id, batch.session_id, batch.request_id
+                ):
+                    index_pair_facts(store, conn, pair)
             return ApplyBatchResult(applied=False, blocks=(), new_pair_ids=())
 
         # ── 第 2 步：组合（纯函数，只看本批）──
@@ -198,6 +223,8 @@ def apply_batch(store: SqliteStore, batch: AddBatch) -> ApplyBatchResult:
                 event_time=block.event_time,
             )
             written.append(pair.id)
+            if grounded_evidence:
+                index_pair_facts(store, conn, pair)
 
         # 应用成功时，在【同一个事务】里记下本批（含 payload 指纹）
         store.record_batch(

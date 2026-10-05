@@ -21,6 +21,11 @@ test_reranker.py        §11.2 远端精排：线格式、降级、两个计数�
 test_observability.py   §14 指标出口：聚合、**计数是增量不是累计**、装配与 runner 读取（**V12**）
 test_capture.py         请求**原文**采集（**S6**）：开关归 yaml / 路径归 env、一行的形状、
                         **以及"它什么都没改变"**（不改响应、不改真源、不吞异常）
+test_datasets_extra.py  `official-extra` 各份 + PersonaMem 的加载层（合成 fixture）、
+                        **每个数据集的输入项字段**、**qid 唯一性** + 自写 pipeline 的
+                        **纯函数判分**（MQuAKE 别名表 / CorporateBench 标量·布尔·集合 /
+                        MedMemoryBench 的字符串·选项集合 / 三处裁判 JSON 解析：**嵌套**那条、
+                        **未转义引号**那条、**非布尔 `is_correct`** 那条）+ TempReason 的**切句**
 ```
 
 > ⚠ **§13 的开关纯度没有独立文件**。断言住在**各自开关所在的模块**里：
@@ -46,7 +51,7 @@ test_idempotency.py  批次级守卫
 | 用例 | 覆盖 | 住在哪 |
 | --- | --- | --- |
 | `U A U A` / `U U A A A U A` / `A U A` / `U A U` / `A` / `U` | 六个形状逐字对照 | `test_pairing.py`（**Test 1–6**） |
-| 连续同 role 合并、相邻 U+A 配对、落单独立成块 | 同上，含工具调用序列**不劈开** | `test_pairing.py` |
+| 相邻 U+A 配对、**配不上的各自独立**（同 role 相邻也不并，D29）、工具调用序列**不劈开** | 见 `test_pairing.py`；S5 的形状（`U U U A` 仍合并）单独有用例 | `test_pairing.py` |
 | 未知 role（`system` / `tool` …） | **不得丢消息**——判据只依赖"是不是 `user`"，**不要枚举白名单** | `test_pairing.py` |
 | 来源元数据 | `source_idxs` 合起来是 `0..n-1` 的**排列**（无丢失、无重复） | `test_pairing.py` |
 | **跨 Add 不拼接** | `Add0=[U A U]` + `Add1=[A U A]` ⇒ **不出现 U(Add0)+A(Add1)** | `test_apply.py`（**Test 7**） |
@@ -169,6 +174,23 @@ test_idempotency.py  批次级守卫
 > 断言**段的 `best_rank` 与锚点一字不变**（只有段的长度变了）。
 > ⚠ 但 **`neighbor.enabled` 这个开关本身还没接线**（见 `config-reference.md` §2）——
 > 现在能关的只有 `radius`，**别把"能关半径"当成"开关已落地"**。
+
+> ### ⚠ 测扩窗的用例**必须自己钉住半径**（2026-10-01，**D31**）
+>
+> 产品默认是 **`radius = 0` = 不扩窗**。而 `conftest` 的 `wired` **刻意继承内置默认值**
+> ⇒ 拿 `wired` 写"邻居会不会进来"的断言会**静默地什么都不测**：
+> 返回的段照样合法、`id` 照样对，**只有"段里有几条记忆"这一件事没了**——
+> 而只数段数、只比 `id` 的断言**照过**。
+>
+> ⇒ 两条现成的口子，**按意图选**：
+>
+> * **端到端**（`wired.services.search.run`）：用 **`wired_expanding`** 夹具（显式 `radius=1`）；
+> * **纯函数**（`expand_neighbors`）：`test_neighbor.py` 的 `_expand` 助手**显式 `radius=1`**，
+>   要关扩窗的用例自己写 `radius=0`（文件里那几条本来就这么写）。
+>
+> 同理，`test_reranker.py` 的 `_STEP` / `test_contract.py` 的 `_SPACING` 是**间距几何**：
+> 前者**已从 `DEFAULT_RADIUS` 解耦**（它自己传 `radius=1`，间距要 **> 3**），
+> 后者仍跟着默认值走（它的 pipeline 就是吃默认值的那一条）。
 
 ### 精排测试的三层（`test_reranker.py`）—— **不发真请求**
 
