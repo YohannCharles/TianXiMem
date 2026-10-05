@@ -151,7 +151,7 @@
 | # | 阻塞项 | 状态 |
 | --- | --- | --- |
 | 1 | **`api_config.py`** | ✅ **不是环境依赖**：**AML 公开仓自己就发布了这个文件**（520 字节、无凭据、只读 `os.environ`），放**仓库内** + 由 harness 在 subprocess 里注入 `PYTHONPATH` 即可——**"clone 下来不能直接跑"不成立**。实现见 [`eval/harness/api_config.py`](./eval/harness/api_config.py) |
-| 2 | **归档 `benchmark_data/`** | ✅ **已解决**：已在本机（635MB→**370MB**，删掉了明令不用的 `lme_test.json` 与失败下载残留）；**且不需要任何共享副本**——每一份都能按 commit / revision 从公开源取回，**出处 + sha256 进版本库**：`make fetch-data` 取回、`make data-check` 校验，清单在 [`tools/fetch_benchmark_data.py`](./tools/fetch_benchmark_data.py)。见 [`docs/benchmark-data.md`](./docs/benchmark-data.md) |
+| 2 | **归档 `benchmark_data/`** | ✅ **已解决**：已在本机（**349 项 / 1.5GB**，其中 `official-extra` 那 325 项占 1.1GB）；**且不需要任何共享副本**——每一份都能按 commit / revision 从公开源取回，**出处 + sha256 进版本库**：`make fetch-data` 取回、`make data-check` 校验，清单在 [`tools/fetch_benchmark_data.py`](./tools/fetch_benchmark_data.py)。见 [`docs/benchmark-data.md`](./docs/benchmark-data.md) |
 | 3 | **Windows 那台机器的 `tmp_path` 故障** | ⬜ **仍开着，且与代码无关**（是机器状态）。绕法见 [`docs/roadmap.md`](./docs/roadmap.md) 的 Step 0 |
 
 **reranker 点尚未部署**（部署不在本项目范围内，后续进行）。它是 Step 3 及之后的**基础设施前置项**，不是代码任务——而 v1 不做 agentic 之后，**唯一的新增价值就是 Rerank + Context Packaging**，所以这条前置项直接压在主线上。
@@ -162,11 +162,31 @@
 
 ## 快速开始
 
+**新机器上从 clone 到跑通一轮**——每一行都是必需的，顺序也是：
+
 ```bash
-cp .env.example .env      # 填密钥与路径
-make sync                 # uv sync --all-extras
-make help                 # 看全部目标
+cp .env.example .env      # ← 密钥要向管理员申请（仓库里全空，见下）
+make sync                 # uv sync --all-extras；含 [local] 本地模型栈，数 GB
+make fetch-data           # 取回 benchmark_data/：约 282MB（必需集）/ 1.5G（全档）
+make data-check           # 逐文件 sha256 校验
+make qdrant-up            # 起 Qdrant（**必须 server 模式**）
+make check                # 环境自检：Qdrant / 三段模型端点 / 密钥已填
+make serve                # ⚠ 另开一个终端：起检索服务
+make baseline DATASET=locomo-refined   # 跑一轮冻结口径的基线
 ```
+
+**四件事先知道，否则会卡在半路：**
+
+| | |
+| --- | --- |
+| **`.env` 的密钥要向管理员申请** | 仓库里**全空**（只提交 `.env.example`）。这是**唯一一个"仓库里查不到答案"的步骤**，其余都能自己跑通 |
+| **数据集不进版本库** | `benchmark_data/` 整目录被 `.gitignore` 排除 ⇒ **clone 完一个文件都没有**。取回**只要外网、不要任何凭据**（公开源，按 commit / sha256 钉死）；**目录不用先 `mkdir`**，`make fetch-data` 会在下载时自己建 |
+| **Qdrant 必须 server 模式** | **local 模式会静默丢弃 payload 索引**，而 `user_id` / `session_id` / `event_time` 三个筛选**全依赖**它 |
+| **服务得先起着** | `make eval` / `make baseline` 打的是**真 HTTP**（§13 的边界：harness 不 import `src/`）⇒ 另开一个终端跑 `make serve` |
+
+⚠ **`make fetch-data` 不带 `--tier` 默认全取（1.5G）**。只跑代理评测的话 `required` 档（282MB）就够；
+`official-extra` 那 325 项占 1.1G —— 要省磁盘就用
+`uv run --env-file .env python tools/fetch_benchmark_data.py --fetch --tier required`。
 
 **部署到服务器**（只跑检索服务 + Qdrant，不需要 GPU）：
 

@@ -18,6 +18,11 @@
 #   显式带 `--env-file`——它也刻意**不依赖配置层**（配置层坏了它还得能跑）。
 ENV_FILE ?= .env
 
+# `--env-file` **只在 `.env` 存在时才加**：`uv run` 碰到不存在的 env 文件会**直接报错**，
+# 而取数据**不需要任何密钥**，不该卡在"还没建 `.env`"上（新机器上 `fetch-data` 甚至
+# 可以排在 `cp .env.example .env` 之前）。存在时就必须带上——见 `fetch-data` 的说明。
+ENV_FILE_FLAG = $(if $(wildcard $(ENV_FILE)),--env-file $(ENV_FILE))
+
 # 跑评测时的数据集（`make eval`）。**只有两个计分数据集有加载器**（§12.4）。
 DATASET ?= locomo-refined
 
@@ -65,7 +70,15 @@ data-patch:  ## 把已声明的本地修订就地打到归档上（**不下载**
 #    且**幂等**——已经打过的再跑是零处改动。tests/test_benchmark_archive.py 钉住了这条。
 
 fetch-data:  ## 取回 benchmark_data/ 归档（公开源，按 commit / 哈希钉死）
-	python3 tools/fetch_benchmark_data.py --fetch
+	uv run $(ENV_FILE_FLAG) python tools/fetch_benchmark_data.py --fetch
+# ⚠ 它**必须读 `.env`**（2026-10-04）：`TIANXIMEM_BENCHMARK_DIR` 是数据路径的唯一入口，
+#   而 `.env.example` 明写"本地开发把它指到开发数据集即可"。以前这条用裸 `python3`、
+#   **不读 `.env`**，于是把它改过的人会看到"fetch 下到 benchmark_data/、eval 去别处找"
+#   ——报错仍然是"缺文件"（响亮），但两边对不上。
+# ⚠ **不需要任何凭据**（公开源，请求只带 User-Agent），只要外网直连
+#   raw.githubusercontent.com 与 huggingface.co。
+# ⚠ 目录不存在**不用先 mkdir**：`--fetch` 会在连接成功后自己建（见工具里 `_download`
+#   的注释——网络不通时不留空目录，那会让 `needs_archive` 守卫从 skip 变 fail）。
 
 check:  ## 环境自检：Qdrant 可达 / 三段模型端点可用 / 密钥已填（含 V7 思考探针）
 	uv run --env-file $(ENV_FILE) python tools/check_env.py
@@ -139,6 +152,14 @@ contract-check:  ## §2 契约合规自查（打真 HTTP：本地自启服务，
 # ⚠ 需要 .env 里的 AML_EMB_BASE_URL / AML_EMB_API_KEY（由 common/config.py 读）与可达的 Qdrant。
 # 打已经在跑的服务：uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
 
+diagnose:  ## 跑批诊断：把「低分」与「模型不行」分开（RUN=run-id；只读产物，不打网关）
+	uv run python tools/diagnose_run.py --run-id $(RUN)
+# **接完一个新数据集、或看到任何低分时的第一件事**。它报四件事：
+#   ① 拒答率（逐字同一句 = 被 prompt 逼的指纹）  ② 拒答 × gold 在不在检索结果里
+#   ③ label 分布（含 JUDGE_ERROR）              ④ 逐类分化
+# ⚠ 2026-10-03 四个数据集的接错缺陷**全是它这套手法找出来的**；判读树在脚本 docstring 里。
+# 用法：make diagnose RUN=base-mqk
+
 probe-reranker:  ## 精排探针：打真网关，验连通性 + 它在链上真的起作用（不消耗 Smoke 配额）
 	uv run python tools/probe_reranker.py
 # 与 contract-check 的分工：那一个验**契约形状**（不关心精排好不好用），
@@ -168,6 +189,20 @@ eval:  ## 跑一轮代理评测（§13）：DATASET / ARGS 可覆盖
 # ⚠ 缺 `--embedder` 时 run record 的模型指纹会写"未声明"——**R1 要求记下换没换模型**，
 #   所以想留下可比记录就设 `TIANXIMEM_EMBED_MODEL`（或 `ARGS='--embedder ...'`）。
 # ⚠ 冒烟用 `ARGS='--limit 3'`；**截断跑会在数据指纹的 note 里留警示**，别拿它跟全量比。
+
+baseline:  ## 跑一轮**冻结口径**的基线/对照（§13）：DATASET / ARGS 可覆盖
+	uv run --env-file $(ENV_FILE) python -m eval.experiments.run --dataset $(DATASET) --frozen $(ARGS)
+# **判断"改动值不值"就用这个**：口径（跑多少题、要不要分层）由
+# `eval/experiments/recipes.py` 给，不手抄数字——抄错一个数的后果是分数看起来完全正常、却不可比。
+# ⚠ 它**拒绝**与手写的 `--limit` / `--spread` 同时给（那两个只在做消融或冒烟时才用）。
+# ⚠ 墙钟差着量级：locomo ≈44 分（**建议当唯一哨兵**）、mquake ≈4 分、
+#   clbench ≈7 小时、lme ≈12–20 小时。见 `eval/reports/ledger.md`。
+# ⛔ **一次只跑一条**：网关在 Cloudflare 后面（源站时限 ~125 秒 ⇒ HTTP 524），
+#   并发会把 524 从"不会发生"变成"随机发生"，**而客户端超时调多大都没用**。
+#   别被"本机 CPU 只用了 2%"误导——瓶颈在远端网关。
+# ⚠ 本仓噪声底是 **346 题上 ~1pt** ⇒ 几十题的小跑法读不出改动。
+# 用法：make baseline DATASET=locomo-refined
+#       make baseline DATASET=clbench ARGS='--run-id clb-after-rerank --switches {…}'
 
 t1:  ## §13 的 T1 实验：时间戳前缀 带/不带（**改渲染 = 重建索引**）
 	uv run --env-file $(ENV_FILE) python -m eval.experiments.t1_timestamp
