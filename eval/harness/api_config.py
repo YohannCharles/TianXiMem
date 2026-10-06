@@ -2,7 +2,8 @@
 
 ## 为什么需要它
 
-归档的 7 个 pipeline 都在模块顶部做这两件事（`benchmark_data/pipeline_locomo-refined.py:17`）：
+归档的 pipeline 都在模块顶部做这两件事
+（`dataset/.upstream/aml/pipeline_locomo-refined.py:17`）：
 
 ```python
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -10,8 +11,8 @@ from api_config import (ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL,
                         JUDGE_API_BASE, JUDGE_API_KEY, JUDGE_MODEL, JUDGE_VERSION)
 ```
 
-`__file__` 在 `benchmark_data/` 下 ⇒ `parents[2]` 解析到**仓库外一层**——那份 `api_config`
-不存在，7 个 pipeline 全部 import 失败。
+D35 后 `__file__` 在 `dataset/.upstream/aml/` 下，`parents[2]` 指向数据根目录。
+旧平铺归档时它指向仓库外；两种目录都不能靠那条路径找到配置。
 
 **处置（D12，见 [`CLAUDE.md`](./CLAUDE.md)）**：**不在仓库外创建它**。
 本文件就是那一份，放在仓库内；由 harness 在 subprocess 里注入

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""我们自写的三份数据集的 `answer` / `evaluate`——**官方没有发布它们的 pipeline**。
+"""我们自写的五份 `official-extra` 数据集的 `answer` / `evaluate`——**官方没有发布它们的 pipeline**。
 
 CLI 与归档 pipeline **同形**（harness 的 `run_judge` 就是按这个形状调的）：
 
@@ -18,11 +18,11 @@ CLI 与归档 pipeline **同形**（harness 的 `run_judge` 就是按这个形�
 ## 三句必须先读的话
 
 1. **这是"我们自己的契约"，不是官方口径。** 官方那 6 份的 answer/judge prompt 在
-   `benchmark_data/pipeline_*.py` 里逐字可查；这三份没有 ⇒ **分数只能在本仓内部前后对比**，
+   `dataset/.upstream/aml/pipeline_*.py` 里逐字可查；这五份没有 ⇒ **分数只能在本仓内部前后对比**，
    别拿去和官方分数对齐（§12.4：跨数据集的裁判不同，横向比没有意义）。
-2. **裁判分两种**：MQuAKE / CorporateBench 是**纯函数**（字符串 / 集合匹配，不花钱、
-   确定性强、可离线重算）；**MemTrapBench 必须 LLM**——官方只给 4 维 0–5 的**均分**、
-   没有过/不过线，所以：
+2. **裁判分两种**：MQuAKE / CorporateBench / TempReason 是**纯函数**（字符串 / 集合匹配，不花钱、
+   确定性强、可离线重算），MedMemoryBench 照上游发布的 `metrics/`；**MemTrapBench 必须 LLM**——
+   官方只给 4 维 0–5 的**均分**、没有过/不过线，所以：
    * 阈值 `MEMTRAP_PASS_MEAN` 是**我们定的**；
    * **四个原始分原样写进 `judge_response`** ⇒ 换阈值**不用重跑裁判**。
 3. **失败不静默**：判分出错时 `label` 带 `JUDGE_ERROR`、`is_correct=False`，
@@ -41,12 +41,14 @@ import unicodedata
 from pathlib import Path
 
 # ⚠ 归档目录走 D16 的唯一入口（`benchmark_dir()` 读 `TIANXIMEM_BENCHMARK_DIR`，
-#   默认 `benchmark_data`）。subprocess 的 `sys.path[0]` 是本目录 ⇒ 补一条仓库根，
+#   默认 `dataset`）。subprocess 的 `sys.path[0]` 是本目录 ⇒ 补一条仓库根，
 #   与 `tools/*.py` 同一处置。
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from eval.datasets.musique import ANSWER_CONTRACT as MUSIQUE_ANSWER_CONTRACT  # noqa: E402
+from eval.datasets.musique import REFUSAL as MUSIQUE_REFUSAL  # noqa: E402
 from eval.datasets.registry import benchmark_dir  # noqa: E402
 from eval.harness.corporatebench_pipeline import (  # noqa: E402
     build_answer_prompt as build_corporatebench_answer_prompt,
@@ -64,6 +66,7 @@ __all__ = [
     "judge_corporatebench",
     "judge_memtrapbench_scores",
     "judge_mquake",
+    "judge_musique",
     "normalize",
 ]
 
@@ -115,6 +118,23 @@ def judge_mquake(generated: str, gold: object) -> tuple[bool, str]:
     return False, f"MQuAKE：{len(aliases)} 个别名一个都没出现"
 
 
+def judge_musique(generated: str, gold: object) -> tuple[bool, str]:
+    """本地 MuSiQue：可答题归一化后精确匹配别名，不可答题严格匹配拒答标记。"""
+    if not isinstance(gold, dict) or not isinstance(gold.get("answerable"), bool):
+        return False, "MuSiQue：金标缺 bool 类型的 answerable"
+    if not gold["answerable"]:
+        ok = generated.strip() == MUSIQUE_REFUSAL
+        return ok, f"MuSiQue：不可答题必须只输出 {MUSIQUE_REFUSAL}"
+    aliases = {
+        normalize(value)
+        for value in [gold.get("answer", ""), *(gold.get("answer_aliases") or [])]
+        if normalize(value)
+    }
+    if not aliases:
+        return False, "MuSiQue：金标答案及别名均为空"
+    return normalize(generated) in aliases, "MuSiQue：参考答案或别名归一化后精确匹配"
+
+
 def judge_tempreason(generated: str, gold: object) -> tuple[bool, str]:
     """TempReason：**任一可接受答案串出现在回答里即算对**（归一化后）。
 
@@ -154,7 +174,7 @@ def judge_memtrapbench_scores(raw_response: str) -> tuple[float | None, str]:
 
 # ── MedMemoryBench（zh）：判分口径**照上游 `metrics/` 实现**，不是我们发明的 ──────────
 #
-# 上游仓（`benchmark_data/medmemorybench-code/`，另下的 GitHub 份）里：
+# 上游仓（`dataset/.upstream/medmemorybench/`，另下的 GitHub 份）里：
 #   `metrics/__init__.py` 的 DEFAULT_METRIC_MAPPING 把 6 类题分给三个度量：
 #     entity_exact_match → string_contain · multiple_choice → option_match
 #     temporal_localization / state_update / inference_generation → llm_judge
@@ -221,7 +241,9 @@ def judge_mmb_option_match(generated: str, gold: dict) -> tuple[bool, str]:
 
 def _mmb_prompt_templates() -> dict[str, str]:
     """从归档里读上游的裁判模板（**纯数据文件**，`ast.literal_eval` 即可，不必 import）。"""
-    path = Path(benchmark_dir()) / MMB_CODE_DIR / MMB_PROMPTS
+    from eval.datasets.layout import archive_file
+
+    path = archive_file(benchmark_dir(), f"{MMB_CODE_DIR}/{MMB_PROMPTS}")
     if not path.exists():
         raise SystemExit(
             f"缺 {path}——MedMemoryBench 的裁判 prompt 在上游代码仓里（见 docs/benchmark-data.md）"
@@ -428,7 +450,9 @@ DOCPP_PROMPTS = "doc-pp/prompts/judge_evaluation.py"
 
 def _docpp_prompts() -> dict[str, str]:
     """从归档里读上游的裁判模板（纯数据文件；赋值形如 `NAME = 三引号字符串.strip()`）。"""
-    path = Path(benchmark_dir()) / DOCPP_PROMPTS
+    from eval.datasets.layout import archive_file
+
+    path = archive_file(benchmark_dir(), DOCPP_PROMPTS)
     if not path.exists():
         raise SystemExit(f"缺 {path}——Doc-PP 的裁判 prompt 在上游仓里（见 docs/benchmark-data.md）")
     values: dict[str, str] = {}
@@ -540,7 +564,7 @@ def _chat(base: str, key: str, model: str, prompt: str, *, max_tokens: int, time
     return response.json()["choices"][0]["message"]["content"]
 
 
-#: 答案 prompt。**我们写的**（官方那 6 份的模板在 `benchmark_data/pipeline_*.py`）。
+#: 答案 prompt。**我们写的**（官方那 6 份的模板在 `dataset/.upstream/aml/pipeline_*.py`）。
 ANSWER_PROMPT = """
 You are an assistant that answers a question using ONLY the memories provided below.
 
@@ -556,13 +580,20 @@ Question: {question}
 
 Answer:"""
 
+MUSIQUE_ANSWER_PROMPT = (
+    "Answer the question using ONLY the retrieved candidate paragraphs below. "
+    "Do not use outside knowledge. Return only the short answer, without explanation. "
+    f"If the paragraphs are insufficient, return exactly: {MUSIQUE_REFUSAL}\n\n"
+    "Retrieved candidate paragraphs:\n{memories}\n\nQuestion: {question}\n\nAnswer:"
+)
+
 #: **MemTrapBench 专用**的答案 prompt——**逐字用官方那份**
-#: （`benchmark_data/memtrapbench/eval/shared/prompt_user_mem.txt`，只把两个占位符换名）。
+#: （`dataset/.upstream/memtrapbench/eval/shared/prompt_user_mem.txt`，只把两个占位符换名）。
 #:
 #: ⛔ **不要对它用上面那份通用 `ANSWER_PROMPT`。** 两者的取向**正好相反**：
 #:   · 通用那份写着「**只用记忆里的信息**，记忆里没有就回
 #:     `Cannot determine from the memories.`」
-#:   · 而 MemTrapBench 的设计是（`benchmark_data/memtrapbench/README.md` 原文）
+#:   · 而 MemTrapBench 的设计是（`dataset/memtrapbench/README.md` 原文）
 #:     **"No-Memory Solvability: the final query must be answerable correctly
 #:     even without the history"**，gold 是 **"the correct answer that ignores
 #:     the misleading memory"**，官方 prompt 也说的是 **"reference … when needed"**。
@@ -652,7 +683,8 @@ TEMPR_ANSWER_PROMPT = (
 
 
 #: MemTrapBench 的裁判 prompt。**按官方 4 维改写**（官方那份在
-#: `benchmark_data/memtrapbench/eval/shared/judge_prompt_per_dimension.txt`，逐字可用时可直接换）。
+#: `dataset/.upstream/memtrapbench/eval/shared/judge_prompt_per_dimension.txt`，
+#: 逐字可用时可直接换）。
 MEMTRAP_JUDGE_PROMPT = """
 You are a strict evaluator. Score the response on four dimensions, each 0-5.
 
@@ -693,6 +725,27 @@ def _write_line(handle, row: dict) -> None:
     handle.flush()  # 逐行落盘：被强杀时最多丢最后一行（`run_judge` 会先修半行）
 
 
+def render_answer_prompt(item: dict) -> str:
+    """按 `item["dataset"]` 挑答案 prompt——**`cmd_answer` 与本包的分派 pipeline 共用这一处**。
+
+    （`official_capture_pipeline.py` 逐题调它，而不是把整个文件交给 `cmd_answer`：
+    那样会把别的数据集的题也顺带跑一遍。）
+    """
+    template = {
+        "memtrapbench": MEMTRAP_ANSWER_PROMPT,
+        "mquake-remastered": MQUAKE_ANSWER_PROMPT,
+        "tempreason": TEMPR_ANSWER_PROMPT,
+    }.get(item.get("dataset"), ANSWER_PROMPT)
+    if item.get("dataset") == "musique" and item.get("answer_contract") == MUSIQUE_ANSWER_CONTRACT:
+        template = MUSIQUE_ANSWER_PROMPT
+    if item.get("dataset") == "corporatebench":
+        return build_corporatebench_answer_prompt(item, scalar_template=ANSWER_PROMPT)
+    return template.format(
+        memories=item.get("retrieved_context") or "(no memories)",
+        question=item["question"],
+    )
+
+
 def cmd_answer(args: argparse.Namespace) -> int:
     items = _read_jsonl(Path(args.input))
     output = Path(args.output)
@@ -705,18 +758,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
                 continue
             # **逐数据集挑 prompt**（判据是 item 里那个 `dataset` 字段，与 evaluate 同一口径）。
             # 分派理由见各自模板注释及 CorporateBench 的独立适配器。
-            template = {
-                "memtrapbench": MEMTRAP_ANSWER_PROMPT,
-                "mquake-remastered": MQUAKE_ANSWER_PROMPT,
-                "tempreason": TEMPR_ANSWER_PROMPT,
-            }.get(item.get("dataset"), ANSWER_PROMPT)
-            if item.get("dataset") == "corporatebench":
-                prompt = build_corporatebench_answer_prompt(item, scalar_template=ANSWER_PROMPT)
-            else:
-                prompt = template.format(
-                    memories=item.get("retrieved_context") or "(no memories)",
-                    question=item["question"],
-                )
+            prompt = render_answer_prompt(item)
             generated = _chat(
                 base, key, model, prompt, max_tokens=args.max_tokens, timeout=ANSWER_TIMEOUT
             )
@@ -752,6 +794,9 @@ def _judge_one(
         return _verdict(qid, score == 1.0, why) | {"partial": score}
     if dataset == "tempreason":
         ok, why = judge_tempreason(generated, gold)
+        return _verdict(qid, ok, why)
+    if dataset == "musique":
+        ok, why = judge_musique(generated, gold)
         return _verdict(qid, ok, why)
     if dataset == "docpp":
         return _judge_docpp(qid, item, generated, judge=judge, max_tokens=max_tokens)
@@ -886,13 +931,23 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── 公开入口（同包的分派 pipeline 用）─────────────────────────────────────
+# [`official_capture_pipeline.py`](./official_capture_pipeline.py) **逐题**调这几个函数，
+# 而不是把整份文件交给 `cmd_answer` / `cmd_evaluate`——那会多出一份临时文件、
+# 且无法与别的数据集混在同一趟里。**实现仍只有一份**，这里只是给它们公开名字。
+config = _config
+chat = _chat
+verdict = _verdict
+judge_one = _judge_one
+
+
 def build_parser() -> argparse.ArgumentParser:
     """CLI 形状**必须与归档 pipeline 一致**：`--max-tokens` 挂在**子命令上**。
 
     ⚠ 2026-09-30 的教训：一开始把它挂在**顶层** parser 上，而 `run_judge` 是按官方那几份的
     写法**在子命令之后**传的（`… answer --input … --output … --max-tokens 256`）⇒
     argparse 子解析器不认识它，整轮以 `unrecognized arguments` 死在第一步。
-    ⇒ **两个子命令都要收**（`run_judge` 对 locomo / LME / 我们这三份是两边都传的）。
+    ⇒ **两个子命令都要收**（`run_judge` 对 locomo / LME / 我们这五份是两边都传的）。
     """
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--max-tokens", type=int, default=512, help="answer / 裁判各自的输出上限")

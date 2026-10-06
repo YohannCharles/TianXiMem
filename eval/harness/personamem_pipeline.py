@@ -46,7 +46,9 @@ from eval.datasets.registry import benchmark_dir  # noqa: E402
 
 
 def _official():
-    path = str(benchmark_dir())
+    from eval.datasets.layout import upstream_aml_dir
+
+    path = str(upstream_aml_dir(benchmark_dir()))
     if path not in sys.path:
         sys.path.insert(0, path)
     import pipeline_v2_personamem  # type: ignore[import-not-found]

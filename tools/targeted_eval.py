@@ -88,8 +88,13 @@ def main() -> int:
     parser.add_argument("--freeze", type=Path, required=True)
     parser.add_argument("--group", action="append", default=[])
     parser.add_argument("--deadline", type=float, required=True)
+    parser.add_argument("--offline", action="store_true", help="禁止下载裁判依赖")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
+    from eval.datasets.prepare import ensure_dataset
+
+    for dataset in sorted({group["dataset"] for group in manifest["groups"]}):
+        ensure_dataset(dataset, benchmark_dir(), offline=args.offline, purpose="judge")
     frozen = freeze(manifest)
     if args.freeze.exists():
         if json.loads(args.freeze.read_text()) != frozen:

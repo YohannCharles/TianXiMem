@@ -32,10 +32,13 @@ import re
 from pathlib import Path
 
 import pytest
-from tools.fetch_benchmark_data import MANIFEST, _patch_async_open
+from eval.datasets.layout import archive_file
+from eval.datasets.manifest import MANIFEST
+from eval.datasets.prepare import _patch_async_open
+from eval.datasets.registry import benchmark_dir
 
 _ROOT = Path(__file__).resolve().parents[1]
-_ARCHIVE = _ROOT / "benchmark_data"
+_ARCHIVE = benchmark_dir()
 
 #: 修订前的形状。**它不该在任何归档文件里再出现。**
 _RAW_ASYNC_OPEN = re.compile(
@@ -54,7 +57,7 @@ _PATCHED = [entry for entry in MANIFEST if entry.get("local_patch")]
 
 
 def _read(entry: dict) -> str:
-    path = _ARCHIVE / entry["name"]
+    path = archive_file(_ARCHIVE, entry["name"])
     if not path.exists():
         pytest.skip(f"{entry['name']} 不在归档里（`make fetch-data` 才取回）")
     return path.read_text(encoding="utf-8")
@@ -165,7 +168,7 @@ def test_fetch_does_not_require_the_directory_to_exist_beforehand(
     """
     import urllib.error
 
-    from tools import fetch_benchmark_data as F
+    from eval.datasets import prepare as F
 
     called: list[str] = []
 
@@ -198,7 +201,7 @@ def test_download_creates_the_directory_only_after_connecting(
     import urllib.error
     import urllib.request
 
-    from tools import fetch_benchmark_data as F
+    from eval.datasets import prepare as F
 
     def boom(*args: object, **kwargs: object) -> object:
         raise urllib.error.URLError("连不上")
@@ -214,7 +217,7 @@ def test_check_on_a_missing_archive_points_at_the_fetch_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """`--check` 撞上不存在的目录时，**提示必须指向真正能解决它的那一步**。"""
-    from tools import fetch_benchmark_data as F
+    from eval.datasets import prepare as F
 
     monkeypatch.setattr(
         "sys.argv", ["fetch_benchmark_data.py", "--check", "--dir", str(tmp_path / "没有")]

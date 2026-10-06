@@ -12,7 +12,7 @@
 
 ## ⚠ 归档里**没有** `conversations.jsonl`——这不是缺陷，是出处链
 
-`tools/fetch_benchmark_data.py` 明写它"本清单不收录——它属 `eval/datasets/` 的 clone"。
+`eval/datasets/manifest.py` 明写它"本清单不收录——它属 `eval/datasets/` 的 clone"。
 但归档的 `locomo_refined.json` **含同一份对话全文**，两个来源的差别**只有首尾空白**：
 
 > **已核实（全量 5,882 turn）**：`locomo_refined.json` 的每条 `text`
@@ -21,7 +21,7 @@
 
 所以两个来源在这里**产出完全相同的 `Message` 流**，两条路径都可用：
 
-- 归档路径（`benchmark_data/`）→ `locomo_refined.json` + `strip()`
+- 归档路径（`dataset/`）→ `locomo_refined.json` + `strip()`
 - 开发路径（`eval/datasets/LoCoMo-Refined/data/public/`）→ `conversations.jsonl`
 
 > ⚠ **D16 说"用 `locomo_refined.json` 会引入 209 条契约违规"——那句的前提是"不 strip"。**
@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .layout import archive_file
 from .preprocess import (
     Message,
     Question,
@@ -74,10 +75,10 @@ REFINED_JSON = "locomo_refined.json"
 
 def conversation_file(bench_dir: Path) -> Path:
     """对话全文的来源文件——`conversations.jsonl` 优先，退回 `locomo_refined.json`。"""
-    direct = bench_dir / CONVERSATIONS_JSONL
+    direct = archive_file(bench_dir, CONVERSATIONS_JSONL)
     if direct.exists():
         return direct
-    refined = bench_dir / REFINED_JSON
+    refined = archive_file(bench_dir, REFINED_JSON)
     if refined.exists():
         return refined
     raise FileNotFoundError(
@@ -202,7 +203,7 @@ def load_locomo(bench_dir: str | Path) -> list[Sample]:
     """
     bench_dir = Path(bench_dir)
     conversations = _load_conversations(bench_dir)
-    questions = _load_questions(bench_dir / QUESTIONS_JSONL)
+    questions = _load_questions(archive_file(bench_dir, QUESTIONS_JSONL))
 
     unknown = set(questions) - set(conversations)
     if unknown:

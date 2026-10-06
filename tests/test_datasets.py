@@ -1,6 +1,6 @@
 """`eval/datasets/` —— schema 落差预处理层（§12.2 / §12.3 第 9 条 / D16）。
 
-**大部分用例是合成 fixture**：归档不入库（`benchmark_data/` 被 gitignore），
+**大部分用例是合成 fixture**：归档不入库（`dataset/` 被 gitignore），
 所以逻辑用例不能让"归档在不在"决定跑不跑。真数据的事实另开一组，归档缺席时 skip。
 """
 
@@ -17,6 +17,7 @@ from eval.datasets import (
     load_locomo,
     load_longmemeval,
 )
+from eval.datasets.layout import archive_file
 from eval.datasets.locomo import CONVERSATIONS_JSONL, QUESTIONS_JSONL, REFINED_JSON
 from eval.datasets.longmemeval import LME_JSON
 from eval.datasets.preprocess import (
@@ -26,9 +27,10 @@ from eval.datasets.preprocess import (
     to_epoch_ms,
 )
 
-ARCHIVE = Path("benchmark_data")
+ARCHIVE = benchmark_dir({})
 needs_archive = pytest.mark.skipif(
-    not ARCHIVE.exists(), reason="归档不在（见 docs/benchmark-data.md）"
+    not archive_file(ARCHIVE, QUESTIONS_JSONL).is_file(),
+    reason="归档不在（见 docs/benchmark-data.md）",
 )
 
 
@@ -351,7 +353,7 @@ def test_lme_limit_and_evidence(tmp_path):
 # ── 路径口径（D16）──
 def test_benchmark_dir_reads_env_only():
     """**唯一读取点**：默认归档，`.env` 可改指（本地开发指到 `eval/datasets/...`）。"""
-    assert benchmark_dir({}) == Path("benchmark_data")
+    assert benchmark_dir({}) == Path("dataset")
     assert benchmark_dir({"TIANXIMEM_BENCHMARK_DIR": "/tmp/x"}) == Path("/tmp/x")
 
 

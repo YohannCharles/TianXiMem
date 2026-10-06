@@ -2,7 +2,7 @@
 
 标量给 exact-match 分，列表给真正的 set-F1。兼容旧运行的自然语言答案，
 新答案要求 JSON 值；空集合与证据不足的拒答是不同结果。题目类型可以进入
-答案 prompt，金标答案绝不进入。归档 README 的协议见 benchmark_data/corporatebench/。
+答案 prompt，金标答案绝不进入。归档 README 的协议见 dataset/corporatebench/。
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """MedMemoryBench（中文档）的加载层——**检查点式**，记忆只喂到该次问诊为止。
 
-## 这份数据长什么样（2026-09-30 实测，`benchmark_data/medmemorybench/`）
+## 这份数据长什么样（2026-09-30 实测，`dataset/medmemorybench/`）
 
 ```text
 data/zh/dialogues.parquet    31,976 轮 / 2,020 次问诊 / 20 个 persona
@@ -29,7 +29,7 @@ data/zh/queries.parquet      1,939 题，6 类；`session_id` **全是 10 的倍
 
 ## 判分**不在这里**——口径在上游代码里
 
-`benchmark_data/medmemorybench-code/metrics/`（我们另下的 GitHub 仓）：
+`dataset/.upstream/medmemorybench/metrics/`（我们另下的 GitHub 仓）：
 `entity_exact_match→string_contain`、`multiple_choice→option_match`、
 其余四类 → LLM 裁判（`llm_judge` / 多跳那条是 `llm_judge_mcd`）。
 ⇒ 判分住在 [`../harness/extra_pipeline.py`](../harness/extra_pipeline.py)，**照那份代码实现**。

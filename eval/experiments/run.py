@@ -57,15 +57,20 @@ from eval.datasets import (
     load_beam,
     load_clbench,
     load_corporatebench,
+    load_feverous,
+    load_halumem,
+    load_hybridqa,
     load_locomo,
     load_longmemeval,
     load_medmemorybench,
     load_memtrapbench,
     load_mquake,
+    load_musique,
     load_personamem,
     load_tempreason,
     shape_note,
 )
+from eval.datasets.prepare import PreparationError, ensure_dataset
 
 # ⚠ **绝对 import**：本文件是**当脚本跑的**（`python eval/experiments/run.py`），
 # 相对 import 在那种调用方式下会抛 `ImportError: no attempt relative import...`。
@@ -103,16 +108,20 @@ DEFAULT_TOP_K: Final[int] = 100
 #: 服务地址：与 `eval/harness/__init__.py` 的示例、`make serve` 的缺省端口一致。
 DEFAULT_BASE_URL: Final[str] = "http://127.0.0.1:8000"
 
-#: 有加载器的数据集——**三个**（不只是代理评测那两个；CL-Bench 也在加载层里，§12.4）。
+#: 独立本地评测入口；各自的输入与评分范围见加载器和 pipeline（§12.4）。
 DATASETS: Final[tuple[str, ...]] = (
     "beam",
     "clbench",
     "corporatebench",
+    "feverous",
+    "halumem",
+    "hybridqa",
     "locomo-refined",
     "longmemeval-s",
     "medmemorybench",
     "memtrapbench",
     "mquake-remastered",
+    "musique",
     "personamem-v2",
     "tempreason",
 )
@@ -142,6 +151,14 @@ def _load(
         return load_clbench(bench_dir, limit=limit, spread=spread)
     if dataset == "beam":
         return load_beam(bench_dir, limit=limit, spread=spread)
+    if dataset == "halumem":
+        return load_halumem(bench_dir, limit=limit, spread=spread)
+    if dataset == "musique":
+        return load_musique(bench_dir, limit=limit, spread=spread)
+    if dataset == "hybridqa":
+        return load_hybridqa(bench_dir, limit=limit, spread=spread)
+    if dataset == "feverous":
+        return load_feverous(bench_dir, limit=limit, spread=spread)
     # ↓ 这三份**没有官方 pipeline**（`extra_pipeline.py` 是我们自写的）⇒ 分数只在仓内比。
     if dataset == "tempreason":
         return load_tempreason(bench_dir, limit=limit, spread=spread)
@@ -410,6 +427,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--skip-ingest", action="store_true", help="跳过 Add，复用已有语料")
+    parser.add_argument("--offline", action="store_true", help="禁止下载数据，缺失或校验不符就退出")
     parser.add_argument(
         "--frozen",
         action="store_true",
@@ -529,7 +547,7 @@ def _exit_for_error(error: Exception, *, base_url: str) -> int:
             f"{error}\n"
             "  ⇒ 按顺序查两件事：\n"
             "     1) `bench_dir` 指对了没有（`TIANXIMEM_BENCHMARK_DIR`，"
-            "默认 `benchmark_data/`）；\n"
+            "默认 `dataset/`）；\n"
             "     2) 归档取回来了没有——**新机器上 clone 完一个数据文件都没有**：\n"
             "        `make fetch-data`（公开源，不需要凭据），见 docs/benchmark-data.md",
             file=sys.stderr,
@@ -623,6 +641,8 @@ def _print_result(record, path: Path) -> None:
         f"\n{record.run_id}：overall={record.scores['overall']}"
         f"（n={record.breakdown.get('abstention', {}).get('n', 0)} 道拒答另计）"
     )
+    if record.scores.get("dataset_score"):
+        print("  dataset_score=" + json.dumps(record.scores["dataset_score"], ensure_ascii=False))
     for category, entry in record.breakdown.items():
         print(f"  {category}: {entry}")
     print(f"\nrun record → {path}")
@@ -681,6 +701,12 @@ def main(argv: list[str] | None = None) -> int:
             "而裁判是 subprocess，只继承环境变量。",
             file=sys.stderr,
         )
+        return EXIT_PRECONDITION_FAILED
+
+    try:
+        ensure_dataset(args.dataset, bench_dir, offline=args.offline)
+    except PreparationError as error:
+        print(f"数据准备失败：{error}", file=sys.stderr)
         return EXIT_PRECONDITION_FAILED
 
     absent = missing_pipeline(args.dataset, bench_dir)

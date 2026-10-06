@@ -90,7 +90,9 @@ def load_clbench(
     ⚠ **两部分跑要加 `spread=True`**：文件按 `context_category` 排，
     否则 `entries[:limit]` 只取到一类——理由与处置见 [`sampling.py`](./sampling.py)。
     """
-    source = Path(bench_dir) / CLBENCH_JSONL
+    from .layout import archive_file
+
+    source = archive_file(bench_dir, CLBENCH_JSONL)
     # ⚠ **按 `"\n"` 切，不用 `splitlines()`**：这份文件里**真的有 `U+2028`**
     #   （实测：`splitlines()` 会在 char 22463 处把一条记录劈成两半 ⇒ `JSONDecodeError`）。
     #   它是 `"\n"` 分隔的 JSONL ⇒ **按写它的方式读**。同一条纪律见

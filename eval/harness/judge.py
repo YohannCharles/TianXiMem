@@ -72,6 +72,7 @@ __all__ = [
     "JudgeResult",
     "MEMORY_FIELD",
     "build_input_items",
+    "build_official_items",
     "render_memories",
     "run_judge",
     "pipeline_for",
@@ -97,6 +98,9 @@ _LOCAL_PIPELINES = {
     "corporatebench": "extra_pipeline.py",
     "medmemorybench": "extra_pipeline.py",
     "tempreason": "extra_pipeline.py",
+    "musique": "extra_pipeline.py",
+    "hybridqa": "corpusqa_pipeline.py",
+    "feverous": "corpusqa_pipeline.py",
 }
 
 #: **适配器**型 pipeline：脚本住在仓库里，但**判分逻辑来自归档那份官方实现**
@@ -106,6 +110,11 @@ _LOCAL_PIPELINES = {
 #: 不是我们自定的 `retrieved_context`。
 _ADAPTER_PIPELINES = {
     "personamem-v2": "personamem_pipeline.py",
+    "halumem": "official_capture_pipeline.py",
+    #: 官方采集的重放（`eval/experiments/replay_official.py`）——它一个 pipeline 里
+    #: **按题分派**到 8 个数据集的 answer/judge，所以既不是归档那份、也不是
+    #: `extra_pipeline.py` 的五选一（见 `official_capture_pipeline.py` 的 docstring）。
+    "official-capture": "official_capture_pipeline.py",
 }
 
 #: 走 `_LOCAL_PIPELINES` 的数据集——`build_input_items` 也按它分派。
@@ -122,7 +131,9 @@ def pipeline_for(bench_dir: Path, dataset: str) -> Path:
         name = _PIPELINES[dataset]
     except KeyError:
         raise ValueError(f"未知数据集 {dataset!r}——没有对应的 pipeline") from None
-    return Path(bench_dir) / name
+    from eval.datasets.layout import archive_file
+
+    return archive_file(bench_dir, name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +158,8 @@ class JudgeResult:
     #: `partial_credit`）。CorporateBench 在这里传递标量 EM / 列表 set-F1，
     #: 同时在 run record 的 `scores.dataset_score` 记录其数据集指标。
     partial: float | None = None
+    #: 数据集原生指标；不替代 is_correct/overall，按各自的聚合公式记录。
+    metrics: dict[str, float] | None = None
 
 
 #: 日期前缀的形状——**与 `src/tianximem/common/render.py` 的 `DATE_PREFIX` 必须逐字相同**
@@ -319,7 +332,7 @@ def build_input_items(
         return _build_personamem_items(
             sample, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
         )
-    if sample.dataset in EXTRA_DATASETS:
+    if sample.dataset in EXTRA_DATASETS or sample.dataset == "halumem":
         return _build_extra_items(
             sample, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
         )
@@ -355,9 +368,9 @@ def _build_extra_items(
     date_mode: str,
     annotate_mark: str,
 ) -> list[dict]:
-    """我们自写的三份数据集（MQuAKE / MemTrapBench / CorporateBench）的输入项。
+    """本地评测的平铺记忆输入项（含复用上游 QA 裁判的 HaluMem）。
 
-    **形状是我们定的**（官方没有发布这三份的 pipeline，也就没有可对齐的契约）：
+    **形状是我们定的**（没有对应的官方 AML 输入适配）：
     记忆走一个平铺的 `retrieved_context`，题目与金标原样带上，
     `dataset` 让 `extra_pipeline.py` 知道该用哪套判分。⇒ **分数只在仓内前后对比**。
     """
@@ -378,12 +391,81 @@ def _build_extra_items(
                 "retrieved_context": text,
             }
         )
+        if sample.dataset == "halumem":
+            # 复用采集分派层的上游三分类裁判；证据只在裁判侧，不进答案 prompt。
+            gold = question.gold
+            if not isinstance(gold, dict) or not isinstance(gold.get("answer"), str):
+                raise ValueError(f"HaluMem {question.qid}：缺参考回答")
+            items[-1]["gold_answers"] = [gold["answer"]]
+        if sample.dataset == "musique":
+            from eval.datasets.musique import ANSWER_CONTRACT
+
+            # 采集重放仍用原有答案 prompt；新的独立入口显式选择自己的作答契约。
+            items[-1]["answer_contract"] = ANSWER_CONTRACT
+        if sample.dataset in {"hybridqa", "feverous"}:
+            from eval.datasets.feverous import ANSWER_CONTRACT as FEVEROUS_CONTRACT
+            from eval.datasets.hybridqa import ANSWER_CONTRACT as HYBRIDQA_CONTRACT
+
+            items[-1]["answer_contract"] = (
+                HYBRIDQA_CONTRACT if sample.dataset == "hybridqa" else FEVEROUS_CONTRACT
+            )
     return items
 
 
 def _warn_truncated(qid: str) -> None:
     """注入被平台前缀截断——**两条注入路径共用这一行字**。"""
     print(f"  ⚠ {qid}：注入被截到平台前缀（{PLATFORM_TOKEN_PREFIX:,} token）", flush=True)
+
+
+def build_official_items(
+    questions: list[dict],
+    hits_by_qid: dict[str, list[SearchHit]],
+    *,
+    date_mode: str = "none",
+    annotate_mark: str = "paren",
+) -> list[dict]:
+    """官方采集（`official-capture`）的输入项——**题是套件的一行，不是 `Question`**。
+
+    ⚠ 与其余建造函数的区别只有一处：**这一族题的"数据集"是逐题不同的**
+    （同一个 run 里 locomo / scriptmem / mquake … 混着走），所以 `dataset` 取自
+    **题自己的归属**（`official-eval-kit.jsonl` 的 `dataset` 字段），而不是 `Sample.dataset`。
+    分派 pipeline（[`official_capture_pipeline.py`](./official_capture_pipeline.py)）
+    正是按它选 answer prompt 与裁判。
+
+    `gold_answer` 给**该数据集裁判要的原生形状**：有 `gold_native` 就原样给
+    （CorporateBench 的 `answer_type`、MedMemoryBench 的 `query_type`…），否则给
+    `gold_answers` 那个列表（MQuAKE / TempReason 的别名表就是它）。
+    """
+    items: list[dict] = []
+    for row in questions:
+        qid = str(row["seq"])
+        hits = hits_by_qid.get(qid, [])
+        text = render_memories(hits, date_mode=date_mode, annotate_mark=annotate_mark)
+        text, cut = truncate_to_platform_prefix(text)
+        if cut:
+            _warn_truncated(qid)
+        gold = row.get("gold_native")
+        items.append(
+            {
+                "id": qid,
+                "seq": row["seq"],
+                "dataset": row["dataset"],
+                "judge_kind": row["judge_kind"],
+                "task": row.get("task"),
+                # **原样**是采集里那一串（含选项与尾指令）——线上检索用的就是它，
+                # 改动会让检索侧的输入与线上不一致。
+                "question": row.get("query"),
+                "question_text": row.get("question"),
+                "options": row.get("options") or [],
+                "instruction": row.get("instruction"),
+                "gold_answer": gold if gold is not None else (row.get("gold_answers") or []),
+                "gold_answers": row.get("gold_answers") or [],
+                "gold_rubric": row.get("gold_rubric"),
+                "gold_judging": row.get("gold_judging") or "",
+                "retrieved_context": text,
+            }
+        )
+    return items
 
 
 def _subprocess_env() -> dict[str, str]:
@@ -940,6 +1022,7 @@ def run_judge(
                     judge_response=row["judge_response"],
                     generated_answer=generated.get(row["id"], ""),
                     partial=row.get("partial"),
+                    metrics=row.get("metrics"),
                 )
             )
     return results

@@ -3,7 +3,7 @@
 > ⚠ **只用 `lme_s_cleaned.json`，不要用 `lme_test.json`。** 后者多出 **1,230 个
 > 0-turn session**，而空 session 会污染按"20 条消息"切批的埋点逻辑（§6.5）。
 > 那份文件**不在归档里**（它就是等着被误用的坑）；要复核这条结论得先从上游取回它，
-> 线索在 `tools/fetch_benchmark_data.py` 的 `DELETED` 段。
+> 线索在 `eval/datasets/manifest.py` 的 `DELETED` 段。
 
 ## 基数与 LoCoMo **正好相反**：一题一个 haystack
 
@@ -178,7 +178,9 @@ def load_longmemeval(
     很可能只有一类）；`spread=True` 才按比例**跨类**取。**"跑一部分"要用后者**
     ——理由见 [`sampling.py`](./sampling.py)。
     """
-    source = Path(bench_dir) / LME_JSON
+    from .layout import archive_file
+
+    source = archive_file(bench_dir, LME_JSON)
     entries = json.loads(source.read_text(encoding="utf-8"))
     if limit is not None:
         entries = (

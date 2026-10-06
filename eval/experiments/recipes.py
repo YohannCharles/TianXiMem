@@ -53,7 +53,7 @@ uv run python -c "from eval.experiments.recipes import flags_for; print(flags_fo
 两次 run 的分数不可比时**静默**表现出来）。
 
 > ⚠ **加载器改了、题数就会变**（例如 V14 那次跳过空正文）。这张表因此**依赖归档数据**：
-> 没有 `benchmark_data/` 时那条断言会 skip，**但不会假装通过**。
+> 没有 `dataset/` 时那条断言会 skip，**但不会假装通过**。
 """
 
 from __future__ import annotations
@@ -92,6 +92,43 @@ class Recipe:
 #: **冻结口径表**。依据：2026-10-02 逐个数据集实测 + **独立复核**（复核者重新加载、
 #: 并试图证伪"轴 / spread 必要性 / 确定性 / 覆盖度"四条）。
 FROZEN_RECIPES: Final[dict[str, Recipe]] = {
+    "hybridqa": Recipe(
+        limit=120,
+        spread=True,
+        n_questions=120,
+        axis="**题数**（抽题后按 table_id 共用完整表格/关联段落）",
+        note="按上游 table/passage/other 分层；文本检索输入为本地适配，EM/token-F1 复用上游函数。",
+    ),
+    "feverous": Recipe(
+        limit=120,
+        spread=True,
+        n_questions=123,
+        axis="**claim 数**（每题通过固定 claim-only 索引检索候选整页）",
+        note=(
+            "按 label/challenge 分层；候选池不读金标，页面数与索引版本由加载器固定。"
+            "记录标签及严格证据组指标；属于本地候选检索评测，不与完整官方系统分数对齐。"
+        ),
+    ),
+    "halumem": Recipe(
+        limit=60,
+        spread=True,
+        n_questions=203,
+        axis="**提问检查点数**（一个用户的一个提问会话）",
+        note=(
+            "按用户分层，覆盖各类 QA；检查点只投喂当时可见的对话，使用独立 user_id。"
+            "后续检查点重复投喂历史；本地只测 QA，不测上游记忆抽取/更新指标。"
+        ),
+    ),
+    "musique": Recipe(
+        limit=120,
+        spread=True,
+        n_questions=120,
+        axis="**题数**（每题自带候选段落，可答/不可答变体独立）",
+        note=(
+            "Full dev 按跳数及可答性分层；可答/不可答两种变体均保留。"
+            "只测本地答案别名归一化后精确匹配与拒答，不是上游 F1/sufficiency 指标。"
+        ),
+    ),
     "locomo-refined": Recipe(
         limit=3,
         spread=False,

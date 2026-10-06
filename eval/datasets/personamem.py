@@ -1,4 +1,4 @@
-"""PersonaMem-v2 的加载层——⚠ **它的 pipeline 不读检索字段**（这点必须记住）。
+"""PersonaMem-v2 的加载层：原始对话用于 Add，答案输入由检索适配器构造。
 
 ## 这份数据长什么样（2026-09-30 实测）
 
@@ -12,12 +12,10 @@ data/chat_history_32k/*.json     200 份（**只取了 benchmark 引用到的那
 
 ## ⚠ 两条与别的数据集不同的地方
 
-1. **它没有"检索"这回事**：官方 `pipeline_v2_personamem.py` 从 `chat_history` 直接拼 prompt，
-   **完全不看任何检索字段**（`../CLAUDE.md` 那张契约表记着这一条）。
-   ⇒ 接进来**测不出架构改动**，它的价值是**回归对照**：如果某个改动把它也弄坏了，
-   那大概率是装配/契约层出了问题，**而不是排序**。
+1. 归档原版从 `chat_history` 直接拼 prompt；本地适配器将逐题 Search 结果转成该字段，
+   原始对话只用于 Add。输入边界见 `../harness/personamem_pipeline.py`。
 2. **一个 `Sample` = 一个 persona**（记忆 = 它的整段 chat_history，题 = 它的全部题）——
-   与 LongMemEval 同形（1 份记忆 : 多道题），只是记忆不走检索。
+   与 LongMemEval 同形（1 份记忆 : 多道题）。
 
 判分走**官方那份**（MCQ 模式：把 `correct_answer` + `incorrect_answers` 拼成选项、
 **按种子洗牌**后让模型选字母，再比字母）——见
@@ -105,7 +103,7 @@ def load_personamem(
         if not path.exists():
             raise FileNotFoundError(
                 f"缺 {path}——PersonaMem 的语料**不在归档的公开清单里**，"
-                "见 tools/fetch_benchmark_data.py 的 official-extra 说明"
+                "见 eval/datasets/manifest.py 的 official-extra 说明"
             )
         questions = []
         for index, row in enumerate(by_persona[persona]):

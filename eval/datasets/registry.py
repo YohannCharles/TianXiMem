@@ -2,8 +2,9 @@
 
 ## 路径口径（D16）
 
-**数据路径一律经 `TIANXIMEM_BENCHMARK_DIR` 读取**——代码中不得硬编码 `benchmark_data/`
-或 `eval/datasets/`。默认值是 `benchmark_data`（只读归档）；本地开发用 `.env` 指到
+**数据路径一律经 `TIANXIMEM_BENCHMARK_DIR` 读取**。
+文件名与目录布局集中在加载层，不进入服务代码。
+默认值是 `dataset`；本地开发用 `.env` 指到
 开发数据集即可。全仓只有 [`benchmark_dir()`][eval.datasets.registry.benchmark_dir] 一处
 读这个变量，其余模块一律接 `Path` 参数——**这样测试才能指向临时目录**。
 
@@ -30,27 +31,16 @@ import hashlib
 import os
 from pathlib import Path
 
-from .beam import PARQUET as BEAM_PARQUET
-from .clbench import CLBENCH_JSONL
-from .corporatebench import DATA_DIR as CORP_DATA_DIR
-from .corporatebench import KB_FILE as CORP_KB_FILE
-from .corporatebench import QA_TYPES as CORP_QA_TYPES
-from .corporatebench import SHAPE_NOTE as CORP_SHAPE_NOTE
-from .locomo import QUESTIONS_JSONL, conversation_file
-from .longmemeval import LME_JSON
-from .medmemorybench import DATA_DIR as MMB_DATA_DIR
-from .medmemorybench import DATA_SUBDIR as MMB_DATA_SUBDIR
-from .medmemorybench import SHAPE_NOTE as MMB_SHAPE_NOTE
-from .memtrapbench import DATA_DIR as MTB_DATA_DIR
-from .mquake import DATA_DIR as MQUAKE_DATA_DIR
-from .mquake import FILES as MQUAKE_FILES
-from .mquake import SHAPE_NOTE as MQUAKE_SHAPE_NOTE
-from .personamem import BENCHMARK_CSV as PM_CSV
-from .personamem import DATA_DIR as PM_DATA_DIR
-from .tempreason import DATA_DIR as TR_DATA_DIR
-from .tempreason import FILES as TR_FILES
+from .layout import DEFAULT_DATASET_DIR, archive_file
 
-__all__ = ["benchmark_dir", "data_fingerprint", "file_fingerprint", "shape_note", "BATCHING_LOCAL"]
+__all__ = [
+    "benchmark_dir",
+    "capture_dir",
+    "data_fingerprint",
+    "file_fingerprint",
+    "shape_note",
+    "BATCHING_LOCAL",
+]
 
 #: 本地唯一能复现的切批口径（§6.5：词数那一路复现不了，"Adapter 计的词"从未定义）。
 BATCHING_LOCAL = "20 messages (local repro only; word-count path unreproducible)"
@@ -61,14 +51,37 @@ _HASH_CHUNK = 1 << 20
 def benchmark_dir(env: dict[str, str] | None = None) -> Path:
     """`TIANXIMEM_BENCHMARK_DIR`——**本仓唯一的读取点**（D16）。"""
     source = os.environ if env is None else env
-    return Path(source.get("TIANXIMEM_BENCHMARK_DIR") or "benchmark_data")
+    return Path(source.get("TIANXIMEM_BENCHMARK_DIR") or DEFAULT_DATASET_DIR)
+
+
+#: 官方采集导出目录的缺省名（仓库根下）。**它不进 git**（`.gitignore` 的
+#: `official-dataset-*`），与 `dataset/` 同一条纪律。
+CAPTURE_DIR_NAME = "official-dataset-2026-09-29"
+
+
+def capture_dir(env: dict[str, str] | None = None) -> Path:
+    """官方 add/search 采集的落点（`TIANXIMEM_CAPTURE_DIR`）。
+
+    ⚠ **它与 `dataset/` 是两码事**：那份是公开题库（`make fetch-data` 取回），
+    这份是**我们自己服务的线上流量**（S6 的采集旁路导出），只能从部署机上取。
+    ⇒ 缺省指向仓库根下的那个目录；换机器/换一轮采集时用环境变量改，**代码里不写死**（D16 同一条）。
+    """
+    source = os.environ if env is None else env
+    raw = source.get("TIANXIMEM_CAPTURE_DIR")
+    if raw:
+        return Path(raw)
+    return Path(__file__).resolve().parents[2] / CAPTURE_DIR_NAME
 
 
 #: 形状是**我们造的**那几个数据集（不是数据集事实）——它们的约定要进数据指纹的 `note`。
-_SHAPE_NOTES = {
-    "mquake-remastered": MQUAKE_SHAPE_NOTE,
-    "corporatebench": CORP_SHAPE_NOTE,
-    "medmemorybench": MMB_SHAPE_NOTE,
+_SHAPE_MODULES = {
+    "mquake-remastered": "mquake",
+    "corporatebench": "corporatebench",
+    "medmemorybench": "medmemorybench",
+    "halumem": "halumem",
+    "musique": "musique",
+    "hybridqa": "hybridqa",
+    "feverous": "feverous",
 }
 
 
@@ -78,7 +91,10 @@ def shape_note(dataset: str) -> str:
     ⚠ 与 [`BATCHING_LOCAL`][eval.datasets.registry.BATCHING_LOCAL] 同一性质：
     **它是常量，不是旋钮**——改它会改分数，而两次 run 的 record 否则一模一样。
     """
-    return _SHAPE_NOTES.get(dataset, "")
+    import importlib
+
+    module = _SHAPE_MODULES.get(dataset)
+    return importlib.import_module(f".{module}", __package__).SHAPE_NOTE if module else ""
 
 
 def file_fingerprint(path: Path) -> dict:
@@ -91,12 +107,51 @@ def file_fingerprint(path: Path) -> dict:
 
 
 def _sources(bench_dir: Path, dataset: str) -> list[Path]:
+    from .halumem import DATA_DIR as HALU_DATA_DIR
+    from .halumem import JSONL as HALU_JSONL
+    from .musique import DATA_DIR as MUSIQUE_DATA_DIR
+    from .musique import JSONL as MUSIQUE_JSONL
+
+    if dataset == "halumem":
+        return [bench_dir / HALU_DATA_DIR / HALU_JSONL]
+    if dataset == "musique":
+        return [bench_dir / MUSIQUE_DATA_DIR / MUSIQUE_JSONL]
+    if dataset == "hybridqa":
+        from .hybridqa import ARCHIVE, CORPUS_RECEIPT, DATA_DIR, QUESTIONS, REFERENCE, SCORER
+
+        return [
+            bench_dir / DATA_DIR / name for name in (QUESTIONS, REFERENCE, ARCHIVE, CORPUS_RECEIPT)
+        ] + [archive_file(bench_dir, SCORER)]
+    if dataset == "feverous":
+        from .feverous import ANNOTATIONS, DATA_DIR, DATABASE, INDEX, SCORER
+
+        return [bench_dir / DATA_DIR / name for name in (ANNOTATIONS, DATABASE, INDEX)] + [
+            archive_file(bench_dir, SCORER)
+        ]
+
+    from .beam import PARQUET as BEAM_PARQUET
+    from .clbench import CLBENCH_JSONL
+    from .corporatebench import DATA_DIR as CORP_DATA_DIR
+    from .corporatebench import KB_FILE as CORP_KB_FILE
+    from .corporatebench import QA_TYPES as CORP_QA_TYPES
+    from .locomo import QUESTIONS_JSONL, conversation_file
+    from .longmemeval import LME_JSON
+    from .medmemorybench import DATA_DIR as MMB_DATA_DIR
+    from .medmemorybench import DATA_SUBDIR as MMB_DATA_SUBDIR
+    from .memtrapbench import DATA_DIR as MTB_DATA_DIR
+    from .mquake import DATA_DIR as MQUAKE_DATA_DIR
+    from .mquake import FILES as MQUAKE_FILES
+    from .personamem import BENCHMARK_CSV as PM_CSV
+    from .personamem import DATA_DIR as PM_DATA_DIR
+    from .tempreason import DATA_DIR as TR_DATA_DIR
+    from .tempreason import FILES as TR_FILES
+
     if dataset == "locomo-refined":
-        return [bench_dir / QUESTIONS_JSONL, conversation_file(bench_dir)]
+        return [archive_file(bench_dir, QUESTIONS_JSONL), conversation_file(bench_dir)]
     if dataset == "longmemeval-s":
-        return [bench_dir / LME_JSON]
+        return [archive_file(bench_dir, LME_JSON)]
     if dataset == "clbench":
-        return [bench_dir / CLBENCH_JSONL]
+        return [archive_file(bench_dir, CLBENCH_JSONL)]
     if dataset == "tempreason":
         return [bench_dir / TR_DATA_DIR / name for name in TR_FILES]
     if dataset == "personamem-v2":

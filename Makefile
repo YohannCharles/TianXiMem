@@ -25,6 +25,7 @@ ENV_FILE_FLAG = $(if $(wildcard $(ENV_FILE)),--env-file $(ENV_FILE))
 
 # 跑评测时的数据集（`make eval`）。**只有两个计分数据集有加载器**（§12.4）。
 DATASET ?= locomo-refined
+DATASET_FLAG = $(if $(filter all,$(DATASET)),--tier all,--dataset $(DATASET))
 
 # `make order-probe` 的 B 臂用几个**独立进程**（见那个目标的说明）。
 # 默认 1 = 测 D25 本身；`PROCESSES=4` = 测「多 worker 到底安不安全」。
@@ -59,26 +60,26 @@ lint: typecheck  ## 静态检查（ruff 全仓 + mypy 只查 src/）
 typecheck:  ## 类型检查（mypy）
 	uv run mypy src
 
-data-check:  ## 校验 benchmark_data/ 与出处清单是否逐字节一致（**含本地修订后的哈希**）
-	python3 tools/fetch_benchmark_data.py --check
+data-check:  ## 离线校验指定数据集与评分依赖；DATASET=all 校验全档
+	uv run $(ENV_FILE_FLAG) python -m eval.datasets.prepare --check $(DATASET_FLAG)
 # ⚠ 清单里记两套哈希：`upstream_sha256`（上游原始字节）与 `sha256`（本地归档，打完补丁）。
 #    7 个 pipeline 有一处**已声明的本地修订**（上游那份跑不起来），见 docs/benchmark-data.md。
 
-data-patch:  ## 把已声明的本地修订就地打到归档上（**不下载**，网络不通时用这个）
-	python3 tools/fetch_benchmark_data.py --patch
+data-patch:  ## 仅应用指定数据集评分源码的已声明补丁（不下载）
+	uv run $(ENV_FILE_FLAG) python -m eval.datasets.prepare --patch $(DATASET_FLAG)
 # ⚠ 它只做清单里声明的那一处替换（`contextlib.nullcontext` 包住 `Path.open`），
 #    且**幂等**——已经打过的再跑是零处改动。tests/test_benchmark_archive.py 钉住了这条。
 
-fetch-data:  ## 取回 benchmark_data/ 归档（公开源，按 commit / 哈希钉死）
-	uv run $(ENV_FILE_FLAG) python tools/fetch_benchmark_data.py --fetch
+fetch-data:  ## 按数据集准备 dataset/；DATASET=all 取全档，默认 locomo-refined
+	uv run $(ENV_FILE_FLAG) python -m eval.datasets.prepare --fetch $(DATASET_FLAG)
 # ⚠ 它**必须读 `.env`**（2026-10-04）：`TIANXIMEM_BENCHMARK_DIR` 是数据路径的唯一入口，
 #   而 `.env.example` 明写"本地开发把它指到开发数据集即可"。以前这条用裸 `python3`、
 #   **不读 `.env`**，于是把它改过的人会看到"fetch 下到 benchmark_data/、eval 去别处找"
 #   ——报错仍然是"缺文件"（响亮），但两边对不上。
 # ⚠ **不需要任何凭据**（公开源，请求只带 User-Agent），只要外网直连
 #   raw.githubusercontent.com 与 huggingface.co。
-# ⚠ 目录不存在**不用先 mkdir**：`--fetch` 会在连接成功后自己建（见工具里 `_download`
-#   的注释——网络不通时不留空目录，那会让 `needs_archive` 守卫从 skip 变 fail）。
+# ⚠ 目录不存在不用先 mkdir：prepare 会建立暂存路径，校验后才发布数据文件。
+#   测试依据所需文件是否存在决定 skip，不再依据顶层目录。
 
 check:  ## 环境自检：Qdrant 可达 / 三段模型端点可用 / 密钥已填（含 V7 思考探针）
 	uv run --env-file $(ENV_FILE) python tools/check_env.py
@@ -222,7 +223,7 @@ smoke:  ## S1 判别实验（§17.1）——Smoke 跑通后第一件事
 	@echo "TODO(Step 6): 加一条只有它能回答的记忆，看分数是否变化"
 	@false
 
-clean:  ## 清运行时产物（不动 benchmark_data/）
+clean:  ## 清运行时产物（保留 dataset/）
 	rm -rf var/*.db var/*.db-journal var/*.db-wal var/*.db-shm
 	rm -rf .pytest_cache .mypy_cache .ruff_cache
 # ⚠ 真源是 var/tianxi.db，**不是 data/**（2026-09-24 修正：这条目标原先删的是 data/*.db，

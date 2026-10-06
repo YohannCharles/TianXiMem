@@ -1,7 +1,7 @@
 # Docker 构建上下文排除表（**构建上下文 = 仓库根**，见 deploy/compose.yaml 的 `context: ..`）
 #
 # ⚠ 这份文件存在的理由不是"构建快一点"——是**别把不该进镜像的东西送进去**：
-#   · `benchmark_data/`（370M，**只读归档，许可证受限**）——服务根本不读它（D16）
+#   · `dataset/`（评测材料，D35）与旧 `benchmark_data/`——服务不读它们（D16）
 #   · `var/`（真源 SQLite + 向量缓存 + 实验残留）——**真源不得烘进镜像**
 #   · `.env`（密钥）——**绝不进镜像层**，运行时由 compose 注入
 #   · `eval/reports/runs/`、`eval/baselines/`（几百 M 的实验产出与第三方代码）
@@ -26,6 +26,7 @@ __pycache__
 
 # ── 大块只读/运行产物 ────────────────────────────────────────────────
 benchmark_data
+dataset
 var
 eval/reports/runs
 eval/baselines

@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval" / "harness"))
 
+from eval.datasets.registry import benchmark_dir  # noqa: E402
 from eval.harness import extra_pipeline as ep  # noqa: E402
 from eval.harness.corporatebench_pipeline import score_corporatebench  # noqa: E402
 
@@ -300,8 +301,8 @@ def prepare(output: Path) -> None:
     import tiktoken
 
     source_dir = ROOT / "eval/reports/runs/base-cb/corp-kb_qa"
-    archive = ROOT / "benchmark_data/corporatebench/data/kb/zenith.kb"
-    question_file = ROOT / "benchmark_data/corporatebench/data/kb_qa/zenith_questions.json"
+    archive = ROOT / benchmark_dir() / "corporatebench/data/kb/zenith.kb"
+    question_file = ROOT / benchmark_dir() / "corporatebench/data/kb_qa/zenith_questions.json"
     corpus = Corpus(archive)
     questions = json.loads(question_file.read_text())["questions"]
     inputs = read_rows(source_dir / "input.jsonl")
@@ -493,9 +494,9 @@ def run(output: Path) -> None:
 def add_scope(output: Path) -> None:
     """独立第三组：只追加真实候选范围描述，不修改原有两组输入/输出。"""
     manifest = json.loads((output / "manifest.json").read_text())
-    question_file = ROOT / "benchmark_data/corporatebench/data/kb_qa/zenith_questions.json"
+    question_file = ROOT / benchmark_dir() / "corporatebench/data/kb_qa/zenith_questions.json"
     questions = json.loads(question_file.read_text())["questions"]
-    corpus = Corpus(ROOT / "benchmark_data/corporatebench/data/kb/zenith.kb")
+    corpus = Corpus(ROOT / benchmark_dir() / "corporatebench/data/kb/zenith.kb")
     first_date = min(header(body, "Date") for body in corpus.documents.values())
     source_rows = read_rows(output / "oracle_facts" / "input.jsonl")
     rows = []
@@ -634,7 +635,7 @@ def add_matches(output: Path) -> None:
     source_rows = read_rows(output / "oracle_facts" / "input.jsonl")
     scope_rows = read_rows(output / "oracle_scope_facts" / "input.jsonl")
     questions = json.loads(
-        (ROOT / "benchmark_data/corporatebench/data/kb_qa/zenith_questions.json").read_text()
+        (ROOT / benchmark_dir() / "corporatebench/data/kb_qa/zenith_questions.json").read_text()
     )["questions"]
     rows = []
     for ident, source in source_rows.items():

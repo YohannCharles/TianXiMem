@@ -18,7 +18,7 @@
 
 ⇒ 两条规则：**正文一律 `<标签>: ` 开头**；**`system` 不存在**。
 
-`system` 那一条是**逐字节证明**的：`benchmark_data/clbench.jsonl:24` 的 raw
+`system` 那一条是**逐字节证明**的：`dataset/clbench/clbench.jsonl:24` 的 raw
 `messages[0]` 是 `role="system"`、正文 `You are a Chemical Engineer researcher…`，
 而官方那条 canary 发的是 `role="user"`、正文 `user: You are a Chemical Engineer researcher…`
 （该 canary 的正文去转义后在官方流量里逐字命中，同一条也命中 `:302`）。
@@ -124,6 +124,10 @@ LABEL_RULES: dict[str, tuple[str, str]] = {
     "corporatebench": ("document", "document"),
     "medmemorybench": ("user", "assistant"),
     "tempreason": ("source", "source"),
+    "halumem": ("user", "assistant"),
+    "musique": ("Corpus", "Corpus"),
+    "hybridqa": ("Corpus", "Corpus"),
+    "feverous": ("Corpus", "Corpus"),
 }
 
 

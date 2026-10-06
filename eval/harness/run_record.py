@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -189,6 +190,9 @@ def build_record(
             **summary["partial_credit"],
             "scope": "local CorporateBench QA reproduction",
         }
+    datasets = {sample.dataset for sample in samples}
+    if len(datasets) == 1 and datasets <= {"hybridqa", "feverous"} and results:
+        scores["dataset_score"] = _corpus_dataset_score(datasets.pop(), results)
     record = RunRecord(
         run_id=run_id,
         step=step,
@@ -206,6 +210,40 @@ def build_record(
     )
     record.validate()
     return record
+
+
+def _corpus_dataset_score(dataset: str, results: list[JudgeResult]) -> dict[str, Any]:
+    """复用逐题上游指标的聚合；FEVEROUS F1 是平均 precision/recall 的调和均值。"""
+    names = (
+        ("exact_match", "f1")
+        if dataset == "hybridqa"
+        else ("strict_score", "label_accuracy", "evidence_precision", "evidence_recall")
+    )
+    means = {}
+    for name in names:
+        values = [(result.metrics or {}).get(name) for result in results]
+        if any(
+            type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1
+            for value in values
+        ):
+            raise ValueError(f"{dataset}: missing/invalid per-question metric {name}")
+        means[name] = sum(values) / len(values)
+    if dataset == "feverous":
+        precision, recall = means["evidence_precision"], means["evidence_recall"]
+        means["evidence_f1"] = (
+            2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        )
+    return {
+        "metric": "HybridQA answer EM/token-F1"
+        if dataset == "hybridqa"
+        else "FEVEROUS strict/label/evidence macro metrics",
+        "n": len(results),
+        "mean": round(means["exact_match" if dataset == "hybridqa" else "strict_score"], 6),
+        **{name: round(value, 6) for name, value in means.items()},
+        "scope": "local table/passages text retrieval"
+        if dataset == "hybridqa"
+        else "local claim-only bounded candidate-page retrieval",
+    }
 
 
 def _unavailable_counters() -> dict[str, Any]:

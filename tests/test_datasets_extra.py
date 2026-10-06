@@ -336,7 +336,10 @@ def test_pipeline_for_routes_extra_datasets_to_our_own_script(tmp_path: Path) ->
     for dataset in EXTRA_DATASETS:
         path = pipeline_for(tmp_path, dataset)
         assert path.exists(), f"{dataset}: {path}"
-        assert path.name == "extra_pipeline.py"
+        expected = (
+            "corpusqa_pipeline.py" if dataset in {"hybridqa", "feverous"} else "extra_pipeline.py"
+        )
+        assert path.name == expected
     assert pipeline_for(tmp_path, "locomo-refined").name == "pipeline_locomo-refined.py"
     with pytest.raises(ValueError):
         pipeline_for(tmp_path, "nope")
@@ -584,10 +587,11 @@ def test_mmb_prompt_comes_from_the_upstream_archive() -> None:
 
     复制一份 prompt 就等于开了第二个家：上游改了、我们这份就悄悄旧了。
     """
+    from eval.datasets.layout import archive_file
     from eval.datasets.registry import benchmark_dir
     from eval.harness.extra_pipeline import build_mmb_judge_prompt
 
-    if not (benchmark_dir() / "medmemorybench-code" / "utils" / "prompts_judge.py").exists():
+    if not archive_file(benchmark_dir(), "medmemorybench-code/utils/prompts_judge.py").exists():
         pytest.skip("上游代码不在归档里（见 docs/benchmark-data.md）")
     prompt = build_mmb_judge_prompt(
         "state_update",
@@ -627,13 +631,25 @@ def test_every_dataset_builds_items_with_its_own_contract() -> None:
                 Question(
                     qid="q-1",
                     question="问？",
-                    gold={"any": "gold"},
+                    gold=(
+                        {"answer": "gold", "evidence": []}
+                        if dataset == "halumem"
+                        else {"any": "gold"}
+                    ),
                     category="single_choice",
                 ),
             ),
         )
 
     expected = {
+        "halumem": {
+            "id",
+            "dataset",
+            "question",
+            "gold_answer",
+            "gold_answers",
+            "retrieved_context",
+        },
         "clbench": {"idx", "question", "system_prompt", "rubrics", "retrieval"},
         "beam": {"id", "question", "context", "rubric", "question_type"},
         "personamem-v2": {
@@ -658,7 +674,11 @@ def test_every_dataset_builds_items_with_its_own_contract() -> None:
             "speaker_2_memories",
         },
     }
-    assert set(expected) >= set(_ADAPTER_PIPELINES) | EXTRA_DATASETS
+    # ⚠ `official-capture`（官方采集重放）**不在下面这张表里**：它的输入项由
+    #   `judge.build_official_items` 单独建（题是套件的一行、`dataset` 逐题不同，
+    #   见 `replay_official.py`），走的**不是** `build_input_items` 这条路。
+    #   它的形状断言在 [`test_official_capture.py`](./test_official_capture.py)。
+    assert set(expected) >= (set(_ADAPTER_PIPELINES) | EXTRA_DATASETS) - {"official-capture"}
     for dataset, fields in expected.items():
         item = build_input_items(sample_of(dataset), {})[0]
         missing = fields - set(item)
@@ -679,8 +699,9 @@ def test_question_ids_are_unique_across_every_sample() -> None:
         load_mquake,
         load_tempreason,
     )
+    from eval.datasets.registry import benchmark_dir
 
-    bench = Path("benchmark_data")
+    bench = benchmark_dir({})
     if not (bench / "tempreason" / "test_l2.json").exists():
         pytest.skip("归档不在（见 docs/benchmark-data.md）")
     total = 0
@@ -826,11 +847,12 @@ def test_tempreason_ingests_the_fact_context():
     错题里 **259/310 是逐字拒答** ⇒ overall 0.066 量的是"我们没给那份事实"。
     修好后 gold 进记忆的比例 **91/332 → 323/332**。
     """
+    from eval.datasets.registry import benchmark_dir
     from eval.datasets.tempreason import load_tempreason
 
     from tianximem.common.tokens import load_counter
 
-    bench = Path("benchmark_data")
+    bench = benchmark_dir({})
     if not (bench / "tempreason" / "test_l2.json").exists():
         pytest.skip("归档不在（见 docs/benchmark-data.md）")
 

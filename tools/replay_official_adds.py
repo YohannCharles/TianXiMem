@@ -37,7 +37,10 @@ import httpx
 
 __all__ = ["load_bodies", "main", "replay"]
 
-DEFAULT_FILE = "benchmark_data/official-add-bodies-25.jsonl"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from eval.datasets.registry import benchmark_dir  # noqa: E402
+
+DEFAULT_FILE = str(benchmark_dir() / ".legacy/unregistered/official-add-bodies-25.jsonl")
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
 

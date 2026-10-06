@@ -259,6 +259,7 @@ def test_main_returns_precondition_code_when_service_is_unreachable(
     会把任意 localhost 端口接成 **502**（不是拒绝连接），那样写出来的用例**换台机器就变**。
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
+    monkeypatch.setattr(runner, "ensure_dataset", lambda *a, **kw: None)
     monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     monkeypatch.setattr(runner, "ServiceClient", _exploding_client)
     _pretend_judge_is_configured(monkeypatch)
@@ -277,6 +278,7 @@ def test_main_writes_a_record_that_carries_the_fingerprints(bench_dir, tmp_path,
     """
     recorder = _Recorder()
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
+    monkeypatch.setattr(runner, "ensure_dataset", lambda *a, **kw: None)
     monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     monkeypatch.setattr(runner, "ServiceClient", lambda *a, **kw: recorder.client())
     _pretend_judge_is_configured(monkeypatch)
@@ -327,6 +329,7 @@ def test_main_fails_before_running_when_the_judge_is_not_configured(
     ⇒ 少了 `--env-file` 时 Add/Search 会**全部正常跑完**，然后才在裁判那一步炸。
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
+    monkeypatch.setattr(runner, "ensure_dataset", lambda *a, **kw: None)
     monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     monkeypatch.setattr(runner, "judge_preconditions", lambda: ["AML_BASE_URL", "AML_MODEL"])
 
@@ -783,11 +786,19 @@ def test_frozen_recipe_yields_a_sane_reproducible_sample(dataset: str):
       把整轮打死；而它**另一半后果是静默的**（两段无关对话落进同一个段合并分组）。
       LME 实测 9/301 个样本中招，已在 `longmemeval.py` 就地消重。
     """
+    from eval.datasets.layout import archive_file
+    from eval.datasets.registry import benchmark_dir
     from eval.experiments.recipes import recipe_for
 
-    bench = Path("benchmark_data")
-    if not (bench / "questions.jsonl").exists():
+    bench = benchmark_dir({})
+    if not archive_file(bench, "questions.jsonl").exists():
         pytest.skip("归档不在（见 docs/benchmark-data.md）")
+    if dataset in {"hybridqa", "feverous"}:
+        from eval.datasets.registry import _sources
+
+        # 按需下载不能让常规测试隐含要求完整 Wikipedia 数据库。
+        if any(not path.is_file() for path in _sources(bench, dataset)):
+            pytest.skip(f"{dataset} 语料/派生物未准备；合成 fixture 另行覆盖加载与评分")
 
     recipe = recipe_for(dataset)
     qids: list[str] = []
@@ -1039,6 +1050,7 @@ def test_main_gives_a_hint_when_the_dataset_loads_to_nothing(
     要么**静默返回空**（`glob` 对不存在的目录不报错）——后者就落到这里。
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
+    monkeypatch.setattr(runner, "ensure_dataset", lambda *a, **kw: None)
     monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [])
     monkeypatch.setattr(runner, "judge_preconditions", lambda: [])
     monkeypatch.setattr(runner, "missing_pipeline", lambda dataset, bench: None)
@@ -1066,6 +1078,7 @@ def test_main_fails_before_running_when_the_judge_script_is_missing(
     python 的 `can't open file`）。
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
+    monkeypatch.setattr(runner, "ensure_dataset", lambda *a, **kw: None)
     monkeypatch.setattr(runner, "judge_preconditions", lambda: [])
     monkeypatch.setattr(
         runner, "missing_pipeline", lambda dataset, bench: bench / "pipeline_locomo-refined.py"
