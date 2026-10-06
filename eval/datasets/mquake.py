@@ -156,6 +156,36 @@ def load_mquake(
     ⚠ **部分跑要加 `spread=True`**：四份文件按 `CF3k → CF6334 → CF9k → T` 排，
     `entries[:limit]` 只会取到 `CF3k`——而四份的问法/事实并不相同。
     """
+    picked = case_chunks(bench_dir, limit=limit, spread=spread, cases_per_user=cases_per_user)
+    samples: list[Sample] = []
+    for stem, chunk in picked:
+        messages: list[Message] = []
+        questions: list[Question] = []
+        for row in chunk:
+            messages.extend(_memory_messages(row))
+            questions.extend(_questions(row, stem))
+        first_case = chunk[0]["case_id"]
+        user_id = f"{USER_PREFIX}{stem}-{first_case:05d}"
+        samples.append(
+            Sample(
+                user_id=user_id,
+                dataset="mquake-remastered",
+                sessions=(Session(session_id=user_id, messages=tuple(messages)),),
+                questions=tuple(questions),
+                speaker_names=("user", "assistant"),
+            )
+        )
+    return samples
+
+
+def case_chunks(
+    bench_dir: str | Path,
+    *,
+    limit: int | None = None,
+    spread: bool = False,
+    cases_per_user: int = CASES_PER_USER,
+) -> list[tuple[str, list[dict]]]:
+    """共享原始读取和抽样；原生与 AML 适配分别决定序列化及提问阶段。"""
     if cases_per_user < 1:
         raise ValueError(f"cases_per_user 必须 >= 1，收到 {cases_per_user}")
     root = Path(bench_dir) / DATA_DIR / DATA_SUBDIR
@@ -175,24 +205,4 @@ def load_mquake(
     else:
         picked = chunks
 
-    samples: list[Sample] = []
-    for stem, chunk in picked:
-        messages: list[Message] = []
-        questions: list[Question] = []
-        for row in chunk:
-            messages.extend(_memory_messages(row))
-            questions.extend(_questions(row, stem))
-        first_case = chunk[0]["case_id"]
-        user_id = f"{USER_PREFIX}{stem}-{first_case:05d}"
-        samples.append(
-            Sample(
-                user_id=user_id,
-                dataset="mquake-remastered",
-                # ⚠ **整个样本一个 `Session`**：D29 之后 Add 次数由"一条事实一次"
-                #   降到 `batches()` 的打包粒度（一个样本 221 条事实：221 → 12）。
-                sessions=(Session(session_id=user_id, messages=tuple(messages)),),
-                questions=tuple(questions),
-                speaker_names=("user", "assistant"),
-            )
-        )
-    return samples
+    return picked

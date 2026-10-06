@@ -58,10 +58,10 @@ uv run python -c "from eval.experiments.recipes import flags_for; print(flags_fo
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final
 
-__all__ = ["FROZEN_RECIPES", "Recipe", "flags_for", "recipe_for"]
+__all__ = ["AML_FROZEN_RECIPES", "FROZEN_RECIPES", "Recipe", "flags_for", "recipe_for"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,15 +251,60 @@ FROZEN_RECIPES: Final[dict[str, Recipe]] = {
 }
 
 
-def recipe_for(dataset: str) -> Recipe:
+AML_FROZEN_RECIPES: Final[dict[str, Recipe]] = {
+    name: replace(
+        FROZEN_RECIPES[name],
+        note="AML-compatible input; see the input manifest for corpus/timeline scope.",
+    )
+    for name in (
+        "corporatebench",
+        "memtrapbench",
+        "locomo-refined",
+        "medmemorybench",
+        "halumem",
+        "musique",
+        "hybridqa",
+        "feverous",
+    )
+}
+AML_FROZEN_RECIPES["mquake-remastered"] = Recipe(
+    limit=40,
+    spread=True,
+    n_questions=240,
+    axis="public case count; original and updated QA",
+    note="One public case per user; all four sources sampled; original→QA→UPDATE→QA.",
+)
+for _name, _axis in {
+    "corporatebench": "QA 子集数；合并为一个公司用户，每篇文档独立 session",
+    "locomo-refined": "对话数；每段对话配一个确定性公开 LME haystack",
+    "halumem": "源提问检查点数；同一 persona 持续 Add/Search",
+    "medmemorybench": "源提问检查点数；同一 persona 持续 Add/Search",
+    "feverous": "claim 数；全部问题共用声明的整页 JSON 池",
+}.items():
+    AML_FROZEN_RECIPES[_name] = replace(AML_FROZEN_RECIPES[_name], axis=_axis)
+AML_FROZEN_RECIPES["feverous"] = replace(
+    AML_FROZEN_RECIPES["feverous"],
+    n_questions=116,
+    note=(
+        "Default captured Add pool and same-user captured Search claims; "
+        "explicit pools define a different source scope."
+    ),
+)
+
+
+def recipe_for(dataset: str, *, input_contract: str = "native") -> Recipe:
     """取一个数据集的冻结口径。**未知数据集响亮失败**（不静默退回"不抽样"）。"""
+    if input_contract not in {"native", "aml-v1"}:
+        raise ValueError(f"Unknown input contract {input_contract!r}")
+    table = FROZEN_RECIPES if input_contract == "native" else AML_FROZEN_RECIPES
     try:
-        return FROZEN_RECIPES[dataset]
+        return table[dataset]
     except KeyError:
-        known = " / ".join(sorted(FROZEN_RECIPES))
+        known = " / ".join(sorted(table))
         raise KeyError(f"数据集 {dataset!r} 没有冻结口径。已登记的是：{known}") from None
 
 
-def flags_for(dataset: str) -> str:
+def flags_for(dataset: str, *, input_contract: str = "native") -> str:
     """该数据集的参数字符串（可直接粘到 `run.py`）。"""
-    return recipe_for(dataset).flags()
+    flags = recipe_for(dataset, input_contract=input_contract).flags()
+    return flags if input_contract == "native" else f"--input-contract {input_contract} {flags}"

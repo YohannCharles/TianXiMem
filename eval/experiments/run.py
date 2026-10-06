@@ -41,6 +41,7 @@ uv run python eval/experiments/run.py --dataset longmemeval-s --limit 3 --skip-i
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -70,6 +71,7 @@ from eval.datasets import (
     load_tempreason,
     shape_note,
 )
+from eval.datasets.aml import INPUT_CONTRACT, load_plans, required_datasets, validate_options
 from eval.datasets.prepare import PreparationError, ensure_dataset
 
 # ⚠ **绝对 import**：本文件是**当脚本跑的**（`python eval/experiments/run.py`），
@@ -87,6 +89,8 @@ from eval.harness import (
 )
 from eval.harness.api_config import ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL
 from eval.harness.judge import DATE_MODES, MARKS
+from eval.harness.plan_driver import compile_plan, execute_plan, freeze_run
+from eval.harness.run_record import config_fingerprint
 
 EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1
@@ -273,6 +277,10 @@ def run_round(
     fallback_base_url: str | None = None,
     add_shape: str = DEFAULT_ADD_SHAPE,
     client: ServiceClient | None = None,
+    input_contract: str = "native",
+    aml_time_style: str = "synthetic",
+    aml_pool: Path | None = None,
+    execution_fingerprint: dict | None = None,
 ) -> tuple[list[Sample], list]:
     """跑一轮的**机制部分**：加载 → 投喂 → 检索 → 裁判。返回 `(samples, results)`。
 
@@ -282,6 +290,83 @@ def run_round(
     """
     if dataset not in DATASETS:
         raise ValueError(f"未知数据集 {dataset!r}——只有 {' / '.join(DATASETS)} 有加载器")
+    if input_contract == INPUT_CONTRACT:
+        if skip_ingest:
+            raise ValueError(
+                "AML plans resume from event checkpoints; "
+                "--skip-ingest cannot preserve historical Search state"
+            )
+        if top_k != DEFAULT_TOP_K:
+            raise ValueError("AML input contract requires top_k=100")
+        plans = [
+            compile_plan(p, namespace=out_dir.name)
+            for p in load_plans(
+                bench_dir,
+                dataset,
+                limit=limit,
+                spread=spread,
+                max_questions=max_questions,
+                add_shape=add_shape,
+                time_style=aml_time_style,
+                pool=aml_pool,
+            )
+        ]
+        if not plans:
+            raise EmptyDatasetError(f"{dataset}: no AML input plans")
+        from eval.harness.api_config import JUDGE_API_BASE, JUDGE_MODEL
+
+        policy_files = sorted(Path(__file__).parents[1].joinpath("harness").glob("*.py"))
+        pipeline = pipeline_for(bench_dir, dataset)
+        freeze_run(
+            out_dir,
+            plans,
+            execution={
+                "base_url": base_url,
+                "top_k": top_k,
+                "date_mode": date_mode,
+                "annotate_mark": annotate_mark,
+                "fallback_base_url": fallback_base_url,
+                "answer_model": ANSWER_MODEL,
+                "answer_base": ANSWER_API_BASE,
+                "judge_model": JUDGE_MODEL,
+                "judge_base": JUDGE_API_BASE,
+                "harness_sha256": {
+                    p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in policy_files
+                },
+                "pipeline_sha256": hashlib.sha256(pipeline.read_bytes()).hexdigest(),
+                "declarations": execution_fingerprint or {},
+            },
+        )
+        owns_client = client is None
+        client = client or ServiceClient(
+            base_url, fallback=ServiceClient(fallback_base_url) if fallback_base_url else None
+        )
+        results = []
+        try:
+            for index, plan in enumerate(plans, 1):
+                sample = plan.sample
+                print(
+                    f"  [{index}/{len(plans)}] {sample.user_id}: AML 有序 Add/Search，"
+                    f"{len(sample.questions)} 题",
+                    flush=True,
+                )
+                user_dir = out_dir / sample.user_id
+                hits = execute_plan(plan, client=client, out_dir=user_dir, top_k=top_k)
+                items = build_input_items(
+                    sample, hits, date_mode=date_mode, annotate_mark=annotate_mark
+                )
+                for item in items:
+                    item["input_contract"] = input_contract
+                    if "answer_contract" in plan.metadata:
+                        item["answer_contract"] = plan.metadata["answer_contract"]
+                results += run_judge(pipeline, items, user_dir, dataset=dataset)
+                print(f"  [{index}/{len(plans)}] {sample.user_id}: {len(items)} 题已判", flush=True)
+            return [p.sample for p in plans], results
+        finally:
+            if owns_client:
+                client.close()
+    if input_contract != "native" or aml_time_style != "synthetic" or aml_pool is not None:
+        raise ValueError("Unknown input contract or AML-only options used with native input")
     samples = _load(dataset, bench_dir, limit, spread=spread)
     if not samples:
         raise EmptyDatasetError(f"{dataset}：一个 sample 都没加载到——bench_dir={bench_dir} 对吗？")
@@ -407,6 +492,24 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--dataset", required=True, choices=sorted(DATASETS))
+    parser.add_argument(
+        "--input-contract",
+        choices=("native", INPUT_CONTRACT),
+        default="native",
+        help="native 保留当前加载/包装；aml-v1 使用版本化的 AML 近似事件计划",
+    )
+    parser.add_argument(
+        "--aml-time-style",
+        choices=("synthetic", "inline"),
+        default="synthetic",
+        help="AML 对话时间形态；inline 仅适用于 HaluMem",
+    )
+    parser.add_argument(
+        "--aml-pool",
+        type=Path,
+        default=None,
+        help="FEVEROUS 的声明页面池 JSON（titles 列表）；缺省从本地捕获 Add 恢复标题",
+    )
     parser.add_argument(
         "--base-url", default=DEFAULT_BASE_URL, help=f"服务地址（缺省 {DEFAULT_BASE_URL}）"
     )
@@ -563,6 +666,24 @@ def _exit_for_error(error: Exception, *, base_url: str) -> int:
 
 def _assemble_record(args, *, run_id: str, bench_dir: Path, samples, results, note: str):
     """把这一轮的**配置指纹 + 数据指纹 + 结果**装成 run record（§13）。"""
+    if getattr(args, "input_contract", "native") == INPUT_CONTRACT:
+        path = Path(args.reports_dir) / "runs" / run_id / "input-manifest.json"
+        fingerprint = json.loads(path.read_text(encoding="utf-8"))["data_fingerprint"]
+        fingerprint = fingerprint | {
+            "dataset": args.dataset,
+            "benchmark_dir": str(bench_dir),
+            "add_shape": args.add_shape,
+            "note": note,
+        }
+    else:
+        fingerprint = data_fingerprint(
+            bench_dir,
+            args.dataset,
+            n_samples=len(samples),
+            n_questions=_count_questions(samples),
+            add_shape=args.add_shape,
+            note=note,
+        )
     return build_record(
         run_id=run_id,
         step=args.step,
@@ -570,14 +691,7 @@ def _assemble_record(args, *, run_id: str, bench_dir: Path, samples, results, no
         bench_dir=bench_dir,
         samples=samples,
         results=results,
-        data_fingerprint=data_fingerprint(
-            bench_dir,
-            args.dataset,
-            n_samples=len(samples),
-            n_questions=_count_questions(samples),
-            add_shape=args.add_shape,
-            note=note,
-        ),
+        data_fingerprint=fingerprint,
         models=models_fingerprint(
             embedder=args.embedder,
             llm=args.llm or _default_llm(),
@@ -652,9 +766,29 @@ def _print_result(record, path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    try:
+        if args.input_contract == INPUT_CONTRACT:
+            validate_options(
+                args.dataset,
+                add_shape=args.add_shape,
+                time_style=args.aml_time_style,
+                pool=args.aml_pool,
+            )
+            if args.skip_ingest or args.top_k != DEFAULT_TOP_K:
+                raise ValueError(
+                    "AML plans use their event checkpoints and require top_k=100; "
+                    "do not use --skip-ingest"
+                )
+        elif args.aml_pool is not None or args.aml_time_style != "synthetic":
+            raise ValueError("--aml-pool/--aml-time-style require --input-contract aml-v1")
+    except (ValueError, FileNotFoundError) as error:
+        print(f"输入契约前置检查失败：{error}", file=sys.stderr)
+        return EXIT_PRECONDITION_FAILED
     bench_dir = benchmark_dir()
     reports_dir = Path(args.reports_dir)
-    run_id = args.run_id or derive_run_id(args.dataset)
+    run_id = args.run_id or derive_run_id(
+        args.dataset + ("-" + args.input_contract if args.input_contract != "native" else "")
+    )
     out_dir = reports_dir / "runs" / run_id
 
     if args.frozen:
@@ -671,9 +805,12 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return EXIT_PRECONDITION_FAILED
-        chosen = recipe_for(args.dataset)
+        chosen = recipe_for(args.dataset, input_contract=args.input_contract)
         args.limit, args.spread = chosen.limit, chosen.spread
-        print(f"  冻结口径 {args.dataset}: {chosen.flags()}  ⇒ 预期 {chosen.n_questions} 题")
+        expected = f"预期 {chosen.n_questions} 题"
+        if args.input_contract == INPUT_CONTRACT and args.dataset == "feverous" and args.aml_pool:
+            expected = "自定义页面池；公开 dev 抽样题数以 input-manifest.json 为准"
+        print(f"  冻结口径 {args.dataset}: {chosen.flags()}  ⇒ {expected}")
 
     # ⚠ `note` 由两半拼成，**两半都是"不可比"的警示**：
     #   · 截断（`--limit` / `--max-questions`）——跑了一小撮
@@ -686,7 +823,10 @@ def main(argv: list[str] | None = None) -> int:
             "**冻结口径**（`eval/experiments/recipes.py`）——与同口径的历史 run 可比。"
             if args.frozen
             else "",
-            shape_note(args.dataset),
+            "AML 输入近似；语料范围、时间形态和批界见 input-manifest.json。"
+            "评分复用本地管线，不等同 AML 平台。"
+            if args.input_contract == INPUT_CONTRACT
+            else shape_note(args.dataset),
         )
         if part
     )
@@ -704,7 +844,12 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_PRECONDITION_FAILED
 
     try:
-        ensure_dataset(args.dataset, bench_dir, offline=args.offline)
+        for required in (
+            required_datasets(args.dataset)
+            if args.input_contract == INPUT_CONTRACT
+            else (args.dataset,)
+        ):
+            ensure_dataset(required, bench_dir, offline=args.offline)
     except PreparationError as error:
         print(f"数据准备失败：{error}", file=sys.stderr)
         return EXIT_PRECONDITION_FAILED
@@ -738,13 +883,32 @@ def main(argv: list[str] | None = None) -> int:
             spread=args.spread,
             fallback_base_url=args.fallback_base_url,
             add_shape=args.add_shape,
+            input_contract=args.input_contract,
+            aml_time_style=args.aml_time_style,
+            aml_pool=args.aml_pool,
+            execution_fingerprint={
+                "config": config_fingerprint(
+                    args.profile, _parse_switches(args.switches), configs_dir=Path(args.configs_dir)
+                ),
+                "models": models_fingerprint(
+                    embedder=args.embedder, llm=args.llm or _default_llm(), reranker=args.reranker
+                ),
+                "frozen": args.frozen,
+                "limit": args.limit,
+                "spread": args.spread,
+                "max_questions": args.max_questions,
+            },
         )
     except (
         httpx.HTTPStatusError,
         httpx.TransportError,
         FileNotFoundError,
         EmptyDatasetError,
+        ValueError,
     ) as error:
+        if isinstance(error, ValueError) and not isinstance(error, EmptyDatasetError):
+            print(f"输入计划失败：{error}", file=sys.stderr)
+            return EXIT_PRECONDITION_FAILED
         return _exit_for_error(error, base_url=args.base_url)
 
     record = _assemble_record(

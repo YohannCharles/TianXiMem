@@ -63,7 +63,8 @@ def _cell(cell: list) -> str:
     return _text(text) + (f" (links: {', '.join(links)})" if links else "")
 
 
-def _corpus(root: Path, table_id: str, receipt: dict) -> tuple[Message, ...]:
+def read_corpus(root: Path, table_id: str, receipt: dict) -> tuple[dict, dict]:
+    """共享经 receipt 校验的整表和全部段落，保留未文本化的上游结构。"""
     docs = []
     for folder in ("tables_tok", "request_tok"):
         name = f"{folder}/{table_id}.json"
@@ -72,6 +73,11 @@ def _corpus(root: Path, table_id: str, receipt: dict) -> tuple[Message, ...]:
             raise ValueError(f"HybridQA: corpus sha256 mismatch: {name}")
         docs.append(json.loads(raw))
     table, passages = docs
+    return table, passages
+
+
+def _corpus(root: Path, table_id: str, receipt: dict) -> tuple[Message, ...]:
+    table, passages = read_corpus(root, table_id, receipt)
     headers = [_cell(cell) for cell in table["header"]]
     context = [f"Table: {table_id}", f"Title: {_text(table['title'])}"]
     for key in ("intro", "section_title", "section_text"):

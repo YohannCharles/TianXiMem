@@ -193,6 +193,10 @@ def build_record(
     datasets = {sample.dataset for sample in samples}
     if len(datasets) == 1 and datasets <= {"hybridqa", "feverous"} and results:
         scores["dataset_score"] = _corpus_dataset_score(datasets.pop(), results)
+        if data_fingerprint.get("input_contract") == "aml-v1":
+            scores["dataset_score"]["scope"] = (
+                "AML-compatible input; declared shared corpus; local upstream scoring"
+            )
     record = RunRecord(
         run_id=run_id,
         step=step,

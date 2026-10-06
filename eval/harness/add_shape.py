@@ -83,6 +83,7 @@ __all__ = [
     "LABEL_RULES",
     "MAX_MESSAGE_CHARS",
     "shape_batch",
+    "split_prefixed_payload",
 ]
 
 #: 渲染口径。**进数据指纹**（[`../datasets/registry.py`](../datasets/registry.py)）——
@@ -166,6 +167,26 @@ def _split_labelled(label: str, text: str, cap: int = MAX_MESSAGE_CHARS) -> list
     if room < 1:
         raise ValueError(f"标签 {label!r} 太长，{cap} 字符里塞不下它的前缀")
     return [prefix + text[start : start + room] for start in range(0, len(text), room)]
+
+
+def split_prefixed_payload(message: dict) -> list[dict]:
+    """AML 适配器已完成包装，只切长消息，不再次加标签或修改角色/时间。
+
+    无标签的 inline-time 消息保留原文，按相同字符上限切片。
+    原请求回放不调用此函数。
+    """
+    content = message["content"]
+    if len(content) <= MAX_MESSAGE_CHARS:
+        return [dict(message)]
+    label, separator, body = content.partition(": ")
+    if separator and "\n" not in label and len(label) < 100 and not label.startswith("["):
+        parts = _split_labelled(label, body)
+    else:
+        parts = [
+            content[start : start + MAX_MESSAGE_CHARS]
+            for start in range(0, len(content), MAX_MESSAGE_CHARS)
+        ]
+    return [dict(message, content=part) for part in parts]
 
 
 def shape_batch(

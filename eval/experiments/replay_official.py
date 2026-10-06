@@ -52,11 +52,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+from eval.datasets.aml.plan import AddEvent, SearchEvent
 from eval.datasets.official_capture import UserPlan, replay_plan
 from eval.datasets.prepare import PreparationError, ensure_dataset
 from eval.datasets.registry import benchmark_dir, capture_dir, file_fingerprint
 from eval.harness import ServiceClient, build_official_items, pipeline_for, run_judge
 from eval.harness.api_config import ANSWER_MODEL
+from eval.harness.plan_driver import send_event
 from eval.harness.run_record import build_record, write_record
 
 __all__ = ["main", "replay_user", "load_hits", "save_hits"]
@@ -112,9 +114,7 @@ def load_hits(path: Path):
     """读回检索快照（`SearchHit` 对象——`render_memories` 要它）。"""
     from eval.harness import SearchHit
 
-    return {
-        row["qid"]: [SearchHit(**hit) for hit in row["hits"]] for row in _read_jsonl(path)
-    }
+    return {row["qid"]: [SearchHit(**hit) for hit in row["hits"]] for row in _read_jsonl(path)}
 
 
 def replay_user(
@@ -157,11 +157,12 @@ def replay_user(
                 #   线上那一批就是丢了（AML 重试再多次也过不去），所以这里**跳过并记账**，
                 #   而不是让一个 40 小时的跑批死在第 10 个 user 上。
                 try:
-                    client.add(
-                        request_id=event.request_id,
-                        user_id=plan.user_id,
-                        session_id=event.session_id,
-                        messages=list(event.messages),
+                    send_event(
+                        client,
+                        plan.user_id,
+                        AddEvent(
+                            event.session_id, event.messages, event.request_id, batch_ready=True
+                        ),
                     )
                 except httpx.HTTPStatusError as error:
                     _record_skip(
@@ -188,8 +189,11 @@ def replay_user(
                 #   ⇒ 记账 + **不把这一题算进去**（判了就会以"没有记忆"的形状被计算，
                 #   那比缺一个样本更糟）⇒ 下一次重跑会把它补上（labels 不全 ⇒ 不跳过整户）。
                 try:
-                    hits_by_qid[str(event.seq)] = client.search(
-                        user_id=plan.user_id, query=event.question["query"], top_k=top_k
+                    hits_by_qid[str(event.seq)] = send_event(
+                        client,
+                        plan.user_id,
+                        SearchEvent(str(event.seq), event.question["query"]),
+                        top_k=top_k,
                     )
                 except httpx.HTTPStatusError as error:
                     if error.response.status_code < 500:
@@ -289,8 +293,11 @@ def _write_partial_record(
     note = (
         f"**滚动快照**：这一刻已判 {len(samples)}/{len(plans)} 个 user"
         f"（{len(results)} 题）"
-        + (f"；⚠ **{len(skipped)} 条 add 被服务端拒**（语料少了那几批，见 skipped.jsonl）"
-           if skipped else "")
+        + (
+            f"；⚠ **{len(skipped)} 条 add 被服务端拒**（语料少了那几批，见 skipped.jsonl）"
+            if skipped
+            else ""
+        )
         + f"。{args.notes}"
     ).strip()
     record = build_record(

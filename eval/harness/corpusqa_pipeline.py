@@ -18,6 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from eval.datasets.aml.feverous import ANSWER_CONTRACT as AML_FEVEROUS_CONTRACT
+from eval.datasets.aml.feverous import visible_json_evidence
 from eval.datasets.feverous import ANSWER_CONTRACT as FEVEROUS_CONTRACT
 from eval.datasets.feverous import LABELS, evidence_triplet
 from eval.datasets.feverous import SCORER as FEVEROUS_SCORER
@@ -27,7 +29,10 @@ from eval.datasets.layout import archive_file
 from eval.datasets.registry import benchmark_dir
 from eval.harness.extra_pipeline import ANSWER_TIMEOUT, _chat, _config, _read_jsonl, _write_line
 
-_CONTRACTS = {"hybridqa": HYBRIDQA_CONTRACT, "feverous": FEVEROUS_CONTRACT}
+_CONTRACTS = {
+    "hybridqa": {HYBRIDQA_CONTRACT},
+    "feverous": {FEVEROUS_CONTRACT, AML_FEVEROUS_CONTRACT},
+}
 # 候选整页可形成远长于普通 QA 的上下文；仅本地 FEVEROUS 作答扩展超时。
 FEVEROUS_ANSWER_TIMEOUT = 360.0
 _HYBRID_PROMPT = """Use only the retrieved table rows and linked passages to answer the question.
@@ -58,14 +63,37 @@ Retrieved evidence:
 Claim: {question}
 JSON:"""
 
+_FEVEROUS_JSON_PROMPT = """Verify the claim using only the retrieved Wikipedia JSON below.
+Return exactly one JSON object with label and evidence fields.
+label must be exactly SUPPORTS, REFUTES, or NOT ENOUGH INFO.
+evidence is a list of complete native element ID strings. For a complete visible page JSON,
+join its exact title, an underscore, and the visible sentence key or cell/item id.
+For a table caption, join the title with _table_caption_ and the visible table number.
+Preserve spaces, accents, underscores, header_cell versus cell, and numeric suffixes exactly.
+Only complete parseable retrieved page JSON or explicit bracketed IDs may establish an ID.
+Incomplete, reordered or missing JSON fragments cannot establish an ID; do not fill the gaps.
+Return at most five sentence IDs and twenty-five table/list IDs.
+Do not use outside knowledge or invent IDs. Use an empty evidence list if no valid ID is visible.
+NOT ENOUGH INFO may cite relevant retrieved evidence showing why the claim cannot be verified.
+
+Retrieved evidence:
+{memories}
+
+Claim: {question}
+JSON:"""
+
 
 def render_answer_prompt(item: dict) -> str:
     dataset = item["dataset"]
-    if dataset not in _CONTRACTS or item.get("answer_contract") != _CONTRACTS[dataset]:
+    if dataset not in _CONTRACTS or item.get("answer_contract") not in _CONTRACTS[dataset]:
         raise ValueError("Corpus QA: missing/unsupported local answer contract")
     if not isinstance(item.get("retrieved_context"), str):
         raise ValueError("Corpus QA: retrieved_context must be present, including empty results")
     template = _HYBRID_PROMPT if dataset == "hybridqa" else _FEVEROUS_PROMPT
+    if item.get("answer_contract") == AML_FEVEROUS_CONTRACT:
+        if item.get("input_contract") != "aml-v1":
+            raise ValueError("AML JSON answer contract requires an explicit AML input contract")
+        template = _FEVEROUS_JSON_PROMPT
     return template.format(
         memories=item["retrieved_context"] or "(no memories)", question=item["question"]
     )
@@ -95,7 +123,7 @@ def _scorer(dataset: str) -> dict:
     return namespace
 
 
-def visible_evidence(context: str) -> set[str]:
+def visible_evidence(context: str, *, json_pages: bool = False) -> set[str]:
     result = set()
     for candidate in re.findall(r"\[([^\[\]\n]+)\]", context):
         try:
@@ -103,10 +131,14 @@ def visible_evidence(context: str) -> set[str]:
         except ValueError:
             continue
         result.add(candidate)
+    if json_pages:
+        result.update(visible_json_evidence(context))
     return result
 
 
-def parse_feverous_answer(generated: str, context: str) -> tuple[str, list[list[str]]]:
+def parse_feverous_answer(
+    generated: str, context: str, *, json_pages: bool = False
+) -> tuple[str, list[list[str]]]:
     text = generated.strip()
     if text.startswith("```json\n") and text.endswith("\n```"):
         text = text[8:-4]
@@ -116,7 +148,7 @@ def parse_feverous_answer(generated: str, context: str) -> tuple[str, list[list[
     evidence = obj.get("evidence")
     if not isinstance(evidence, list) or any(not isinstance(e, str) for e in evidence):
         raise ValueError("FEVEROUS evidence must be a list of element ID strings")
-    allowed = visible_evidence(context)
+    allowed = visible_evidence(context, json_pages=json_pages)
     invisible = sorted(set(evidence) - allowed)
     if invisible:
         raise ValueError(
@@ -138,7 +170,11 @@ def score_answer(item: dict, generated: str) -> dict:
         why = f"upstream answer EM={exact:g}, token F1={f1:g}"
     else:
         try:
-            label, evidence = parse_feverous_answer(generated, item["retrieved_context"])
+            label, evidence = parse_feverous_answer(
+                generated,
+                item["retrieved_context"],
+                json_pages=item.get("answer_contract") == AML_FEVEROUS_CONTRACT,
+            )
         except (ValueError, TypeError) as error:
             return {
                 "id": item["id"],
@@ -200,9 +236,9 @@ def _items(path: Path) -> list[dict]:
     return rows
 
 
-def repair_id_guide(generated: str, context: str) -> list[str]:
+def repair_id_guide(generated: str, context: str, *, json_pages: bool = False) -> list[str]:
     """Visible spelling hints only; these do not establish relevance or replace IDs."""
-    allowed = sorted(visible_evidence(context))
+    allowed = sorted(visible_evidence(context, json_pages=json_pages))
     try:
         obj = json.loads(generated)
     except ValueError:
@@ -244,9 +280,19 @@ def generate_answer(item: dict, base: str, key: str, model: str, max_tokens: int
         if item["dataset"] != "feverous":
             break
         try:
-            parse_feverous_answer(generated, item["retrieved_context"])
+            parse_feverous_answer(
+                generated,
+                item["retrieved_context"],
+                json_pages=item.get("answer_contract") == AML_FEVEROUS_CONTRACT,
+            )
         except (ValueError, TypeError) as error:
             attempt["validation_error"] = str(error)
+            id_rule = (
+                "Every evidence ID must use the exact visible spelling "
+                "permitted by the original instructions. "
+                if item.get("answer_contract") == AML_FEVEROUS_CONTRACT
+                else "Every evidence ID must be copied verbatim from a visible bracketed ID. "
+            )
             prompt = (
                 original_prompt
                 + "\n\nYour previous response was invalid:\n"
@@ -255,11 +301,16 @@ def generate_answer(item: dict, base: str, key: str, model: str, max_tokens: int
                 + str(error)
                 + "\nVisible IDs with similar spellings (from the same retrieved text): "
                 + json.dumps(
-                    repair_id_guide(generated, item["retrieved_context"]), ensure_ascii=False
+                    repair_id_guide(
+                        generated,
+                        item["retrieved_context"],
+                        json_pages=item.get("answer_contract") == AML_FEVEROUS_CONTRACT,
+                    ),
+                    ensure_ascii=False,
                 )
                 + "\nReturn a corrected JSON object using only the same retrieved evidence. "
-                "Every evidence ID must be copied verbatim from a visible bracketed ID. "
-                "The previous invalid IDs must not appear in your new response. "
+                + id_rule
+                + "The previous invalid IDs must not appear in your new response. "
                 "Preserve header_cell versus cell. The spelling hints alone do not prove "
                 "the claim; select evidence based on its text. "
                 "Use an empty evidence list if you cannot identify a valid relevant ID. "

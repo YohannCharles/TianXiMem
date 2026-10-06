@@ -3,7 +3,7 @@
 Full 的可答/不可答变体共用 id，user_id/qid 必须带变体标记。只把 title 与
 paragraph_text 送进 Add；answer、is_supporting 与 question_decomposition 均不注入。
 spread 按跳数和可答性分层。只测本地答案别名精确匹配/拒答，不复现上游支持段落 F1
-或成组 answer-sufficiency 指标；与采集中的重采样段落顺序也不等价。
+或成组 answer-sufficiency 指标。原生文本包装与采集不同；候选段落顺序保留源数据顺序。
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ SHAPE_NOTE = (
     "语料只含候选段落 title/paragraph_text。"
     "可答/不可答变体用不同 user_id/qid；spread 按跳数和可答性分层。"
     "本地评分为答案别名归一化后精确匹配与拒答标记精确匹配，不是上游答案/支持段落 F1"
-    "或成组 sufficiency 指标，也不等价于采集中的重采样语料顺序。"
+    "或成组 sufficiency 指标；候选段落保留源数据顺序，原生包装与采集不同。"
 )
 
 
@@ -34,9 +34,9 @@ def _variant(row: dict) -> str:
     return "answerable" if row["answerable"] else "unanswerable"
 
 
-def load_musique(
+def read_rows(
     bench_dir: str | Path, *, limit: int | None = None, spread: bool = False
-) -> list[Sample]:
+) -> list[dict]:
     """加载 Full dev；limit 数题目，spread 覆盖不同跳数及可答/不可答变体。"""
     path = Path(bench_dir) / DATA_DIR / JSONL
     with path.open(encoding="utf-8") as handle:
@@ -59,6 +59,17 @@ def load_musique(
             else rows[:limit]
         )
 
+    return rows
+
+
+def load_musique(
+    bench_dir: str | Path, *, limit: int | None = None, spread: bool = False
+) -> list[Sample]:
+    return samples_from_rows(read_rows(bench_dir, limit=limit, spread=spread))
+
+
+def samples_from_rows(rows: list[dict]) -> list[Sample]:
+    """共享题目/金标验证；AML 适配从同一原始 row 读取段落结构。"""
     samples: list[Sample] = []
     for row in rows:
         variant = _variant(row)
