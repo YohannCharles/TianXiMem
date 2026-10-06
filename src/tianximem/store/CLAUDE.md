@@ -181,7 +181,7 @@ CREATE INDEX evidence_coverage_user ON evidence_coverage(user_id, version, paren
 
 ---
 
-## Qdrant 配置要点（§6.3）—— 配置项见 [`../../docs/config-reference.md`](../../../docs/config-reference.md) §8
+## Qdrant 配置要点（§6.3）—— 配置项见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §8
 
 （七项配置 —— 模式 / 版本 / 分片数 / 命名向量 / payload 索引 / payload 内容 / 写入方式 —— 的**值与理由都在那份文档**，本文件不复制。下面是本层特有的两条。）
 

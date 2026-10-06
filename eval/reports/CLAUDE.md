@@ -7,6 +7,7 @@
 ```text
 ledger.md          **结果台账**（人工维护，**提交进 git**）
 schema.py          run record 的 schema
+<主题>-<YYYYMMDD>.md  **专题报告**：一次调查一份（修复 / 接入 / 基准 / 诊断）
 runs/              每次 run 的原始产出与复现脚本（**原始数据 gitignored、复现脚本提交**，见下）
 ```
 
@@ -41,7 +42,7 @@ runs/              每次 run 的原始产出与复现脚本（**原始数据 gi
 
 ### ⚠ `breakdown.partial_credit`：**不进总分**的那一列（2026-10-03）
 
-只对**判分方本来就给出部分分**的数据集存在（**CL-Bench / CorporateBench**）：
+只对**判分方本来就给出部分分**的数据集存在（**CL-Bench / CorporateBench / BEAM**；BEAM 的那份来自官方采集重放，发射方见 [`../harness/official_capture_pipeline.py`](../harness/official_capture_pipeline.py)）：
 `{"mean": …, "n": …}`，逐类还有 `partial`。**给不出的数据集写 `mean=None, n=0`**
 （同 `_accuracy` 的纪律：空集合不写 `0.0`，那会被读成"全错"）。
 
@@ -50,8 +51,13 @@ CorporateBench 每题传递标量 exact-match / 列表 set-F1，完整 QA 均分
 `overall` 保留二值完全匹配准确率，两者不能混用；它也不代表 AML 榜分。
 实现与重判记录见 [修复报告](corporatebench-fix-20261004.md)。
 
+HybridQA / FEVEROUS 的逐题指标也汇总到 `scores.dataset_score`，
+分别记录上游 EM/F1、标签准确率与严格证据组分，以及证据宏平均 precision/recall
+的调和 F1。其语料候选范围和指标定义见 [接入报告](hybridqa-feverous-pipelines-20261006.md)。
+`overall` 分别对应二值 EM 或严格证据组正确率；候选池范围必须随结果一起引用。
+
 **为什么需要它**：CL-Bench 的官方分是**全有全无**的 LLM rubric 判分
-（[`../../benchmark_data/clb_pipeline.py`](../../benchmark_data/clb_pipeline.py) 的判分 prompt 原文：
+（[`../../dataset/.upstream/aml/clb_pipeline.py`](../../dataset/.upstream/aml/clb_pipeline.py) 的判分 prompt 原文：
 `strict, all-or-nothing … The final score is binary`）——一道题从 0 翻到 1 要**每一条**
 rubric 都满足 ⇒ **中间的所有进展在 `overall` 里都看不见**。实测有题
 `rubric_clbench_score=0` 而 `requirement_ratio=0.50`（14 条里满足 7 条）：

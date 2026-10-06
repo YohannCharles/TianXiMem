@@ -899,7 +899,11 @@ A: [assistant] Let me check the schedule.
 | Qdrant 的全部行为断言 | qdrant.tech：concepts/hybrid-queries、concepts/indexing、inference/inference-bm25、guides/multiple-partitions、articles/how-to-tune-hybrid-search，以及 **articles/before-tuning-a-qdrant-collection**——§8 的 `score_threshold` 警告与"分片数改变排名且无报错"，**出处是后者，不在 hybrid-queries 页** |
 | 各数据集问题类型分布、跨 session 比例、许可证 | 见 `benchmark_data/` 下的原始数据与 AML pipeline 源码 |
 
-**原始数据与 AML pipeline 源码已归档在 `benchmark_data/`。**
+**原始数据与 AML pipeline 源码现归档在 `dataset/`（D35，2026-10-06）。**
+
+本文早期记录的 `benchmark_data/<文件>` 是旧归档标识。新位置由
+[`eval/datasets/layout.py`](eval/datasets/layout.py) 映射；目录准备与出处见
+[`docs/benchmark-data.md`](docs/benchmark-data.md)。迁移不改变源数据或评测规则。
 
 **第二轮核对记录（2026-09-22 同日）**：上表每一行的"来源"都回原文复核过一遍，并对文档正文做了一次全文体检。更正的要点：
 

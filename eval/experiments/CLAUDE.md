@@ -5,13 +5,15 @@
 ## 要写什么
 
 ```text
-run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告      ✅
-recipes.py        **冻结的抽样口径**：每个数据集跑多少题的唯一声明处  ✅
+run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告；native / aml-v1 输入契约 ✅
+replay_official.py **官方采集重放** runner：按 timeline 交错、`--per-family N` 保族覆盖 ✅
+recipes.py        **冻结的抽样口径**：按输入契约区分原生与 AML 配方的唯一声明处 ✅
 arms.py           两臂脚手架的**唯一实现**：冻结快照 / 核对 / 驱动 / 比较  ✅
+a0_recency.py         A0 sanity：不检索、按时间倒序返回最近 N 对      ⬜ 未开始（判据：若逼近全系统，§4 核心判断要重写）
 t1_timestamp.py       T1 时间戳前缀 带/不带（两臂冻结快照）        ✅ 问题已答（`t1-dated` 0.633）；**干净的两臂 A/B 未跑**
 t2_cross_session.py   T2 跨 session 失败归因（含**人工标注产物**）  🟡 汇总半边已就位；标注待人工
 a3_rerank.py          A3 Rerank 开/关                            ✅（首组对照见 ../reports/ledger.md）
-a4_agent.py           A4a 门控 / A4b always-on                    ⬜（v1 没有 agent，见 D13）
+a4_agent.py           A4a 门控 / A4b always-on                    ⛔ **不在 v1**（**D26**；arm 定义留在 [`../../docs/experiments.md`](../../docs/experiments.md)）
 ```
 
 > ## ⚠ 跑任何一个数据集，都用 **`--frozen`**
@@ -21,7 +23,7 @@ a4_agent.py           A4a 门控 / A4b always-on                    ⬜（v1 没
 > ```
 >
 > 它按 [`recipes.py`](./recipes.py) 取 `--limit` / `--spread`——**"这个数据集跑多少题"的唯一声明处**。
-> **不要手抄 `--limit 3` 这类数字**：10 个数据集的全量题数差着量级（mquake 69,618 vs locomo 1,382），
+> **不要手抄 `--limit 3` 这类数字**：各数据集的全量题数差着量级，
 > 每个的 `limit` 数的**还不是同一个东西**（对话数 / 题数 / persona 数 / QA 子集 …），
 > 而**抄错一个数的后果是分数看起来完全正常、却不可比**。
 >
@@ -56,7 +58,7 @@ a4_agent.py           A4a 门控 / A4b always-on                    ⬜（v1 没
 
 ```bash
 make serve                    # 另一个终端；TIANXIMEM_PROFILE=local 时用 memories_dev 集合
-make eval                     # = DATASET=locomo-refined；ARGS='--limit 3 --skip-ingest' 可冒烟
+make eval                     # 自动准备缺失材料，默认 locomo-refined；ARGS='--limit 3 --skip-ingest' 可冒烟
 make eval DATASET=longmemeval-s
 make eval DATASET=mquake-remastered ARGS='--limit 1 --max-questions 2'   # official-extra 之一
 # ⚠ LongMemEval **部分跑必须加 `--spread`**：它的文件**按 `question_type` 分块**
@@ -73,6 +75,11 @@ make eval DATASET=mquake-remastered ARGS='--limit 1 --max-questions 2'   # offic
 
 ### `--add-shape`：本地发的 add 像不像线上
 
+本节的通用形态开关属于 `native`。`--input-contract aml-v1` 由专用适配器包装，
+仅 LoCoMo 允许 `alluser`，仅 HaluMem 允许内联时间；按事件检查点续跑，不支持 `--skip-ingest`。
+支持范围、CLI 用法与输出指纹统一见
+[`../../docs/benchmark-data.md`](../../docs/benchmark-data.md) 的「公开数据的 AML 输入适配」。
+
 `Add` 的 payload **由 AML 造，不由我们造** ⇒ 本地复现的形态决定**分数预不预测得了线上**。
 缺省 `official`（线上那个：逐数据集加 `<标签>: ` 前缀、`system` 折成 `user`）；
 `native` 是改之前的形状，**只作对照**；`alluser` 是**判分池那一簇**的形态。
@@ -81,14 +88,24 @@ make eval DATASET=mquake-remastered ARGS='--limit 1 --max-questions 2'   # offic
 `data_fingerprint.add_shape`，**不同形态的分数不可互比**。
 细节与实测依据在 [`../harness/add_shape.py`](../harness/add_shape.py)。
 
-**十个数据集有加载器**：`locomo-refined` / `longmemeval-s` / `clbench` / **`beam`** 走
+**独立评测按评分来源分派**：`locomo-refined` / `longmemeval-s` / `clbench` / **`beam`** 走
 **归档里的官方 pipeline**；`personamem-v2` 走**本仓的适配器**
-（[`../harness/personamem_pipeline.py`](../harness/personamem_pipeline.py)——**作答与判分都直接调官方那份的函数**）；
+（[`../harness/personamem_pipeline.py`](../harness/personamem_pipeline.py)——**Search 片段替代历史，选项与判分复用官方函数**）；
 `mquake-remastered` / `memtrapbench` / `corporatebench` / `medmemorybench` / **`tempreason`**
 （来自 `official-extra`）**没有官方 AML pipeline**，走我们自写的
 [`../harness/extra_pipeline.py`](../harness/extra_pipeline.py)
 ⇒ **这五家的分数只在仓内前后对比，别与官方分数对齐**。
 ⚠ `medmemorybench` 例外一半：**判分口径是上游发布的**（`metrics/`，见 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md)），我们照它实现——但**作答侧**仍是我们自己的 prompt。
+
+`halumem` 的 QA 裁判复用上游三分类 prompt；`musique` 的本地评分为答案别名
+归一化后精确匹配及拒答标记匹配。两份的输入范围与未覆盖指标见加载器 docstring。
+HaluMem 的 `limit` 数提问检查点，MuSiQue 数题目；都已登记 `--frozen` 配置。
+
+`hybridqa` / `feverous` 走 [`corpusqa_pipeline.py`](../harness/corpusqa_pipeline.py)，
+分别复用固定上游的 EM/F1 与标签、证据组函数。⚠ **两份的 `limit` 轴不同**（hybridqa 数题、
+feverous 数 claim——见 `recipes.py`），`--spread` 的分组轴和冻结配置由 `recipes.py` 声明。
+FEVEROUS 有本地 claim-only 候选生成步骤；它与完整 Wikipedia 检索及 AML 候选池
+的范围区别见 [接入报告](../reports/hybridqa-feverous-pipelines-20261006.md)。
 
 ⚠ **`beam` 的判分产物与那三份形状不同**：官方 `pipeline_beam.py` 写的是 `llm_judge_score`
 （逐条 rubric 三点制的均分，**没有 `is_correct`**）⇒ 二值化口径由 harness 定
@@ -108,7 +125,7 @@ make eval DATASET=mquake-remastered ARGS='--limit 1 --max-questions 2'   # offic
 
 **这是从零搭建特有的陷阱**（复用既有代码时不会犯，因为开关早就有了）。
 
-**跑之前先在 [`../../../docs/config-reference.md`](../../docs/config-reference.md) 核对**——**开关的依赖图与"关掉时不得改变什么"一处声明在那里**。对应测试见 [`../../tests/CLAUDE.md`](../../tests/CLAUDE.md)。
+**跑之前先在 [`../../docs/config-reference.md`](../../docs/config-reference.md) 核对**——**开关的依赖图与"关掉时不得改变什么"一处声明在那里**。对应测试见 [`../../tests/CLAUDE.md`](../../tests/CLAUDE.md)。
 
 ### 2. 每个 arm 都要冻结配置
 
@@ -150,20 +167,16 @@ make baseline DATASET=locomo-refined          # 44 分钟 ⇒ 与 ledger 的「�
 | 对照 | arm | 注意 |
 | --- | --- | --- |
 | **A3** | Rerank 开 / 关 | §11 主线的验证。若不值，把算力挪去别处 |
-| **A4** | **A4a 门控** / **A4b always-on** | **两个 arm 都要**，见下 |
+| **A4** | **A4a 门控** / **A4b always-on** | ⛔ **不在 v1**（**D26**）——两臂的 arm 定义与判据见协议登记表，本目录不重复 |
 | **T1** | 时间戳前缀 带 / 不带 | 测出差异时**归因不要默认只来自一条机制**（§11.3 的两条独立规则） |
 | **T2** | 跨 session 失败归因 | **人工标注**，见下 |
 
-### A4 必须拆成两个 arm
+### A4 的两臂定义在协议登记表里
 
-| arm | 含义 | 回答什么 |
-| --- | --- | --- |
-| **A4a** | agent **受 Checker 门控** | 当前设计（§3.1 的成本主张）值不值 |
-| **A4b** | agent **always-on** | agent 的**上限**在哪 |
+> **A4a / A4b 的 arm 定义、为什么两个都要、以及失败判据一处声明在
+> [`../../docs/experiments.md`](../../docs/experiments.md)**（本目录不重复，连速查表也不留）。
 
-**只做 A4a 无法区分"agent 没用"与"Checker 卡太严"**——这两种失败要求完全相反的下一步动作（砍 agent vs 放松 Checker），而 Agent Trigger Rate 是区分它们的关键信号（§14）。
-
-> **A4 的完整协议与两臂的设计理由在 [`../../../docs/experiments.md`](../../docs/experiments.md)**（本目录不重复）。
+> ⚠ 两臂都**不在 v1**（**D26**，2026-09-28）——它们要 agent 真的存在。
 
 ---
 
@@ -199,3 +212,10 @@ make baseline DATASET=locomo-refined          # 44 分钟 ⇒ 与 ledger 的「�
 ## 一条提醒：B1 不在这里
 
 **B1（ReFind 原版）的 runner 在 [`../baselines/`](../baselines/) 的 `refind/`**（Vendor 代码已就位）——它是"另一个服务"，不是本系统的一个 arm。
+
+
+## 数据准备（D35）
+
+`run.py` 在发请求前准备所选数据集；`replay_official.py` 只准备所选题目家族的
+裁判源码，不下载公开语料替代采集原文。两者的 `--offline` 均禁止下载。
+准备与校验失败要在付费 Add/Search 前退出，不能等到首题裁判时才发现依赖缺失。

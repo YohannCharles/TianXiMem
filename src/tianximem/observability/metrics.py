@@ -102,7 +102,10 @@ class SnapshotMetricsSink:
         self._write()
 
     def snapshot(self) -> dict[str, Any]:
-        """当前的聚合值——**写进文件的就是它**，runner 原样塞进 run record 的 `counters=`。"""
+        """当前的聚合值——写进文件的就是它。
+
+        runner 原样塞进 run record 的 `metrics=`（不是 `counters=`）。
+        """
         return {
             "searches": self.searches,
             "latency_ms": {

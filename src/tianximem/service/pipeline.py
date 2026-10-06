@@ -118,7 +118,7 @@ class AddOutcome:
     new_pair_count: int
 
     repaired: bool
-    """是否走了"按 session 幂等重建"的修复路径（即这是一次重试）。"""
+    """是否走了"按 `request_id` 幂等重建"的修复路径（即这是一次重试；作用域见 `_batch_pairs`）。"""
 
 
 class AddPipeline:

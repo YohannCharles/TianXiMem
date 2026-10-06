@@ -2,7 +2,7 @@
 
 > **状态**：`default.yaml` 与 `local.yaml` **已建**，由
 > [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py) 加载。
-> **`runs/` 已建**：**43 个目录**的对照臂配置快照（分类与重放注意见下节）。
+> **`runs/` 已建**：**44 个目录**的对照臂配置快照（分类与重放注意见下节）。
 > `submit.yaml` **已建**（2026-09-28）——**现在只有 `models.embedder` 一项**
 > （`text-embedding-v4`）；**由模型派生的量（token 预算实测量、全部标定阈值）待 Step 5 重标定后往这里补**。
 > **完整配置项清单见 [`../docs/config-reference.md`](../docs/config-reference.md)**（每个配置项、默认值、出处 §）。本文件只说**为什么这么组织**。
@@ -59,13 +59,13 @@ configs/
 ├── default.yaml     # 基线：全部有消费方的阈值与模型名（含共同取证的四个检索键）
 ├── local.yaml       # 开发期覆盖（**只写与基线不同的键**）
 ├── submit.yaml      # 提交期覆盖（🟡 已建：模型名；阈值待 Step 5 重标定）
-└── runs/            # 每次对照实验的配置快照（哪个实验、什么时候、哪套模型）✅ 43 个目录
+└── runs/            # 每次对照实验的配置快照（哪个实验、什么时候、哪套模型）✅ 44 个目录
 ```
 
 `runs/` 的用途：`docs/experiments.md` 要求记录**配置指纹**。让每个实验留下**冻结的配置副本**，而不是"当时的 local.yaml 大概是这样"——**后者在 Step 5 之后就无法重建了**。
 （跑某个 arm 用 `TIANXIMEM_CONFIG_DIR=configs/runs/<arm>` 指向那份快照。）
 
-43 个目录大致分三类，重放前先确认手上这份落在哪一类：
+44 个目录大致分四类，重放前先确认手上这份落在哪一类：
 
 - **2026-09 的对照臂**：`t1-*` / `a3-*` / `annotate` / `seed-*` / `cov-wide` / `clbench` / `lme`——
   T1/A3 四份由 [`../eval/experiments/t1_timestamp.py`](../eval/experiments/t1_timestamp.py) 与
@@ -84,6 +84,10 @@ configs/
     那些业务专用键（`employment_facts` / `statement_source_limit` / …）**不在当前键集里**，
     **当前代码遇到它们拒绝启动**。
   - 报告见 [`../eval/reports/`](../eval/reports/) 的 `*-20261005.md`。
+- **新数据集接入臂**（`new-datasets-benchmark-20261006`）：HaluMem / MuSiQue / HybridQA / FEVEROUS
+  等的接入基准——`default.yaml` 与基线**逐字相同**，`local.yaml` 只覆盖集合名与
+  `rerank.enabled: false`（当前键集，可加载）。报告见
+  [`../eval/reports/new-datasets-benchmark-20261006.md`](../eval/reports/new-datasets-benchmark-20261006.md)。
 
 > ⛔ **2026-09 那批快照的 `models.embedder` 是旧网关 id**（`Qwen/Qwen3-Embedding-8B`；现役 id
 > `qwen3-embedding-8b`，对照表见 [`../docs/config-reference.md`](../docs/config-reference.md) §9）。

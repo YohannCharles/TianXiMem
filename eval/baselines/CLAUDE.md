@@ -78,7 +78,7 @@ uv run --env-file .env python -m eval.experiments.run --dataset locomo-refined -
 1. **`refind/` 只能被 [`../harness/`](../harness/) 当"另一个 Add/Search 服务"来调**——**任何 `src/tianximem/` 里的代码都不得 import 它**。§1 明确"本项目从零搭建，不复用任何既有代码"；B1 是**外部基线**，不是代码来源。
 2. **Vendor 进来时保持原样**，不修改。改了就不再是 B1 了——**而"我们赢了吗"这个问题的答案依赖于它没被改过**。
 
-**⚠ 一条归因纪律**：ReFind 的消融数据（BM25 93.2/89.3 vs dense 91.3/82.2 vs hybrid 91.3/86.7）出自 **GPT-5-mini backbone 的 matched 子集**——**它证明的是"检索后端之间 BM25 不输"，不能直接推及 §9 的 `gpt-4o-mini` 场景。引用时别把两者混在一起**（§4 第 3 条）。
+**⚠ 一条归因纪律**：ReFind 的消融数据出自 **GPT-5-mini backbone 的 matched 子集**——**它证明的是"检索后端之间 BM25 不输"，不能直接推及 §9 的 `gpt-4o-mini` 场景；引用时别把两者混在一起**（§4 第 3 条）。数字与完整的纪律表见 [`../../docs/experiments.md`](../../docs/experiments.md) 的「基线数字的引用纪律」——**本文件不复制那张表**。
 
 > **⚠ 这条数据无法在本地检验**（D15）——**若日后分数不及预期，第一个该复检的就是它**。
 
@@ -138,16 +138,12 @@ uv run --env-file .env python -m eval.experiments.run --dataset locomo-refined -
 
 ## 引用数字的纪律
 
-**引用数字的总纪律（"不要相信自报数字"）在 [`../CLAUDE.md`](../CLAUDE.md)。** 本目录特有的四条：
+**引用数字的总纪律（"不要相信自报数字"）在 [`../CLAUDE.md`](../CLAUDE.md)；四类数字的读法（ReFind 58.2/93.2、榜单分、ActiveMemoryIndex、自报数字）一处声明在 [`../../docs/experiments.md`](../../docs/experiments.md) 的「基线数字的引用纪律」。本目录只登记真正独有的一行：**
 
 | 数字 | 能否当基线 |
 | --- | --- |
-| ReFind 公开的 58.2 / 93.2 | ❌ **必须自己重跑** |
-| 榜单分数（45.06 / 44.97 / 44.84） | ⚠️ 可作**目标参照**，不可作**本地对照** |
-| ActiveMemoryIndex 的 .6333 / .5887 | ⚠️ 其**自述**为本地 harness + 本地 judge 的 LoCoMo 结果，**非平台分**，重跑还有约 0.2pp 漂移 |
-| 任何系统**自报**数字 | ❌ 只有自己 harness 里跑出来的数才算数（§12.3 第 4 条） |
 | **候选映射仓库**（`invmem-candidate/`）的公开数据回归：0.6.0 在 LoCoMo-Refined **1,382 题、Top K=100**：Evidence Recall **0.9277**；同数据用官方 Answer/Judge 模板 + `gpt-4o-mini`：Judge Accuracy **76.92%**（1063/1382）。0.5.0：**扩窗 vs 无窗口** 54.0% vs 49.5%（200 题分层样本，TopK=90） | ⚠️ **自报 + 公开数据 + 自建流程**，非平台分（它自己也这么声明）。**但它是我们手上唯一与我们代理评测同场景的第三方数字**（LoCoMo-Refined + `gpt-4o-mini`），可作**量级校准**的参照——**仍不可当基线** |
 
-> **候选仓库那条的读法**：它的作用是回答"**我们的 0.52 离一个能上榜的系统有多远**"这类量级问题（对照口径见 [`../../docs/reference-implementations.md`](../../docs/reference-implementations.md)），**不是**"它 76.9% 所以我们也该有 76.9%"。**两边的题集、注入字段、裁判实现都可能不同。**
+> **候选仓库那条的读法**：它的作用是回答"**我们离一个能上榜的系统有多远**"这类量级问题（**当前同场景的数：0.6387 / 0.7948，见 [`../reports/ledger.md`](../reports/ledger.md)**；对照口径见 [`../../docs/reference-implementations.md`](../../docs/reference-implementations.md)），**不是**"它 76.9% 所以我们也该有 76.9%"。**两边的题集、注入字段、裁判实现都可能不同。**
 
 > **注意 AML 自己的两篇技术解读末位差 0.04**（45.06/44.97/44.84 vs 45.10/45.00/44.80）。**本 PRD 取前者**（附录 B）。

@@ -361,5 +361,5 @@ AML 把多个返回项拼进答案 prompt 时只做 `"\n".join(...)`——**不�
 > **Step 5 切换后必须重新量一次单请求实际返回的段数**，且 token 预算要做成配置项。见 [`../../../docs/open-questions.md`](../../../docs/open-questions.md) **E7**。
 >
 > **"做成配置项"这一半已落地**：上限住在 `budget.max_tokens`、分词器名住在 `budget.tokenizer`
-> （[`docs/config-reference.md`](../../../docs/config-reference.md)）。
+> （[`../../../docs/config-reference.md`](../../../docs/config-reference.md)）。
 > **剩下的是量一次**——那要等 Step 5 真的切到 `text-embedding-v4` / `gpt-4o-mini` 之后。

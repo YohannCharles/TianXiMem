@@ -140,11 +140,11 @@ Qdrant 一侧的缺失由 `service/` 的 Add 编排按同一 `request_id` 重建
 
 ## 写完之后先测什么
 
-测试用例清单见 [`../../tests/CLAUDE.md`](../../../tests/CLAUDE.md)。**本目录的关键用例有两条
+测试用例清单见 [`../../../tests/CLAUDE.md`](../../../tests/CLAUDE.md)。**本目录的关键用例有两条
 要在这里记住**。其一：幂等测试必须模拟"**事务已提交、响应未发出**"的中间态（**只测"重复 POST
 两次"太弱**）。位置是纯函数、重放必然算出同一位置，所以这一步抓的是**重放撞 `UNIQUE`**
 ——守卫若被删掉，表现为**重放把整批写成 500**（`IntegrityError`），而不是静默重复。
 
 其二：重放补索引这条路径（重放后 `qa_pairs` 逐字不变、事实不重复），见
-[`../../tests/test_grounded_evidence.py`](../../../tests/test_grounded_evidence.py) 的
+[`../../../tests/test_grounded_evidence.py`](../../../tests/test_grounded_evidence.py) 的
 `test_replay_backfill_and_source_bounds_never_change_raw_memory`。

@@ -108,7 +108,7 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 | [`CLAUDE.md`](./CLAUDE.md) | **约束速查 + 文档路由**（写给 Claude Code，也适合人读） | 全部 |
 | [`AML Agentic Memory 增强框架 PRD.md`](./AML%20Agentic%20Memory%20增强框架%20PRD.md) | **权威实现规格** | 全部 |
 | [`docs/`](./docs/) | 架构与七维映射、契约、配置项、实验登记、悬而未决清单、提交台账、决策日志 | — |
-| [`benchmark_data/`](./docs/benchmark-data.md) | AML 官方 pipeline 源码与数据集的**只读归档**（**整目录 gitignored**，说明见链接的文档） | §12 |
+| [`dataset/`](./dataset/CLAUDE.md) | 按数据集组织的本地材料；评测前按需下载，数据与上游源码 gitignored | §12 / D35 |
 | [`configs/`](./configs/) | 运行时配置：三个 profile + 完整开关清单 + 开关依赖图 | §15 |
 | [`deploy/`](./deploy/) | Qdrant server（**版本钉死**）、Step 5 重建 runbook | §6.3、§7.3 |
 | [`src/tianximem/`](./src/tianximem/) | 检索服务本体 | §6–§11、§14、§15 |
@@ -150,7 +150,7 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 
 > **本项目没有"跑一遍看看"的余地。** 所有迭代必须在自建代理评测上完成，Smoke 用于验证契约合规，Full 只用于最终定稿。
 
-**代理评测的边界**：只覆盖 LoCoMo-Refined + LongMemEval——而这两份恰好是全部数据集里**唯一共用同一套契约**的。其余各份的记忆注入字段与裁判规则各不相同（PersonaMem 甚至**根本不读检索字段**），因此**代理分数不能线性外推到全赛道**（§12.4）。
+**代理评测的边界**：只覆盖 LoCoMo-Refined + LongMemEval——而这两份恰好是全部数据集里**唯一共用同一套契约**的。其余各份的记忆注入字段与裁判规则各不相同（PersonaMem 的本地答案输入适配见 [`eval/harness/CLAUDE.md`](eval/harness/CLAUDE.md)），因此**代理分数不能线性外推到全赛道**（§12.4）。
 
 ---
 
@@ -165,7 +165,7 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 | # | 阻塞项 | 状态 |
 | --- | --- | --- |
 | 1 | **`api_config.py`** | ✅ **不是环境依赖**：**AML 公开仓自己就发布了这个文件**（520 字节、无凭据、只读 `os.environ`），放**仓库内** + 由 harness 在 subprocess 里注入 `PYTHONPATH` 即可——**"clone 下来不能直接跑"不成立**。实现见 [`eval/harness/api_config.py`](./eval/harness/api_config.py) |
-| 2 | **归档 `benchmark_data/`** | ✅ **已解决**：已在本机（**349 项 / 1.5GB**，其中 `official-extra` 那 325 项占 1.1GB）；**且不需要任何共享副本**——每一份都能按 commit / revision 从公开源取回，**出处 + sha256 进版本库**：`make fetch-data` 取回、`make data-check` 校验，清单在 [`tools/fetch_benchmark_data.py`](./tools/fetch_benchmark_data.py)。见 [`docs/benchmark-data.md`](./docs/benchmark-data.md) |
+| 2 | **本地评测数据** | ✅ 已整理为 `dataset/`，来源与哈希在 [`eval/datasets/manifest.py`](./eval/datasets/manifest.py)。按需准备，验证见 [迁移报告](./eval/reports/dataset-layout-20261006.md)。 |
 | 3 | **Windows 那台机器的 `tmp_path` 故障** | ⬜ **仍开着，且与代码无关**（是机器状态）。绕法见 [`docs/roadmap.md`](./docs/roadmap.md) 的 Step 0 |
 
 **reranker 走自建网关**（`TIANXIMEM_RERANKER_BASE_URL` + `rerank.envelope` 两半必须配套，观测点与两种信封见 [`src/tianximem/rank/CLAUDE.md`](./src/tianximem/rank/CLAUDE.md)）。它是 Step 3 及之后的**基础设施前置项**，不是代码任务——而 v1 不做 agentic 之后，**Rerank + Context Packaging 就是主线上的新增价值**，所以这条前置项直接压在主线上。开发期由 `configs/local.yaml` 显式关掉（墙钟约 3×）；关掉时链路照常（记 `rerank_disabled`）。
@@ -181,26 +181,34 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 ```bash
 cp .env.example .env      # ← 密钥要向管理员申请（仓库里全空，见下）
 make sync                 # uv sync --all-extras；含 [local] 本地模型栈，数 GB
-make fetch-data           # 取回 benchmark_data/：约 282MB（必需集）/ 1.5G（全档）
+make fetch-data DATASET=locomo-refined  # 按需准备；make eval 也会自动准备缺失材料
 make data-check           # 逐文件 sha256 校验
 make qdrant-up            # 起 Qdrant（**必须 server 模式**）
 make check                # 环境自检：Qdrant / 三段模型端点 / 密钥已填
 make serve                # ⚠ 另开一个终端：起检索服务
 make baseline DATASET=locomo-refined   # 跑一轮冻结口径的基线
+make baseline DATASET=halumem          # HaluMem-Medium 的检查点 QA
+make baseline DATASET=musique          # MuSiQue-Full dev 的答案与拒答评测
+make baseline DATASET=hybridqa         # 整表及链接段落的问答
+make baseline DATASET=feverous         # claim 候选整页上的标签及证据评测
 ```
+
+HybridQA / FEVEROUS 的语料下载、输入范围与评分见
+[接入报告](./eval/reports/hybridqa-feverous-pipelines-20261006.md)。FEVEROUS 首次准备会下载
+完整 Wikipedia 数据库并生成候选检索索引，空间与耗时也记录在那里。
 
 **四件事先知道，否则会卡在半路：**
 
 | | |
 | --- | --- |
 | **`.env` 的密钥要向管理员申请** | 仓库里**全空**（只提交 `.env.example`）。这是**唯一一个"仓库里查不到答案"的步骤**，其余都能自己跑通 |
-| **数据集不进版本库** | `benchmark_data/` 整目录被 `.gitignore` 排除 ⇒ **clone 完一个文件都没有**。取回**只要外网、不要任何凭据**（公开源，按 commit / sha256 钉死）；**目录不用先 `mkdir`**，`make fetch-data` 会在下载时自己建 |
+| **数据集不进版本库** | `dataset/CLAUDE.md` 入库，数据不入库；首次评测自动按固定版本下载所选数据集及评分依赖，`--offline` 禁止下载。需要预取时运行 `make fetch-data DATASET=<名称>` |
 | **Qdrant 必须 server 模式** | **local 模式会静默丢弃 payload 索引**，而 `user_id` / `session_id` / `event_time` 三个筛选**全依赖**它 |
 | **服务得先起着** | `make eval` / `make baseline` 打的是**真 HTTP**（§13 的边界：harness 不 import `src/`）⇒ 另开一个终端跑 `make serve` |
 
-⚠ **`make fetch-data` 不带 `--tier` 默认全取（1.5G）**。只跑代理评测的话 `required` 档（282MB）就够；
-`official-extra` 那 325 项占 1.1G —— 要省磁盘就用
-`uv run --env-file .env python tools/fetch_benchmark_data.py --fetch --tier required`。
+`make fetch-data` 默认只准备 LoCoMo-Refined；其他数据集用 `DATASET=<名称>` 指定。
+需要全档时显式用 `DATASET=all`。旧的按档下载仍可通过
+`uv run --env-file .env python -m eval.datasets.prepare --fetch --tier required` 使用。
 
 **部署到服务器**（只跑检索服务 + Qdrant，不需要 GPU）：
 

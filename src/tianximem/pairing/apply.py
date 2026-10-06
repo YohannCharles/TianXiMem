@@ -3,12 +3,14 @@
 ```text
 0. payload 指纹                 canonical(user_id, session_id, messages) → sha256（D28）
 1. 幂等守卫（必须最先做）        SELECT ... FROM applied_batches WHERE request_id = ?
-                               命中且指纹相同 → 本批已应用过（重试）→ 直接返回，不写任何东西
+                               命中且指纹相同 → 本批已应用过（重试）→ **真源一行不动**；
+                                                启用共同取证时经 index_pair_facts() 补事实索引
                                命中但指纹不同 → **响亮冲突**（非 5xx），不许静默当重放
 2. 组合                        compose_memory_blocks(messages)   ← 只看本批，不看库
 3. Add 内邻接                   link_blocks(blocks) → 每个块的 (前, 后) 的 local_index
 4. 写入 + 记下本批              位置 = (request_id, local_index)；同一个事务里
                                INSERT qa_pairs + INSERT applied_batches
+                               （启用共同取证时再加 index_pair_facts() 写的派生表）
 ```
 
 > **⚠ 第 1 步不能省。** 它是**唯一**能防"同一批被应用两次"的东西：服务在事务提交之后、

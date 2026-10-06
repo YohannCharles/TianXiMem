@@ -12,10 +12,10 @@ test_contract.py        §2.1 / §2.2 契约形状与计数（含真 HTTP 往返
 test_contract_preflight.py  `eval/smoke/preflight.py` 的静态一致性与**检查是否真会失败**
 test_isolation.py       §2.2 user_id 隔离
 test_render.py          §7.2 / §11.3 同一份渲染
-test_annotate.py        §11.3 / **D21** 相对时间就地注解：**只加不改**、推不出不动、**不碰索引**
+test_annotate.py        §11.3 / **D22** 相对时间就地注解：**只加不改**、推不出不动、**不碰索引**
 test_store.py           §6.1 / §6.3 DDL、连续性与索引、**连接生命周期与并发**
 test_config.py          §15 配置唯一入口（**AST 静态断言** + 校验 + `.env` 读取）
-test_neighbor.py        §10 / §11.2 扩窗 + 段合并（**24 条清单的主体**）
+test_neighbor.py        §10 / §11.2 扩窗 + 段合并（链断裂、跨 Add / 跨 user 不合并、`radius` 纯度对比）
 test_packaging.py       §11.3 段级打包 + 双预算（段进来之后的事）
 test_reranker.py        §11.2 远端精排：线格式、降级、两个计数器、装配（**不发真请求**）
 test_observability.py   §14 指标出口：聚合、**计数是增量不是累计**、装配与 runner 读取（**V12**）
@@ -36,8 +36,31 @@ test_fact_index_coverage.py 事实索引的覆盖与**有界补扫**：冷 Searc
                         **补不满绝不返回半份集合**、失败回滚、真源与旧派生表一字不动
 test_chinese_evidence.py 中文显式表达复用同一套共同字段与算子：角色/动词/数量归一、
                         **部分抽取不得冒充完整集合**（物理扫描齐全 ≠ 语义齐全）、单位与原文顺序不丢
+test_official_capture.py 官方采集套件（`official-dataset-*`）：套件合成（归属/金标/判分语义）、
+                        加载层**按 timeline 交错**、**只加载可评分题**、注入项按题带家族、
+                        分派 pipeline 的纯函数判分（MQuAKE 别名 / FEVEROUS 三分类 / HaluMem prompt 逐字）
+test_dataset_prepare.py 数据准备的断网/截断/哈希失败、原子发布、离线模式、迁移预检与兼容入口
+test_memoryqa_datasets.py HaluMem 检查点隔离、MuSiQue 变体 ID、标注不进入 Add、
+                        HTTP 驱动到实际答案/裁判函数、拒答及三分类评分、数据指纹
+test_corpusqa_datasets.py HybridQA 整表/全部段落、FEVEROUS 候选不依赖 gold、证据 ID 可见性、
+                        上游严格证据组判分、压缩语料原子发布、实际子进程与输入指纹
+test_aml_inputs.py       AML 输入计划的金标隔离、更新前/后与持续检查点、实际 HTTP 顺序、
+                        Search 失败阻断未来 Add、历史快照续跑、版本/配置/检查点缺失守卫
+test_personamem_pipeline.py 逐题 Search 片段进入实际答案请求；原始历史不泄入、空检索不回填、
+                        旧完整历史答案与变更后的检索输入不得静默复用
 test_current_payload.py 当前字面输入的依赖检查：payload 齐全且开关开 ⇒ **不检索、直接空结果**；
                         缺项/变量/冲突/历史依赖 ⇒ 照常检索（原混合链）
+test_retrieve.py        `retrieve/` 的策略与参数所有权（**不碰 Qdrant**）
+test_qdrant_store.py    Qdrant 派生索引集成（**需要真 Qdrant**，不可达整组 skip，不静默通过）
+test_embed_cache.py     embedding 维度来源 / 落盘缓存 / 坐标系失效（**不碰网络**）
+test_query_instruction.py 查询侧 instruction：**前缀必须加在缓存之上**那条静默边界
+test_service_add.py     Add 端的时序与两层幂等（假 Qdrant，精确控制第几次 upsert 失败）
+test_harness.py         `eval/harness/` 切批 / HTTP 驱动 / 裁判包装 / run record（桩 pipeline 真 import api_config）
+test_experiments.py     `eval/experiments/` 通用 runner 与各 arm 的声明（不碰网络与归档）
+test_datasets.py        `eval/datasets/` schema 落差（合成 fixture 为主，真数据另组、缺席时 skip）
+test_benchmark_archive.py 归档的**已声明本地修订**（补丁必须声明，不许悄悄改）
+test_corporatebench_pipeline.py CorporateBench 判分与 harness 接线
+test_probes.py          truncation_probe / reorder_probe 的纯函数（判分那步不在本文件）
 ```
 
 > ⚠ **§13 的开关纯度没有独立文件**。断言住在**各自开关所在的模块**里：
@@ -273,7 +296,7 @@ test_idempotency.py  批次级守卫
 make test      # uv run pytest
 ```
 
-**契约相关的断言也要能被 `make contract-check` 在**服务**上跑一遍**——单元测试验证函数，[`../eval/smoke/preflight.py`](../eval/smoke/) 验证**真的 HTTP 响应**。两者都要（§13 要求主路径能通过 Smoke 契约校验）。
+**契约相关的断言也要能被 `make contract-check` 在**服务**上跑一遍**——单元测试验证函数，[`../eval/smoke/preflight.py`](../eval/smoke/preflight.py) 验证**真的 HTTP 响应**。两者都要（§13 要求主路径能通过 Smoke 契约校验）。
 
 ⚠ **"门禁必须能失败"本身也要有测试**：[`test_contract_preflight.py`](./test_contract_preflight.py) 塞一个**故意违规的假服务**，逐条确认对应的检查报 FAIL，再用合规的假服务做**阳性对照**。
 **一个永远不会 FAIL 的检查等于没有检查**——而"没有检查"与"检查通过"在屏幕上是同一个样子。

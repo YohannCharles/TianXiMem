@@ -6,7 +6,7 @@
 
 `var/` 沿用 Unix 的 `/var` 语义：**只装运行时状态**。**装进这里的东西都应当是可重建或可弃的。**
 
-⚠ **别与只读归档 `benchmark_data/` 混为一谈**——混了会导致有人往里写、或反过来以为它可以删。
+⚠ **别与评测材料 `dataset/` 混为一谈**——混了会导致有人往里写、或反过来以为它可以删。
 
 ## 里面有什么
 
@@ -32,7 +32,7 @@ var/
 | **`tianxi.db`** | **没了就没了。**它是真源，**备份对象只有它** |
 | **Qdrant 卷**（`deploy/compose.yaml` 的 Docker 命名卷，**不在本目录**） | 可从 `tianxi.db` 的正文全量重建（这正是"Qdrant 是派生读存储"的意思，§6.3） |
 | `embed_cache/` | 可重建，**但要重付一遍 embedding 的钱**——本地模型是电费，线上是 API 账单 |
-| `capture/` | **丢了就丢了，不用重建**——它是诊断产物（要再来一次就再打开开关跑一遍），而且**不进备份**（`deploy/CLAUDE.md` §4 的 runbook 只备份 SQLite） |
+| `capture/` | **丢了就丢了，不用重建**——它是诊断产物（要再来一次就再打开开关跑一遍）；⚠ 但 **§4 的备份是整卷 `tar`**，它会顺带被拷进备份包——**恢复时可弃** |
 
 **所以 Step 5 的重建 runbook 里"备份 SQLite"是第 2 步**（见 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4）——**顺序不能反**。
 
@@ -47,7 +47,7 @@ var/
 | **不要往这里提交任何东西** | 整目录被忽略，提交了也看不见——**若你写的东西需要入库，它就不属于 `var/`**（派生【产物】的归属见 `.gitignore` 里那条说明） |
 | **embedding 缓存必须落盘**（§7.2） | 不是优化项，是**成本结构**：v1 的 Add 阶段不调用任何 LLM，embedding 是唯一的 Add 侧成本，**且只与内容有关——缓存后即成为一次性成本，与迭代次数无关**（实现要求见 [`../src/tianximem/embed/CLAUDE.md`](../src/tianximem/embed/CLAUDE.md)） |
 
-> **缓存条目键 = "渲染后文本的哈希"**（不能用 `id`）；**一个坐标系一个缓存文件**——坐标系 = 模型名 + 渲染模板版本，写进文件名与文件内（见 [`../src/tianximem/embed/CLAUDE.md`](../src/tianximem/embed/CLAUDE.md)）。Step 5 切模型时按 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的 runbook 第 3 步**作废整个缓存目录**。
+> **缓存条目键与"一个坐标系一个缓存文件"的口径在根 `CLAUDE.md` 的「两个 ID / 缓存键」表与 [`../src/tianximem/embed/CLAUDE.md`](../src/tianximem/embed/CLAUDE.md)**——本目录不重复。Step 5 切模型时按 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的 runbook 第 3 步**作废整个缓存目录**。
 
 ---
 
@@ -59,7 +59,7 @@ var/
 服务一启动就 `no such column: local_index`，**起不来**。
 
 **换库时只换 SQLite 是不够的**：旧集合里的 point 是旧库的派生索引，**新库不会覆盖它们**
-（§6.3 是按 id upsert）⇒ 检索会返回"新真源里根本不存在的记忆"，而**不报错**（这就是 **V9**）。
+（§15 写路径第 5 步：同 `id` upsert 覆盖）⇒ 检索会返回"新真源里根本不存在的记忆"，而**不报错**（这就是 **V9**）。
 
 ```bash
 mv var/tianxi.db var/tianxi.db.pre-d25                          # 留档。**别删**——它是唯一不可重建的那份
@@ -67,8 +67,8 @@ curl -X DELETE http://127.0.0.1:6333/collections/memories_dev   # 派生索引�
 ```
 
 > 本机（WSL）2026-09-30 已这么做过一次：`tianxi.db.pre-d25` 是 9/27 那代（schema 早于 D25）的库，
-> `memories_dev` 已删。要在它上面重建索引：把 `TIANXIMEM_SQLITE_PATH` 指回那份留档，
-> 再跑 `tools/reindex.py --drop`。
+> `memories_dev` 已删。⚠ **那份留档仅供取证，不能直接喂给服务或 `tools/reindex.py`**——D25 之前那代库
+> 没有迁移路径（见上），要用它得先 checkout 当时的代码，或先写转换脚本。
 
 **2026-10-01 又做了一次，理由不同但手法一样**：add 形态从 `native` 改成 `official`
 （逐数据集加 `<标签>: ` 前缀、`system` 折成 `user`、单条 8,000 字符切分、每条 Add 2,000 词预算）——

@@ -4,7 +4,7 @@
 >
 > **v1 默认"证据充足"，没有 Agentic Search、没有证据补充、没有关键词重写。** 下文的循环、工具集、参数、监控**整块归 v2**。
 >
-> **但 Evidence Checker 的接缝要留在 v1**：实现为**恒返回"充足"、且必须记录每轮判定**的空实现。记录的理由见 D13——不记，**Step 4 之前永远无法用数据回答 A4「agent 值不值」**。
+> **但 Evidence Checker 的接缝要留在 v1**：实现为**恒返回"充足"**的空实现（[`../retrieve/checker.py`](../retrieve/checker.py)）。⚠ 但 **v1 的装配不带 instrument**（落到 `NullCheckerInstrument`）⇒ **每轮判定被丢弃**，D13 那条"必须记录"**至今未满足**（取舍见 [`../service/app.py`](../service/app.py) 的装配注释）——而 **A4 已移出 v1**（**D26**，两臂都跑不起来），A4a/A4b 的 arm 定义留在 [`../../../docs/experiments.md`](../../../docs/experiments.md)。
 >
 > **v1 的代价必须正视**：没有证据补充路径，**召回是一次性天花板**——正确的 QA 对不在初始候选里就永久丢了。**v1 的全部重量因此压在"排序 + token 预算分配"上**，而这正是 [`../rank/`](../rank/) 与 Neighbor Expansion 的职责。
 
@@ -36,7 +36,7 @@ tools.py    search_chatrecord / take_note / finish_search
 | **门控太松** | Agent Trigger Rate 偏高 | Checker 太保守 |
 | **门控太紧** | Agent Trigger Rate **接近 0** | **agent 没起作用**——核心 claim 事实上没有被验证 |
 
-**只看平均分看不出这两种失败**——必须同时看 Trigger Rate。这也是 §13 要把 A4 拆成 A4a/A4b 两个 arm 的原因（见 [`../../../docs/experiments.md`](../../../docs/experiments.md)）。
+**只看平均分看不出这两种失败**——必须同时看 Trigger Rate。这也是 [`../../../docs/experiments.md`](../../../docs/experiments.md) 把 §13 的 A4 拆成 A4a/A4b 两条读法的原因（两臂都不在 v1，**D26**）。
 
 ---
 
@@ -100,4 +100,4 @@ Multi-hop · Temporal · Knowledge Update · Ambiguous · 信息分散
 ## 依赖
 
 - 检索：[`../retrieve/`](../retrieve/)（复用 §7 的 hybrid 检索，**不另起一套**）
-- LLM：[`../llm/`](../llm/)（**v1 里它是 LLM 的唯一消费者**）
+- LLM：[`../llm/`](../llm/)（**agent 是 LLM 的唯一消费者**；v1 不实现 agent、Checker 恒"充足" ⇒ **v1 没有实际调用点**，口径与 [`../llm/CLAUDE.md`](../llm/CLAUDE.md) 一致）

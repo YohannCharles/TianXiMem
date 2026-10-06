@@ -252,7 +252,7 @@
 
 ## D16 · 数据路径统一走 `TIANXIMEM_BENCHMARK_DIR`；LoCoMo 的 Add 对话源支持两种布局（2026-09-23）
 
-**决策一 —— 路径口径**：**数据路径一律通过 `TIANXIMEM_BENCHMARK_DIR` 读取，代码中不得硬编码 `benchmark_data/` 或 `eval/datasets/`。** 默认值仍是 `benchmark_data/`；本地开发通过 `.env` 指向实际数据目录。
+**决策一 —— 路径口径**：**数据路径一律通过 `TIANXIMEM_BENCHMARK_DIR` 读取，代码中不得硬编码 `benchmark_data/` 或 `eval/datasets/`。** 最初默认值是 `benchmark_data/`；D35 将默认目录改为 `dataset/`，环境变量入口保持不变。
 
 **边界**：`eval/datasets/LoCoMo-Refined/data/` 是**开发与自测用**的数据，**不是最终要跑的数据集**——归档才是。两者不可混为一谈，**也不得让代码依赖任何一边**。
 
@@ -1456,3 +1456,91 @@ clbench 的基线实测死在第 7 个样本）。
 2. **v2 的 agent 立项**——多轮检索才是聚合题的天然解法；
 3. **40k 这个网关限制消失**（换网关 / 换提交期模型）⇒ 改动变得**可测**；
 4. 官方流量里出现 corp 的**判分回写**（证明它在被判分，而不只是语料在）。
+
+---
+
+## D34 · 官方采集的重放口径：**按 timeline 交错、payload 用原文、判分走套件**（2026-10-06）
+
+**决策**：`official-dataset-2026-09-29/`（2026-09-29 那轮打在我们服务上的全部官方
+add/search 原文）本地的复放，**不套 `run.py` 的通用路径**，而是：
+
+1. **payload 用采集原文**——不 `add_shape`（再加一遍 `<标签>: ` 就是加两遍）、
+   不重新切批（**D24 下批界决定记忆块的形状**）、`request_id` 用官方那个；
+2. **按 `official-timeline.jsonl` 的时序交错投喂**——该题的检索发生在**它之后的 add 之前**。
+   依据：6,146 道可评分题里 **2,507 道（41%）的提问时刻早于该 user 的最后一条 add**，
+   先灌完再问 = **读到未来**（README §5.4 的同一条）；
+3. **判分走 `official-eval-kit.jsonl`**（一题一行：归属 / 金标 / 判分语义 / prompt 指针）
+   —— 它是加载与判分的**唯一入口**，由 `tools/build_official_kit.py` 从
+   三份既有产物 + 逐族补金标合成；
+4. **归属是 user 级为主、行级为辅**（`official-attribution.jsonl` 记依据：
+   `tag` > `official_feedback` > `public_gold`/`gold_extra` > `corpus` 启发式）。
+   ⚠ `corpus` 那一档是**猜的**（`Corpus:` 前缀下实测至少五族），只用于族统计。
+
+**落地**：`eval/datasets/official_capture.py`（加载）· `eval/experiments/replay_official.py`
+（按 timeline 的 runner）· `eval/harness/official_capture_pipeline.py`（**按题分派**到 14 个
+数据集的 answer/judge）· `make replay-official`。
+
+### 哪些判分口径是**我们定的**（不是官方口径，写在这里免得被当成官方分）
+
+| 家族 | 口径 | 出处 |
+| --- | --- | --- |
+| LoCoMo / ScriptMem / BEAM / CL-Bench | **官方那份**（归档 pipeline 的函数直接调） | `benchmark_data/pipeline_*.py` |
+| MQuAKE / MemTrapBench / CorporateBench / MedMemoryBench / TempReason / Doc-PP | 自写（Doc-PP 的裁判 prompt 读上游文件） | `eval/harness/extra_pipeline.py` |
+| **PersonaMem-v2** | 上游 `evaluate_narrow` 要 `preference` 元数据，而采集的 search 里没有 ⇒ 换成"拿参考回答当标准"的 LLM 裁判 | `_NARROW_JUDGE_PROMPT` |
+| **HaluMem** | 上游只发布一份 LLM 裁判（`Correct`/`Hallucination`/`Omission`），**逐字读归档那份** | `benchmark_data/halumem/eval_tools.py` |
+| **FEVEROUS** | **只判 label**（三分类），**不判证据 id 的 F1** | `_feverous_judge` |
+| **BEAM 的二值化** | 均分 `== 1.0` 才算对（官方只报均分） | 与 `_read_beam_labels` 同一口径 |
+
+⇒ **这些分数只在仓内前后比**（§12.4 照旧）；它们证明的是**改动的方向**，
+**不是官方榜分**（README §6.1 的同一条）。
+
+### 一处**已声明的偏离**：CL-Bench 的 rubric 判分**拆批判**（2026-10-06）
+
+**是什么**：官方那份 `evaluate_rubric_clbench` 把**全部** rubric 塞进一次调用；
+本仓按 **30 条一批**拆开，**每批都通过才算对**。
+
+**为什么**：实测（同一道题、同一个网关）——10 条 rubric → 12.1 秒 · 30 条 → 13.5 秒 ·
+**109 条 → 360 秒还不返回**（撞网关源站时限）⇒ 官方那套重试 3 次后按纪律**记 0**
+⇒ 一条题烧掉约 20 分钟、**而且分不出"没测到"与"答得不对"**。
+拆批后同一道题 **47–70 秒**判完，并给出 `partial`（54/103 条满足）。
+
+**判据没有变**：官方 prompt 原文就是逐条独立判定、全中才算 1
+（*"For every requirement… verify one by one"* / *"strict, all-or-nothing"*）——
+拆批只是把同一组条件分成几组"全都要满足"。
+⚠ **但批与批之间互相看不见**，所以判定**可能与"一次判完"不同**；
+**实测 ≤30 条的那 128 道题走的是同一条路**（只有一批），**不受影响**。
+
+**另外**：`JUDGE_ERROR` 与 `WRONG` 在我们这一层**分开写**
+（归档那份对"API 失败"与"答错"一律记 0）——分数口径不变，但**基础设施抖动不再冒充准确率**。
+
+### 边界（照实说）
+
+- **覆盖率**：10,144 条 search 里 **8,783 条（86.6%）可评分**；剩下 1,361 条无公开金标
+  （中文法条族、TempReason 本地实例缺失、未识别的书/影族、无金标的 persona 段…）。
+- **一个 run 里的分数不能按类别横比**：14 个家族的判分语义各不相同（有的 LLM 判、有的纯函数）。
+- **重放不能证明线上分数**：语料是官方的、题是官方的、**但检索与答案是我们的**，
+  而官方那一轮的判分（1,907 条回写）本身只有 42.84%。
+
+
+## D35 · 按数据集整理材料并在评测前按需准备（2026-10-06）
+
+**问题**：旧 `benchmark_data/` 把题库、官方评分代码、参考仓库与历史笔记放在一起，
+数据缺失时需要人工取全档，无法从目录直接判断哪些内容属于哪个数据集。
+
+**决策**：数据根目录改为 `dataset/`，一个数据集一个目录；上游代码与参考材料
+集中在 `.upstream/`，不可重取的存档在 `.legacy/`，下载暂存在 `.tmp/`。
+`dataset/CLAUDE.md` 入库，其余下载与迁移材料不入库。D16 的环境变量入口和
+数据集文件名不得进入服务内部的边界不变；旧平铺布局保持只读兼容。
+
+清单、目录映射和准备逻辑分别集中在 `eval/datasets/{manifest,layout,prepare}.py`。
+评测 CLI 在发请求前准备所选数据集，官方采集重放只准备所选题目家族的裁判依赖。
+`--offline` 禁止下载；loader/import 不联网。暂存文件先校上游哈希，再打已声明补丁，
+校本地哈希后才原子发布；已有异常字节不会被自动覆盖。
+
+**处理边界**：下载阶段只整理目录和应用已声明补丁；schema 归一化复用现有加载器，
+不改变语料、题目、答案、prompt、评分逻辑或源文件哈希。记录中的数据根地址随迁移改变，
+已有报告与已生成套件保持原样。
+官方采集原文不属于公开可下载数据，不通过此入口补造。
+
+用法与出处见 [`benchmark-data.md`](benchmark-data.md)，
+迁移校验与测试结果见 [`../eval/reports/dataset-layout-20261006.md`](../eval/reports/dataset-layout-20261006.md)。

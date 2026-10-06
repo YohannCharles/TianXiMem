@@ -15,9 +15,20 @@ memtrapbench.py   official-extra：MemTrapBench（真对话，陷阱题）
 corporatebench.py official-extra：CorporateBench（邮件/KB 文档）
 medmemorybench.py official-extra：MedMemoryBench zh（**检查点式**：记忆只喂到该次问诊）
 tempreason.py     official-extra：TempReason **L2/L3**（L1 无上下文，不是记忆任务）
-personamem.py     公开六份之一：PersonaMem-v2（⚠ **不读检索字段**，只能当回归对照）
+personamem.py     公开六份之一：PersonaMem-v2（对话用于 Add，逐题 Search 输入由 harness 适配）
+halumem.py        HaluMem-Medium QA（独立检查点，只加载当时可见对话；不注入标注）
+musique.py        MuSiQue-Full dev（可答/不可答变体隔离，候选段落作为 Add 语料）
+hybridqa.py       HybridQA dev（整张表格及全部链接段落，同表题目共享用户语料）
+feverous.py       FEVEROUS dev（claim-only 候选页检索、整页元素 ID；不由 gold 补页面）
+corpus_prepare.py CLI 的语料解压：固定包成员白名单、校验与原子发布
+official_capture.py **官方采集流量**（2026-09-29 那轮，不进 git）——按 timeline 交错重放、
+                  payload 用采集原文；**与独立加载器结构不同**（见 D34）
+aml/              公开数据的版本化 AML 输入计划；进入前读 aml/CLAUDE.md，原生加载器不改名
 preprocess.py     **schema 落差预处理层**（§12.3 第 9 条）
 sampling.py       确定性分层抽样（`stratified_sample`，跨类不随机）
+manifest.py       数据清单：URL / 固定 commit / sha256 / **已声明补丁**的唯一来源（D35）
+layout.py         清单标识 → 本地路径的**唯一映射**（D35 的目录布局）
+prepare.py        按需下载 / 校验 / 打补丁 / 原子发布 / 旧目录迁移（评测 CLI 的入口，D35）
 registry.py       数据指纹（版本 + 切批口径）——§13 的记录要它
 ```
 
@@ -28,10 +39,11 @@ registry.py       数据指纹（版本 + 切批口径）——§13 的记录要
 > ⚠ `personamem.py` 走**适配器**（[`../harness/`](../harness/) 的
 > `*_pipeline.py`）——官方 pipeline 的子命令形状与通用两子命令不同，适配器里**直接调官方那几个函数**。
 >
-> **`official-extra` 那几份没有官方 AML pipeline** ⇒ 它们的 answer（以及大部分 judge）
+> **MQuAKE / MemTrapBench / CorporateBench / MedMemoryBench / TempReason 没有官方 AML pipeline**
+> ⇒ 它们的 answer（以及大部分 judge）
 > 是我们自写的（[`../harness/extra_pipeline.py`](../harness/extra_pipeline.py)），
 > **分数只在仓内前后对比**。⚠ 一个例外：**MedMemoryBench 的判分口径是上游发布的**
-> （`benchmark_data/medmemorybench-code/metrics/`，我们照它实现、prompt 直接从它读）——
+> （`dataset/.upstream/medmemorybench/metrics/`，我们照它实现、prompt 直接从它读）——
 > 但作答侧仍是我们的。
 > 逐份的构造约定写在各自模块的 docstring 顶部——**读 loader 之前先读它**。
 
@@ -43,7 +55,7 @@ registry.py       数据指纹（版本 + 切批口径）——§13 的记录要
 >
 > **理由**：同一套 `Add` / `Search` 最终要接 **LongMemEval / PersonaMem / BEAM 以及未来的真实 API 请求**。**任何数据集的便利格式都不得向上渗透**——`conversations.jsonl` 的"本身即 JSONL / 自带 `role`"止步于此。
 
-> **⚠ 一条路径口径（D16）**：**数据路径一律通过 `TIANXIMEM_BENCHMARK_DIR` 读取，代码中不得硬编码 `benchmark_data/` 或 `eval/datasets/`。** 默认值仍是 `benchmark_data/`；本地开发通过 `.env` 指向实际数据目录。
+> **⚠ 一条路径口径（D16）**：**数据路径一律通过 `TIANXIMEM_BENCHMARK_DIR` 读取，代码中不得硬编码 `benchmark_data/` 或 `eval/datasets/`。** 默认值为 `dataset/`（D35）；本地开发通过 `.env` 指向实际数据目录。
 >
 > **边界**：`eval/datasets/LoCoMo-Refined/data/` 是**开发与自测用**的数据，**不是最终要跑的数据集**——归档才是。两者不可混为一谈，**也不得让代码依赖任何一边**。
 
@@ -53,8 +65,8 @@ registry.py       数据指纹（版本 + 切批口径）——§13 的记录要
 
 | 头 | 干什么 | 为什么 |
 | --- | --- | --- |
-| **(a) 加载器** | 各数据集的加载（见上「要写什么」，十份） | 其中只有 LoCoMo-Refined + LongMemEval 共用同一套代理契约（§12.4）；其余各带自己的落差 |
-| **(b) 契约抽取** | 从**其余各份**的 pipeline 源码里抽出记忆注入字段与裁判规则 | §11.3 的打包规则**是从它们推导出来的**——BEAM 的时间规则**正好相反**、CL-Bench 读 `text` + `created_at`、PersonaMem **忽略全部检索字段** |
+| **(a) 加载器** | 各数据集的加载（见上「要写什么」） | 其中只有 LoCoMo-Refined + LongMemEval 共用同一套代理契约（§12.4）；其余各带自己的落差 |
+| **(b) 契约抽取** | 从**其余各份**的 pipeline 源码里抽出记忆注入字段与裁判规则 | §11.3 的打包规则**是从它们推导出来的**——BEAM 的时间规则**正好相反**、CL-Bench 读 `text` + `created_at`、PersonaMem 归档原版只读历史（本地输入适配见 [`../harness/CLAUDE.md`](../harness/CLAUDE.md)） |
 
 **只做 (a) 会漏掉一整类错误**：在 LoCoMo 上调好的注入格式，到 CL-Bench 可能被**整批丢弃**——而 (b) 就是提前知道这件事的唯一手段。
 
@@ -74,7 +86,7 @@ registry.py       数据指纹（版本 + 切批口径）——§13 的记录要
    - 文件里有 `qa_id`，pipeline 读 `item["id"]` → **`KeyError`**
    - 文件里有 `answer`（list[str]），pipeline 读四个 gold 键之一 → **`ValueError`**
    - 记忆字段**为空**（文件里根本没有）
-2. **记忆注入字段在数据集里根本不存在**——`speaker_1_memories` / `retrieved_context` / `memories` 的命中数都是 0，**只能由检索方运行时注入，但用什么键名注入没有明文**（§11.3 / [`../../../docs/open-questions.md`](../../docs/open-questions.md) V3）。
+2. **记忆注入字段在数据集里根本不存在**——`speaker_1_memories` / `retrieved_context` / `memories` 的命中数都是 0，**只能由检索方运行时注入，但用什么键名注入没有明文**（§11.3 / [`../../docs/open-questions.md`](../../docs/open-questions.md) V3）。
 
 **因此加载器必须产出一份转换后的 JSONL**，每行含：`id`（取自 `qa_id`）、`question`、四个 gold 键之一（取自 `answer`；`memory_text` 会把 list `"\n"` 拼起来）、以及**由系统注入的记忆字段**。
 
@@ -224,3 +236,23 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 > **NC（非商业）这一列值得注意**：LoCoMo-Refined 与 ScriptMem 都是 CC BY-NC 4.0。**不影响参赛**，但**它意味着这两份数据不能进任何商业用途的产物**——如果后续想把系统或其中组件开源/商用，**这两份数据的评测结果是引用不了的**。
 
 > **"不得训练"这条的出处提醒**：归档里**没有**这些条款的出处（全库检索 `only for the evaluation` 等措辞零命中），属**单边来源**，引用前须回原始页面/许可证文件复核。**结论不变，但不要把它当成已归档的实证。**
+
+
+## 按需准备（D35）
+
+`native` 与 `aml-v1` 的边界、支持范围和续跑纪律统一见
+[`../../docs/benchmark-data.md`](../../docs/benchmark-data.md) 的「公开数据的 AML 输入适配」。
+适配器只构造事件和独立评分题；HTTP、切片及切批交给 harness，不从金标挑语料。
+
+`manifest.py` 只记录来源、版本与哈希，`layout.py` 只负责本地目录映射，
+`prepare.py` 负责暂存下载、校验、已声明补丁与原子发布。
+HybridQA 的固定语料包提取出逐表文件并记录成员哈希；FEVEROUS 从官方 ZIP 提取
+原始 SQLite，再构建可重建的 title/intro FTS5 缓存。候选生成范围只在
+[`feverous.py`](./feverous.py) 声明，数据规模和验证见 [接入报告](../reports/hybridqa-feverous-pipelines-20261006.md)。
+评测 CLI 在执行前显式调用 `ensure_dataset`；loader 和模块 import 不联网。
+`__init__.py` 按需导出加载器；仅下载/校验时不要求安装 pyarrow。
+目录纪律见 [`../../dataset/CLAUDE.md`](../../dataset/CLAUDE.md)。
+
+HaluMem 和 MuSiQue 的独立评测口径、复用的评分来源、未覆盖的上游指标见各自
+加载器 docstring；使用方法与验证见
+[`../reports/halumem-musique-pipelines-20261006.md`](../reports/halumem-musique-pipelines-20261006.md)。

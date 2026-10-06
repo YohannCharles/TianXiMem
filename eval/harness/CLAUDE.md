@@ -6,13 +6,17 @@
 
 ```text
 driver.py                  喂 Add、调 Search（**走 HTTP**）、收集返回
+plan_driver.py             AML 事件编译、HTTP 分派与逐事件检查点；历史 Search 落盘后才继续 Add
 batching.py                模拟 AML 切批（20 条消息 + 2,000 词的**空白分词近似**）
 add_shape.py               模拟 AML **正文形态**（`<标签>: …` 前缀 + `system` 折叠 + 单条 8,000 字符切分）——线上就是这么发的
 judge.py                   包住 pipeline 的裁判（`run_judge` 跑 `answer`→`evaluate` 两步）
-extra_pipeline.py          我们自写的五份 `official-extra` 数据集的 answer / evaluate——官方没有发布它们的 pipeline
-personamem_pipeline.py     PersonaMem-v2 适配器——两个子命令都直接调归档里那份的函数（官方 CLI 形状不同）
+extra_pipeline.py          本地自写的 `official-extra` answer / evaluate（含 MuSiQue）
+corpusqa_pipeline.py       HybridQA / FEVEROUS：Search-only 作答，固定上游函数判分与逐题指标
+personamem_pipeline.py     PersonaMem-v2 适配器——Search 片段替代原始历史，选项与 MCQ 判分复用归档
 scriptmem_pipeline.py      ScriptMem 适配器——**到不了裁判**（加载层与 pipeline 表里都没有它），保留作参考
 corporatebench_pipeline.py CorporateBench 的答案 prompt 与纯函数判分——被 `extra_pipeline.py` 调用
+official_capture_pipeline.py 官方采集重放的逐题分派层（D34）；HaluMem 独立 QA 也复用其
+                        上游三分类裁判与通用作答入口。评分范围见对应加载器与验证报告
 api_config.py              归档 pipeline 要 `import` 的端点配置——`run_judge` 经 `PYTHONPATH` 注入本目录这份（见下文）
 annotate.py                相对时间就地注解——`--memory-date annotate` 那一档的 harness 侧实现
 run_record.py              每次 run 的配置指纹 + 数据指纹 + 结果
@@ -27,19 +31,15 @@ run_record.py              每次 run 的配置指纹 + 数据指纹 + 结果
 ## ⚠ `Add` 的 payload 不是我们造的——它由 AML 造
 
 这是 `add_shape.py` 存在的全部理由。**全量实测**官方 43,272 条 add / 454,937 条消息：
-
-| 观测 | 数 |
-| --- | --- |
-| 正文带 `<标签>: ` 前缀 | **93.9%** |
-| ├ 标签 == `role`（`user:` / `assistant:` 小写） | 82.9% |
-| ├ 标签是说话人名或固定词（`Caroline:` / `Corpus:` / `source:` / `document:` …） | 10.9% |
-| `role` 的取值域 | **只有 `user` / `assistant`，零 `system`** |
+**正文 93.9% 带 `<标签>: ` 前缀**（其中 82.9% 的标签就是 `role`），
+**`role` 的取值域只有 `user` / `assistant`，零 `system`**——
+逐项数字（含绝对条数）在 [`add_shape.py`](./add_shape.py) 的模块 docstring。
 
 ⇒ 缺省口径是 **`official`**：逐数据集加实测到的标签、`system` 折进 user 侧。
 `native`（数据集原始形状）**只作对照**，`alluser`（把 role 全折成 user）是**判分池那一簇**
 的形态——三个取值都进数据指纹。
 
-**`system` 折叠是逐字节证明的**：`benchmark_data/clbench.jsonl:24` 的 raw `messages[0]`
+**`system` 折叠是逐字节证明的**：`dataset/clbench/clbench.jsonl:24` 的 raw `messages[0]`
 是 `role="system"`，官方发的是 `role="user"` + `user: …`。它**不是排版**——D24 下
 "一段连续 user + 紧随的非 user"才合并（D29），而**折叠会把 `system` 变成那段 user 里的
 一条**、从而改变**哪一条是"最后一条"**（D32 只配最后一条）⇒ 块的个数与内容都会变。
@@ -64,7 +64,9 @@ from api_config import (ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL,
                         JUDGE_API_BASE, JUDGE_API_KEY, JUDGE_MODEL, JUDGE_VERSION)
 ```
 
-`__file__` 在 `benchmark_data/` 下，所以 `parents[2]` 解析到 **`/home/buptc/project`**——**不是 `TianXiMem/`，是它的上一级**。
+D35 后官方脚本位于 `dataset/.upstream/aml/`，`parents[2]` 指向数据根目录。
+旧归档在 `benchmark_data/` 时它指向仓库外；两种布局都继续靠 harness 注入的
+`PYTHONPATH` 找到本目录的配置，不依赖那条脆弱路径。
 
 **⚠ 不要在仓库外创建它。** 那份就是本目录里的 [`api_config.py`](./api_config.py)（AML 公开的那份是 520 字节、无凭据），由 `judge.run_judge()` 起 subprocess 时把**本目录**放进 `PYTHONPATH` 找到（`judge._subprocess_env`）——`sys.path.insert(0, <不存在路径>)` 只是塞进一个没有该模块的条目，**import 会继续往后找到 `PYTHONPATH` 里的那份**，于是归档保持只读、`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。
 
@@ -98,7 +100,7 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 > ⚠ 归档的 7 个 pipeline 有一处**已声明的本地修订**（`Path.open` 当异步上下文用的语法问题，
 > `contextlib.nullcontext` 包一层）——**prompt 与判分逻辑与上游逐字相同**，差的是文件句柄那一处。
 > 理由、范围与复现方式见 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md) 的"本地修订"一节，
-> 机器可查的部分在 [`../../tools/fetch_benchmark_data.py`](../../tools/fetch_benchmark_data.py) 的 `local_patch`。
+> 机器可查的部分在 [`../../eval/datasets/manifest.py`](../../eval/datasets/manifest.py) 的 `local_patch`。
 > **"以 pipeline 代码为准"照旧。**
 
 **readme 与代码不一致，已核实**：readme 写 `predicted_answer`（LoCoMo）/ `hypothesis`（LME），但**这些 pipeline 实际读写的是 `generated_answer`**。
@@ -118,6 +120,38 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 1. **stage 之间的规范字段是 `generated_answer`**（七个里六个如此；CL-Bench 写 `model_output`，读时兼容两者）
 2. **`hypothesis` 没有任何 pipeline 读它**——尽管 `lme_readme.md` 明文文档化了它
 3. **`predicted_answer` 从来不是 inter-stage 的键**（只在 CL-Bench 里是个**函数参数名**，在 PersonaMem / ScriptMem 里是 evaluate 步**写出**的字段）
+
+### PersonaMem-v2 的本地检索输入（2026-10-06）
+
+归档原版只读 `chat_history/messages`。本地选择题适配器把每题 `retrieved_context`
+（兼容旧 `speaker_1_memories`）转成一条 user 历史消息，再调用官方选项构造与 MCQ 判分。
+保留 Search 顺序；空检索不回填原始对话，缺字段直接失败。
+⚠ **平台 token 前缀截断在这条路径上还没接**（[`judge.py`](./judge.py) 的 `_build_personamem_items`
+直接 `render_memories`；其余适配器都截）——**待补**。
+这属于本地答案输入口径的显式改动，不能认定 AML 线上也是同一输入方式。
+旧完整历史答案与成绩不能直接复用；适配器校验输入版本和指纹，重跑使用新 run-id。
+验证与复现见 [`../reports/personamem-pipeline-fix-20261006.md`](../reports/personamem-pipeline-fix-20261006.md)。
+
+### HybridQA / FEVEROUS 的本地文本检索适配
+
+两份走 [`corpusqa_pipeline.py`](./corpusqa_pipeline.py)，要求显式 `answer_contract`，
+只有逐题 Search 文本进入回答 prompt；FEVEROUS 只接受其中可见的元素 ID。
+FEVEROUS 的 `feverous-claim-pages-evidence-v3` 对无效 JSON、标签或不可见 ID
+最多做一次模型校正：仍只用相同 Search 文本、上次输出及格式错误，保留每次输出，
+从同一文本列出与非法 ID 拼写相近的可见 ID，不自动替换引用，不读 gold 或评分反馈；
+校正后仍无效则按原规则记 `ANSWER_ERROR`。
+整页长上下文的单次作答超时为 360 秒；该设置仅属于本地 FEVEROUS 管线。
+答案记录完整输入指纹，输入变更后不能继续复用旧答案。
+上游评分源码保持原字节并校验哈希，通过函数节点调用避免执行其命令行入口。
+逐题 `metrics` 经 `run_record.py` 汇总到 `scores.dataset_score`；
+FEVEROUS 的严格分包含完整证据组要求，采集重放仍按其原有 label-only 口径。
+输入范围、聚合指标及验证见 [接入报告](../reports/hybridqa-feverous-pipelines-20261006.md)。
+官方采集重放入口已经把 Search 结果注入开放题 prompt，不受选择题入口的修复影响。
+
+`aml-v1` 使用独立的 FEVEROUS JSON 证据契约；完整可解析的 Search 页面可提供原生 ID，
+不完整页面不回填，原生括号 ID 契约保持原逻辑。公共事件分派不重塑采集请求。
+支持范围、页面池来源和续跑纪律见
+[`../../docs/benchmark-data.md`](../../docs/benchmark-data.md) 的「公开数据的 AML 输入适配」。
 
 ### 两个不对称，会改变结果
 
@@ -178,11 +212,11 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 
 | | 说法 |
 | --- | --- |
-| **答案 prompt 第 7 条** | Convert relative times like `"yesterday"`, `"last month"`, `"last year"` into dates, months, or years **when the memory timestamp makes it clear**. **Keep week-based expressions relative.** |
+| **答案 prompt 第 7 条** | Convert relative times like `"yesterday"`, `"last month"`, and `"last year"` into dates, months, or years **when the memory timestamp makes it clear**. **Keep week-based expressions relative.** |
 | **裁判 prompt TIME 块** | **Do NOT convert relative ↔ absolute.** If the gold uses a relative time expression, the generated answer **must also use a relative form**…not a computed date/range |
 
 **答案阶段被要求做的事，正是裁判阶段被判负的事**——除非 gold 本身也是绝对时间。**这就是根 `CLAUDE.md` 那条"不要在 content 里注入绝对时间戳"的实证来源**，也是 §13 的 T1 实验要测的东西。
 
-**判分输出契约**：裁判返回一句话解释 + `CORRECT`/`WRONG`，包成 JSON `{"label": ...}`；解析器正则取**第一个 `{...}`** 并要求 label ∈ {CORRECT, WRONG}。**JSON 解析失败时要看 `clb_pipeline.py` 的纪律——API/JSON 失败一律记 0**（§12.4）——那是 CL-Bench 的严格性，**代理评测里要显式决定是否照此办理，并记进 `docs/decisions.md`。**
+**判分输出契约**：裁判返回一句话解释 + `CORRECT`/`WRONG`，包成 JSON `{"label": ...}`；解析器正则取**第一个 `{...}`** 并要求 label ∈ {CORRECT, WRONG}。**JSON 解析失败时要看 `clb_pipeline.py` 的纪律——API/JSON 失败一律记 0**（§12.4）——那是 CL-Bench 的严格性；**本仓的处置已定并落档**：`JUDGE_ERROR` 与 `WRONG` 分开写、分数口径不变（[`../../docs/decisions.md`](../../docs/decisions.md) 的 **D34**）。
 
 **裁判模型**：readme 记为 `Qwen/Qwen3-14B`，temperature `0.0`。

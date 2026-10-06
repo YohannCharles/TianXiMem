@@ -35,7 +35,7 @@ runner 读进 run record 的 `metrics=`——**不是 `counters=`**，那份是 
 | **Agent Trigger Rate** · 平均轮数 · Rewrite 次数 | [`../agent/`](../agent/) | 只有 agent 循环知道被触发了几次 |
 | latency/query | [`../service/`](../service/) | 请求边界 |
 
-**本目录把它们汇集、按 §13 的记录格式导出**，供 `eval/reports/` 使用（字段清单见 [`../../eval/reports/CLAUDE.md`](../../../eval/reports/CLAUDE.md)）。
+**本目录把它们汇集、按 §13 的记录格式导出**，供 `eval/reports/` 使用（字段清单见 [`../../../eval/reports/CLAUDE.md`](../../../eval/reports/CLAUDE.md)）。
 
 **反向依赖是错的**——若 `observability/` import 了业务层，分层就坏了。
 
@@ -60,7 +60,7 @@ runner 读进 run record 的 `metrics=`——**不是 `counters=`**，那份是 
 **没有独立计数器**：一次 Add 的块在写下那一刻就是最终形状，**不存在"新建 / 补全 / 落单"三种归宿**
 ⇒ 这件事**只体现在块形状里**——每次 Add 产出几个块、其中几个 `is_paired`（见
 [`../pairing/pairing.py`](../pairing/pairing.py) 的 `MemoryBlock.is_paired`），
-**一次读库就能算出来**（`SELECT count(*) ... WHERE answer IS NULL`），不需要任何跨请求状态。
+**一次读库就能算出来**（`SELECT count(*) ... WHERE question IS NULL OR answer IS NULL`——`is_paired` 要求两列都非空，A-only 块是合法的），不需要任何跨请求状态。
 
 > ⚠ **别为它加回一个计数器**：跨请求状态正是 D24 想消掉的东西。
 
@@ -71,7 +71,7 @@ runner 读进 run record 的 `metrics=`——**不是 `counters=`**，那份是 
 
 > **词数那一路只能近似**（§6.5 / §12.3 第 5 条）：AML 按"20 条消息**或** 2,000 个 **Adapter 计数的词**"切分，而**计数口径官方是给了的**（`2,000 **Adapter-counted** words`）——**本仓复现不了的是那个 Adapter 本身**（平台侧冻结组件），本地那一路只能用**空白分词近似**。
 
-**这只影响 [`../../eval/harness/batching.py`](../../../eval/harness/batching.py)**（它已声明两条预算都做、词数那半是近似）——
+**这只影响 [`../../../eval/harness/batching.py`](../../../eval/harness/batching.py)**（它已声明两条预算都做、词数那半是近似）——
 本目录没有依赖切批口径的计数器。S2 本身仍是 [`../../../docs/open-questions.md`](../../../docs/open-questions.md) 里的一条未决事项。
 
 ---

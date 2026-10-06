@@ -352,7 +352,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `storage.qdrant.payload_indexes` | `user_id`(**keyword** + `is_tenant`) / `session_id`(keyword) / `event_time`(integer) | **必须在写入数据前建**，否则 HNSW 需要重建才有过滤感知 |
 | `storage.qdrant.payload_fields` | `memory_id` / `user_id` / `session_id` / `local_index` / `event_time` | **不含正文**。⚠ **D28** 起 `chunk_ordinal` 已从 payload 里删掉（那个列本身也没了）——payload 里这些都**没有消费方**，只是溯源；过滤只按 `user_id`，扩窗读 SQLite |
 | `storage.qdrant.wait` | **`true`** | 契约要求"响应前立即可搜"；默认异步不保证 |
-| `storage.sqlite.path` | `var/tianxi.db`（`.env`） | 真源，文件随 run 归档。⚠ 是 `var/` 不是 `data/`——后者与只读归档 `benchmark_data/` 容易混（见 [`../var/CLAUDE.md`](../var/CLAUDE.md)） |
+| `storage.sqlite.path` | `var/tianxi.db`（`.env`） | 真源，文件随 run 归档。⚠ 是 `var/` 不是 `data/`——后者与评测材料 `dataset/` 容易混（见 [`../var/CLAUDE.md`](../var/CLAUDE.md)） |
 | `cache.embed.dir` | `var/embed_cache`（`.env`） | **必须落盘** |
 | `cache.embed.key` | **渲染文本哈希** | **不能用 `id`** |
 
@@ -464,3 +464,9 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 > ⚠ **打开它要重建镜像**（`configs/` 是烘进镜像的，不是挂载的）⇒ 它是"预先开好、
 > 跑完关掉"的开关，不是运行期随手拨的。**跑完记得关回去**——文件里是**官方评测原文**。
+
+
+## 评测材料路径（D35）
+
+`TIANXIMEM_BENCHMARK_DIR` 住在 `.env`，默认 `dataset`；只由评测加载层解析，
+不属于服务 yaml。公开材料的按需准备与离线模式见 [`benchmark-data.md`](benchmark-data.md)。

@@ -126,7 +126,7 @@ vim /srv/tianxi/configs/default.yaml        # 例如 rerank.enabled: true
 # ② .env 加三行：
 TIANXIMEM_RERANKER_BASE_URL=http://host.docker.internal:9002/v1   # ⚠ 同 embedding 那条规矩：不是 127.0.0.1
 TIANXIMEM_RERANKER_API_KEY=<key>
-TIANXIMEM_RERANKER_MODEL=Qwen3-Reranker-4B                        # 只进 run record，端点忽略它
+TIANXIMEM_RERANKER_MODEL=qwen3-reranker-4b                        # ⚠ 两个网关行为不同：vLLM 直服（memory3）**校验**它、填错 ⇒ 404 ⇒ **每次检索静默降级**；本机自研封装忽略它。同时进 run record
 ```
 
 **怎么确认真的生效**（三层，从便宜到贵）：
@@ -193,10 +193,10 @@ make up                                 # 内部就是 up -d --build
 # 路 B：本地构建、导出、scp 过去（服务器不需要外网，只需要 docker）
 make image-build
 docker save tianximem:local | gzip > tianximem.tar.gz
-scp tianximem.tar.gz deploy/ docker-compose.yml server:/opt/tianxi/
+scp -r tianximem.tar.gz deploy/ server:/opt/tianxi/
 # 服务器上：
 gunzip -c tianximem.tar.gz | docker load
-docker compose up -d          # 注意：不要带 --build，否则它会想重新构建
+docker compose -f deploy/compose.yaml up -d   # 注意：不要带 --build，否则它会想重新构建
 ```
 
 | | 路 A | 路 B |
@@ -228,13 +228,13 @@ docker compose up -d          # 注意：不要带 --build，否则它会想重�
 | 步 | 做什么 | 命令 / 判据 |
 | --- | --- | --- |
 | **①** | 拿到带这一层的代码 | **路 A**（服务器能出网）：`git pull` 到含 `src/tianximem/service/capture.py` 的 commit（`git log --oneline -- src/tianximem/service/capture.py` 查得到）· **路 B**（内网）：本地 `make image-build` → `docker save` → `scp` → `docker load`（见上一节） |
-| **②** | 打开开关 | **路 A**：在**服务器**的仓库里就地改 `configs/default.yaml` → `capture: enabled: true`。**别提交它**——它是个临时诊断开关，一提交下次 `git pull` 就撞冲突（未提交状态反而会在 pull 时**拦住你**，这是好事）。**路 B**：改**本地**那份再 `make image-build`（yaml 是烘进镜像的） |
+| **②** | **确认开关**（⚠ **仓库里提交的就是 `enabled: true`**——2026-09-29 起，见 `configs/default.yaml` 的注释；这一步通常是空操作） | 要**改**它：**路 A**：在**服务器**的仓库里就地改 `configs/default.yaml`（或按 §0.5 挂一份配置目录——`TIANXIMEM_CONFIG_DIR` 能覆盖它，不必重建镜像）；**路 B**：改**本地**那份再 `make image-build`（yaml 烘进镜像）。⚠ **提交状态已是 `true`**，所以"别提交它"那条不再适用——改完它会显示为一次改动 |
 | **③** | 重建 + 起 | **路 A**：`docker compose -f deploy/compose.yaml up -d --build` · **路 B**：`docker load` 新镜像后 `up -d`（**不要带 `--build`**）。`ps` 期望 `app (healthy)` |
 | **④** | **核对采集真的开了** | `docker compose -f deploy/compose.yaml logs app \| grep 请求采集` ⇒ 期望 `请求采集已开启：…/data/capture/requests.jsonl（每份 … 字节，写满自动换下一份）`。⚠ 若看到 **ERROR「打不开文件」**：采集已**自动关闭**，服务照常跑——去查 `TIANXIMEM_CAPTURE_PATH` 与 `/data` 卷属主（坑表里那条 `chown 10001:10001`） |
 | **⑤** | 跑你要跑的（冒烟一次 / 一轮 Smoke） | 见 [`../docs/submission.md`](../docs/submission.md) §1 |
 | **⑥** | 取文件 | **可能有好几份**（每 50 MiB 一份）：`docker compose -f deploy/compose.yaml exec -T app sh -c 'ls -la /data/capture/'`，再逐份 `docker compose -f deploy/compose.yaml cp app:/data/capture/requests.jsonl ./`、`…/requests.part2.jsonl ./` … |
 | **⑦** | 读它（下表） | |
-| **⑧** | **关回去** | 路 A：`git checkout -- configs/default.yaml` → `up -d --build`；路 B：本地改回 `false` 再走一遍镜像。⛔ **别用 `down -v`**：那个卷同时装着唯一不可重建的 `tianxi.db` |
+| **⑧** | **关回去** | 把 `configs/default.yaml` 的 `capture.enabled` 改回 `false`。**路 A**（服务器有仓库）：就地改 → `up -d --build`。**路 B**：改**本地**那份 → `make image-build` → `docker load` → `up -d`（**不带 `--build`**）。⚠ **`git checkout -- configs/default.yaml` 关不掉它**（提交状态就是 `true`，checkout 只是恢复成 `true`）。⛔ **别用 `down -v`**：那个卷同时装着唯一不可重建的 `tianxi.db` |
 
 **⑦ 怎么读**——一行一次请求，看的是**官方原样发来的那个字符串**：
 
@@ -322,7 +322,7 @@ for line in open('requests.jsonl', encoding='utf-8'):
 | 1 | `docker compose -f deploy/compose.yaml stop app`（⚠ **`stop` 而不是 `down`**——`down` 是按项目拆的，会顺手把 Qdrant 也拆了） |
 | 2 | `docker compose ... exec app tar -c -C /data . > backup.tar`。⚠ **先停服务再拷**：SQLite 在 WAL 模式下直接拷文件可能拿到不一致的快照 |
 | 3 | 缓存与真源**在同一个卷** `/data/embed_cache` ⇒ `rm -rf` 那一个子目录即可（**别删 `/data` 本身**） |
-| 4–5 | `T2` 的转储走 [`../tools/reindex.py`](../tools/reindex.py)；换 profile（`TIANXIMEM_PROFILE`）会换集合名 |
+| 4–5 | 走 [`../tools/reindex.py`](../tools/reindex.py)（**从 SQLite 全量重建 Qdrant**）；换 profile（`TIANXIMEM_PROFILE`）会换集合名。⚠ T2 的纯 BM25 转储是另一个工具：[`../tools/t2_retrieval_dump.py`](../tools/t2_retrieval_dump.py) |
 
 **第 2 步不能省**：Qdrant 是**派生读存储**，可从 SQLite 全文重建；**SQLite 是真源，丢了就没了**。
 
@@ -364,7 +364,7 @@ for line in open('requests.jsonl', encoding='utf-8'):
 | 平台探活必须答得上 | S4 | `HEALTHCHECK` 打 `/health`（**不碰下游**：Qdrant 或网关抖动不该让容器被判不健康） |
 | 24×7 能自己回来 | §15 | `restart: unless-stopped` |
 
-> **⚠ 一条开发环路的单点风险（D12）**：answer / judge / embed / rerank **四条都打同一个网关**，而 harness 评测时会同时驱动 Add/Search（embed + rerank）与答案/裁判生成。**必须有客户端并发上限**，否则**排队超时会伪装成"模型变差了"**（[`../docs/open-questions.md`](../docs/open-questions.md) V8）。
+> **⚠ 一条开发环路的单点风险（D12）**：answer / judge 打 **memory2**，embed / rerank 打**主网关**（`memory3` 或本机自托管那台）——**不是同一个网关**，但自建网关这一环仍是**单点**：harness 评测时会同时驱动 Add/Search（embed + rerank）与答案/裁判生成。**必须有客户端并发上限**，否则**排队超时会伪装成"模型变差了"**（[`../docs/open-questions.md`](../docs/open-questions.md) V8）。
 
 ---
 

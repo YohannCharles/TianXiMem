@@ -55,7 +55,7 @@ tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 > 别把它读成"以后可以往 `content` 里加任何东西"——每加一层都要重新回答
 > "它进不进索引、缓存坐标要不要动"（[`../../../docs/architecture.md`](../../../docs/architecture.md) §4）。
 >
-> ⚠ **[`eval/harness/annotate.py`](../../../eval/harness/annotate.py) 是同一套逻辑的第二份**
+> ⚠ **[`../../../eval/harness/annotate.py`](../../../eval/harness/annotate.py) 是同一套逻辑的第二份**
 > （harness 不许 import `src/`，而那次实验是在 harness 侧跑的）——**两份都对**，
 > 由 [`../../../tests/test_annotate.py`](../../../tests/test_annotate.py) 的逐例等价断言钉住。
 
@@ -109,9 +109,9 @@ tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 > ⚠ **不认识的键一律报错**（env 的那几项写进 yaml 也算）：拼错的键被静默忽略 ⇒ 跑的是默认值，
 > 而**没有任何人会发现**——这正是本项目反复要避免的那一类失败。
 
-**⚠ 配置化 ≠ 可调**。`rrf.k = 61` 与 `top_k = 100` 都是**正确性常量**，写进配置是为了追溯与切换，**不是为了调**——分组见 config-reference 的 A / B / C 三分类。**不合法的值在启动阶段就拒绝**（`rrf_k != 61`、`workers != 1` 都是硬错误，不是警告）。
+**⚠ 配置化 ≠ 可调**。`rrf.k = 61` 这类**正确性常量**写进配置是为了追溯与切换，**不是为了调**——分组见 config-reference 的 A / B / C 三分类。**不合法的值在启动阶段就拒绝**（`rrf_k != 61`、`workers != 1` 都是硬错误，不是警告）。⚠ `top_k = 100` **不是配置键**：它来自请求，代码**不写死 100**（见 [`../retrieve/fusion.py`](../retrieve/fusion.py)——写死会在 AML 传更小值时变成"返回超限"，那是**契约错误**，不是截断）。
 
-**一条待补的开关**：**`checker.enabled` 与它的三个判据阈值都必须是配置项**（§15 / D15）——§8 要求阈值在代理评测上标定，§13 的 A4 要关它做对照。落点见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §4。
+**一条 v2 才落地的开关**：**`checker.enabled` 与它的三个判据阈值都必须是配置项**（§15 / D15）——⚠ 但 `checker.*` 是 **v2 再接**（**D26 / D13**：接线的唯一理由本来是 A4，而 A4 已移出 v1），**别写成"待接线"**。逐项**接线状态**以 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §2 的表为准，**键的落点在 §4**。
 
 > **只收"今天有代码消费方"的键**——**收一个没有消费方的键等于预留字段**（§6.1 对 DDL 的同一条纪律）；**哪些开关还没接线，逐项以 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §2 的表为准**。
 > **但已接线的键仍不可随手调**（`neighbor.*` / `budget.*`，消费方 `rank/neighbor.py` + `service/pipeline.py`）——哪些能调见 `configs/default.yaml` 的 A / B / C 类注释。

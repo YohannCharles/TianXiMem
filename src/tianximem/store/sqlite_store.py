@@ -347,7 +347,8 @@ class SqliteStore:
         # 取自配置的 `storage.sqlite.busy_timeout_ms`（默认 5000）。
         conn.execute(f"PRAGMA busy_timeout = {int(self._busy_timeout_ms)}")
         # 外键约束默认是 **OFF**（SQLite 的默认值），且它是**每连接**生效的。
-        # 当前 schema 里没有外键 ⇒ 这条是**空转**；但留着它，将来加 FK 时不会静默失效。
+        # schema 里 memory_facts / evidence_coverage 都有 REFERENCES qa_pairs(id)
+        # ON DELETE CASCADE ⇒ 这条现在**承重**（级联删除与归属核对靠它），不是空转。
         conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
         return conn

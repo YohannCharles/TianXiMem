@@ -113,6 +113,6 @@
 | --- | --- |
 | ReFind 公开的 58.2 / 93.2 | ❌ **必须在我们自己的 harness 里重跑** |
 | InvMem 45.06 / ReFind 44.97 / ActiveMemoryIndex 44.84 | ⚠️ 榜单分数，可作**目标参照**，不可作**本地对照** |
-| ActiveMemoryIndex 的 .6333 / .5887 | ⚠️ 其**自述**为本地 harness + 本地 judge 的 LoCoMo 结果，**非平台分** |
+| ActiveMemoryIndex 的 .6333 / .5887 | ⚠️ 其**自述**为本地 harness + 本地 judge 的 LoCoMo 结果，**非平台分**，重跑还有约 0.2pp 漂移 |
 | ReFind 消融（BM25 93.2/89.3 vs dense 91.3/82.2 vs hybrid 91.3/86.7） | ⚠️ **GPT-5-mini backbone 下的 matched 子集消融**——它证明的是"检索后端之间 BM25 不输"，**不能直接推及 §9 的 `gpt-4o-mini` 场景**。引用时别把两者混在一起 |
 | 任何系统自报数字 | ❌ **Mem0 自报 93.4%、第三方复现 29.07% 是常态。只有自己 harness 里跑出来的数才算数**（§12.3 第 4 条） |
