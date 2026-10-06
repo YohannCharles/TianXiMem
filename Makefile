@@ -33,7 +33,7 @@ PROCESSES ?= 1
 
 .PHONY: help sync check fmt lint typecheck test qdrant-up qdrant-down serve contract-check probe-reranker \
         order-probe image-build up down deploy-check \
-        eval t1 t2 t2-dump smoke clean \
+        eval replay-official t1 t2 t2-dump smoke clean \
         fetch-data data-check data-patch
 
 help:  ## 列出所有目标
@@ -204,6 +204,14 @@ baseline:  ## 跑一轮**冻结口径**的基线/对照（§13）：DATASET / AR
 # ⚠ 本仓噪声底是 **346 题上 ~1pt** ⇒ 几十题的小跑法读不出改动。
 # 用法：make baseline DATASET=locomo-refined
 #       make baseline DATASET=clbench ARGS='--run-id clb-after-rerank --switches {…}'
+
+replay-official:  ## 重放官方采集流量并判分（README §6.2 线①）：ARGS 可覆盖
+	uv run --env-file $(ENV_FILE) python -m eval.experiments.replay_official $(ARGS)
+# **按采集的 timeline 交错重放**（不是"灌完再问"）——41% 的题早于该 user 的最后一条 add，
+# 先灌完再问会读到未来。payload 用采集原文（不加前缀、不重切批）。
+# ⚠ 前置：套件得先重建过——`uv run python tools/build_official_kit.py`（读采集目录里那三份）。
+# ⚠ 冒烟用 `ARGS='--users 1 --max-questions 3'`；正式的用 `ARGS='--users 261 --run-id …'`。
+# ⚠ 与 `make eval` 同一条纪律：**一次只跑一条**（网关在 Cloudflare 后面）。
 
 t1:  ## §13 的 T1 实验：时间戳前缀 带/不带（**改渲染 = 重建索引**）
 	uv run --env-file $(ENV_FILE) python -m eval.experiments.t1_timestamp

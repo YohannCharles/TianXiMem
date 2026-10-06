@@ -6,7 +6,7 @@
 [`build_eval_set.py`](../build_eval_set.py)（它生成 `official-eval-questions.jsonl`）只从
 **3 个**数据集捞金标：ScriptMem / LoCoMo-Refined / PersonaMem-v2。官方流量里还出现过别的数据集
 （[`../official-dataset-2026-09-29/README.md`](../official-dataset-2026-09-29/README.md) §4.2.3），
-它们的题库现在都在 `benchmark_data/`（tier = `official-extra`）。
+它们的题库现在都在 `dataset/`（tier = `official-extra`）。
 
 本脚本按**同一套归一化**（NFKC + 小写 + 空白折叠）逐字匹配题面，把它们也接上。
 
@@ -174,6 +174,12 @@ def load_corporatebench(root: Path) -> dict[str, dict]:
                     "gold_kind": "exact",
                     "gold_answers": [str(item["answer"])],
                     "gold_rubric": None,
+                    #: 判分要**整个 dict**（`score_corporatebench` 靠 `answer_type` 决定怎么比），
+                    #: 所以原样留一份——套件（`build_official_kit.py`）直接把它交给裁判。
+                    "gold_native": {
+                        "answer": item["answer"],
+                        "answer_type": item.get("answer_type"),
+                    },
                     "gold_judging": f"CorporateBench（zenith）：金标是 question 自带的 answer，"
                     f"类型 {item.get('answer_type')}",
                 },
@@ -203,6 +209,12 @@ def load_medmemorybench(root: Path) -> dict[str, dict]:
                 "gold_kind": "exact",
                 "gold_answers": correct,
                 "gold_rubric": None,
+                #: 上游裁判**按 `query_type` 分流**（2 条纯函数 + 4 条 LLM）⇒ 必须原样带上，
+                #: 只留 `gold_answers` 会让 6 类的题全走错分支（而不会报错）。
+                "gold_native": {
+                    "query_type": str(row["query_type"]),
+                    "answers": answers or [],
+                },
                 "gold_judging": f"MedMemoryBench（zh）：金标是 answers 里 is_correct=true 的那些"
                 f"（query_type = {row['query_type']}）",
             },
@@ -234,6 +246,12 @@ def load_memtrapbench(root: Path) -> dict[str, dict]:
                     "gold_kind": "rubric",
                     "gold_answers": [],
                     "gold_rubric": item.get("gold_standard"),
+                    #: 裁判读 `gold_standard`；`test_type`（red / green）与场景目录只作上下文。
+                    "gold_native": {
+                        "gold_standard": item.get("gold_standard"),
+                        "test_type": item.get("test_type"),
+                        "scenario": path.parent.name,
+                    },
                     "gold_judging": f"MemTrapBench：{path.parent.name} / "
                     f"test_type={item.get('test_type')}。金标是 gold_standard 那段判分要点——"
                     "判分看的是**有没有抵抗住上下文里的陷阱**，不是答案串相等",
@@ -279,6 +297,13 @@ def load_beam(root: Path) -> dict[str, dict]:
                         "gold_kind": "rubric",
                         "gold_answers": [item[answer_key]] if answer_key else [],
                         "gold_rubric": item.get("rubric"),
+                        #: 官方 `pipeline_beam.py` 是**逐条 rubric 三点制**，逐条打分要的是
+                        #: `rubric` 的**整段原文**（可能含多条）。组名与难度只进判分说明。
+                        "gold_native": {
+                            "rubric": item.get("rubric"),
+                            "group": group,
+                            "difficulty": item.get("difficulty"),
+                        },
                         "gold_judging": f"BEAM（100K）：probing 组 {group}，"
                         f"difficulty={item.get('difficulty')}。"
                         "**金标以 rubric 为准**（官方 pipeline 逐条三点制）"
@@ -450,6 +475,7 @@ def main() -> int:
         help="采集的 official-adds.jsonl——给了它才能逐条定夺 MQuAKE 的 gold_variant"
         "（要多扫 300+ MB）；写 auto 表示取数据集目录下那份",
     )
+    parser.add_argument("--offline", action="store_true", help="禁止下载缺失的题库材料")
     args = parser.parse_args()
 
     bench = Path(args.benchmark_dir) if args.benchmark_dir else benchmark_dir()
@@ -458,9 +484,10 @@ def main() -> int:
     if not searches_path.exists():
         print(f"✗ 找不到 {searches_path}", file=sys.stderr)
         return 1
-    if not bench.is_dir():
-        print(f"✗ 题库目录不存在：{bench}（先 `make fetch-data`）", file=sys.stderr)
-        return 1
+    from eval.datasets.prepare import ensure_dataset
+
+    for family in SOURCES:
+        ensure_dataset(family, bench, offline=args.offline)
 
     print(f"题库目录 {bench}")
     pool = load_all(bench)
@@ -483,6 +510,11 @@ def main() -> int:
                 **gold,
             }
         )
+
+    # `gold_native` 只是**判分时要原样交给裁判的载荷**；套件（`build_official_kit.py`）
+    # 会把它搬进 `official-eval-kit.jsonl`，两份文件之间不需要人手工对齐键名。
+    for row in rows:
+        row.setdefault("gold_native", None)
 
     variants: Counter[str] = Counter()
     if args.adds:
