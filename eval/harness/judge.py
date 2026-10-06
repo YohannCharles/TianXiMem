@@ -106,8 +106,8 @@ _LOCAL_PIPELINES = {
 #: **适配器**型 pipeline：脚本住在仓库里，但**判分逻辑来自归档那份官方实现**
 #: （它的 `evaluate` 形状与通用两子命令不同，见
 #: [`personamem_pipeline.py`](./personamem_pipeline.py)）。
-#: ⚠ 它们**不在** `EXTRA_DATASETS` 里——输入项走**官方那套 `speaker_*_memories`**，
-#: 不是我们自定的 `retrieved_context`。
+#: ⚠ 它们不在 `EXTRA_DATASETS` 里；PersonaMem 的 `retrieved_context` 经适配器
+#: 转为官方认的 `chat_history`，官方采集则逐题分派。
 _ADAPTER_PIPELINES = {
     "personamem-v2": "personamem_pipeline.py",
     "halumem": "official_capture_pipeline.py",
@@ -743,37 +743,26 @@ def _build_personamem_items(
     date_mode: str,
     annotate_mark: str,
 ) -> list[dict]:
-    """PersonaMem-v2 的项——**字段名以官方 pipeline 为准**（它认 `chat_history` 与
-    `correct_answer`/`incorrect_answers`，**不认任何检索字段**）。
+    """保留官方选项字段；每题的历史只来自该题的 Search 结果。"""
+    from .personamem_pipeline import retrieved_history
 
-    ⚠ **`speaker_1_memories` 照常填**（把命中放进去），但官方 pipeline **一个字节都不会读**——
-    填它只是为了让"这个数据集也走同一条 harness 流水线"，而不是假装它在用检索。
-    """
     items: list[dict] = []
-    history = [
-        {"role": message.role, "content": message.content}
-        for session in sample.sessions
-        for message in session.messages
-    ]
     for question in sample.questions:
         gold = question.gold if isinstance(question.gold, dict) else {}
-        items.append(
-            {
-                "id": question.qid,
-                "question": question.question,
-                "persona_id": gold.get("persona_id"),
-                "correct_answer": gold.get("correct_answer", ""),
-                "incorrect_answers": gold.get("incorrect_answers", []),
-                "chat_history": history,
-                # 下面两个只是"形状一致"，官方不看（见 docstring）
-                "speaker_1_memories": render_memories(
-                    hits_by_qid.get(question.qid, []),
-                    date_mode=date_mode,
-                    annotate_mark=annotate_mark,
-                ),
-                "speaker_2_memories": "",
-            }
-        )
+        item = {
+            "id": question.qid,
+            "question": question.question,
+            "persona_id": gold.get("persona_id"),
+            "correct_answer": gold.get("correct_answer", ""),
+            "incorrect_answers": gold.get("incorrect_answers", []),
+            "retrieved_context": render_memories(
+                hits_by_qid.get(question.qid, []),
+                date_mode=date_mode,
+                annotate_mark=annotate_mark,
+            ),
+        }
+        item["chat_history"] = retrieved_history(item)
+        items.append(item)
     return items
 
 

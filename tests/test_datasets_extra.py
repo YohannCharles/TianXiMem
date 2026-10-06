@@ -659,6 +659,7 @@ def test_every_dataset_builds_items_with_its_own_contract() -> None:
             "correct_answer",
             "incorrect_answers",
             "chat_history",
+            "retrieved_context",
         },
         # 我们自写那一类（含 medmemorybench / tempreason）
         **{
@@ -829,7 +830,9 @@ def test_personamem_item_contract_matches_the_official_pipeline(tmp_path: Path) 
     item = build_input_items(sample, {})[0]
     assert item["correct_answer"] == "继续瑜伽"
     assert item["incorrect_answers"] == ["跑步", "游泳"]
-    assert [m["content"] for m in item["chat_history"]] == ["persona", "我喜欢瑜伽"]
+    assert item["retrieved_context"] == ""
+    assert "(no memories)" in item["chat_history"][0]["content"]
+    assert "我喜欢瑜伽" not in str(item["chat_history"])
 
 
 # ── TempReason：`fact_context` 必须进记忆（2026-10-03）─────────────────

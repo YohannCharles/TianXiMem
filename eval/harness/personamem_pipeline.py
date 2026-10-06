@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PersonaMem-v2 的 `answer` / `evaluate` 适配器——**两个子命令都直接调官方那份的函数**。
+"""PersonaMem-v2：用检索记忆构造历史，复用官方 MCQ 选项与判分。
 
 ## 为什么需要适配器
 
@@ -14,24 +14,25 @@ python pipeline_v2_personamem.py evaluate-mcq --answers … --output …     # �
 **判分逻辑一行都不重写**：直接把官方那两个函数拿过来调。
 
 ```python
-official.answer(namespace)      # 官方那份（async）
+official.official_mcq_messages(item)  # 历史由 Search 结果替换
 official.evaluate_mcq(namespace)
 ```
 
 ⚠ 与 ScriptMem 那条适配器同一条注意事项：官方模块**模块级**就 `from api_config import (...)`，
 运行期靠 `run_judge` 注入的 `PYTHONPATH` 找到它。
 
-## ⚠ 这个数据集**不读检索字段**
+## 本地检索评测口径
 
-官方 pipeline 从 `chat_history` 直接拼 prompt ⇒ **检索/排序/打包的改动在它上面测不出来**。
-接它的用途是**回归对照**（装配层坏了它会响），见
-[`../datasets/personamem.py`](../datasets/personamem.py) 的 docstring。
+归档原版只读 `chat_history`；本适配器将其替换成逐题 Search 返回的片段。
+空检索保留为空，不回填原始对话；缺检索字段直接报错。选项与 MCQ 判分复用归档。
+这改变了答案输入口径，旧完整历史成绩不能直接比较，旧答案必须换 run-id 重跑。
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -43,6 +44,34 @@ for _candidate in (str(_REPO_ROOT), str(Path(__file__).resolve().parent)):
         sys.path.insert(0, _candidate)
 
 from eval.datasets.registry import benchmark_dir  # noqa: E402
+
+MEMORY_INPUT_VERSION = "personamem-search-memory-v1"
+
+
+def retrieved_history(item: dict) -> list[dict[str, str]]:
+    """只用检索字段生成官方认的历史；显式空结果不得回退到原始历史。"""
+    context = item.get("retrieved_context", item.get("speaker_1_memories"))
+    if context is None:
+        raise ValueError("PersonaMem-v2 缺少检索记忆字段；不能使用原始 chat_history 代替")
+    if not isinstance(context, str):
+        raise TypeError("PersonaMem-v2 检索记忆必须是字符串（空检索用空串）")
+    return [
+        {
+            "role": "user",
+            "content": "Retrieved memories (in retrieval order):\n" + (context or "(no memories)"),
+        }
+    ]
+
+
+def _input_fingerprint(item: dict) -> str:
+    values = {
+        k: item.get(k)
+        for k in ("question", "user_query", "persona_id", "correct_answer", "incorrect_answers")
+    }
+    values["chat_history"] = retrieved_history(item)
+    return hashlib.sha256(
+        json.dumps(values, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
 
 
 def _official():
@@ -84,12 +113,16 @@ def _fold_trailing_system(messages: list[dict]) -> list[dict]:
     return folded
 
 
+def build_mcq_messages(item: dict) -> tuple[list[dict], dict[str, str], str]:
+    """保留官方选项与提问，替换历史输入后折叠尾部 system。"""
+    memory_item = {**item, "chat_history": retrieved_history(item)}
+    messages, mapping, correct_letter = _official().official_mcq_messages(memory_item)
+    return _fold_trailing_system(messages), mapping, correct_letter
+
+
 def cmd_answer(args: argparse.Namespace) -> int:
-    """**直接调官方的 `answer`**（MCQ 模式：拼选项 → 洗牌 → 让模型选字母），
-    只多一步"把尾部 system 折进前一条"（见 [`_fold_trailing_system`][...] 的理由）。"""
-    official = _official()
-    # 官方的 `answer` 自己拼 messages 并发请求 ⇒ 我们**替换它用的那一步**，其余照旧：
-    # `official_mcq_messages()` 逐条造、折叠后再发。
+    """Search 片段 → 官方 MCQ 消息 → 模型选字母；拒绝复用旧口径答案。"""
+    # 官方的选项构造与判分保持不变；答案消息改用逐题检索历史。
     import json as _json
     from pathlib import Path as _Path
 
@@ -97,29 +130,35 @@ def cmd_answer(args: argparse.Namespace) -> int:
 
     output = _Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    done = {str(row.get("id")) for row in _read_jsonl(output)}
+    items = _read_jsonl(Path(args.input))
+    fingerprints = {
+        str(item.get("id", i)): _input_fingerprint(item) for i, item in enumerate(items)
+    }
+    done = set()
+    for row in _read_jsonl(output):
+        ident = str(row.get("id"))
+        if row.get("memory_input_version") != MEMORY_INPUT_VERSION or row.get(
+            "input_fingerprint"
+        ) != fingerprints.get(ident):
+            raise ValueError("PersonaMem-v2 已有答案口径或输入不一致；请使用新 run-id 重跑")
+        done.add(ident)
 
     async def run() -> None:
         import httpx
 
-        items = [
-            _json.loads(line)
-            for line in _Path(args.input).read_text(encoding="utf-8").split("\n")
-            if line.strip()
-        ]
         with output.open("a", encoding="utf-8") as handle:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 for index, item in enumerate(items):
                     ident = str(item.get("id", index))
                     if ident in done:
                         continue
-                    messages, mapping, correct_letter = official.official_mcq_messages(item)
+                    messages, mapping, correct_letter = build_mcq_messages(item)
                     response = await client.post(
                         f"{ANSWER_API_BASE.rstrip('/')}/chat/completions",
                         headers={"Authorization": f"Bearer {ANSWER_API_KEY}"},
                         json={
                             "model": ANSWER_MODEL,
-                            "messages": _fold_trailing_system(messages),
+                            "messages": messages,
                             "temperature": 0,
                             "max_tokens": 512,
                         },
@@ -135,7 +174,9 @@ def cmd_answer(args: argparse.Namespace) -> int:
                                 "option_mapping": mapping,
                                 "correct_letter": correct_letter,
                                 "prompt_source": "PersonaMem-v2 inference.py"
-                                "（尾部 system 已折进前一条）",
+                                "（Search 记忆替代历史；尾部 system 已折叠）",
+                                "memory_input_version": MEMORY_INPUT_VERSION,
+                                "input_fingerprint": fingerprints[ident],
                                 "model": ANSWER_MODEL,
                             },
                             ensure_ascii=False,

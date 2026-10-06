@@ -238,7 +238,7 @@ FROZEN_RECIPES: Final[dict[str, Recipe]] = {
         axis="**persona 数**（`limit 11` = 11 个人，共 319 题）",
         note=(
             "⚠ `spread` 在这份上是 **no-op**（加载器收下参数但从不使用），所以写 False。"
-            "⚠ **它不读检索字段**——这个数字与检索/排序无关，只能当装配层的回归对照。"
+            "本地适配器用 Search 片段替代历史；旧完整历史成绩不可比，重跑使用新 run-id。"
         ),
     ),
     "tempreason": Recipe(
