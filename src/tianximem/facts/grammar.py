@@ -214,6 +214,7 @@ INFIX_FORMS = (
     ("continent", "is located in the continent of"),
     ("position played on team / speciality", "plays the position of"),
     ("employee", "works for"),
+    ("employee", "is employed by"),
     ("religion or worldview", "is affiliated with the religion of"),
     ("notable work", "is known for"),
     ("team", "plays for"),
@@ -332,6 +333,10 @@ def extract_evidence(
                     break
             if fields is None:
                 for rel, phrase in INFIX_FORMS:
+                    if phrase == "is employed by" and (
+                        _UNSAFE.search(body) or _PLANNED.search(body)
+                    ):
+                        continue
                     match = re.fullmatch(r"(.+?)\s+" + re.escape(phrase) + r"\s+(.+)", body, re.I)
                     if match:
                         fields = (match[1], rel, match[2])

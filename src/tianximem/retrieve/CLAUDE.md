@@ -102,7 +102,12 @@ evidence.py  共同证据执行器：执行 facts/query 的共同计划（筛选
 | `interval` 显式区间比较 | 只用原文明确的起止月份；来源日期不冒充事件日期 |
 | `current` 当前输入 | 计划判定输入已完备 ⇒ 空选择，由 `service` 返回合法空结果 |
 
-外加两类把关：**数量消歧**（`_quantities`，在 `filter` 分支里**无条件跑**——同一项的多个数量观察若单位冲突、或没有可信来源时间可分新旧，选择失败）与**来源覆盖审查**（仅当计划带字面范围守卫时：同一字面范围的原文里若仍有未解释的相关正向/变更声明，选择失败）——**物理扫过不等于语义齐全**。
+外加两类把关：**数量消歧**（`_quantities`，在 `filter` 分支里**无条件跑**——同一项的多个数量观察若单位冲突、或没有可信来源时间可分新旧，选择失败）与**来源覆盖审查**（计划的字面范围，以及要求完整路径的计划沿途主体的原文里若仍有未解释的相关声明，选择失败）——**物理扫过不等于语义齐全**。
+
+`walk_subjects` / `walk_source_literals` 定义路径审查的字面范围，
+`walk_sources_supported` 检查未返回来源中的未知声明；来源抓取仍由 `service` 调用
+`store`，与事实选择共用读快照。原文投影已返回完整 QA 时，该条中的未知声明仍在输出内；
+另一条相关来源中的否定或未知变更不得被旧的正向关系边遮住。
 
 **两条上限由调用方注入**（`source_limit` / `hop_limit` 实参，来自
 `retrieval.evidence_limit` / `evidence_hop_limit`；键与口径见
@@ -117,6 +122,7 @@ evidence.py  共同证据执行器：执行 facts/query 的共同计划（筛选
 * 没有适用的计划（`compile_query` 返回 `None`）；
 * 当前用户的事实索引未扫完（版本覆盖不全）；
 * 相关原文仍有未解释声明或数量冲突；
+* `require_complete_walk` 计划缺少已识别关系的可达原文、候选分支缺项或相关更正无法解释；
 * 选择超过 `evidence_limit`。
 
 设计与验证记录见 [`../../../eval/reports/unified-evidence-refactor-20261005.md`](../../../eval/reports/unified-evidence-refactor-20261005.md)。

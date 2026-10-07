@@ -86,7 +86,7 @@ from tianximem.common.config import (
 from tianximem.common.render import render_pair
 from tianximem.common.tokens import TokenCounter
 from tianximem.facts.evidence import EVIDENCE_VERSION
-from tianximem.facts.query import FactPattern, compile_query
+from tianximem.facts.query import FactPattern, QueryPlan, compile_query
 from tianximem.observability import MetricsSink, NullMetricsSink, SearchObservation
 from tianximem.pairing import AddBatch, ApplyBatchResult, apply_batch
 from tianximem.pairing.apply import index_pair_facts
@@ -100,7 +100,14 @@ from tianximem.rank import (
 )
 from tianximem.rank.neighbor import ContextSegment
 from tianximem.retrieve import EvidenceChecker, HybridRetriever, dedup_candidates
-from tianximem.retrieve.evidence import EvidenceSelection, evaluate_evidence
+from tianximem.retrieve.evidence import (
+    EvidenceDecision,
+    EvidenceSelection,
+    evaluate_evidence,
+    walk_source_literals,
+    walk_sources_supported,
+    walk_subjects,
+)
 from tianximem.retrieve.fusion import Candidate
 from tianximem.store.qdrant_store import QdrantStore
 from tianximem.store.sqlite_store import QaPair, SqliteStore
@@ -342,6 +349,79 @@ class SearchPipeline:
         """
         return self._metrics
 
+    def _grounded_decision(self, user_id: str, plan: QueryPlan) -> EvidenceDecision:
+        """事实选择与相关原文审查共用一个读快照；选择器仅执行一次。"""
+        fetch_limit = self._evidence_limit * 8
+        patterns = plan.patterns
+        if plan.resolve_references:
+            patterns = tuple(FactPattern(subject=p.subject) for p in patterns)
+        if plan.operator == "walk":
+            patterns = (*patterns, FactPattern(("explicit replacement",)))
+        with self._fact_snapshot(user_id) as conn:
+            if conn is None:
+                return EvidenceDecision(None, "index_incomplete")
+            evidence = self._store.fetch_evidence(conn, user_id, patterns, limit=fetch_limit + 1)
+            if len(evidence) > fetch_limit:
+                return EvidenceDecision(None, "fetch_limit")
+            sources, audit = [], []
+            if plan.guard_literal:
+                sources = self._store.fetch_evidence_sources(
+                    conn, user_id, plan.guard_literal, limit=self._evidence_limit + 1
+                )
+                if len(sources) > self._evidence_limit:
+                    return EvidenceDecision(None, "source_scan_limit")
+                if sources:
+                    audit = self._store.fetch_evidence(
+                        conn,
+                        user_id,
+                        (FactPattern(source_ids=tuple(p.id for p in sources)),),
+                        limit=fetch_limit + 1,
+                        deduplicate=False,
+                    )
+                    if len(audit) > fetch_limit:
+                        return EvidenceDecision(None, "audit_limit")
+            decision = evaluate_evidence(
+                evidence,
+                plan,
+                source_limit=self._evidence_limit,
+                hop_limit=self._evidence_hop_limit,
+                sources=sources,
+                audit_facts=audit,
+            )
+            if (
+                plan.operator != "walk"
+                or not plan.require_complete_walk
+                or decision.selection is None
+            ):
+                return decision
+            subjects = walk_subjects(evidence, decision.selection, plan)
+            related: dict[str, QaPair] = {}
+            for literal in walk_source_literals(subjects):
+                for source in self._store.fetch_evidence_sources(
+                    conn, user_id, literal, limit=fetch_limit + 1
+                ):
+                    related[source.id] = source
+                if len(related) > fetch_limit:
+                    return EvidenceDecision(None, "source_scan_limit")
+            audit = (
+                self._store.fetch_evidence(
+                    conn,
+                    user_id,
+                    (FactPattern(source_ids=tuple(related)),),
+                    limit=fetch_limit + 1,
+                    deduplicate=False,
+                )
+                if related
+                else []
+            )
+            if len(audit) > fetch_limit:
+                return EvidenceDecision(None, "audit_limit")
+            if not walk_sources_supported(
+                tuple(related.values()), decision.selection, audit, subjects
+            ):
+                return EvidenceDecision(None, "unsupported_source")
+            return decision
+
     def run(self, *, user_id: str, query: str, top_k: int) -> PackagedResponse:
         """跑完整条链，返回打包好的响应，并**把这一次的观测值发出去**（§14）。
 
@@ -397,58 +477,14 @@ class SearchPipeline:
                 if plan.operator == "current":
                     trace.grounded_status = "current_input"
                     return PackagedResponse(items=())
-                fetch_limit = self._evidence_limit * 8
-                patterns = plan.patterns
-                if plan.resolve_references:
-                    patterns = tuple(FactPattern(subject=p.subject) for p in patterns)
-                if plan.operator == "walk":
-                    patterns = (*patterns, FactPattern(("explicit replacement",)))
-                with self._fact_snapshot(user_id) as conn:
-                    evidence = (
-                        []
-                        if conn is None
-                        else self._store.fetch_evidence(
-                            conn, user_id, patterns, limit=fetch_limit + 1
-                        )
-                    )
-                    sources = []
-                    audit = []
-                    if conn is not None and plan.guard_literal:
-                        sources = self._store.fetch_evidence_sources(
-                            conn, user_id, plan.guard_literal, limit=self._evidence_limit + 1
-                        )
-                        if sources:
-                            audit = self._store.fetch_evidence(
-                                conn,
-                                user_id,
-                                (FactPattern(source_ids=tuple(p.id for p in sources)),),
-                                limit=fetch_limit + 1,
-                                deduplicate=False,
-                            )
-                if conn is None:
-                    trace.grounded_status = "index_incomplete"
-                elif len(evidence) > fetch_limit:
-                    trace.grounded_status = "fetch_limit"
-                elif len(sources) > self._evidence_limit:
-                    trace.grounded_status = "source_scan_limit"
-                elif len(audit) > fetch_limit:
-                    trace.grounded_status = "audit_limit"
-                else:
-                    decision = evaluate_evidence(
-                        evidence,
-                        plan,
-                        source_limit=self._evidence_limit,
-                        hop_limit=self._evidence_hop_limit,
-                        sources=sources,
-                        audit_facts=audit,
-                    )
-                    trace.grounded_status = decision.reason
-                    selected = decision.selection
-                    if selected is not None:
-                        trace.grounded_projection = selected.projection
-                        trace.selected_facts = len(selected.facts)
-                        trace.selected_sources = len({f.parent_memory_id for f in selected.facts})
-                        return self._package_evidence(selected, top_k=top_k)
+                decision = self._grounded_decision(user_id, plan)
+                trace.grounded_status = decision.reason
+                selected = decision.selection
+                if selected is not None:
+                    trace.grounded_projection = selected.projection
+                    trace.selected_facts = len(selected.facts)
+                    trace.selected_sources = len({f.parent_memory_id for f in selected.facts})
+                    return self._package_evidence(selected, top_k=top_k)
         if not self._qdrant.exists():
             return PackagedResponse(items=())
 

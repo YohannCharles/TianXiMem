@@ -58,6 +58,7 @@ class QueryPlan:
     direction: Literal["before", "after"] | None = None
     reference: str = ""
     bind_side: Literal["subject", "object"] = "subject"
+    require_complete_walk: bool = False
 
 
 def period(text: str) -> tuple[str, str] | None:
@@ -98,7 +99,11 @@ _QUERY_RELATIONS = (
     ("founded by", r"\bfound(?:ed|er)\b"),
     ("continent", r"\bcontinent\b"),
     ("position played on team / speciality", r"\bposition\b|\bspeciality\b"),
-    ("employee", r"\bemployer\b|\bworkplace\b|\bwork(?:s)? for\b"),
+    (
+        "employee",
+        r"\bemployer\b|\bworkplace\b|\bwork(?:s)? (?:for|at)\b|"
+        r"\bwhere\s+(?:do|does)\s+.+?\s+work$",
+    ),
     ("religion or worldview", r"\breligion\b|\bworldview\b|\bfaith\b"),
     ("notable work", r"\bknown for\b|\brenowned\b|\bnotable\b|\bachievement\b"),
     ("director", r"\bdirector\b|\bdirected\b"),
@@ -450,5 +455,13 @@ def compile_query(query: str) -> QueryPlan | None:
         )
     )
     if relations and len(text.split()) <= 64 and not _UNSAFE_SCOPE.search(text):
-        return QueryPlan("walk", (FactPattern(relations),), "source", query=text)
+        return QueryPlan(
+            "walk",
+            (FactPattern(relations),),
+            "source",
+            query=text,
+            require_complete_walk=bool(
+                re.search(r"\bwork(?:s)? at\b|^where\s+(?:do|does)\s+.+?\s+work$", text, re.I)
+            ),
+        )
     return None

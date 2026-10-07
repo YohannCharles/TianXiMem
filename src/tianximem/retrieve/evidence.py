@@ -148,6 +148,7 @@ def _walk(
     frontier = set(roots)
     visited: set[str] = set()
     selected: dict[str, EvidenceFact] = {}
+    covered_relations: set[str] = set()
     for _ in range(min(hop_limit, len(relations))):
         frontier -= visited
         if not frontier:
@@ -159,7 +160,18 @@ def _walk(
             names[words_key(fact.subject)].add(key(fact.subject))
         if any(len(variants) > 1 for variants in names.values()):
             return None
+        if plan.require_complete_walk and relations - covered_relations:
+            remaining = relations - covered_relations
+            if any(
+                not any(
+                    key(f.subject) == entity and relation_key(f.relation) in remaining
+                    for f in scoped
+                )
+                for entity in frontier
+            ):
+                return None
         current = _current(scoped)
+        covered_relations.update(relation_key(f.relation) for f in current)
         for fact in current:
             selected.setdefault(fact.parent_memory_id, fact)
         # 未理解的明确更正只能保留其原文，不能造出新关系边。
@@ -167,10 +179,14 @@ def _walk(
             if fact.get("unparsed"):
                 for entity in frontier:
                     if f" {words_key(entity)} " in f" {words_key(fact.source_quote)} ":
+                        if plan.require_complete_walk:
+                            return None
                         if key(entity) not in key(fact.source_quote):
                             return None
                         selected.setdefault(fact.parent_memory_id, fact)
         frontier = {key(f.object) for f in current}
+    if plan.require_complete_walk and not relations.issubset(covered_relations):
+        return None
     return list(selected.values())
 
 
@@ -284,6 +300,78 @@ def sources_supported(
                 continue
         if not handled:
             return False
+    return True
+
+
+def walk_subjects(
+    facts: Sequence[EvidenceFact], selection: EvidenceSelection, plan: QueryPlan
+) -> tuple[str, ...]:
+    """审查整条已选来源中的关系主体，避免原文投影去重掩盖另一主体。"""
+    parents = {fact.parent_memory_id for fact in selection.facts}
+    return tuple(
+        sorted(
+            {
+                key(fact.subject)
+                for fact in facts
+                if fact.parent_memory_id in parents
+                and not fact.get("unparsed")
+                and any(pattern.matches(fact) for pattern in plan.patterns)
+            }
+        )
+    )
+
+
+def walk_source_literals(subjects: Sequence[str]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                literal
+                for subject in subjects
+                for literal in (("i", "user", "用户", "我", "my") if subject == "i" else (subject,))
+            }
+        )
+    )
+
+
+def walk_sources_supported(
+    sources: Sequence[Source],
+    selection: EvidenceSelection,
+    audit_facts: Sequence[EvidenceFact],
+    subjects: Sequence[str],
+) -> bool:
+    """未返回的相关原文仍有未知声明时，旧的正向边不能代表完整证据。"""
+    selected_parents = {fact.parent_memory_id for fact in selection.facts}
+    for source in sources:
+        # 原文投影已返回整条 QA，不会丢掉同一条中的否定或未知声明。
+        if selection.projection == "source" and source.id in selected_parents:
+            continue
+        for side in ("question", "answer"):
+            residue = getattr(source, side) or ""
+            for fact in audit_facts:
+                if (
+                    fact.parent_memory_id == source.id
+                    and fact.source_side == side
+                    and not fact.get("unparsed")
+                ):
+                    residue = residue.replace(fact.source_quote, "")
+            for _, utterance in named_utterances(residue):
+                text = utterance.strip()
+                if not text or re.fullmatch(r"[^:\n]{1,64}:\s*", text):
+                    continue
+                speaker = SPEAKER.fullmatch(text)
+                actor, body = (key(speaker[1]), speaker[2]) if speaker else ("", text)
+                if actor in {"user", "用户"}:
+                    actor = "i"
+                if actor in subjects:
+                    return False
+                if "i" in subjects and not actor and side == "question":
+                    if " i " in f" {words_key(body)} " or "我" in body:
+                        return False
+                    if " my " in f" {words_key(body)} ":
+                        return False
+                for subject in set(subjects) - {"i"}:
+                    if f" {words_key(subject)} " in f" {words_key(body)} ":
+                        return False
     return True
 
 
