@@ -169,6 +169,27 @@ def test_incomplete_derived_index_records_a_distinct_whole_search_fallback(store
     assert observations[-1].selected_facts == 0
 
 
+@pytest.mark.parametrize("label", ["user", "User", "USER"])
+def test_generic_user_prefix_keeps_first_person_role_and_inventory_ownership(label):
+    facts = extract(f"{label}: I am an engineer at Example Labs.")
+    assert [(f.subject, f.object) for f in facts] == [("I", "Example Labs")]
+    assert extract(f"{label}: My tank has 2 fish.")[0].subject == "I"
+
+
+@pytest.mark.parametrize("label", ["assistant", "Assistant", "ASSISTANT", "system", "System"])
+def test_generic_assistant_and_system_prefixes_cannot_create_owner_facts(label):
+    assert not extract(f"{label}: My tank has 100 fish.")
+    assert not extract(None, answer=f"[assistant] {label}: My tank has 100 fish.")
+
+
+def test_lowercase_transcript_boundaries_preserve_named_humans_and_skip_generic_advice():
+    facts = extract(
+        "user: My tank has 2 fish.\nassistant: My tank has 100 fish.\nBea: My tank has 3 fish."
+    )
+    assert [(f.subject, f.get("quantity")) for f in facts] == [("I", 2), ("Bea", 3)]
+    assert not extract('Alex: I read this quote: "\nuser: My tank has 100 fish.')
+
+
 @pytest.mark.parametrize(
     "text",
     [

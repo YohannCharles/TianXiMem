@@ -453,9 +453,9 @@ def extract_evidence(
             speaker = SPEAKER.fullmatch(utterance.strip())
             if speaker:
                 actor, body = speaker["actor"], speaker["body"]
-                if actor in {"Assistant", "助手", "系统"}:
+                if key(actor) in {"assistant", "system", "助手", "系统"}:
                     continue
-                if actor in {"User", "用户"} and side == "question":
+                if key(actor) in {"user", "用户"} and side == "question":
                     actor = "I"
             elif side == "question":
                 actor, body = "I", utterance
@@ -472,7 +472,7 @@ def extract_evidence(
                     emit(subject, relation, org, sentence, statement, side=side)
                 role = (
                     (_ROLE.fullmatch(sentence) or _VERB.fullmatch(sentence))
-                    if speaker and actor != "I" and safe_attributes
+                    if speaker and safe_attributes
                     else None
                 )
                 if role:

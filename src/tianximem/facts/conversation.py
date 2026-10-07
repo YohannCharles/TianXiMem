@@ -4,8 +4,11 @@ import re
 from collections.abc import Iterator
 
 NAME = r"(?:[A-Z][A-Za-z'-]*(?: [A-Z][A-Za-z'-]*){0,3}|[\u4e00-\u9fff·]{2,16})"
-SPEAKER = re.compile(rf"^(?:\[assistant\]\s*)?(?P<actor>{NAME})[:：]\s*(?P<body>.+)$", re.S)
-_BOUNDARY = re.compile(rf"\n(?=(?:\[assistant\]\s*)?{NAME}[:：])")
+_SPEAKER_NAME = rf"(?:(?i:user|assistant|system)|{NAME})"
+SPEAKER = re.compile(
+    rf"^(?:\[assistant\]\s*)?(?P<actor>{_SPEAKER_NAME})[:：]\s*(?P<body>.+)$", re.S
+)
+_BOUNDARY = re.compile(rf"\n(?=(?:\[assistant\]\s*)?{_SPEAKER_NAME}[:：])")
 _QUOTE_INTRO = re.compile(
     r"(?:\b(?:said|says|wrote|quoted|reads|read|text|example)|说|说道|写道|引用|示例|例子)"
     r"\s*[:：]\s*$",
