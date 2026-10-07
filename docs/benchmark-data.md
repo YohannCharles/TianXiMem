@@ -304,6 +304,9 @@ make eval DATASET=mquake-remastered ARGS='--limit 1 --spread'
 （多跳那条是 `llm_judge_mcd`）。`extra_pipeline.py` **照它实现，prompt 直接从它读**。
 ⚠ 它的**形状是照上游评测循环复刻的**：一个 Sample = 一个（persona, 检查点），记忆只喂到该检查点
 ——**不读未来**，代价是投喂量 ≈ 5.4×（见 `eval/datasets/medmemorybench.py` 的 docstring）。
+临床多跳的 native 作答格式与旧答案复用纪律见
+[`eval/harness/CLAUDE.md`](../eval/harness/CLAUDE.md) 的对应小节；
+本地格式对照与证据缺口诊断见 [临床多跳报告](../eval/reports/clinical-multihop-20261007.md)。
 
 **HaluMem 和 MuSiQue 也已接入独立本地评测**：
 

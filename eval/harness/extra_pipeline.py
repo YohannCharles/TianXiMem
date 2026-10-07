@@ -12,7 +12,7 @@ CLI 与归档 pipeline **同形**（harness 的 `run_judge` 就是按这个形�
 
 输出：
 
-    answer   → `{"id", "generated_answer"}`（**追加**模式，按 id 跳过已完成的题）
+    answer   → `{"id", "generated_answer"}`（**追加**模式，临床多跳另带契约与输入指纹）
     evaluate → `{"id", "is_correct", "label", "judge_response"}`（**覆盖**模式）
 
 ## 三句必须先读的话
@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import re
 import string
@@ -351,22 +352,42 @@ def judge_mmb_llm_verdict(raw_response: str) -> tuple[bool | None, str]:
     """
     text = raw_response or ""
     decoder = json.JSONDecoder()
+    head, tail = text.find("{"), text.rfind("}")
     for start, char in enumerate(text):
         if char != "{":
             continue
         try:
             payload, _end = decoder.raw_decode(text[start:])
         except json.JSONDecodeError:
+            # Repair the outer object before scanning nested fragments: quoted
+            # note contents must not supply a different is_correct decision.
+            if start == head and head < tail:
+                repaired = _repair_mmb_judge_strings(text[head : tail + 1])
+                try:
+                    payload = json.loads(repaired)
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict) and "is_correct" in payload:
+                    verdict = _as_bool(payload["is_correct"])
+                    if verdict is None:
+                        return None, "裁判 is_correct 不是可识别的布尔值"
+                    return verdict, (
+                        f"{payload.get('reason', '')}"
+                        "（⚠ 判词含未转义引号或混用字符串引号，规范化后解析）"
+                    )
             continue
+        if isinstance(payload, dict) and "is_correct" in payload:
+            verdict = _as_bool(payload["is_correct"])
+            if verdict is None:
+                return None, "裁判 is_correct 不是可识别的布尔值"
         verdict = _as_bool(payload.get("is_correct")) if isinstance(payload, dict) else None
         if verdict is not None:
             return verdict, str(payload.get("reason", ""))
 
     # 严格路径全灭 ⇒ 兜底：把字符串里的裸引号转义掉再来一遍（见 `_escape_stray_quotes`）。
-    head, tail = text.find("{"), text.rfind("}")
     if 0 <= head < tail:
         try:
-            payload = json.loads(_escape_stray_quotes(text[head : tail + 1]))
+            payload = json.loads(_repair_mmb_judge_strings(text[head : tail + 1]))
         except json.JSONDecodeError:
             payload = None
         verdict = _as_bool(payload.get("is_correct")) if isinstance(payload, dict) else None
@@ -374,6 +395,20 @@ def judge_mmb_llm_verdict(raw_response: str) -> tuple[bool | None, str]:
             reason = str(payload.get("reason", ""))
             return verdict, f"{reason}（⚠ 判词含未转义引号，转义后解析）"
     return None, "裁判响应里没有可解析的 is_correct"
+
+
+def _repair_mmb_judge_strings(text: str) -> str:
+    """Normalize only string syntax; the literal verdict remains authoritative."""
+    pattern = r"""("(?:note|reason)"\s*:\s*)('(?:[^'\\]|\\.)*')(?=\s*[,}])"""
+
+    def normalize_note(match: re.Match) -> str:
+        try:
+            value = ast.literal_eval(match[2])
+        except (SyntaxError, ValueError):
+            return match[0]
+        return match[1] + json.dumps(value, ensure_ascii=False)
+
+    return _escape_stray_quotes(re.sub(pattern, normalize_note, text))
 
 
 def _as_bool(value: object) -> bool | None:
@@ -420,6 +455,12 @@ def _escape_stray_quotes(text: str) -> str:
             out.append(text[index : index + 2])
             index += 2
             continue
+        if char == "”" and in_string:
+            look = index + 1
+            while look < len(text) and text[look].isspace():
+                look += 1
+            if look < len(text) and text[look] == "}":
+                char = '"'
         if char != '"':
             out.append(char)
             index += 1
@@ -582,6 +623,34 @@ Question: {question}
 
 Answer:"""
 
+# Native question category selects the QA format; gold remains judge-only.
+# Evidence and matched-budget comparison: reports/clinical-multihop-20261007.md.
+MMB_MCD_ANSWER_CONTRACT = "medmemorybench-clinical-evidence-v1"
+MMB_MCD_ANSWER_PROMPT = (
+    "You are an assistant answering from the patient's retrieved visit history.\n"
+    """
+Rules:
+1. Use only information in the memories. Do not invent medical history,
+   measurements, diagnoses, dates, medications, or causal mechanisms.
+2. When asked why symptoms or events are related, explain the supported links
+   across visits. Include the relevant patient-specific facts, dates, medication
+   details and measurements that support those links. A generic conclusion alone
+   is insufficient. Keep the explanation focused on the question.
+3. Distinguish current facts from earlier facts and statements of uncertainty.
+   If a necessary link is missing, state that limitation instead of inventing it.
+4. If the question provides answer options, return only the letters of all
+   selected options. For a direct name, value, date or status question, return
+   only the requested information.
+5. If the history provides no answer, reply exactly: Cannot determine from the memories.
+
+Memories:
+{memories}
+
+Question: {question}
+
+Answer:"""
+)
+
 MUSIQUE_ANSWER_PROMPT = (
     "Answer the question using ONLY the retrieved candidate paragraphs below. "
     "Do not use outside knowledge. Return only the short answer, without explanation. "
@@ -730,21 +799,74 @@ def render_answer_prompt(item: dict) -> str:
         template = MUSIQUE_ANSWER_PROMPT
     if item.get("dataset") == "corporatebench":
         return build_corporatebench_answer_prompt(item, scalar_template=ANSWER_PROMPT)
+    if _is_mmb_clinical(item):
+        template = MMB_MCD_ANSWER_PROMPT
     return template.format(
         memories=item.get("retrieved_context") or "(no memories)",
         question=item["question"],
     )
 
 
+def _is_mmb_clinical(item: dict) -> bool:
+    return (
+        item.get("dataset") == "medmemorybench"
+        and item.get("category") == "multi_hop_clinical_deduction"
+    )
+
+
+def _mmb_answer_metadata(item: dict, config: tuple[str, str, str], max_tokens: int) -> dict:
+    if not _is_mmb_clinical(item):
+        return {}
+    payload = {
+        "contract": MMB_MCD_ANSWER_CONTRACT,
+        "prompt": render_answer_prompt(item),
+        "base": config[0],
+        "model": config[2],
+        "max_tokens": max_tokens,
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+    return {
+        "answer_contract": MMB_MCD_ANSWER_CONTRACT,
+        "input_fingerprint": fingerprint,
+        "answer_max_tokens": max_tokens,
+    }
+
+
+def _validate_mmb_answers(
+    items: list[dict], answers: dict, config: tuple[str, str, str], max_tokens: int | None = None
+) -> None:
+    """Reject old or changed clinical answers before any answer/judge API call."""
+    for item in items:
+        previous = answers.get(item["id"])
+        if previous is None:
+            continue
+        if not (
+            _is_mmb_clinical(item) or previous.get("answer_contract") == MMB_MCD_ANSWER_CONTRACT
+        ):
+            continue
+        budget = max_tokens if max_tokens is not None else previous.get("answer_max_tokens")
+        if type(budget) is not int or budget <= 0:
+            raise ValueError("MedMemoryBench clinical answer has no valid budget; use a new run-id")
+        expected = _mmb_answer_metadata(item, config, budget)
+        if not expected or any(previous.get(key) != value for key, value in expected.items()):
+            raise ValueError(
+                "MedMemoryBench clinical prompt/input/model/budget changed; use a new run-id"
+            )
+
+
 def cmd_answer(args: argparse.Namespace) -> int:
     items = read_jsonl(Path(args.input))
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    done = {row["id"] for row in read_jsonl(output)}
-    base, key, model = _config("answer")
+    previous = {row["id"]: row for row in read_jsonl(output)}
+    config = _config("answer")
+    _validate_mmb_answers(items, previous, config, args.max_tokens)
+    base, key, model = config
     with output.open("a", encoding="utf-8") as handle:
         for item in items:
-            if item["id"] in done:
+            if item["id"] in previous:
                 continue
             # **逐数据集挑 prompt**（判据是 item 里那个 `dataset` 字段，与 evaluate 同一口径）。
             # 分派理由见各自模板注释及 CorporateBench 的独立适配器。
@@ -752,7 +874,10 @@ def cmd_answer(args: argparse.Namespace) -> int:
             generated = _chat(
                 base, key, model, prompt, max_tokens=args.max_tokens, timeout=ANSWER_TIMEOUT
             )
-            write_line(handle, {"id": item["id"], "generated_answer": generated})
+            row = {"id": item["id"], "generated_answer": generated}
+            row.update(_mmb_answer_metadata(item, config, args.max_tokens))
+            write_line(handle, row)
+            previous[item["id"]] = row
     return 0
 
 
@@ -900,7 +1025,14 @@ def _call_judge(judge: tuple[str, str, str], prompt: str, *, max_tokens: int) ->
 
 def cmd_evaluate(args: argparse.Namespace) -> int:
     items = {item["id"]: item for item in read_jsonl(Path(args.input))}
-    answers = {row["id"]: row.get("generated_answer", "") for row in read_jsonl(Path(args.answers))}
+    answer_rows = {row["id"]: row for row in read_jsonl(Path(args.answers))}
+    if any(
+        _is_mmb_clinical(item)
+        or answer_rows.get(item["id"], {}).get("answer_contract") == MMB_MCD_ANSWER_CONTRACT
+        for item in items.values()
+    ):
+        _validate_mmb_answers(list(items.values()), answer_rows, _config("answer"))
+    answers = {qid: row.get("generated_answer", "") for qid, row in answer_rows.items()}
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     judge = _config("judge")

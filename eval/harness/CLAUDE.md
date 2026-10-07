@@ -153,6 +153,21 @@ FEVEROUS 的严格分包含完整证据组要求，采集重放仍按其原有 l
 支持范围、页面池来源和续跑纪律见
 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md) 的「公开数据的 AML 输入适配」。
 
+### MedMemoryBench native 临床多跳作答
+
+`extra_pipeline.py` 对输入 `category=multi_hop_clinical_deduction` 使用病史依据与
+推理格式，仍只将问题和 Search 文本放入提示词。格式路由不读 gold；没有该公开
+分类字段的采集请求保留原有入口。诊断、适用范围和原始就诊对照见
+[临床多跳报告](../reports/clinical-multihop-20261007.md)。
+
+这类答案记录 `answer_contract`、`input_fingerprint` 和实际答案输出预算。
+提示词、问题、Search 文本、答案端点/模型或输出预算变化后，`answer` 拒绝续用旧答案，
+应使用新 run-id；`evaluate` 也核验答案来源，答案预算从答案记录读取，和裁判预算分开。
+CLI 的 `--max-tokens` 仍按请求执行，其他题类的作答与旧答案续跑方式保留。
+
+MedMemoryBench 的 LLM 裁判对混用 note/reason 字符串引号做语法修复，仍只接受
+显式布尔裁决；原响应与重新解析的结果分别归档。具体来源与校验同见上述报告。
+
 ### 两个不对称，会改变结果
 
 | pipeline | 行为 |
