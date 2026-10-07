@@ -488,19 +488,19 @@ class SearchPipeline:
         if not self._qdrant.exists():
             return PackagedResponse(items=())
 
-        # ① 混合检索（DenseArm 内部保证每 query 恰好 1 次 embedding）
+        # ① 混合检索
         candidates = self._retriever.search(user_id=user_id, query=query, top_k=top_k)
 
-        # ② 稳定去重 + 重编号（**在 rerank 之前**，见类 docstring）
+        # ② 稳定去重 + 重编号
         ranked = dedup_candidates(candidates)
 
-        # ③ Evidence Checker：v1 恒"充足"，但每轮判定都记账（D13）
+        # ③ Evidence Checker（v1 恒"充足"）
         self._checker.decide(query=query)
 
-        # ④ rerank —— **恰好一次**
+        # ④ rerank —— 恰好一次
         ranked = self._maybe_rerank(query=query, ranked=ranked, trace=trace)
 
-        # ⑤⑥ 扩窗 + 合并成段（全部候选保留，只对前 N 条扩窗）
+        # ⑤⑥ 扩窗 + 合并成段
         expansion = expand_neighbors(
             ranked, store=self._store, seed_limit=self._seed_limit, radius=self._radius
         )
@@ -512,7 +512,7 @@ class SearchPipeline:
             annotate_relatives=self._annotate_relatives,
         )
 
-        # ⑦ 预算 + 打包（段是原子单位；`top_k` 约束的是**段数**）
+        # ⑦ 预算 + 打包
         return package(
             segments,
             top_k=top_k,

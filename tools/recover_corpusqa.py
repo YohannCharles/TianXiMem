@@ -91,7 +91,6 @@ FEVEROUS 的 URL 取自官方仓库 `Raldir/FEVEROUS/download_data.sh`。
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
@@ -104,6 +103,7 @@ from typing import Any
 #   同一条处置）；也可以 `python -m tools.recover_corpusqa` 跑。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from eval.datasets.prepare import sha256_file  # noqa: E402
 from eval.datasets.registry import benchmark_dir, capture_dir  # noqa: E402
 
 __all__ = ["main", "norm"]
@@ -223,14 +223,6 @@ def norm(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
-def sha256_of(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def check_file(path: Path, url: str, want: str, *, required: bool) -> bool:
     """存在性 + 哈希校验。必需文件对不上就退出；旁证文件只提示。"""
     if not path.exists():
@@ -239,7 +231,7 @@ def check_file(path: Path, url: str, want: str, *, required: bool) -> bool:
         if required:
             raise SystemExit(f"✗ 必需文件不存在：{path}")
         return False
-    got = sha256_of(path)
+    got = sha256_file(path)
     if got != want:
         print(f"[哈希不符] {path}\n    期望 {want}\n    实际 {got}\n    来源 {url}")
         if required:

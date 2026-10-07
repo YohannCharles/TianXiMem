@@ -37,25 +37,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from eval.datasets import benchmark_dir, load_locomo, load_longmemeval  # noqa: E402
+from eval.datasets import benchmark_dir  # noqa: E402
 from eval.harness import pipeline_for, run_judge  # noqa: E402
+from tools.run_products import categories_of  # noqa: E402,F401 —— 转出给 reorder_probe
 
 __all__ = ["categories_of", "load_run", "truncate_prefix"]
-
-
-def categories_of(dataset: str, *, limit: int | None, spread: bool) -> dict[str, str]:
-    """`qid → 类`——本工具**不猜类别**，一律回数据集问。
-
-    ⚠ **加载参数必须与产生该 run 时一致**（`--limit/--spread`）：
-    LongMemEval 全量里有一条空 `content` 的记录会让加载器**响亮地拒绝**
-    （`sharegpt_ADHo6Ob_0`，见 [`../../docs/open-questions.md`](../../docs/open-questions.md)），
-    所以"顺手套用全量"会直接崩——而那条恰恰不是本次要看的题。
-    """
-    if dataset == "longmemeval-s":
-        samples = load_longmemeval(benchmark_dir(), limit=limit, spread=spread)
-    else:
-        samples = load_locomo(benchmark_dir())
-    return {q.qid: str(q.category) for s in samples for q in s.questions}
 
 
 def load_run(run_id: str, reports_dir: Path) -> tuple[dict[str, dict], dict[str, bool]]:

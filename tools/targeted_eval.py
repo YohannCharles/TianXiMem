@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from eval.datasets import benchmark_dir  # noqa: E402
+from eval.datasets.prepare import sha256_file  # noqa: E402
 from eval.harness import ServiceClient, pipeline_for, run_judge  # noqa: E402
 from eval.harness.api_config import ANSWER_MODEL, JUDGE_MODEL  # noqa: E402
 from eval.harness.judge import EXTRA_DATASETS, render_memories  # noqa: E402
@@ -30,10 +31,6 @@ def read_rows(path: Path) -> list[dict]:
     缺文件时**响亮报错**——不能返回空表，否则"产物没生成"会伪装成"跑了 0 题"。
     """
     return [json.loads(line) for line in path.read_text().split("\n") if line.strip()]
-
-
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def write_json(path: Path, value: object) -> None:
@@ -54,7 +51,7 @@ def freeze(manifest: dict) -> dict:
         "manifest_sha256": hashlib.sha256(
             json.dumps(manifest, sort_keys=True).encode()
         ).hexdigest(),
-        "files": {path: digest(Path(path)) for path in sorted(paths)},
+        "files": {path: sha256_file(Path(path)) for path in sorted(paths)},
         "answer_model": ANSWER_MODEL,
         "judge_model": JUDGE_MODEL,
         "max_tokens": 1024,

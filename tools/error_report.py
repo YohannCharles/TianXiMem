@@ -43,6 +43,12 @@ from collections import Counter
 from pathlib import Path
 from typing import Final
 
+# ⚠ 直接跑脚本时 `sys.path[0]` 是 `tools/`，仓库根不在上面（与 `ab_answer_prompt.py` 同一处置）。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from eval.jsonl_io import read_jsonl  # noqa: E402
+from tools.run_products import categories_of  # noqa: E402
+
 EXIT_OK: Final[int] = 0
 EXIT_PRECONDITION_FAILED: Final[int] = 2
 
@@ -177,28 +183,15 @@ def _judge_hints(judge_response: str) -> list[str]:
     return hints
 
 
-def _category_map(dataset: str) -> dict[str, str]:
-    """`qid → category`——**归档 pipeline 的产物里没有分类**，得回数据集取。
-
-    （`labels.jsonl` 只写 id/label/is_correct/judge_response；`input.jsonl` 的字段由
-    `judge.build_input_items` 决定，也没有分类。所以这里回加载层要。）
-    """
-    from eval.datasets import benchmark_dir, load_locomo, load_longmemeval
-
-    bench = benchmark_dir()
-    samples = load_locomo(bench) if dataset == "locomo-refined" else load_longmemeval(bench)
-    return {q.qid: str(q.category) for sample in samples for q in sample.questions}
-
-
 def load(run_id: str, *, dataset: str = "locomo-refined") -> list[dict]:
     """把一轮 run 的三份产物按 `id` 拼起来（目录里每个 user 一份）。"""
     root = RUNS_DIR / run_id
-    categories = _category_map(dataset)
+    categories = categories_of(dataset)
     rows: list[dict] = []
     for user_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        inputs = {r["id"]: r for r in _rows(user_dir / "input.jsonl")}
-        answers = {r["id"]: r for r in _rows(user_dir / "answers.jsonl")}
-        for label_row in _rows(user_dir / "labels.jsonl"):
+        inputs = {r["id"]: r for r in read_jsonl(user_dir / "input.jsonl")}
+        answers = {r["id"]: r for r in read_jsonl(user_dir / "answers.jsonl")}
+        for label_row in read_jsonl(user_dir / "labels.jsonl"):
             item = inputs.get(label_row["id"], {})
             rows.append(
                 {
@@ -215,13 +208,6 @@ def load(run_id: str, *, dataset: str = "locomo-refined") -> list[dict]:
                 }
             )
     return rows
-
-
-def _rows(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    with path.open(encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle if line.strip()]
 
 
 def classify(row: dict) -> tuple[str, float]:

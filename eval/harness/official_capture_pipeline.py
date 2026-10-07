@@ -57,6 +57,7 @@ for _candidate in (str(_REPO_ROOT), str(Path(__file__).resolve().parent)):
     if _candidate not in sys.path:
         sys.path.insert(0, _candidate)
 
+from eval.harness.pipeline_cli import build_pipeline_parser  # noqa: E402
 from eval.jsonl_io import read_jsonl, write_line  # noqa: E402
 
 #: 走 `extra_pipeline` 的六个家族（它自己那套 prompt 与判分）。
@@ -627,19 +628,12 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """CLI 形状与归档那几份一致：`--max-tokens` 挂在**两个子命令上**。"""
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--max-tokens", type=int, default=1024, help="answer / 裁判各自的输出上限")
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="command", required=True)
-    answer = sub.add_parser("answer", parents=[common])
-    answer.add_argument("--input", required=True)
-    answer.add_argument("--output", required=True)
-    evaluate = sub.add_parser("evaluate", parents=[common])
-    evaluate.add_argument("--input", required=True)
-    evaluate.add_argument("--answers", required=True)
-    evaluate.add_argument("--output", required=True)
-    return parser
+    """CLI 形状与归档那几份一致：`--max-tokens` 挂在**两个子命令上**（见 `pipeline_cli`）。"""
+    return build_pipeline_parser(
+        __doc__.splitlines()[0],
+        default_max_tokens=1024,
+        max_tokens_help="answer / 裁判各自的输出上限",
+    )
 
 
 def main() -> int:

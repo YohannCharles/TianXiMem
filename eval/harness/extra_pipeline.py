@@ -57,6 +57,7 @@ from eval.harness.corporatebench_pipeline import (  # noqa: E402
     judge_corporatebench,
     score_corporatebench,
 )
+from eval.harness.pipeline_cli import build_pipeline_parser  # noqa: E402
 from eval.jsonl_io import read_jsonl, write_line  # noqa: E402
 
 __all__ = [
@@ -625,7 +626,7 @@ MEMTRAP_ANSWER_PROMPT = (
 #:
 #: ⚠ **这是 MQuAKE 的接法问题，不是"通用 prompt 该改"**：通用那份还被
 #: medmemorybench / CorporateBench 的单值查询仍沿用；CorporateBench 聚合任务已独立。
-#: （tempreason 一度也在名单里，**10-04 起它有自己那份 `TEMPR_ANSWER_PROMPT`**。）
+#: （tempreason **不在**名单里——它有自己那份 `TEMPR_ANSWER_PROMPT`。）
 MQUAKE_ANSWER_PROMPT = (
     "You are an assistant answering a question using the memories provided below.\n\n"
     "The memories may contain **updates**: a statement marked as replacing an earlier one.\n"
@@ -929,28 +930,13 @@ judge_one = _judge_one
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """CLI 形状**必须与归档 pipeline 一致**：`--max-tokens` 挂在**子命令上**。
-
-    ⚠ 2026-09-30 的教训：一开始把它挂在**顶层** parser 上，而 `run_judge` 是按官方那几份的
-    写法**在子命令之后**传的（`… answer --input … --output … --max-tokens 256`）⇒
-    argparse 子解析器不认识它，整轮以 `unrecognized arguments` 死在第一步。
-    ⇒ **两个子命令都要收**（`run_judge` 对 locomo / LME / 我们这五份是两边都传的）。
-    """
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--max-tokens", type=int, default=512, help="answer / 裁判各自的输出上限")
-
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="command", required=True)
-    answer = sub.add_parser(
-        "answer", parents=[common], help="作答（**追加**模式，按 id 跳过已完成的题）"
+    return build_pipeline_parser(
+        __doc__.splitlines()[0],
+        default_max_tokens=512,
+        max_tokens_help="answer / 裁判各自的输出上限",
+        answer_help="作答（**追加**模式，按 id 跳过已完成的题）",
+        evaluate_help="判分（**覆盖**模式）",
     )
-    answer.add_argument("--input", required=True)
-    answer.add_argument("--output", required=True)
-    evaluate = sub.add_parser("evaluate", parents=[common], help="判分（**覆盖**模式）")
-    evaluate.add_argument("--input", required=True)
-    evaluate.add_argument("--answers", required=True)
-    evaluate.add_argument("--output", required=True)
-    return parser
 
 
 def main() -> int:

@@ -33,7 +33,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
 
 __all__ = [
     "Message",
@@ -46,8 +45,6 @@ __all__ = [
     "normalize_content",
     "to_epoch_ms",
 ]
-
-Role = Literal["user", "assistant"]
 
 
 @dataclass(frozen=True, slots=True)

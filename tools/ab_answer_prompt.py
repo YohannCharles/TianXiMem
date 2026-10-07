@@ -52,7 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # 仓库根（`eva
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval" / "harness"))  # `api_config`
 
 from eval.harness import extra_pipeline as ep  # noqa: E402
-from eval.jsonl_io import read_jsonl  # noqa: E402
+from tools.run_products import rows_by_sample  # noqa: E402
 
 #: `input.jsonl` 里给模型的那份记忆叫什么（逐数据集不同，见 `eval/CLAUDE.md` 的契约表）。
 MEMORY_FIELD: Final[dict[str, str]] = {
@@ -65,15 +65,6 @@ MEMORY_FIELD: Final[dict[str, str]] = {
 
 #: 判定"这句话是不是拒答"——**与 prompt 里让模型回的那句一致**（改了 prompt 记得一起改）。
 REFUSALS: Final[tuple[str, ...]] = ("cannot determine from the memories",)
-
-
-def _read(run_dir: Path, filename: str) -> dict[tuple[str, str], dict]:
-    """键是 `(批目录, 题号)`——**不能只用题号**（见 [`diagnose_run.py`](./diagnose_run.py)）。"""
-    rows: dict[tuple[str, str], dict] = {}
-    for path in sorted(run_dir.glob(f"*/{filename}")):
-        for row in read_jsonl(path):
-            rows[(path.parent.name, str(row["id"]))] = row
-    return rows
 
 
 def _judge(dataset: str, item: dict, generated: str) -> bool:
@@ -164,9 +155,9 @@ def run_ab(run_id: str, dataset: str, reports_dir: Path, sample: int | None) -> 
         print(f"⛔ 还没为 {dataset} 准备候选（见本文件 CANDIDATES）", file=sys.stderr)
         return 2
 
-    inputs = _read(run_dir, "input.jsonl")
-    answers = _read(run_dir, "answers.jsonl")
-    labels = _read(run_dir, "labels.jsonl")
+    inputs = rows_by_sample(run_dir, "input.jsonl")
+    answers = rows_by_sample(run_dir, "answers.jsonl")
+    labels = rows_by_sample(run_dir, "labels.jsonl")
 
     total = correct = 0
     refused: list[tuple[tuple[str, str], dict]] = []

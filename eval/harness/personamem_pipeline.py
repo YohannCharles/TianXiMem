@@ -44,6 +44,7 @@ for _candidate in (str(_REPO_ROOT), str(Path(__file__).resolve().parent)):
         sys.path.insert(0, _candidate)
 
 from eval.datasets.registry import benchmark_dir  # noqa: E402
+from eval.harness.pipeline_cli import build_pipeline_parser  # noqa: E402
 from eval.jsonl_io import read_jsonl, write_line  # noqa: E402
 
 MEMORY_INPUT_VERSION = "personamem-search-memory-v1"
@@ -209,18 +210,11 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--max-tokens", type=int, default=512, help="**收下但不用**——形状对齐用")
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="command", required=True)
-    answer = sub.add_parser("answer", parents=[common])
-    answer.add_argument("--input", required=True)
-    answer.add_argument("--output", required=True)
-    evaluate = sub.add_parser("evaluate", parents=[common])
-    evaluate.add_argument("--input", required=True)
-    evaluate.add_argument("--answers", required=True)
-    evaluate.add_argument("--output", required=True)
-    return parser
+    return build_pipeline_parser(
+        __doc__.splitlines()[0],
+        default_max_tokens=512,
+        max_tokens_help="**收下但不用**——形状对齐用",
+    )
 
 
 def main() -> int:

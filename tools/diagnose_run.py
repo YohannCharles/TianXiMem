@@ -64,6 +64,11 @@ import sys
 from pathlib import Path
 from typing import Any, Final
 
+# ⚠ 直接跑脚本时 `sys.path[0]` 是 `tools/`，仓库根不在上面（与 `ab_answer_prompt.py` 同一处置）。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.run_products import by_id_or_idx, rows_by_sample  # noqa: E402
+
 #: **答案本来就不该在记忆里**的数据集 —— 判读树对它们**不适用**。
 #:
 #: ⚠ 这一条是本脚本**第一次真跑就自己撞出来的**：它对 memtrapbench 判了
@@ -92,26 +97,6 @@ MEMORY_FIELDS: Final[tuple[str, ...]] = (
 )
 
 _SUMMARY_HEAD: Final[int] = 3
-
-
-def _read_batches(run_dir: Path, filename: str) -> dict[tuple[str, str], dict]:
-    """读产物，键是 **`(批目录名, 题号)`**。
-
-    ⚠ **不能只用题号**：一个 run 的产物按 `sample.user_id` 分目录，而题号只在
-    **一个样本内**保证唯一。`medmemorybench` 一度就是**全局**撞的（`session_10_eem_1`
-    在 20 个 persona 上各出现一次）⇒ 按题号配对的读法把 172 行压成 20 个键，
-    报出来的"答案只有 20/172 题、跑批中断？"**是工具自己造的**。
-    加载器已改成全局唯一，但**核对产物时不该假定它**——这里以目录为准。
-    """
-    rows: dict[tuple[str, str], dict] = {}
-    for path in sorted(run_dir.glob(f"*/{filename}")):
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                row = json.loads(line)
-                rows[(path.parent.name, str(row.get("id") or row.get("idx")))] = row
-    return rows
 
 
 def _norm(text: object) -> str:
@@ -272,9 +257,9 @@ def clinical_report(run_id: str, reports_dir: Path, refusals: tuple[str, ...]) -
     )
     fingerprint = record.get("data_fingerprint") or {}
 
-    inputs = _read_batches(run_dir, "input.jsonl")
-    answers = _read_batches(run_dir, "answers.jsonl")
-    labels = _read_batches(run_dir, "labels.jsonl")
+    inputs = rows_by_sample(run_dir, "input.jsonl", key=by_id_or_idx)
+    answers = rows_by_sample(run_dir, "answers.jsonl", key=by_id_or_idx)
+    labels = rows_by_sample(run_dir, "labels.jsonl", key=by_id_or_idx)
 
     print(f"\n═══ {run_id} ═══")
     if fingerprint:

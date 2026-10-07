@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "eval" / "harness"))
 
+from eval.datasets.prepare import sha256_file  # noqa: E402
 from eval.datasets.registry import benchmark_dir  # noqa: E402
 from eval.harness import extra_pipeline as ep  # noqa: E402
 from eval.harness.corporatebench_pipeline import score_corporatebench  # noqa: E402
@@ -59,10 +60,6 @@ CORE = "https://storybeat.company/ontology/core#"
 COMPANY = "https://storybeat.company/ontology/company#"
 MEET = "https://storybeat.company/ontology/meetings#"
 RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
-
-
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def read_rows(path: Path) -> dict[str, dict]:
@@ -403,7 +400,7 @@ def prepare(output: Path) -> None:
                 "Candidate scopes include nonmatching dates/frequencies for negative controls."
             ),
             "source_sha256": {
-                str(p.relative_to(ROOT)): digest(p)
+                str(p.relative_to(ROOT)): sha256_file(p)
                 for p in (
                     archive,
                     question_file,
@@ -553,7 +550,7 @@ def add_scope(output: Path) -> None:
         "document Date. Completeness is provided by the oracle snapshot and is not "
         "a claim about present Search capabilities."
     )
-    manifest["scope_runner_sha256"] = digest(Path(__file__))
+    manifest["scope_runner_sha256"] = sha256_file(Path(__file__))
     write_json(output / "manifest.json", manifest)
     print(json.dumps({"added_arm": arm, "n": len(rows)}), flush=True)
 
@@ -623,7 +620,7 @@ def add_sentences(output: Path) -> None:
         "counts or combined answer sets are present. Source KB attendee relations "
         "and occurrence dates remain oracle facts, not guaranteed prose extractions."
     )
-    manifest["sentence_runner_sha256"] = digest(Path(__file__))
+    manifest["sentence_runner_sha256"] = sha256_file(Path(__file__))
     write_json(output / "manifest.json", manifest)
     print(json.dumps({"added_arm": arm, "n": len(rows)}), flush=True)
 
@@ -757,7 +754,7 @@ def add_matches(output: Path) -> None:
         "The occurrence verb is an oracle interpretation of KB event records, not "
         "proof that agenda/calendar prose confirms the event actually happened."
     )
-    manifest["matching_runner_sha256"] = digest(Path(__file__))
+    manifest["matching_runner_sha256"] = sha256_file(Path(__file__))
     manifest["matching_reused_ids"] = [row["id"] for row in reuse]
     write_json(output / "manifest.json", manifest)
     print(json.dumps({"added_arm": arm, "n": len(rows), "reused": len(reuse)}), flush=True)

@@ -34,7 +34,7 @@ HaluMem 仓库对 QA **不发布**字符串匹配打分器，只发一份 **LLM 
 `eval/prompts.py` 里的 `PROMPT_*` 是**作答侧**提示词，不是裁判。
 逐字规则抄进每行的 `gold_judging`（引用前必读）。
 
-## 数据来源与指纹（下载走 curl，落 `dataset/halumem/`）
+## 数据来源与指纹（缺数据时按 `eval/datasets/manifest.py` 的清单校验后落 `dataset/halumem/`）
 
 * 数据集：<https://huggingface.co/datasets/IAAR-Shanghai/HaluMem>
 * 文件：`HaluMem-Medium.jsonl`，33,511,525 B（≈33.5 MB），20 个 user / 3,467 题
@@ -56,7 +56,7 @@ HaluMem 有 6 个题面在多 session 重复（如 `What is Sarah Garcia's middl
 
 ## 怎么跑（可重复）
 
-    uv run python tools/recover_halumem.py    # 缺数据会自动 curl 下载并校验 sha256
+    uv run python tools/recover_halumem.py    # 缺数据会按清单下载并校验 sha256
     uv run ruff check tools/recover_halumem.py
 
 产物：`official-dataset-2026-09-29/official-gold-extra-halumem.jsonl`，
@@ -66,7 +66,6 @@ HaluMem 有 6 个题面在多 session 重复（如 `What is Sarah Garcia's middl
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
@@ -83,10 +82,6 @@ from eval.datasets.registry import benchmark_dir, capture_dir  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
-MEDIUM_URL = (
-    "https://huggingface.co/datasets/IAAR-Shanghai/HaluMem/resolve/main/HaluMem-Medium.jsonl"
-)
-MEDIUM_SHA256 = "486fbc130a5c8781a2af27ffa508a1d7855245137aa449c193ac4d29c45634e7"
 MEDIUM_BYTES = 33_511_525
 OUT_NAME = "official-gold-extra-halumem.jsonl"
 
@@ -132,15 +127,6 @@ _JUDGING_RULES = (
     "provides a definite fact, that is a **Hallucination**. If the system also answers "
     '*“unknown”* (without guessing), it may be **Correct**."'
 )
-
-
-def sha256_file(path: Path) -> str:
-    """分块读——30+ MB 的文件没必要整个读进来只为算哈希（与 registry 同一处置）。"""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def ensure_medium(bench_dir: Path, *, offline: bool = False) -> Path:

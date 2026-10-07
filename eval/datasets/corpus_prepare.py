@@ -10,13 +10,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-
-def _digest(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+from .prepare import sha256_file
 
 
 def extract_zip_member(archive: Path, destination: Path, entry: dict) -> None:
@@ -64,7 +58,7 @@ def prepare_hybridqa_corpus(root: Path, entry: dict, *, check_only: bool = False
                 hashes[name] = digest
                 target = root / DATA_DIR / name
                 if target.is_file():
-                    if _digest(target) != digest:
+                    if sha256_file(target) != digest:
                         raise ValueError(
                             f"HybridQA corpus sha256 mismatch: {target}; existing file preserved"
                         )

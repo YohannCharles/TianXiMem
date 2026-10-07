@@ -181,11 +181,6 @@ class FakeEmbedder:
         return [x / norm for x in acc]
 
 
-@pytest.fixture
-def fake_embedder() -> FakeEmbedder:
-    return FakeEmbedder()
-
-
 def unit_vector(dim: int, index: int) -> list[float]:
     """第 `index` 个基向量——用来构造互不相干的 dense 候选。"""
     return [1.0 if i == index else 0.0 for i in range(dim)]
@@ -561,9 +556,3 @@ def seed_line(
 def seed_pair() -> Callable[..., str]:
     """`seed_pair_in` 的 fixture 形态——**同一份实现**，用它的测试就不必自己 import。"""
     return seed_pair_in
-
-
-@pytest.fixture
-def seed_sparse() -> Callable[..., list[str]]:
-    """`seed_line` 的 fixture 形态——"落满、只返回选中那几个"。"""
-    return seed_line

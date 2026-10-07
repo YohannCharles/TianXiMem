@@ -28,7 +28,13 @@ class PreparationError(RuntimeError):
     """材料缺失、校验失败或下载失败；必须在付费评测之前退出。"""
 
 
-def _sha256(path: Path) -> str:
+def sha256_file(path: Path) -> str:
+    """分块读——LME 那份 277 MB、HaluMem 那份 33 MB，整个读进来只为算哈希不划算。
+
+    ⚠ **本仓算文件哈希只用这一份**（`eval/datasets/**` 与 `tools/**` 都从这里 import）：
+    各写一份的话，`prepare.py` 的分块版与别处的 `read_bytes()` 版会**给出一致的值但吃不同的内存**
+    ——于是"哪个能跑得动"只在最大的那份文件上才暴露。
+    """
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
@@ -121,7 +127,7 @@ def _download(url: str, dest: Path) -> None:
 def _prepare_entry(entry: dict, root: Path, *, offline: bool, patch: bool = False) -> bool:
     """返回是否新发布文件。任何不符的已有文件都不能被自动覆盖。"""
     path = archive_file(root, entry["name"])
-    actual = _sha256(path) if path.is_file() else None
+    actual = sha256_file(path) if path.is_file() else None
     if actual == entry["sha256"]:
         return False
     upstream = entry.get("upstream_sha256", entry["sha256"])
@@ -154,7 +160,7 @@ def _prepare_entry(entry: dict, root: Path, *, offline: bool, patch: bool = Fals
                     _download(entry["url"], compressed)
                     if (
                         compressed.stat().st_size != int(entry["download_bytes"])
-                        or _sha256(compressed) != entry["download_sha256"]
+                        or sha256_file(compressed) != entry["download_sha256"]
                     ):
                         raise PreparationError(
                             f"{entry['name']} 压缩包与固定版本的 sha256/大小不符"
@@ -170,11 +176,11 @@ def _prepare_entry(entry: dict, root: Path, *, offline: bool, patch: bool = Fals
                 zipfile.BadZipFile,
             ) as error:
                 raise PreparationError(f"下载 {entry['name']} 失败：{error}") from error
-        if _sha256(staged) != upstream:
+        if sha256_file(staged) != upstream:
             raise PreparationError(f"{entry['name']} 下载字节与固定版本的上游 sha256 不符")
         if entry.get("local_patch"):
             apply_local_patch(entry, staged)
-        if _sha256(staged) != entry["sha256"]:
+        if sha256_file(staged) != entry["sha256"]:
             raise PreparationError(f"{entry['name']} 准备后 sha256 不符，不发布")
         destination = path if actual is not None else root / local_path(entry["name"])
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -226,7 +232,7 @@ def migrate_archive(source: Path, root: Path) -> int:
             continue
         name = path.relative_to(source).as_posix()
         entry = known.get(name)
-        if entry and _sha256(path) != entry["sha256"]:
+        if entry and sha256_file(path) != entry["sha256"]:
             raise PreparationError(f"迁移前校验不符：{path}；未移动任何文件")
         relative = local_path(name) if entry else Path(".legacy/unregistered") / name
         destination = root / relative

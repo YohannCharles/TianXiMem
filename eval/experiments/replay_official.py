@@ -73,12 +73,6 @@ _ARCHIVE_SLUG = {"docpp": "doc-pp"}
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
 
-def _append(path: Path, row: dict) -> None:
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-        handle.flush()
-
-
 def save_hits(path: Path, hits_by_qid: dict[str, list]) -> None:
     """检索快照——**judge 侧要的字段一个不少**，重判时不必再检索一遍。"""
     with path.open("w", encoding="utf-8") as handle:
