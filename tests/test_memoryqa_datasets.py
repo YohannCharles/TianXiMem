@@ -283,7 +283,7 @@ def test_http_round_reaches_real_answer_and_judge_functions(bench, tmp_path, mon
                 input=str(input_path), answers=str(answers), output=str(labels), max_tokens=128
             )
         )
-        generated = {r["id"]: r["generated_answer"] for r in module._read_jsonl(answers)}
+        generated = {r["id"]: r["generated_answer"] for r in module.read_jsonl(answers)}
         return [
             JudgeResult(
                 qid=r["id"],
@@ -292,7 +292,7 @@ def test_http_round_reaches_real_answer_and_judge_functions(bench, tmp_path, mon
                 judge_response=r["judge_response"],
                 generated_answer=generated[r["id"]],
             )
-            for r in module._read_jsonl(labels)
+            for r in module.read_jsonl(labels)
         ]
 
     monkeypatch.setattr(runner, "run_judge", run_real_functions)
@@ -355,7 +355,7 @@ def test_musique_evaluate_subprocess_uses_the_actual_pipeline(bench, tmp_path):
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    assert all(row["is_correct"] for row in extra._read_jsonl(labels))
+    assert all(row["is_correct"] for row in extra.read_jsonl(labels))
 
 
 @pytest.mark.parametrize("dataset", ["halumem", "musique"])

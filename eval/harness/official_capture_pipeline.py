@@ -57,6 +57,8 @@ for _candidate in (str(_REPO_ROOT), str(Path(__file__).resolve().parent)):
     if _candidate not in sys.path:
         sys.path.insert(0, _candidate)
 
+from eval.jsonl_io import read_jsonl, write_line  # noqa: E402
+
 #: 走 `extra_pipeline` 的六个家族（它自己那套 prompt 与判分）。
 _EXTRA_FAMILIES = frozenset(
     {
@@ -111,19 +113,6 @@ _ARCHIVED = {
     "clbench": "clb_pipeline",
     "personamem-v2": "pipeline_v2_personamem",
 }
-
-
-def _read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    return [
-        json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line.strip()
-    ]
-
-
-def _write_line(handle, row: dict) -> None:
-    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-    handle.flush()
 
 
 def _extra():
@@ -597,10 +586,10 @@ def _generic_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
 
 
 def cmd_answer(args: argparse.Namespace) -> int:
-    items = _read_jsonl(Path(args.input))
+    items = read_jsonl(Path(args.input))
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    done = {str(row["id"]) for row in _read_jsonl(output)}
+    done = {str(row["id"]) for row in read_jsonl(output)}
     extra = _extra()
     base, key, model = extra.config("answer")
     with contextlib.nullcontext(output.open("a", encoding="utf-8")) as handle:
@@ -615,25 +604,25 @@ def cmd_answer(args: argparse.Namespace) -> int:
                 max_tokens=args.max_tokens,
                 timeout=extra.ANSWER_TIMEOUT,
             )
-            _write_line(handle, {"id": str(item["id"]), "generated_answer": generated})
+            write_line(handle, {"id": str(item["id"]), "generated_answer": generated})
     return 0
 
 
 def cmd_evaluate(args: argparse.Namespace) -> int:
-    items = {str(item["id"]): item for item in _read_jsonl(Path(args.input))}
+    items = {str(item["id"]): item for item in read_jsonl(Path(args.input))}
     answers = {
-        str(row["id"]): row.get("generated_answer", "") for row in _read_jsonl(Path(args.answers))
+        str(row["id"]): row.get("generated_answer", "") for row in read_jsonl(Path(args.answers))
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     # ⚠ **按 id 合并**：判分要调网关，几千题的一轮不该因为重启从头再判一遍。
     #   与归档那几份（`evaluate` 覆盖）故意不同，见模块 docstring。
-    existing = {str(row["id"]) for row in _read_jsonl(output)}
+    existing = {str(row["id"]) for row in read_jsonl(output)}
     with contextlib.nullcontext(output.open("a", encoding="utf-8")) as handle:
         for qid, item in items.items():
             if qid in existing:
                 continue
-            _write_line(handle, _judge(item, answers.get(qid, ""), max_tokens=args.max_tokens))
+            write_line(handle, _judge(item, answers.get(qid, ""), max_tokens=args.max_tokens))
     return 0
 
 

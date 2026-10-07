@@ -35,7 +35,6 @@ official.gold_letters(...) · official.predicted_letters(...) · official.score_
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -46,6 +45,7 @@ for _candidate in (str(_REPO_ROOT), str(Path(__file__).resolve().parent)):
         sys.path.insert(0, _candidate)
 
 from eval.datasets.registry import benchmark_dir  # noqa: E402
+from eval.jsonl_io import read_jsonl, write_line  # noqa: E402
 
 
 def _official():
@@ -56,19 +56,6 @@ def _official():
     import pipeline_scriptmem  # type: ignore[import-not-found]
 
     return pipeline_scriptmem
-
-
-def _read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    return [
-        json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line.strip()
-    ]
-
-
-def _write_line(handle, row: dict) -> None:
-    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-    handle.flush()
 
 
 def _chat(prompt: str) -> str:
@@ -97,14 +84,14 @@ def cmd_answer(args: argparse.Namespace) -> int:
     official = _official()
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    done = {str(row.get("id")) for row in _read_jsonl(output)}
+    done = {str(row.get("id")) for row in read_jsonl(output)}
     with output.open("a", encoding="utf-8") as handle:
-        for item in _read_jsonl(Path(args.input)):
+        for item in read_jsonl(Path(args.input)):
             ident = str(item["id"])
             if ident in done:
                 continue
             generated = _chat(official.render_answer_prompt(item))
-            _write_line(handle, {"id": ident, "generated_answer": generated})
+            write_line(handle, {"id": ident, "generated_answer": generated})
     return 0
 
 
@@ -112,10 +99,10 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     """逐题判分——**三个函数都来自官方那份**（`score_item` 里那三条规则：单选相等、
     多选集合相等、排序按序）。"""
     official = _official()
-    items = {str(item["id"]): item for item in _read_jsonl(Path(args.input))}
+    items = {str(item["id"]): item for item in read_jsonl(Path(args.input))}
     answers = {
         str(row["id"]): str(row.get("generated_answer", ""))
-        for row in _read_jsonl(Path(args.answers))
+        for row in read_jsonl(Path(args.answers))
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -129,7 +116,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
             why = f"ScriptMem/{qa_type}：gold={gold} predicted={predicted}" + (
                 "（**malformed**：解析不出选项字母）" if malformed else ""
             )
-            _write_line(
+            write_line(
                 handle,
                 {
                     "id": qid,

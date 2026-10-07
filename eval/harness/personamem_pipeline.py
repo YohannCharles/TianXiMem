@@ -44,6 +44,7 @@ for _candidate in (str(_REPO_ROOT), str(Path(__file__).resolve().parent)):
         sys.path.insert(0, _candidate)
 
 from eval.datasets.registry import benchmark_dir  # noqa: E402
+from eval.jsonl_io import read_jsonl, write_line  # noqa: E402
 
 MEMORY_INPUT_VERSION = "personamem-search-memory-v1"
 
@@ -85,14 +86,6 @@ def _official():
     return pipeline_v2_personamem
 
 
-def _read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    return [
-        json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line.strip()
-    ]
-
-
 def _fold_trailing_system(messages: list[dict]) -> list[dict]:
     """把**非开头**的 system 消息折进**前一条**消息（只换 `role`，文字一字不改）。
 
@@ -123,19 +116,18 @@ def build_mcq_messages(item: dict) -> tuple[list[dict], dict[str, str], str]:
 def cmd_answer(args: argparse.Namespace) -> int:
     """Search 片段 → 官方 MCQ 消息 → 模型选字母；拒绝复用旧口径答案。"""
     # 官方的选项构造与判分保持不变；答案消息改用逐题检索历史。
-    import json as _json
     from pathlib import Path as _Path
 
     from eval.harness.api_config import ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL
 
     output = _Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    items = _read_jsonl(Path(args.input))
+    items = read_jsonl(Path(args.input))
     fingerprints = {
         str(item.get("id", i)): _input_fingerprint(item) for i, item in enumerate(items)
     }
     done = set()
-    for row in _read_jsonl(output):
+    for row in read_jsonl(output):
         ident = str(row.get("id"))
         if row.get("memory_input_version") != MEMORY_INPUT_VERSION or row.get(
             "input_fingerprint"
@@ -165,25 +157,21 @@ def cmd_answer(args: argparse.Namespace) -> int:
                     )
                     response.raise_for_status()
                     generated = response.json()["choices"][0]["message"]["content"]
-                    handle.write(
-                        _json.dumps(
-                            {
-                                "id": ident,
-                                "mode": "mcq",
-                                "generated_answer": generated,
-                                "option_mapping": mapping,
-                                "correct_letter": correct_letter,
-                                "prompt_source": "PersonaMem-v2 inference.py"
-                                "（Search 记忆替代历史；尾部 system 已折叠）",
-                                "memory_input_version": MEMORY_INPUT_VERSION,
-                                "input_fingerprint": fingerprints[ident],
-                                "model": ANSWER_MODEL,
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
+                    write_line(
+                        handle,
+                        {
+                            "id": ident,
+                            "mode": "mcq",
+                            "generated_answer": generated,
+                            "option_mapping": mapping,
+                            "correct_letter": correct_letter,
+                            "prompt_source": "PersonaMem-v2 inference.py"
+                            "（Search 记忆替代历史；尾部 system 已折叠）",
+                            "memory_input_version": MEMORY_INPUT_VERSION,
+                            "input_fingerprint": fingerprints[ident],
+                            "model": ANSWER_MODEL,
+                        },
                     )
-                    handle.flush()
 
     asyncio.run(run())
     return 0
@@ -202,25 +190,21 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     official.evaluate_mcq(SimpleNamespace(answers=args.answers, output=str(scratch)))
 
     with output.open("w", encoding="utf-8") as handle:
-        for row in _read_jsonl(scratch):
+        for row in read_jsonl(scratch):
             ok = bool(row.get("is_correct"))
-            handle.write(
-                json.dumps(
-                    {
-                        "id": str(row["id"]),
-                        "is_correct": ok,
-                        "label": f"letter={row.get('predicted_letter')}/{row.get('gold_letter')}",
-                        "judge_response": (
-                            f"PersonaMem-v2/mcq："
-                            f"predicted={str(row.get('predicted_answer'))[:120]!r} "
-                            f"gold={str(row.get('gold_answer'))[:120]!r}"
-                        ),
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
+            write_line(
+                handle,
+                {
+                    "id": str(row["id"]),
+                    "is_correct": ok,
+                    "label": f"letter={row.get('predicted_letter')}/{row.get('gold_letter')}",
+                    "judge_response": (
+                        f"PersonaMem-v2/mcq："
+                        f"predicted={str(row.get('predicted_answer'))[:120]!r} "
+                        f"gold={str(row.get('gold_answer'))[:120]!r}"
+                    ),
+                },
             )
-            handle.flush()
     return 0
 
 

@@ -52,7 +52,8 @@ def load_bodies(path: str | Path) -> tuple[dict, list[dict]]:
     """
     meta: dict = {}
     bodies: list[dict] = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    # ⚠ 按 `"\n"` 切、**不用 `splitlines()`**（见 [`eval/jsonl_io.py`](../eval/jsonl_io.py)）。
+    for line in Path(path).read_text(encoding="utf-8").split("\n"):
         if not line.strip():
             continue
         entry = json.loads(line)

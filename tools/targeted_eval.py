@@ -26,7 +26,10 @@ from eval.harness.judge import EXTRA_DATASETS, render_memories  # noqa: E402
 
 
 def read_rows(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    """⚠ 按 `"\\n"` 切、**不用 `splitlines()`**（见 [`eval/jsonl_io.py`](../eval/jsonl_io.py)）。
+    缺文件时**响亮报错**——不能返回空表，否则"产物没生成"会伪装成"跑了 0 题"。
+    """
+    return [json.loads(line) for line in path.read_text().split("\n") if line.strip()]
 
 
 def digest(path: Path) -> str:

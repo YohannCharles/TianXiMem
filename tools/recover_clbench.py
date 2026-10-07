@@ -63,6 +63,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eval.datasets.clbench import CLBENCH_JSONL  # noqa: E402
 from eval.datasets.registry import benchmark_dir, capture_dir  # noqa: E402
+from eval.jsonl_io import jsonl_line  # noqa: E402
 
 __all__ = ["main", "norm", "load_clbench", "match_record"]
 
@@ -214,20 +215,6 @@ def build_row(
     }
 
 
-#: `str.splitlines()` 会断行、而 `json.dumps(ensure_ascii=False)` 又不转义的字符。
-#: `clbench.jsonl` 本身就有 `U+2028` ⇒ 产物照 `eval/harness/judge.py#_jsonl_line`
-#: 同一条纪律就地转义（本轮命中载荷里没有，换一轮采集未必）。
-_BREAKERS = {"\x85": "\\u0085", "\u2028": "\\u2028", "\u2029": "\\u2029"}
-
-
-def _jsonl_line(item: dict[str, Any]) -> str:
-    """写一行 JSONL（`ensure_ascii=False` + 转义 `splitlines()` 会断行的字符）。"""
-    line = json.dumps(item, ensure_ascii=False)
-    for char, escaped in _BREAKERS.items():
-        line = line.replace(char, escaped)
-    return line
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -291,7 +278,7 @@ def main() -> int:
     out_path = dataset_dir / args.out
     with out_path.open("w", encoding="utf-8") as handle:
         for row in out_rows:
-            handle.write(_jsonl_line(row) + "\n")
+            handle.write(jsonl_line(row))
 
     usable_sys = sum(1 for row in out_rows if str(row["gold_native"]["system_prompt"]).strip())
     print(f"命中 {len(out_rows)} 条 search → {out_path}")

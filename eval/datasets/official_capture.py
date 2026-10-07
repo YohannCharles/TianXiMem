@@ -43,6 +43,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..jsonl_io import read_jsonl
 from .preprocess import Message, Question, Sample, Session
 from .registry import capture_dir
 
@@ -60,11 +61,6 @@ __all__ = [
 KIT_FILE = "official-eval-kit.jsonl"
 ADDS_FILE = "official-adds.jsonl"
 TIMELINE_FILE = "official-timeline.jsonl"
-
-
-def _read_jsonl(path: Path) -> list[dict]:
-    with path.open(encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle if line.strip()]
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,12 +154,12 @@ def replay_plan(
     **261 个 user 就覆盖 90% 的可评分题**（14,143 条 add），全量是 1,580 个 user / 43,272 条。
     """
     root = Path(dataset_dir) if dataset_dir is not None else capture_dir()
-    kit = _read_jsonl(root / KIT_FILE)
+    kit = read_jsonl(root / KIT_FILE)
     qa_by_seq = {
         int(row["seq"]): row for row in kit if not scorable_only or row["judge_kind"] != "none"
     }
 
-    timeline = _read_jsonl(root / TIMELINE_FILE)
+    timeline = read_jsonl(root / TIMELINE_FILE)
     wanted = set(only_users) if only_users else {row["user_id"] for row in qa_by_seq.values()}
     wanted &= {event["user_id"] for event in timeline}
     adds = _adds_by_request(root / ADDS_FILE, wanted)

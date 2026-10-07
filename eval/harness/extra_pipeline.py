@@ -57,6 +57,7 @@ from eval.harness.corporatebench_pipeline import (  # noqa: E402
     judge_corporatebench,
     score_corporatebench,
 )
+from eval.jsonl_io import read_jsonl, write_line  # noqa: E402
 
 __all__ = [
     "MEMTRAP_PASS_MEAN",
@@ -711,18 +712,6 @@ Reply with JSON only:
 
 
 # ── 两个子命令 ──────────────────────────────────────────────────────────────
-def _read_jsonl(path: Path) -> list[dict]:
-    """⚠ 按 `"\\n"` 切、**不用 `splitlines()`**：正文里出现 `U+2028` 时后者会劈开一条记录。"""
-    if not path.exists():
-        return []
-    return [
-        json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line.strip()
-    ]
-
-
-def _write_line(handle, row: dict) -> None:
-    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-    handle.flush()  # 逐行落盘：被强杀时最多丢最后一行（`run_judge` 会先修半行）
 
 
 def render_answer_prompt(item: dict) -> str:
@@ -747,10 +736,10 @@ def render_answer_prompt(item: dict) -> str:
 
 
 def cmd_answer(args: argparse.Namespace) -> int:
-    items = _read_jsonl(Path(args.input))
+    items = read_jsonl(Path(args.input))
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    done = {row["id"] for row in _read_jsonl(output)}
+    done = {row["id"] for row in read_jsonl(output)}
     base, key, model = _config("answer")
     with output.open("a", encoding="utf-8") as handle:
         for item in items:
@@ -762,7 +751,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
             generated = _chat(
                 base, key, model, prompt, max_tokens=args.max_tokens, timeout=ANSWER_TIMEOUT
             )
-            _write_line(handle, {"id": item["id"], "generated_answer": generated})
+            write_line(handle, {"id": item["id"], "generated_answer": generated})
     return 0
 
 
@@ -909,10 +898,8 @@ def _call_judge(judge: tuple[str, str, str], prompt: str, *, max_tokens: int) ->
 
 
 def cmd_evaluate(args: argparse.Namespace) -> int:
-    items = {item["id"]: item for item in _read_jsonl(Path(args.input))}
-    answers = {
-        row["id"]: row.get("generated_answer", "") for row in _read_jsonl(Path(args.answers))
-    }
+    items = {item["id"]: item for item in read_jsonl(Path(args.input))}
+    answers = {row["id"]: row.get("generated_answer", "") for row in read_jsonl(Path(args.answers))}
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     judge = _config("judge")
@@ -927,7 +914,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
                 judge=judge,
                 max_tokens=args.max_tokens,
             )
-            _write_line(handle, row)
+            write_line(handle, row)
     return 0
 
 

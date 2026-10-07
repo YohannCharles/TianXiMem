@@ -60,6 +60,8 @@ from eval.datasets.beam import PIPELINE as BEAM_PIPELINE
 from eval.datasets.clbench import PIPELINE as CLB_PIPELINE
 from eval.datasets.locomo import PIPELINE as LOCOMO_PIPELINE
 from eval.datasets.longmemeval import PIPELINE as LME_PIPELINE
+from eval.jsonl_io import LINE_BREAKS as _LINE_BREAKS
+from eval.jsonl_io import jsonl_line as _jsonl_line
 
 from .annotate import MARKS, annotate
 from .driver import SearchHit
@@ -173,7 +175,7 @@ class JudgeResult:
 #: 记着 CL-Bench 那条路径用 `- [timestamp] text` 渲染我们返回的 `created_at`。
 DATE_PREFIX: str = "[{date}] "
 
-#: 注入里怎么带日期——**三档**（`--memory-date` 的取值域）。
+#: 注入里怎么带日期（`--memory-date` 的完整取值域）。
 #:
 #: * `none`：完全不带（**基线**，也是"AML 侧只取 content"那条 S1 假设）
 #: * `per_item`：每条记忆（= 一个段）前面加 `[YYYY-MM-DD] `
@@ -600,42 +602,6 @@ def _sanitize_jsonl(path: Path) -> int:
             flush=True,
         )
     return dropped + escaped
-
-
-#: `str.splitlines()` **会断行**、而 `json.dumps(ensure_ascii=False)` **不转义**的字符。
-#:
-#: ⚠ `\n` / `\r` / `\x0b` / `\x0c` / `\x1c-\x1e` 都由 `json.dumps` 自己转义掉了；
-#: 只有 **`\x85` / `\u2028` / `\u2029`** 是它不碰、而 `splitlines()` 照断的——
-#: 这三个才是真正会咬人的（列全是为了"下次有人加字符时不假思索"）。
-_LINE_BREAKS: Final[tuple[str, ...]] = ("\x85", "\u2028", "\u2029")
-
-
-def _jsonl_line(item: dict) -> str:
-    """把一项写成**一行** JSONL——**转义掉 `splitlines()` 会断行的字符**。
-
-    ## 为什么（2026-09-26，LongMemEval 那轮的真实阻塞）
-
-    归档 pipeline 的 `rows()` 是这么读的：
-
-    ```python
-    [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
-    ```
-
-    **`splitlines()` 断的比 `\n` 多得多**（`\x85`、`\u2028`、`\u2029`、`\v`、`\f`、`\x1c-\x1e`），
-    而 `json.dumps(..., ensure_ascii=False)` **不转义**其中三个 ⇒ 只要**正文里出现
-    `U+2028`**，那一行就会被劈成两半，前半段的字符串没有闭合
-    ⇒ `JSONDecodeError: Unterminated string`。
-
-    ⇒ 现象是"**卡在同一道题**"（实测 47 个席位里只有 1 个含 `U+2028` ⇒
-    **数据相关**，却看起来像网络问题，排查方向整个跑偏）。**写入侧转义是唯一的修法**
-    ——读的那侧是归档代码，不许改。
-    """
-    line = json.dumps(item, ensure_ascii=False)
-    for char in _LINE_BREAKS:
-        if char in line:
-            # 换成 JSON 转义序列：`json.loads` 会解回同一个字符，语义一字不变。
-            line = line.replace(char, f"\\u{ord(char):04x}")
-    return line + "\n"
 
 
 #: 平台在**答案阶段**对返回列表做的截断：**按返回顺序取 117,760 token 前缀**（§2.2 / §6.4）。

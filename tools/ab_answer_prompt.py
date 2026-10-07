@@ -44,7 +44,6 @@ uv run --env-file .env python tools/ab_answer_prompt.py --run-id tr-splitfix --d
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any, Final
@@ -53,6 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # 仓库根（`eva
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval" / "harness"))  # `api_config`
 
 from eval.harness import extra_pipeline as ep  # noqa: E402
+from eval.jsonl_io import read_jsonl  # noqa: E402
 
 #: `input.jsonl` 里给模型的那份记忆叫什么（逐数据集不同，见 `eval/CLAUDE.md` 的契约表）。
 MEMORY_FIELD: Final[dict[str, str]] = {
@@ -71,10 +71,8 @@ def _read(run_dir: Path, filename: str) -> dict[tuple[str, str], dict]:
     """键是 `(批目录, 题号)`——**不能只用题号**（见 [`diagnose_run.py`](./diagnose_run.py)）。"""
     rows: dict[tuple[str, str], dict] = {}
     for path in sorted(run_dir.glob(f"*/{filename}")):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                row = json.loads(line)
-                rows[(path.parent.name, str(row["id"]))] = row
+        for row in read_jsonl(path):
+            rows[(path.parent.name, str(row["id"]))] = row
     return rows
 
 

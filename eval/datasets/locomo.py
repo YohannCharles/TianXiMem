@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..jsonl_io import read_jsonl
 from .layout import archive_file
 from .preprocess import (
     Message,
@@ -85,11 +86,6 @@ def conversation_file(bench_dir: Path) -> Path:
         f"{bench_dir} 下既没有 {CONVERSATIONS_JSONL} 也没有 {REFINED_JSON}——"
         "对话全文无处可取（见 docs/benchmark-data.md 的出处链）"
     )
-
-
-def _read_jsonl(path: Path) -> list[dict]:
-    with path.open(encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle if line.strip()]
 
 
 def _sessions_from_conversations_jsonl(
@@ -164,7 +160,7 @@ def _sessions_from_refined_json(
 def _load_conversations(bench_dir: Path) -> dict[str, tuple[list[Session], tuple[str, str]]]:
     source = conversation_file(bench_dir)
     if source.name == CONVERSATIONS_JSONL:
-        rows = _read_jsonl(source)
+        rows = read_jsonl(source)
         return {r["sample_id"]: _sessions_from_conversations_jsonl(r, source=source) for r in rows}
     rows = json.loads(source.read_text(encoding="utf-8"))
     return {r["sample_id"]: _sessions_from_refined_json(r, source=source) for r in rows}
@@ -178,7 +174,7 @@ def _load_questions(path: Path) -> dict[str, list[Question]]:
     本模块只读前者，但归一化照做：它就是为这条落差存在的。
     """
     grouped: dict[str, list[Question]] = {}
-    for ordinal, row in enumerate(_read_jsonl(path)):
+    for ordinal, row in enumerate(read_jsonl(path)):
         gold = row["answer"]
         if gold in (None, [], ""):
             # questions.jsonl 的 1,382 题全是可答题（adversarial 那批只在

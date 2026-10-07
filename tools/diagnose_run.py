@@ -94,16 +94,6 @@ MEMORY_FIELDS: Final[tuple[str, ...]] = (
 _SUMMARY_HEAD: Final[int] = 3
 
 
-def _read_jsonl(paths: list[str]) -> list[dict]:
-    rows: list[dict] = []
-    for path in paths:
-        with open(path, encoding="utf-8") as handle:
-            for line in handle:
-                if line.strip():
-                    rows.append(json.loads(line))
-    return rows
-
-
 def _read_batches(run_dir: Path, filename: str) -> dict[tuple[str, str], dict]:
     """读产物，键是 **`(批目录名, 题号)`**。
 

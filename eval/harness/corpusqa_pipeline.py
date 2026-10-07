@@ -27,7 +27,8 @@ from eval.datasets.hybridqa import ANSWER_CONTRACT as HYBRIDQA_CONTRACT
 from eval.datasets.hybridqa import SCORER as HYBRIDQA_SCORER
 from eval.datasets.layout import archive_file
 from eval.datasets.registry import benchmark_dir
-from eval.harness.extra_pipeline import ANSWER_TIMEOUT, _chat, _config, _read_jsonl, _write_line
+from eval.harness.extra_pipeline import ANSWER_TIMEOUT, _chat, _config
+from eval.jsonl_io import read_jsonl, write_line
 
 _CONTRACTS = {
     "hybridqa": {HYBRIDQA_CONTRACT},
@@ -228,7 +229,7 @@ def _fingerprint(item: dict) -> str:
 
 
 def _items(path: Path) -> list[dict]:
-    rows = _read_jsonl(path)
+    rows = read_jsonl(path)
     if len({row["id"] for row in rows}) != len(rows):
         raise ValueError("Corpus QA: duplicate input IDs")
     for row in rows:
@@ -325,7 +326,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
     items = _items(Path(args.input))
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    existing = _read_jsonl(output)
+    existing = read_jsonl(output)
     if len({row["id"] for row in existing}) != len(existing):
         raise ValueError("Corpus QA: duplicate existing answer IDs")
     by_id = {item["id"]: item for item in items}
@@ -339,7 +340,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
             if item["id"] in done:
                 continue
             answer = generate_answer(item, base, key, model, args.max_tokens)
-            _write_line(
+            write_line(
                 handle,
                 {
                     "id": item["id"],
@@ -352,7 +353,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
 
 def cmd_evaluate(args: argparse.Namespace) -> int:
     items = _items(Path(args.input))
-    raw_answers = _read_jsonl(Path(args.answers))
+    raw_answers = read_jsonl(Path(args.answers))
     answers = {row["id"]: row for row in raw_answers}
     if len(answers) != len(raw_answers) or set(answers) != {item["id"] for item in items}:
         raise ValueError("Corpus QA: input/answer IDs must match exactly")
@@ -364,7 +365,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     with output.open("w", encoding="utf-8") as handle:
         for item in items:
             answer = answers[item["id"]]
-            _write_line(handle, score_answer(item, answer["generated_answer"]))
+            write_line(handle, score_answer(item, answer["generated_answer"]))
     return 0
 
 

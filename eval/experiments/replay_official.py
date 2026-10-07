@@ -60,6 +60,7 @@ from eval.harness import ServiceClient, build_official_items, pipeline_for, run_
 from eval.harness.api_config import ANSWER_MODEL
 from eval.harness.plan_driver import send_event
 from eval.harness.run_record import build_record, write_record
+from eval.jsonl_io import read_jsonl
 
 __all__ = ["main", "replay_user", "load_hits", "save_hits"]
 
@@ -70,14 +71,6 @@ DATASET = "official-capture"
 #: 而 D35 之后的归档清单（`eval/datasets/prepare.py`）叫 `doc-pp`。
 _ARCHIVE_SLUG = {"docpp": "doc-pp"}
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
-
-
-def _read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    return [
-        json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line.strip()
-    ]
 
 
 def _append(path: Path, row: dict) -> None:
@@ -114,7 +107,7 @@ def load_hits(path: Path):
     """读回检索快照（`SearchHit` 对象——`render_memories` 要它）。"""
     from eval.harness import SearchHit
 
-    return {row["qid"]: [SearchHit(**hit) for hit in row["hits"]] for row in _read_jsonl(path)}
+    return {row["qid"]: [SearchHit(**hit) for hit in row["hits"]] for row in read_jsonl(path)}
 
 
 def replay_user(
@@ -141,7 +134,7 @@ def replay_user(
     wanted = {str(row["seq"]) for row in plan.questions}
 
     if not force and labels_path.exists():
-        rows = _read_jsonl(labels_path)
+        rows = read_jsonl(labels_path)
         if {str(row["id"]) for row in rows} >= wanted:
             print(f"    （已判完，跳过——{len(rows)} 题）", flush=True)
             return _results_from(rows, user_dir)
@@ -242,7 +235,7 @@ def _results_from(rows: list[dict], user_dir: Path) -> list:
     """把已落盘的 `labels.jsonl` 读成 `JudgeResult`（跳过裁判那一步时用）。"""
     from eval.harness import JudgeResult
 
-    answers = _read_jsonl(user_dir / "answers.jsonl")
+    answers = read_jsonl(user_dir / "answers.jsonl")
     generated = {row["id"]: row.get("generated_answer", "") for row in answers}
     return [
         JudgeResult(
@@ -289,7 +282,7 @@ def _write_partial_record(
     而 `overall` / 分类明细要等整轮结束才存在。⚠ **它是滚动快照**：
     `data_fingerprint.note` 里写清"这一轮还在跑"，免得被当成跑完的数。
     """
-    skipped = _read_jsonl(Path(args.reports_dir) / "runs" / run_id / "skipped.jsonl")
+    skipped = read_jsonl(Path(args.reports_dir) / "runs" / run_id / "skipped.jsonl")
     note = (
         f"**滚动快照**：这一刻已判 {len(samples)}/{len(plans)} 个 user"
         f"（{len(results)} 题）"

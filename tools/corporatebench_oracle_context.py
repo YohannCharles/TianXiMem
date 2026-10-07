@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / "eval" / "harness"))
 from eval.datasets.registry import benchmark_dir  # noqa: E402
 from eval.harness import extra_pipeline as ep  # noqa: E402
 from eval.harness.corporatebench_pipeline import score_corporatebench  # noqa: E402
+from eval.jsonl_io import read_jsonl  # noqa: E402
 
 IDS = (
     0,
@@ -65,9 +66,7 @@ def digest(path: Path) -> str:
 
 
 def read_rows(path: Path) -> dict[str, dict]:
-    if not path.exists():
-        return {}
-    return {str(row["id"]): row for row in map(json.loads, path.read_text().splitlines())}
+    return {str(row["id"]): row for row in read_jsonl(path)}
 
 
 def write_json(path: Path, value: object) -> None:
