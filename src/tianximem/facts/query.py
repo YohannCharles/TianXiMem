@@ -449,6 +449,6 @@ def compile_query(query: str) -> QueryPlan | None:
             }
         )
     )
-    if relations and len(text.split()) <= 64:
+    if relations and len(text.split()) <= 64 and not _UNSAFE_SCOPE.search(text):
         return QueryPlan("walk", (FactPattern(relations),), "source", query=text)
     return None

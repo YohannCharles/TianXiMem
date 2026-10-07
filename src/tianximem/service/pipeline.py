@@ -100,12 +100,26 @@ from tianximem.rank import (
 )
 from tianximem.rank.neighbor import ContextSegment
 from tianximem.retrieve import EvidenceChecker, HybridRetriever, dedup_candidates
-from tianximem.retrieve.evidence import EvidenceSelection, select_evidence
+from tianximem.retrieve.evidence import EvidenceSelection, evaluate_evidence
 from tianximem.retrieve.fusion import Candidate
 from tianximem.store.qdrant_store import QdrantStore
 from tianximem.store.sqlite_store import QaPair, SqliteStore
 
 __all__ = ["AddOutcome", "AddPipeline", "SearchPipeline"]
+
+
+@dataclass(slots=True)
+class _SearchTrace:
+    """请求局部诊断；并发搜索不共享状态，也不改变 HTTP 响应。"""
+
+    grounded_status: str = "disabled"
+    grounded_operator: str | None = None
+    grounded_projection: str | None = None
+    selected_facts: int = 0
+    selected_sources: int = 0
+    rerank_calls: int = 0
+    rerank_disabled: int = 0
+    rerank_degraded: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,7 +298,7 @@ class SearchPipeline:
         self._metrics = metrics if metrics is not None else NullMetricsSink()
         #: 诊断计数（§14）。**不进响应**——响应的形状是契约，一个字段都不能多。
         #:
-        #: ⚠ **它们是累计值**（`run()` 每次读前后差值发给 `_metrics`，见那里的注释），
+        #: ⚠ **它们是累计值**（`run()` 单独用请求局部诊断发增量给 `_metrics`），
         #: 所以读的人拿到的总是"这个进程开到现在"。出口是
         #: [`../observability/`](../observability/)——**别在响应里给它们找位置**。
         self.rerank_calls = 0
@@ -331,29 +345,38 @@ class SearchPipeline:
     def run(self, *, user_id: str, query: str, top_k: int) -> PackagedResponse:
         """跑完整条链，返回打包好的响应，并**把这一次的观测值发出去**（§14）。
 
-        ⚠ 三个 rerank 计数在实例上是**累计值**，而 `SearchObservation` 要的是**增量**
-        （[`../observability/metrics.py`](../observability/metrics.py) 的模块 docstring）
-        ⇒ 这里前后各取一次、相减。**直接把累计值发出去会让聚合端把它们加成
-        `1+2+3+…`——而那个数字只是"有点大"，不报错。**
+        ⚠ 三个 rerank 计数在实例上是累计值；观测采用请求局部增量，
+        避免并发搜索把其他请求的调用或取证原因算进来。
 
         ⚠ **失败的那一次不发**：耗时与计数只统计"真的返回了响应"的请求
         （非 200 由 AML 重试，§15；把失败混进 latency 会让均值没有解释）。
         """
         started = monotonic()
-        calls, disabled, degraded = self.rerank_calls, self.rerank_disabled, self.rerank_degraded
-        response = self._search(user_id=user_id, query=query, top_k=top_k)
+        trace = _SearchTrace()
+        response = self._search(user_id=user_id, query=query, top_k=top_k, trace=trace)
         self._metrics.record(
             SearchObservation(
                 latency_ms=round((monotonic() - started) * 1000.0, 3),
-                rerank_calls=self.rerank_calls - calls,
-                rerank_disabled=self.rerank_disabled - disabled,
-                rerank_degraded=self.rerank_degraded - degraded,
+                rerank_calls=trace.rerank_calls,
+                rerank_disabled=trace.rerank_disabled,
+                rerank_degraded=trace.rerank_degraded,
                 rerank_name=self._reranker.name if self._reranker is not None else None,
+                grounded_status=trace.grounded_status,
+                grounded_operator=trace.grounded_operator,
+                grounded_projection=trace.grounded_projection,
+                selected_facts=trace.selected_facts,
+                selected_sources=trace.selected_sources,
+                returned_segments=len(response.items),
+                truncated_by_budget=response.truncated_by_budget,
+                truncated_by_top_k=response.truncated_by_top_k,
+                dropped_missing=response.dropped_missing,
             )
         )
         return response
 
-    def _search(self, *, user_id: str, query: str, top_k: int) -> PackagedResponse:
+    def _search(
+        self, *, user_id: str, query: str, top_k: int, trace: _SearchTrace | None = None
+    ) -> PackagedResponse:
         """链本身（顺序见类 docstring）。
 
         ⚠ **空库直接返回空结果**（`data: []` 是合法的，§2.1）：集合还不存在时
@@ -361,12 +384,18 @@ class SearchPipeline:
         顺带也**不为一次必然空的检索付远程 embedding 调用**。
         ⚠ 注意这里的短路**早于** token 计数——空库时不该去加载分词器。
         """
+        if trace is None:
+            trace = _SearchTrace()
         if top_k <= 0:
+            trace.grounded_status = "invalid_top_k"
             return PackagedResponse(items=())
         if self._grounded_evidence:
+            trace.grounded_status = "no_plan"
             plan = compile_query(query)
             if plan is not None:
+                trace.grounded_operator = plan.operator
                 if plan.operator == "current":
+                    trace.grounded_status = "current_input"
                     return PackagedResponse(items=())
                 fetch_limit = self._evidence_limit * 8
                 patterns = plan.patterns
@@ -396,12 +425,16 @@ class SearchPipeline:
                                 limit=fetch_limit + 1,
                                 deduplicate=False,
                             )
-                if (
-                    len(evidence) <= fetch_limit
-                    and len(audit) <= fetch_limit
-                    and len(sources) <= self._evidence_limit
-                ):
-                    selected = select_evidence(
+                if conn is None:
+                    trace.grounded_status = "index_incomplete"
+                elif len(evidence) > fetch_limit:
+                    trace.grounded_status = "fetch_limit"
+                elif len(sources) > self._evidence_limit:
+                    trace.grounded_status = "source_scan_limit"
+                elif len(audit) > fetch_limit:
+                    trace.grounded_status = "audit_limit"
+                else:
+                    decision = evaluate_evidence(
                         evidence,
                         plan,
                         source_limit=self._evidence_limit,
@@ -409,7 +442,12 @@ class SearchPipeline:
                         sources=sources,
                         audit_facts=audit,
                     )
+                    trace.grounded_status = decision.reason
+                    selected = decision.selection
                     if selected is not None:
+                        trace.grounded_projection = selected.projection
+                        trace.selected_facts = len(selected.facts)
+                        trace.selected_sources = len({f.parent_memory_id for f in selected.facts})
                         return self._package_evidence(selected, top_k=top_k)
         if not self._qdrant.exists():
             return PackagedResponse(items=())
@@ -424,7 +462,7 @@ class SearchPipeline:
         self._checker.decide(query=query)
 
         # ④ rerank —— **恰好一次**
-        ranked = self._maybe_rerank(query=query, ranked=ranked)
+        ranked = self._maybe_rerank(query=query, ranked=ranked, trace=trace)
 
         # ⑤⑥ 扩窗 + 合并成段（全部候选保留，只对前 N 条扩窗）
         expansion = expand_neighbors(
@@ -493,7 +531,14 @@ class SearchPipeline:
             ]
         return package(segments, top_k=top_k, counter=self._counter, max_tokens=self._budget_tokens)
 
-    def _maybe_rerank(self, *, query: str, ranked: list[Candidate]) -> list[Candidate]:
+    def _record_rerank(self, trace: _SearchTrace | None, field: str) -> None:
+        setattr(self, field, getattr(self, field) + 1)
+        if trace is not None:
+            setattr(trace, field, getattr(trace, field) + 1)
+
+    def _maybe_rerank(
+        self, *, query: str, ranked: list[Candidate], trace: _SearchTrace | None = None
+    ) -> list[Candidate]:
         """对候选做**一次** rerank；不可用就退回原顺序。
 
         ⚠ **"降级"与"没开"是两件事，分开计数**（见 [`../rank/reranker.py`](../rank/reranker.py)）：
@@ -514,7 +559,7 @@ class SearchPipeline:
         必须留下痕迹**，不能像什么都没发生。
         """
         if self._reranker is None or not ranked:
-            self.rerank_disabled += 1
+            self._record_rerank(trace, "rerank_disabled")
             return ranked
 
         # 取每条候选的**渲染文本**当 rerank 的输入——与索引侧、与最终 content 是同一份渲染
@@ -526,21 +571,21 @@ class SearchPipeline:
         if len(documents) != len(ranked):
             # 真源缺行 ⇒ 不 rerank（少了几条就没法一一对应）。扩窗那一步会把缺行的记下来。
             # ⚠ 计 `degraded` 而不是 `disabled`：**我们本来是要调的**。
-            self.rerank_degraded += 1
+            self._record_rerank(trace, "rerank_degraded")
             return ranked
 
-        self.rerank_calls += 1
+        self._record_rerank(trace, "rerank_calls")
         try:
             scores = self._reranker.score(query=query, documents=documents)
         except RerankUnavailable:
-            self.rerank_degraded += 1
+            self._record_rerank(trace, "rerank_degraded")
             return ranked  # ★ 退回未重排的 RRF 顺序（D12）
 
         if len(scores) != len(ranked):
             # 形状不符与端点挂了一样不可用——**静默按前缀对齐会让后半段名次错位**。
             # ⚠ `RemoteReranker.score()` 自己保证长度一致（它校验 index 集合），
             #   所以走到这里说明**换了一个不守规矩的实现**——那正是这条判断存在的理由。
-            self.rerank_degraded += 1
+            self._record_rerank(trace, "rerank_degraded")
             return ranked
 
         # 分数降序；**同分按原名次**（稳定）——否则同分项的先后会随排序实现漂移，

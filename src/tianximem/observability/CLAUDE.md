@@ -16,6 +16,8 @@ metrics.py     ✅ 已实现——§14 指标的**聚合与导出**（出口 = �
 | --- | --- | --- |
 | latency/query | [`../service/`](../service/) 的请求边界 | ✅ |
 | rerank `calls` / `disabled` / `degraded` + 模型名 | [`../service/`](../service/)（计数住在 `SearchPipeline`） | ✅——**V12 要的那几个量** |
+| 共同取证计划、投影及选择/回退原因 | [`../service/`](../service/) + [`../retrieve/evidence.py`](../retrieve/evidence.py) | ✅；请求局部诊断，不进入响应 |
+| 打包截断及返回片段数 | [`../service/`](../service/) 的打包出口 | ✅；区分槽位、token 与缺失来源 |
 | embedding 调用数 / 缓存命中率 | [`../embed/`](../embed/) | ⬜ 还没发 |
 | Agent Trigger Rate · 平均轮数 · Rewrite 次数 | [`../agent/`](../agent/) | ⬜ v2（D13） |
 
@@ -24,6 +26,15 @@ metrics.py     ✅ 已实现——§14 指标的**聚合与导出**（出口 = �
 runner 读进 run record 的 `metrics=`——**不是 `counters=`**，那份是 §6.5 的 pending 计数器，
 `schema.validate()` 要求它的键**恒在场**。聚合**只在本目录做一次**（eval 侧自己再算一遍
 就是两处会漂的判据）。
+
+`grounded_evidence.outcomes` 区分无计划、索引未齐、事实/来源/审查扫描超限、
+无匹配、数量冲突、引用或区间无法解析、来源声明未解释及成功选择。
+`operators` / `projections` 记录实际采用的计划和投影；成功计划的选中事实数与来源数
+保存在同一快照里。`packaging` 记录输出段数、槽位截断、token 截断和缺失来源。
+这些都是服务进程的累计计数；跨数据集复用进程时不能当成单份数据集的独立计数。
+
+发射采用请求局部状态，不能从共享累计值相减推算增量。
+快照更新和聚合在进程内互斥，落盘通过临时文件原子替换；写失败仍只记录诊断。
 
 ## 一条职责边界
 

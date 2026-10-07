@@ -87,6 +87,10 @@ evidence.py  共同证据执行器：执行 facts/query 的共同计划（筛选
 `select_evidence(...)` 执行——命中则直接产出证据片段（不生成答案，§2.1 照旧），
 不适用或判"不齐"才回原混合检索。
 
+`evaluate_evidence(...)` 在同一次选择中返回选择结果和诊断原因；
+`select_evidence(...)` 保留只返回选择的兼容入口。诊断由编排层发送到
+[`../observability/`](../observability/)，不写入 Search 响应，也不另跑一次选择。
+
 > ⚠ **问法识别不归本目录**：关系同义词与问法句法集中在 [`../facts/`](../facts/)
 > （`query.py` 编译计划、`grammar.py` 抽取来源句法、`input.py` 检查当前字面输入）。
 > **新增问法改那里，不要在本目录加对应分支**——本目录只执行计划。

@@ -12,7 +12,9 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 from eval.experiments import run as runner
 from tests.conftest import Wired, seed_line
@@ -140,6 +142,38 @@ def test_counts_are_per_request_not_cumulative(wired: Wired, tmp_path: Path) -> 
     snapshot = json.loads(path.read_text(encoding="utf-8"))
     assert snapshot["rerank"]["disabled"] == 3  # **不是** 1+2+3
     assert snapshot["rerank"]["calls"] == 0
+
+
+def test_concurrent_searches_report_only_their_own_rerank_increment(wired, tmp_path):
+    barrier = Barrier(2)
+
+    class ConcurrentReranker(_FakeReranker):
+        def score(self, *, query, documents):
+            barrier.wait(timeout=5)
+            return super().score(query=query, documents=documents)
+
+    path = tmp_path / "metrics.json"
+    pipeline = _with_metrics(wired, path, reranker=ConcurrentReranker())
+    wired.qdrant.by_user["u1"] = seed_line(wired.store, [0, 1, 2])
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(pipeline.run, user_id="u1", query="question", top_k=100) for _ in range(2)
+        ]
+        assert all(f.result().items for f in futures)
+    snapshot = json.loads(path.read_text())
+    assert snapshot["searches"] == 2
+    assert snapshot["rerank"]["calls"] == 2
+    assert snapshot["grounded_evidence"]["outcomes"] == {"disabled": 2}
+
+
+def test_concurrent_metrics_snapshot_does_not_lose_records(tmp_path):
+    path = tmp_path / "metrics.json"
+    sink = SnapshotMetricsSink(path=path)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: sink.record(_obs(grounded_status="no_match")), range(80)))
+    assert json.loads(path.read_text()) == sink.snapshot()
+    assert sink.snapshot()["searches"] == 80
+    assert sink.snapshot()["grounded_evidence"]["outcomes"] == {"no_match": 80}
 
 
 def test_rerank_calls_and_name_reach_the_snapshot(wired: Wired, tmp_path: Path) -> None:

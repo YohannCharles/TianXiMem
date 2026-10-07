@@ -318,6 +318,7 @@ def extract_evidence(
                 body = ""
         if edited:
             attrs["replaces_earlier"] = True
+            attrs["observation"] = True
         fields = None
         if not interval and not edited:
             pieces = body.split(" — ")

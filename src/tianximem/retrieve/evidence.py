@@ -20,6 +20,12 @@ class EvidenceSelection:
     projection: str
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceDecision:
+    selection: EvidenceSelection | None
+    reason: str
+
+
 class Source(Protocol):
     @property
     def id(self) -> str: ...
@@ -41,6 +47,17 @@ def _current(facts: Sequence[EvidenceFact]) -> list[EvidenceFact]:
     selected: list[EvidenceFact] = []
     for group in groups.values():
         replacements = [f for f in group if f.get("replaces_earlier")]
+        if replacements and all(f.event_time is not None for f in replacements):
+            latest = max(f.event_time for f in replacements if f.event_time is not None)
+            replacements = [f for f in replacements if f.event_time == latest]
+            # 更正只覆盖更早的陈述；后来明确出现的普通陈述仍须保留。
+            replacements.extend(
+                f
+                for f in group
+                if not f.get("replaces_earlier")
+                and f.event_time is not None
+                and f.event_time >= latest
+            )
         unique: dict[tuple[str, tuple[tuple[str, Qualifier], ...]], EvidenceFact] = {}
         for fact in replacements or group:
             unique.setdefault((key(fact.object), fact.qualifiers), fact)
@@ -270,7 +287,7 @@ def sources_supported(
     return True
 
 
-def select_evidence(
+def evaluate_evidence(
     facts: Sequence[EvidenceFact],
     plan: QueryPlan,
     *,
@@ -278,13 +295,17 @@ def select_evidence(
     hop_limit: int,
     sources: Sequence[Source] = (),
     audit_facts: Sequence[EvidenceFact] = (),
-) -> EvidenceSelection | None:
+) -> EvidenceDecision:
     if plan.operator == "current":
-        return EvidenceSelection((), "fact")
+        return EvidenceDecision(EvidenceSelection((), "fact"), "current_input")
     if plan.operator == "walk":
         selected = _walk(facts, plan, hop_limit)
+        if selected is None:
+            return EvidenceDecision(None, "unsupported_walk")
     elif plan.operator == "interval":
         selected = _interval(facts, plan)
+        if selected is None:
+            return EvidenceDecision(None, "unresolved_interval")
     else:
         selected = [f for f in facts if any(p.matches(f) for p in plan.patterns)]
         if plan.date_bounds:
@@ -294,11 +315,13 @@ def select_evidence(
                 try:
                     date.fromisoformat(value)
                 except ValueError:
-                    return None
+                    return EvidenceDecision(None, "invalid_scope_date")
                 if plan.date_bounds[0] <= value < plan.date_bounds[1]:
                     valid.append(fact)
             selected = valid
         selected = _quantities(selected)
+        if selected is None:
+            return EvidenceDecision(None, "quantity_conflict")
         if selected and all(fact.get("quantity") is None for fact in selected):
             # 呈现先放明确自述；同等级按主体/关系稳定排列。数量观察保持原文次序。
             selected.sort(
@@ -311,12 +334,34 @@ def select_evidence(
             )
         if selected and plan.resolve_references:
             selected = _resolve(facts, selected)
+            if selected is None:
+                return EvidenceDecision(None, "unresolved_reference")
         if plan.guard_literal and not sources_supported(sources, audit_facts or facts, plan):
-            return None
+            return EvidenceDecision(None, "unsupported_source")
     if not selected:
-        return None
+        return EvidenceDecision(None, "no_match")
     if plan.projection == "source":
         selected = list({f.parent_memory_id: f for f in selected}.values())
     if len(selected) > source_limit:
-        return None
-    return EvidenceSelection(tuple(selected), plan.projection)
+        return EvidenceDecision(None, "source_limit")
+    return EvidenceDecision(EvidenceSelection(tuple(selected), plan.projection), "selected")
+
+
+def select_evidence(
+    facts: Sequence[EvidenceFact],
+    plan: QueryPlan,
+    *,
+    source_limit: int,
+    hop_limit: int,
+    sources: Sequence[Source] = (),
+    audit_facts: Sequence[EvidenceFact] = (),
+) -> EvidenceSelection | None:
+    """兼容入口；诊断与执行共用同一次选择。"""
+    return evaluate_evidence(
+        facts,
+        plan,
+        source_limit=source_limit,
+        hop_limit=hop_limit,
+        sources=sources,
+        audit_facts=audit_facts,
+    ).selection

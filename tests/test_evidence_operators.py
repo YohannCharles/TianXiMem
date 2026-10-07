@@ -32,7 +32,7 @@ def add(store, *texts, rid="opaque", user="u", timestamp=None, role="user"):
     )
 
 
-def run(store, query, *, user="u", limit=12, top_k=100, budget=117760):
+def run(store, query, *, user="u", limit=12, top_k=100, budget=117760, metrics=None, backfill=1024):
     def retrieve(*, user_id, query, top_k):
         with store.read() as conn:
             ids = [p.id for p in store.iter_pairs(conn) if p.user_id == user_id]
@@ -47,6 +47,8 @@ def run(store, query, *, user="u", limit=12, top_k=100, budget=117760):
         budget_tokens=budget,
         grounded_evidence=True,
         evidence_limit=limit,
+        fact_backfill_limit=backfill,
+        metrics=metrics,
         radius=0,
     )
     return pipeline.run(user_id=user, query=query, top_k=top_k).items
@@ -57,6 +59,114 @@ def mail(claim="An update.", company="Example Labs", actor="Alex Reader"):
         f"document: From: {actor} <alex@example.com>\nDate: 2024-03-30\nSubject: Update\n\n"
         f"{claim}\n\n{actor}\nSoftware Engineer\n{company}"
     )
+
+
+def test_dated_replacements_choose_latest_even_when_add_arrival_is_reversed(store):
+    add(store, "Corpus: Book — creator — Original", rid="base", timestamp=100)
+    add(
+        store,
+        "Corpus: Book was created by Latest (this replaces the earlier value)",
+        rid="arrived-first",
+        timestamp=300,
+    )
+    add(
+        store,
+        "Corpus: Book was created by Earlier (this replaces the earlier value)",
+        rid="arrived-last",
+        timestamp=200,
+    )
+    hits = run(store, "Who is the creator of Book?")
+    assert len(hits) == 1
+    assert "Latest" in hits[0].content
+    historical = run(store, "Who was the creator of Book before 1970?")
+    assert any("Original" in hit.content for hit in historical)
+    assert compile_query("Who was the previous creator of Book?") is None
+
+
+def test_repeated_replacement_value_keeps_its_later_observation(store):
+    for rid, value, timestamp in (
+        ("a", "Writer A", 100),
+        ("b", "Writer B", 200),
+        ("c", "Writer A", 300),
+    ):
+        add(
+            store,
+            f"Corpus: Book was created by {value} (this replaces the earlier value)",
+            rid=rid,
+            timestamp=timestamp,
+        )
+    hits = run(store, "Who is the creator of Book?")
+    assert len(hits) == 1
+    assert "Writer A" in hits[0].content
+    assert "Writer B" not in hits[0].content
+
+
+@pytest.mark.parametrize("timestamps", [(None, None), (100, 100), (100, None)])
+def test_unknown_or_tied_replacement_time_preserves_conflicting_sources(store, timestamps):
+    for rid, value, timestamp in zip(("a", "b"), ("Writer A", "Writer B"), timestamps, strict=True):
+        add(
+            store,
+            f"Corpus: Book was created by {value} (this replaces the earlier value)",
+            rid=rid,
+            timestamp=timestamp,
+        )
+    hits = run(store, "Who is the creator of Book?")
+    assert len(hits) == 2
+    assert any("Writer A" in h.content for h in hits)
+    assert any("Writer B" in h.content for h in hits)
+
+
+def test_later_ordinary_statement_is_not_hidden_by_an_older_replacement(store):
+    add(
+        store,
+        "Corpus: Book was created by Writer A (this replaces the earlier value)",
+        rid="a",
+        timestamp=100,
+    )
+    add(store, "Corpus: Book — creator — Writer B", rid="b", timestamp=200)
+    assert len(run(store, "Who is the creator of Book?")) == 2
+
+
+def test_grounded_diagnostics_distinguish_selection_conflict_and_truncation(store):
+    observations = []
+    metrics = SimpleNamespace(record=observations.append)
+    add(store, "Alex: I work for Example Labs.", rid="a")
+    add(store, "Bea: I work for Example Labs.", rid="b")
+    hits = run(store, "Who works for Example Labs?", top_k=1, metrics=metrics)
+    assert len(hits) == 1
+    observation = observations[-1]
+    assert observation.grounded_status == "selected"
+    assert observation.grounded_operator == "filter"
+    assert observation.selected_facts == 2
+    assert observation.selected_sources == 2
+    assert observation.truncated_by_top_k
+    assert observation.returned_segments == 1
+    assert observation.rerank_disabled == 0
+
+    add(store, "User: My tank has 1 fish.", rid="c")
+    add(store, "User: My tank has 2 fish.", rid="d")
+    run(store, "How many fish do I have in total in my tanks?", metrics=metrics)
+    assert observations[-1].grounded_status == "quantity_conflict"
+    assert observations[-1].rerank_disabled == 1
+
+
+def test_incomplete_derived_index_records_a_distinct_whole_search_fallback(store):
+    apply_batch(
+        store, AddBatch("a", "u", "s", (Message("user", "Corpus: Book — creator — Writer"),))
+    )
+    apply_batch(
+        store, AddBatch("b", "u", "s", (Message("user", "Corpus: Writer — place of birth — City"),))
+    )
+    observations = []
+    hits = run(
+        store,
+        "Where was the creator of Book born?",
+        backfill=1,
+        metrics=SimpleNamespace(record=observations.append),
+    )
+    assert len(hits) == 2
+    assert observations[-1].grounded_status == "index_incomplete"
+    assert observations[-1].selected_facts == 0
 
 
 @pytest.mark.parametrize(

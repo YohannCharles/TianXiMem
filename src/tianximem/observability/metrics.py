@@ -8,7 +8,7 @@
 `SearchObservation` 的三个 rerank 计数是**这一请求引起的**增量。
 `SearchPipeline` 上的 `rerank_calls` / `rerank_degraded` / `rerank_disabled`
 **仍然是累计的**（`tools/probe_reranker.py` 与测试按累计值读它们，那是不该动的接口）
-⇒ 发射方负责**在请求前后各取一次、相减**。
+⇒ 发射方用请求局部计数记录增量，不能用并发请求共享累计值的前后差。
 
 ⚠ **聚合成累计值时不要拿累计值再相加**：那会把 346 次请求的 `rerank_calls`
 加成 `1+2+3+…+346`——而它看起来只是个"有点大"的数字，不会报错。
@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from threading import RLock
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
@@ -48,6 +49,16 @@ class SearchObservation:
 
     rerank_name: str | None = None
     """这次用的哪个 reranker（D12 要求 run record 记它）。`None` = 这条链上没接。"""
+
+    grounded_status: str = "not_recorded"
+    grounded_operator: str | None = None
+    grounded_projection: str | None = None
+    selected_facts: int = 0
+    selected_sources: int = 0
+    returned_segments: int = 0
+    truncated_by_budget: bool = False
+    truncated_by_top_k: bool = False
+    dropped_missing: int = 0
 
 
 @runtime_checkable
@@ -89,23 +100,51 @@ class SnapshotMetricsSink:
     rerank_disabled: int = 0
     rerank_degraded: int = 0
     rerank_name: str | None = None
+    grounded_outcomes: dict[str, int] = field(default_factory=dict)
+    grounded_operators: dict[str, int] = field(default_factory=dict)
+    grounded_projections: dict[str, int] = field(default_factory=dict)
+    selected_facts: int = 0
+    selected_sources: int = 0
+    returned_segments: int = 0
+    truncated_by_budget: int = 0
+    truncated_by_top_k: int = 0
+    dropped_missing: int = 0
+    _lock: RLock = field(default_factory=RLock, repr=False, compare=False)
 
     def record(self, observation: SearchObservation) -> None:
-        self.searches += 1
-        self.latency_ms_sum += observation.latency_ms
-        self.latency_ms_max = max(self.latency_ms_max, observation.latency_ms)
-        self.rerank_calls += observation.rerank_calls
-        self.rerank_disabled += observation.rerank_disabled
-        self.rerank_degraded += observation.rerank_degraded
-        if observation.rerank_name:
-            self.rerank_name = observation.rerank_name
-        self._write()
+        with self._lock:
+            self.searches += 1
+            self.latency_ms_sum += observation.latency_ms
+            self.latency_ms_max = max(self.latency_ms_max, observation.latency_ms)
+            self.rerank_calls += observation.rerank_calls
+            self.rerank_disabled += observation.rerank_disabled
+            self.rerank_degraded += observation.rerank_degraded
+            if observation.rerank_name:
+                self.rerank_name = observation.rerank_name
+            for counts, value in (
+                (self.grounded_outcomes, observation.grounded_status),
+                (self.grounded_operators, observation.grounded_operator),
+                (self.grounded_projections, observation.grounded_projection),
+            ):
+                if value:
+                    counts[value] = counts.get(value, 0) + 1
+            self.selected_facts += observation.selected_facts
+            self.selected_sources += observation.selected_sources
+            self.returned_segments += observation.returned_segments
+            self.truncated_by_budget += observation.truncated_by_budget
+            self.truncated_by_top_k += observation.truncated_by_top_k
+            self.dropped_missing += observation.dropped_missing
+            self._write()
 
     def snapshot(self) -> dict[str, Any]:
         """当前的聚合值——写进文件的就是它。
 
         runner 原样塞进 run record 的 `metrics=`（不是 `counters=`）。
         """
+        with self._lock:
+            return self._snapshot()
+
+    def _snapshot(self) -> dict[str, Any]:
         return {
             "searches": self.searches,
             "latency_ms": {
@@ -119,21 +158,36 @@ class SnapshotMetricsSink:
                 "degraded": self.rerank_degraded,
                 "name": self.rerank_name,
             },
+            "grounded_evidence": {
+                "outcomes": dict(self.grounded_outcomes),
+                "operators": dict(self.grounded_operators),
+                "projections": dict(self.grounded_projections),
+                "selected_facts": self.selected_facts,
+                "selected_sources": self.selected_sources,
+            },
+            "packaging": {
+                "returned_segments": self.returned_segments,
+                "truncated_by_budget": self.truncated_by_budget,
+                "truncated_by_top_k": self.truncated_by_top_k,
+                "dropped_missing": self.dropped_missing,
+            },
             "note": (
                 "服务进程内累计到此刻的观测值（§14）。"
                 "⚠ `rerank.disabled` 是**没构造 reranker**（没配端点或显式关）、"
                 "`rerank.degraded` 是**端点不可用而退回 RRF 顺序**——"
                 "混为一谈会把「端点一直挂」看成「我们本来就没打算用它」（D12）。"
-                "`disabled == searches` ⇒ 这个 run 全程没有精排。"
+                "共同取证成功与空库短路不调用精排，也不计入 disabled。"
             ),
         }
 
     def _write(self) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(
+            staged = self.path.with_name(self.path.name + ".tmp")
+            staged.write_text(
                 json.dumps(self.snapshot(), ensure_ascii=False, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
+            staged.replace(self.path)
         except OSError as exc:  # 见类 docstring：诊断写不进去不该让 Search 失败
             print(f"⚠ 指标快照写不进 {self.path}（{exc}）——计数仍在进程内累计", file=sys.stderr)
