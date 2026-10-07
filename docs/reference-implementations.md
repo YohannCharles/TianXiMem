@@ -71,7 +71,7 @@ rerank_candidates=200 · reranker_max_length=512 · result_window=1 · seed_k=20
 | RRF `k` | **61**（Qdrant 0-based，D5） | 代码 `1/(60+rank)` 但 **rank 从 1 起** = `1/(61+rank₀)` | `1/(60+rank+1)`，**同样等价于 61** |
 | 融合的是谁 | dense 名次 × BM25 名次 | **对话级名次 × 会话级名次**（会话分 = 组内 BM25 **求和**） | dense 名次 × 词法名次（词法侧乘权重） |
 | 精排 | 远端 `Qwen3-Reranker-4B`，**整批一次**，超时 30s，**不重试**，失败退回 RRF 序 | **无** | 交叉编码器，`rerank_candidates=200`，max_len 512 |
-| 扩窗 | 按 **pair**、半径 1、只对前 30 个种子；**段合并**（严格 `末+1` 才并） | 按 chunk、**±2**、**同 session 内**、锚点 + 邻居当**一整块**返回 | 按 chunk/行序、半径 1、只对前 20 个种子、**同 session 内**、去重后**用原始名次补足 top_k** |
+| 扩窗 | 按 **pair**、沿显式指针跳 `radius` 跳（默认 **0** = 不扩窗，**D31**）、种子数 `expansion_seed_limit`；**段合并**（严格 `末+1` 才并） | 按 chunk、**±2**、**同 session 内**、锚点 + 邻居当**一整块**返回 | 按 chunk/行序、半径 1、只对前 20 个种子、**同 session 内**、去重后**用原始名次补足 top_k** |
 | 名次怎么来的 | rerank 分降序，同分按原名次 | 融合分降序，**同分按时间序下标** | rerank 降序，同分按融合分 |
 
 > **三家的扩窗都遵守同一条**：**扩展出来的邻居占 `top_k` 名额**（§11，PRD 原话也这么写）。
@@ -81,9 +81,9 @@ rerank_candidates=200 · reranker_max_length=512 · result_window=1 · seed_k=20
 | 维度 | 我们 | ReFind | InvMem 候选 |
 | --- | --- | --- | --- |
 | 幂等键 | `applied_batches` 旁表（③-d） | `ingestions.request_id` + `payload_hash` | `add_requests` 表 + `payload_hash` |
-| 同 id 不同 payload | **忽略**（已应用即跳过） | **HTTP 409** | **HTTP 409** |
+| 同 id 不同 payload | **HTTP 409**（**D28**；事务整体回滚，第一次那份原样保留） | **HTTP 409** | **HTTP 409** |
 | `created_at` 语义 | **事件时间**，日粒度 `YYYY-MM-DD` | **入库时间**，ISO 秒级 | **事件时间**，ISO 秒级 |
-| 正文里放时间戳 | **默认不放**（`inject_abs_time=false`） | **放**：`[ISO秒] ROLE: ...` | **放**：`[role \| ISO秒] ...` |
+| 正文里放时间戳 | **放日粒度日期前缀**（`inject_abs_time`，**D21**）+ 相对表达**就地注解**成绝对日期（`annotate_relatives`，**D22**） | **放**：`[ISO秒] ROLE: ...` | **放**：`[role \| ISO秒] ...` |
 | 返回字段 | `id`/`content`/`created_at`/`score` | 同四字段（`score` 带名次衰减 `/1+0.03r`） | 同四字段 |
 | `top_k` | 不硬编码 100，按请求为上限 | 同（`ge=1, le=1000`，**声明建议 100**） | 同 |
 | 未知字段 | **忽略**（未开 `extra="forbid"`） | **`forbid`**：多余字段 → 422 | 未核对 |
@@ -135,7 +135,7 @@ rerank_candidates=200 · reranker_max_length=512 · result_window=1 · seed_k=20
 [Resolved relative dates: last night = August 10, 2026]
 ```
 
-**⇒ 没测过的第四种做法 = 把它搬成 `--memory-date resolved`**：保留前缀，再对正文里出现的相对表达逐条补 `= <绝对日期>`，**粒度跟表达走**（week-based 仍给区间）。
+**⇒ 这一档已经落地**（`--memory-date annotate` / 生产开关 `packaging.annotate_relatives`，**D22**）：保留原文表述，再对正文里出现的相对表达**就地注解**成绝对日期，**粒度跟表达走**（week-based 仍给区间）。实测结果与逐题胜负见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。
 
 > ⚠ **它默认是关的，别误读**：候选仓库自报的那份公开数据成绩（**数字在 [`../eval/baselines/CLAUDE.md`](../eval/baselines/CLAUDE.md) 的纪律表里**）是 **0.6.0 冻结配置**跑出来的，而 `temporal_enrichment` **默认 false**，冻结配置里也没开。**那份成绩不是这个开关的功劳**。
 
@@ -223,7 +223,7 @@ ReFind 留了 `RETRIEVAL_MODE=bm25` 走**不带 LLM 的确定性路径**，专�
 | id 防碰撞 | `netstring` 长度前缀（`len:part`） | NUL 分隔（同样安全） |
 | 扩窗可观测性 | 邻居数 / `dropped_missing` 都进返回值 | 未暴露 |
 
-> **它们的 409 值得单独想一下**：同 `request_id` 换 payload 时，它们**报错**，我们**静默跳过**。AML 契约保证重试的 payload 不变，所以两种都不违反契约；差别在"平台出 bug 时"——它们响，我们哑。**暂不改**（我们的 `applied_batches` 语义更保守、不会写坏数据），但值得记着这个差异。
+> **两家的 409 我们现在也有**（**D28**）：同 `request_id` 换 payload ⇒ **409**（`PayloadMismatchError`），事务整体回滚 ⇒ 真源里那一批仍是**第一次**投进来的那份（`tests/test_idempotency.py` 有用例钉着）。
 
 ---
 
@@ -249,7 +249,7 @@ ReFind 留了 `RETRIEVAL_MODE=bm25` 走**不带 LLM 的确定性路径**，专�
 | 2 | 补"契约最后核对日期 + 跑前重核" | 改几行 | [`contract.md`](./contract.md) / [`submission.md`](./submission.md) |
 | 3 | 申报表补四格（端口 / entrypoint / 并发 / `top_k` 范围） | 一次决定 | [`submission.md`](./submission.md) §5 |
 | 4 | 给 **Qdrant 集合**一个身份（**缓存那一层已有**，见 L3） | 几行代码 | `store/` |
-| 5 | **`--memory-date resolved` 第 4 档对照**（做法与前提见 L2；前三档已测、均未改变行为） | 一次代理评测 | [`experiments.md`](./experiments.md) |
+| 5 | **`--memory-date annotate` 对照**（做法与前提见 L2） | ✅ **已做**（2026-09-26，**D22**） | [`decisions.md`](./decisions.md) D22 |
 | 6 | 30 天保留：先裁决"Full SQLite 归档"与数据条款的冲突 | 一个决定 | [`decisions.md`](./decisions.md) 待决事项 |
 
 > ✅ **原第 2 条已完成**（2026-09-25）：`session_id` 粒度与 Add 到达顺序**已登记为 [S7](./open-questions.md) 与 [S6](./open-questions.md)**——**只登记、未动代码**（口径见 S6 里那段"为什么没顺手加个探测器"）。

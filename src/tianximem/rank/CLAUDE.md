@@ -357,9 +357,5 @@ AML 把多个返回项拼进答案 prompt 时只做 `"\n".join(...)`——**不�
 
 > ### ⚠ 又一处 R1 类风险（§6.4）
 >
-> 本地 qwen3.5-9b 的分词器与 `gpt-4o-mini` **不同**，**本地量出的"能装多少段"不能直接搬到线上**。§12.1 的四条对冲里**没有这一条**，PRD §6.4 明确"应补上"：
-> **Step 5 切换后必须重新量一次单请求实际返回的段数**，且 token 预算要做成配置项。见 [`../../../docs/open-questions.md`](../../../docs/open-questions.md) **E7**。
->
-> **"做成配置项"这一半已落地**：上限住在 `budget.max_tokens`、分词器名住在 `budget.tokenizer`
-> （[`../../../docs/config-reference.md`](../../../docs/config-reference.md)）。
-> **剩下的是量一次**——那要等 Step 5 真的切到 `text-embedding-v4` / `gpt-4o-mini` 之后。
+> 本地 qwen3.5-9b 的分词器与 `gpt-4o-mini` **不同** ⇒ **本地量出的"能装多少段"不能直接搬到线上**——**Step 5 切换后必须重新量一次**（[`../../../docs/open-questions.md`](../../../docs/open-questions.md) **E7**）。
+> **"做成配置项"这一半已落地**（上限 `budget.max_tokens`、分词器名 `budget.tokenizer`，见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md)）；**剩下的是量一次**——要等 Step 5 真的切到 `text-embedding-v4` / `gpt-4o-mini` 之后。

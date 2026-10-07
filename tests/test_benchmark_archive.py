@@ -157,11 +157,10 @@ def test_official_extra_tier_is_well_formed() -> None:
 def test_fetch_does_not_require_the_directory_to_exist_beforehand(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """⚠ **全新 clone 上 `make fetch-data` 曾经直接失败**，而且提示里给的解法都不管用。
+    """⚠ **`--fetch` 不能被"目录得先存在"那道门挡住。**
 
-    那道守卫原先是"归档目录不存在 ⇒ 打印 `用 --dir 或 TIANXIMEM_BENCHMARK_DIR 指定`
-    ⇒ `return 1`"——可**那两个办法指向不存在的路径同样过不了这道判断**，
-    于是"取回数据"这件**唯一能建出目录**的事，被一道"目录得先存在"的门挡住了。
+    那两个建议的解法（`--dir` / `TIANXIMEM_BENCHMARK_DIR`）**指向不存在的路径同样过不了
+    那道判断** ⇒ "取回数据"这件**唯一能建出目录**的事，反倒被一道"目录得先存在"的门挡了。
 
     ⇒ `--fetch` 现在不受它拦（目录由 `_download` 在连接成功后建）。
     本用例把 `_download` 换成一个**立刻抛网络错**的桩：**只要它被调到，就说明越过了守卫**。

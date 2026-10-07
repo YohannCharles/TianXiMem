@@ -45,15 +45,16 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class CheckerThresholds:
-    """§8 判据里的三个初值：**自设阈值，可调，但调整要有 ablation 数据支撑**（§15）。
+    """§8 判据里的四个初值：**自设阈值，可调，但调整要有 ablation 数据支撑**（§15）。
 
     它们与 `rrf_k` 不同类——`rrf_k` 是换算结果，错了就**静默出错**（值见 config-reference §4）。
     """
 
     #: 两路 top-1 相同 ⇒ 足够
     top1_agree: bool = True
-    #: 或：两路 top-5 的重叠 ≥ 这个数 ⇒ 足够
+    #: 比的是**两路各取前 `topk_overlap` 条**的重叠数（窗口大小，不是阈值）
     topk_overlap: int = 5
+    #: 上一条真正被判据比较的那个数：重叠 ≥ 它 ⇒ 足够
     topk_overlap_min: int = 3
     #: 或：bm25 的 top-1 在 dense 结果里位于前几名 ⇒ 足够
     bm25_top1_within: int = 3

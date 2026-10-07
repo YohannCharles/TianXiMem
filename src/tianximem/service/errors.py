@@ -49,9 +49,10 @@ class RetryableError(RuntimeError):
 
 
 def register_error_handlers(app: FastAPI) -> None:
-    """把可重试失败与未处理异常映射成明确的 5xx，并**记日志**。
+    """把可重试失败、同 id 不同 payload 的冲突与未处理异常映射成**明确的非 200**，并**记日志**。
 
-    ⚠ **"非 200 一律按可重试处理"这条契约的落点就是下面两个 handler**。
+    ⚠ **"非 200 一律按可重试处理"这条契约的落点就是下面三个 handler**：
+    503（可重试）/ **409（冲突，不是可重试，D28）** / 500（未处理）。
     """
 
     @app.exception_handler(RetryableError)

@@ -63,9 +63,9 @@ def test_1_user_assistant_user_assistant(M: Callable[..., Message]) -> None:
 def test_2_runs_merge_within_one_memory(M: Callable[..., Message]) -> None:
     """Test 2：`U U A A A U A` ⇒ **3 块**（**D32**）——一段 user 只把**最后一条**配进去。
 
-    ⚠ D32（2026-10-03）之前这条断言的是 2 块（`[UU+AAA] [U+A]`）。改成"只配最后一条"
-    是因为**嵌入窗口**：一段长 user 全进 question 会到 38,270 token（窗口 8,192）
-    ⇒ 线上静默截断、本地 400。代价是前面的 `Q0` 变成**有问无答**。
+    ⚠ 形状由 **D32**（2026-10-03）定（一段 user 只配最后一条）：一段长 user 全进 question
+    会到 38,270 token（窗口 8,192）⇒ 线上静默截断、本地 400。代价是前面的 `Q0`
+    变成**有问无答**。
     """
     blocks = compose_memory_blocks(
         [
@@ -118,11 +118,10 @@ def test_6_lone_user(M: Callable[..., Message]) -> None:
 
 
 def test_adjacent_same_role_runs_alternate_strictly(M: Callable[..., Message]) -> None:
-    """⚠ **D32 之后这条不变量不再成立**：会出现相邻的 user-only 块。
+    """⚠ **相邻的 user-only 块是正常的**，不是"漏合并"。
 
-    改之前：段内所有 user 都进同一个 question ⇒ 块序列里不可能有相邻同 role 的块。
-    改之后（只配最后一条），一段 `U U A` 产出 `[U] [U+A]`——那两个 U **是独立的两条
-    消息**，不是什么"漏合并"。这条改成钉住**新的**形状，而不是删掉：形状变了要有人知道。
+    **D32** 只把一段 user 的**最后一条**配进 question ⇒ 一段 `U U A` 产出 `[U] [U+A]`，
+    那两个 `U` **是独立的两条消息**。形状变了要有人知道，所以这条钉住**新的**形状。
     """
     blocks = compose_memory_blocks(
         [

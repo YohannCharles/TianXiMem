@@ -15,7 +15,7 @@
 把 AML 榜单分数做到**优于 ReFind 的 44.97**。
 
 - **不写论文**，所以不做"为了讲清楚贡献"的实验，**只做能改变下一步动作的对照**（PRD §13）。
-- **核心判断**：检索不是瓶颈（LongMemEval 召回已 96–99%），**选择和排序才是**。因此 Rerank + Context Packaging 是主线（PRD §4 / §11）；另有已落地的**有来源的共同事实取证**（见下方「架构」）。
+- **核心判断**：检索不是瓶颈（LongMemEval 召回已接近天花板，数字见 PRD §4），**选择和排序才是**。因此 Rerank + Context Packaging 是主线（PRD §4 / §11）；另有已落地的**有来源的共同事实取证**（见下方「架构」）。
 - **核心 claim**：不让所有 Query 都进昂贵的 Agentic Search，**只有证据不足时才触发多轮搜索**（PRD §3.1 / §9）。
 
 **资源**：3 人 / 4–6 周。运行形态已定（D12）：**模型三段全部经自建网关远程访问；检索服务与 Qdrant 跑在本机**——本机不需要 GPU。
@@ -32,7 +32,7 @@
 | 2 | **答案阶段按返回顺序取 117,760 token 前缀**——排在后面的证据整段作废 |
 | 3 | **`user_id` 是唯一的检索隔离字段**；`session_id` 不是 Search 的过滤器 |
 | 4 | **幂等**：块写下即最终形状（D24）、位置是**请求的纯函数**（D28）⇒ 重试必然算出同一位置；但**批次级仍必须查 `applied_batches`** 旁表（重试是正常行为，不能靠撞 `UNIQUE` 兜），且**同 `request_id` 不同 payload ⇒ 409** |
-| 5 | **Qdrant RRF 的 `k` 默认是 2**，必须显式设 **61**；**local 模式会静默丢弃 payload 索引** |
+| 5 | **Qdrant RRF 的 `k` 默认是 2**（不是文献里的 60），必须显式设 **61** |
 | 6 | **`content` 里只许带日粒度日期**（`[YYYY-MM-DD]`，D21）——**秒级绝不许出现**，也别加星期 |
 
 **模型规定**（§2.3）：Embedding 只能用 `text-embedding-v4`，LLM 只能用 `gpt-4o-mini`，**Reranker 不作规定**。
@@ -120,35 +120,24 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 
 ## 路线图
 
-| 阶段 | 交付 | 状态 |
-| ---- | ---- | ---- |
-| **Step 0** | 代理评测 harness（LoCoMo-Refined + LongMemEval） | 🟡 加载层 + harness + 契约预检 + runner 已就位，链路已跑通多轮；剩 S1–S3 三个真-Smoke 探针 |
-| Step 1 | 存储层 + Add/Search 服务 + **混合检索**（BM25 + Dense + RRF，含 T2 实验） | 🟡 `src/` 已落；T2 脚手架就位、人工标注未做 |
-| Step 2 | Neighbor Expansion + 双预算截断 | ✅ 已完成 |
-| Step 3 | Rerank + Context Packaging（含 T1 实验） | 🟡 rerank 已接 + 打包已落地 + 渲染模板定稿；**T1 的问题已回答**，干净的两臂 A/B 未跑 |
-| Step 4 | Conditional Agentic Search | ⬜ |
-| **Step 5** | **切换到提交模型**，重标定全部阈值，重跑 T2 | ⬜ |
-| Step 6 | 对照实验（§13）+ Smoke 验证 + Full 定稿 | ⬜ |
+**步骤定义、交付与逐项状态见 [`docs/roadmap.md`](./docs/roadmap.md)**——**本文件不复制那张表**
+（两处各存一份必然漂移，而状态恰好是本仓最易过期的东西）。
 
-**Step 0 不可跳过**——没有它，后面每一步都是盲调，**而 Full 只有 2 次**。
-**Step 5 不可与任何设计改动合并**——否则分数变化无法归因（§12.1 R1）。
+两条不可犯：
 
-> ⚠ **上表是摘要，状态以 [`docs/roadmap.md`](./docs/roadmap.md) 为准**（完整清单与每步的交付定义都在那里）。
-> **改状态时先改 roadmap.md，再回来同步这里。**
+- **Step 0 不可跳过**——没有它，后面每一步都是盲调，**而 Full 只有 2 次**。
+- **Step 5 不可与任何设计改动合并**——否则分数变化无法归因（§12.1 R1）。
 
 ---
 
 ## 评测机会成本
 
 **AML 不提供本地评测**（不给 gold answer、不给评分标准、不提供批量数据下载）。真实信号只有两条路：
+**代理评测**（本地，无限次——全部迭代、消融、调参都在这里）与 **Smoke / Full**（次数是硬上限，
+配额表与版本冻结规则见 [`docs/submission.md`](./docs/submission.md)）。
 
-| 层 | 用途 | 次数限制 |
-| -- | ---- | -------- |
-| **代理评测**（本地） | 全部迭代、消融、调参 | 无限 |
-| **Smoke** | 验证契约合规、端到端连通 | 每轨道 **≤30 次**，每小时 1 次，不进榜 |
-| **Full** | 最终定稿 | 每 Key 每轨道 **2 次**，第二次隔 30 天；**一旦接受即版本冻结** |
-
-> **本项目没有"跑一遍看看"的余地。** 所有迭代必须在自建代理评测上完成，Smoke 用于验证契约合规，Full 只用于最终定稿。
+> **本项目没有"跑一遍看看"的余地。** 任何能在代理评测上回答的问题，都不该花 Smoke 的额度——
+> Smoke 只做两件事：验证契约合规、消除本地无从验证的未知。
 
 **代理评测的边界**：只覆盖 LoCoMo-Refined + LongMemEval——而这两份恰好是全部数据集里**唯一共用同一套契约**的。其余各份的记忆注入字段与裁判规则各不相同（PersonaMem 的本地答案输入适配见 [`eval/harness/CLAUDE.md`](eval/harness/CLAUDE.md)），因此**代理分数不能线性外推到全赛道**（§12.4）。
 
@@ -183,7 +172,7 @@ cp .env.example .env      # ← 密钥要向管理员申请（仓库里全空，
 make sync                 # uv sync --all-extras；含 [local] 本地模型栈，数 GB
 make fetch-data DATASET=locomo-refined  # 按需准备；make eval 也会自动准备缺失材料
 make data-check           # 逐文件 sha256 校验
-make qdrant-up            # 起 Qdrant（**必须 server 模式**）
+make qdrant-up            # 起 Qdrant（server 模式）
 make check                # 环境自检：Qdrant / 三段模型端点 / 密钥已填
 make serve                # ⚠ 另开一个终端：起检索服务
 make baseline DATASET=locomo-refined   # 跑一轮冻结口径的基线
@@ -203,7 +192,7 @@ HybridQA / FEVEROUS 的语料下载、输入范围与评分见
 | --- | --- |
 | **`.env` 的密钥要向管理员申请** | 仓库里**全空**（只提交 `.env.example`）。这是**唯一一个"仓库里查不到答案"的步骤**，其余都能自己跑通 |
 | **数据集不进版本库** | `dataset/CLAUDE.md` 入库，数据不入库；首次评测自动按固定版本下载所选数据集及评分依赖，`--offline` 禁止下载。需要预取时运行 `make fetch-data DATASET=<名称>` |
-| **Qdrant 必须 server 模式** | **local 模式会静默丢弃 payload 索引**，而 `user_id` / `session_id` / `event_time` 三个筛选**全依赖**它 |
+| **Qdrant 必须 server 模式** | **local 模式会静默丢弃 payload 索引**，而 `user_id` / `session_id` / `event_time` 三个筛选**全依赖**它（机制与出处见 [`deploy/CLAUDE.md`](./deploy/CLAUDE.md) §1） |
 | **服务得先起着** | `make eval` / `make baseline` 打的是**真 HTTP**（§13 的边界：harness 不 import `src/`）⇒ 另开一个终端跑 `make serve` |
 
 `make fetch-data` 默认只准备 LoCoMo-Refined；其他数据集用 `DATASET=<名称>` 指定。

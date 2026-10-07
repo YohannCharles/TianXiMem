@@ -16,9 +16,8 @@
 ## 两条**显式的本地约定**（数据集没有这些概念，是我们造的）
 
 1. **一条事实 = 一条消息**（不是一页、更不是一整段），而**整个样本共用一个 `Session`**。
-   ⚠ 曾经是"一条事实 = 一个 `Session`"（一次 Add 一块），理由是旧规则下"连续同 role 合并"
-   会把它们塌成一块。**D29 之后那个理由没有了**——没有非 user 跟随的连续 user
-   **每条各自独立成块**，粒度一样，而 Add 次数从 221 降到 `batches()` 的 12。
+   ⚠ 能这么挤是因为 **D29**：没有非 user 跟随的连续 user **每条各自独立成块** ⇒ 粒度一样，
+   而 Add 次数是 `batches()` 的 **12**（一条一个 `Session` 要 **221** 次）。
 2. **一个 `Sample` = `cases_per_user` 个连续 case**（默认 64）。MQuAKE 本身没有"用户"这个概念，
    但评测需要"记忆远多于证据"才有检索可言（一个 case 只有 2–4 条事实）。
    ⇒ 这些 case 互为干扰项，题目取自它们自己的 `questions`。
@@ -111,9 +110,8 @@ def _rows(path: Path) -> Iterator[dict]:
 def _memory_messages(row: dict) -> list[Message]:
     """一个 case 的记忆：原始事实 + 改写——**一条消息一条事实**（顺序即事实链的顺序）。
 
-    ⚠ **它们曾经一条一个 `Session`**，理由写在模块 docstring 的历史里：旧规则下
-    "连续同 role 合并"会把一次 Add 里的它们塌成一块。**D29 之后那个理由没有了**——
-    一段没有非 user 跟随的连续 user，**每条各自独立成块**，所以挤在一起粒度照样保得住。
+    ⚠ **整个 case 挤在一个 `Session` 里是对的**：**D29** 之后一段没有非 user 跟随的连续
+    user，**每条各自独立成块** ⇒ 粒度照样保得住，而 Add 次数少一个数量级。
     """
     messages: list[Message] = []
     for triple in row.get("orig_triples_labeled") or []:

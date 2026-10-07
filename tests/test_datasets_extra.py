@@ -839,7 +839,7 @@ def test_personamem_item_contract_matches_the_official_pipeline(tmp_path: Path) 
 def test_tempreason_ingests_the_fact_context():
     """⛔ **`fact_context` 是这份数据集的记忆本体**，不是"每题一份的泄题"。
 
-    一度不收它（旧理由："几乎每题一份，不是共享的记忆"）。实测推翻：
+    三条依据（实测 2026-10-03）：
 
     * 同一页的各题**共用同一份事实集**（60 个多题页全部成立）；
     * 正文页**往往没有时间区间**，而问题问的是**某一天的雇主是谁**

@@ -81,7 +81,7 @@ tools.py    search_chatrecord / take_note / finish_search
 
 > 这也是 §4"选择与排序是瓶颈"的直接应用：**Agent 只负责把候选弄全，排序仍归 Rerank。**
 
-**⚠ 与 §13 纯度规则的关系**：A4 关掉 agent 时，**打包顺序与候选数量不得因此改变**——否则对照不成立，"而结果看起来完全正常，只是结论错了"。
+**⚠ 与 §13 纯度规则的关系**：A4 关掉 agent 时，**打包顺序与候选数量不得因此改变**——否则对照不成立（逐开关的"关掉时不得改变什么"见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §2）。
 
 ---
 

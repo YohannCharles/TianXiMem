@@ -231,8 +231,8 @@ LoCoMo 的公开题库没有逐题到达时刻和反馈写回，当前先投喂�
   ——**我们只取了 `benchmark/text/benchmark.csv` 引用到的那 200 份**，另外 800 份没有任何题引用；
   `chat_history_128k`（约 519 MB）与 1M 档整体未取。
   > ⚠ **别用 HuggingFace 的 `?recursive=true` 判断"某个档在不在"**：它**静默截断在 1,000 条**，
-  > 而 PersonaMem-v2 光 `chat_history_128k` 就有 1,000 个文件 ⇒ 那次查询看不到 `32k`，
-  > 一度把它误记成"已撤下"。查子目录要单独打 `tree/main/<路径>`；
+  > 而 PersonaMem-v2 光 `chat_history_128k` 就有 1,000 个文件 ⇒ 那次查询看不到 `32k`。
+  > 查子目录要单独打 `tree/main/<路径>`；
   > 要精确查某几个路径，用 `POST /api/datasets/{repo}/paths-info/{rev}`（它不受 1,000 条截断影响）。
 - MedMemoryBench 的 `data/zh` 两个带噪变体（`dialogues_with_noise` / `noise_sessions`）
 

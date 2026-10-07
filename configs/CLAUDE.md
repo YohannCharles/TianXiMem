@@ -115,8 +115,6 @@ configs/
 1. **`k=61` 不是调参项**，是正确性常量——写进配置但**不要放进"可调阈值"分组**（§7.3 / D5）。
    配置层会**拒绝启动**，不是警告后照用。
 2. **先分清常量与阈值**：见 [`../docs/config-reference.md`](../docs/config-reference.md) §1.5 的 A / B / C 三分类。**"配置化"不等于"可调"**——`top_k = 100` 与 `k = 61` 都是写进配置但**不许动**的。
-3. **每个开关在"关"分支下只影响它命名的那一件事**——否则 §13 的对照不成立，**而结果看起来完全正常，只是结论错了**（§13）。
+3. **每个开关在"关"分支下只影响它命名的那一件事**（§13）——**开关的依赖图、"关掉时不得改变什么"与"不要实现"的连带项一处声明在 [`../docs/config-reference.md`](../docs/config-reference.md) §2**（`dense` / `rrf` **没有下游依赖**，§8 的 Checker 退化路径不存在，D15），本文件不另列一份。对应测试见 [`../tests/CLAUDE.md`](../tests/CLAUDE.md)。
 
-   **开关的依赖图、"关掉时不得改变什么"与"不要实现"的连带项一处声明在 [`../docs/config-reference.md`](../docs/config-reference.md) §2**（`dense` / `rrf` **没有下游依赖**，§8 的 Checker 退化路径不存在，D15），本文件不另列一份。对应测试见 [`../tests/CLAUDE.md`](../tests/CLAUDE.md)。
-
-**⚠ 还没接线的开关**（`checker.*` / `agent.*` / `rrf` 等）**逐项状态见 [`../docs/config-reference.md`](../docs/config-reference.md) §2 的"接线"列**——`checker` / `agent` 是 v2 的事（D26 / D13），`rrf` 没有实验需要它（D15）；`neighbor` 只有 `radius` 可关，而它默认就是 `0`（D31）。本文件不另列。
+**⚠ 开关的接线状态**（`checker.*` / `agent.*` / `rrf` 等）**逐项见 [`../docs/config-reference.md`](../docs/config-reference.md) §2 的"接线"列**——`checker` / `agent` 是 v2 的事（D26 / D13）；`rrf` 与 `dense` 是**无下游依赖**（D15），**不是待办**；`neighbor` 只有 `radius` 可关，而它默认就是 `0`（D31）。本文件不另列。

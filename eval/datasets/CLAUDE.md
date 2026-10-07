@@ -229,7 +229,7 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 | LoCoMo-Refined | **CC BY-NC 4.0** | 归档 readme |
 | ScriptMem | **CC BY-NC 4.0** | 归档 readme |
 | PersonaMem v2 | CC BY 4.0 | 归档 readme |
-| LongMemEval | **待确认**——早先记为 MIT，但归档 readme **没有 License 章节**，归档内无依据 | —— |
+| LongMemEval | **MIT**——⚠ **归档内仍无依据**；出处已从上游取回（HF 数据集卡 + LongMemEval-V2 仓 `LICENSE`），**细节见** [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md) 的许可表 | —— |
 | CL-Bench | 归档内无许可证文本 | —— |
 | BEAM | **CC BY-SA 4.0** | 归档 `beam/README.md` 的 `## 📄 License` 段（**100K 档那一份卡**） |
 

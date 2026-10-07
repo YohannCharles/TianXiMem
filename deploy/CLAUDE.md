@@ -145,7 +145,7 @@ TIANXIMEM_RERANKER_MODEL=qwen3-reranker-4b                        # ⚠ 两个�
 > 打开它是个**质量取舍**，代价是每题 5–12s（100 篇）。`rerank.timeout_seconds` 默认 30s，
 > 超时会**降级回 RRF 顺序**（不报错）。这条对照是 §13 的 **A3**，两臂见 `configs/runs/a3-{on,off}/`。
 
-### 把镜像弄到服务器上（两条路）
+### 服务器上要满足什么（拓扑与网关可达性）
 
 拓扑与开发机**不同**（D12 记的是"服务 + Qdrant + harness 都在本机"那套开发形态）：
 服务器上只跑**服务 + Qdrant**，harness 与答案/裁判生成留在本地。
@@ -156,7 +156,7 @@ TIANXIMEM_RERANKER_MODEL=qwen3-reranker-4b                        # ⚠ 两个�
 | **不需要外网**（除了上面那个网关） | tiktoken 的 BPE 已烘进镜像；依赖已在构建期装完 | `docker run --rm --network none --entrypoint python tianximem:local -c "import tiktoken; tiktoken.get_encoding('o200k_base')"` |
 | **Qdrant 与真源都有持久盘** | SQLite 不可重建（§6.3） | `docker volume ls`；**备份见 §4 的表** |
 | **8000 端口的暴露面想清楚** | **本服务没有任何鉴权**——`user_id` 是隔离字段，不是认证（§2.2） | `TIANXIMEM_BIND` 默认 `127.0.0.1`（只有本机）；要对外就自己加 TLS + 反代 |
-| **镜像 tag 不要用 `latest`** | 与 Qdrant 同源的理由：Full 只有 2 次、一旦接受即版本冻结 | 打 tag 时带上日期或 commit，别覆盖 `tianximem:local` 就上线 |
+| **镜像 tag 不要用 `latest`** | 与 Qdrant 同源的理由：Full 只有 2 次、一旦接受即版本冻结 | 打 tag 时带上日期或 commit（`tianximem:2026-09-28-4f56bcc`），下次要回退才有得回；别覆盖 `tianximem:local` 就上线 |
 
 > ⚠ **服务器上跑 `default` profile，不是 `local`**：`local` 会把集合换成 `memories_dev`
 > （开发期与提交期隔离用）。**提交期必须是 `memories`**——换了集合名 = 换了集合，
@@ -209,9 +209,6 @@ docker compose -f deploy/compose.yaml up -d   # 注意：不要带 --build，否
 > 就以为完事**——真值在 `.env` 里。而且**别把本地 `.env` 直接 scp 上去**：
 > 里面的 `TIANXIMEM_SQLITE_PATH` / `TIANXIMEM_QDRANT_URL` 是开发机的值。
 > 服务器上的 `.env` **从 `.env.example` 起**，只填密钥。
->
-> ⚠ **镜像 tag 别用 `latest`**：与 Qdrant 同源的理由——Full 只有 2 次、一旦接受即版本冻结。
-> 打 tag 时带上日期或 commit（`tianximem:2026-09-28-4f56bcc`），下次要回退才有得回。
 
 ### 0.6 打开**请求原文采集**（S6）—— 服务器上照着做
 
