@@ -55,8 +55,7 @@ def _current(facts: Sequence[EvidenceFact]) -> list[EvidenceFact]:
                 f
                 for f in group
                 if not f.get("replaces_earlier")
-                and f.event_time is not None
-                and f.event_time >= latest
+                and (f.event_time is None or f.event_time >= latest)
             )
         unique: dict[tuple[str, tuple[tuple[str, Qualifier], ...]], EvidenceFact] = {}
         for fact in replacements or group:

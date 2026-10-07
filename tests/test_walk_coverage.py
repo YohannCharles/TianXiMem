@@ -356,3 +356,34 @@ def test_unsafe_passive_employment_edits_cannot_become_positive_edges(body):
     )
     assert not any(relation_key(f.relation) == "employee" for f in facts)
     assert any(f.get("unparsed") and f.source_quote == text for f in facts)
+
+
+@pytest.mark.parametrize(
+    "ordinary_time,parents",
+    [
+        (None, {"edit", "ordinary"}),
+        (1735689600000, {"edit"}),
+        (1767225600000, {"edit", "ordinary"}),
+        (1798761600000, {"edit", "ordinary"}),
+    ],
+)
+def test_dated_replacement_cannot_suppress_a_claim_with_unknown_source_time(ordinary_time, parents):
+    facts = [
+        f
+        for parent, text, moment in (
+            (
+                "edit",
+                "Corpus: Alex is employed by Acme (this replaces the earlier value)",
+                1767225600000,
+            ),
+            ("ordinary", "Alex: I currently work for NewCo.", ordinary_time),
+        )
+        for f in extract_evidence(
+            parent_memory_id=parent, user_id="u", question=text, answer=None, event_time=moment
+        )
+    ]
+    result = evaluate_evidence(
+        facts, compile_query("Where does Alex work?"), source_limit=12, hop_limit=4
+    )
+    assert result.selection is not None
+    assert {f.parent_memory_id for f in result.selection.facts} == parents
