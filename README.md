@@ -116,6 +116,9 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 | [`tests/`](./tests/) | 单元测试（记忆块组合 / 幂等 / 契约 / 隔离 / 开关纯度） | — |
 | [`var/`](./var/) | 运行时产物（**gitignored**，只保留说明） | §6.1 |
 
+MemMachine 参考源码位于 [`eval/baselines/memmachine/`](eval/baselines/memmachine/)，
+研读路径与 TianXiMem 改进方向见 [MemMachine 学习入口](docs/memmachine-reference.md)。当前仅供源码参考。
+
 ---
 
 ## 路线图

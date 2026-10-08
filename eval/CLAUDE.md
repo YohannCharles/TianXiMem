@@ -13,7 +13,7 @@
 | [`datasets/`](./datasets/) | **数据怎么进来**：独立评测加载器 + **schema 落差预处理层**；`aml/` 构造版本化输入事件 |
 | [`harness/`](./harness/) | **怎么跑一轮**：模拟 AML 切批喂 Add、调 Search、接裁判 |
 | [`experiments/`](./experiments/) | **怎么跑一个对照**：A3 / T1 / T2 的 arm 定义 + T2 的标注产物（A4 已移出 v1，**D26**；A0 未开始） |
-| [`baselines/`](./baselines/) | B1 ReFind（**Vendor，禁止被 `src/` import**）· 只读参考 `invmem-candidate/` 与 `serve_invmem_qwen.py`（**不是基线**） |
+| [`baselines/`](./baselines/) | B1 ReFind（**Vendor，禁止被 `src/` import**）· 源码参考 `memmachine/`（[学习入口](../docs/memmachine-reference.md)）· 只读参考 `invmem-candidate/` 与 `serve_invmem_qwen.py`（**不是基线**） |
 | [`smoke/`](./smoke/) | **只打真 AML 的那一层**：契约预检（✅ `preflight.py`）；⬜ 未写：配额/节流（`quota.py`）、S1/S2/S3 判别实验 |
 | [`reports/`](./reports/) | **数字的唯一落点**：结果台账 + 每次 run 的归档 |
 

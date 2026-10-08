@@ -39,7 +39,7 @@
 | 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（逐条 `Dn` + 待决事项——**编号别在这里列范围，它会过期**） |
 | 跑对照实验 | [`docs/experiments.md`](docs/experiments.md)（协议）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（怎么跑） |
 | 数据集加载 / harness | [`docs/benchmark-data.md`](docs/benchmark-data.md) + [`eval/datasets/CLAUDE.md`](eval/datasets/CLAUDE.md) |
-| 读参考实现（InvMem / ReFind 的代码——**代码在哪、什么别学**） | [`docs/reference-implementations.md`](docs/reference-implementations.md) |
+| 读参考实现（InvMem 候选 / ReFind / MemMachine——**代码在哪、什么别学**） | [`docs/reference-implementations.md`](docs/reference-implementations.md) |
 | **准备 / 校验 `dataset/`**（按需下载、旧目录迁移） | [`dataset/CLAUDE.md`](dataset/CLAUDE.md) + [`docs/benchmark-data.md`](docs/benchmark-data.md) 的准备流程、出处链与本地修订；清单 / 映射 / 准备逻辑在 `eval/datasets/{manifest,layout,prepare}.py`。`make fetch-data DATASET=<名称>` / `make data-check DATASET=<名称>`（D35） |
 | 提交周期与截止日 | [`docs/submission.md`](docs/submission.md) §0（**第二期 09-20 已开，材料截止 10-31**） |
 | 发 Smoke / Full | [`docs/submission.md`](docs/submission.md)（配额与版本冻结） |
