@@ -125,7 +125,7 @@ evidence.py  共同证据执行器：执行 facts/query 的共同计划（筛选
 * `require_complete_walk` 计划缺少已识别关系的可达原文、候选分支缺项或相关更正无法解释；
 * 选择超过 `evidence_limit`。
 
-设计与验证记录见 [`../../../eval/reports/unified-evidence-refactor-20261005.md`](../../../eval/reports/unified-evidence-refactor-20261005.md)。
+设计与验证记录见 [`../../../eval/reports/retrieval-evidence-20261005.md`](../../../eval/reports/retrieval-evidence-20261005.md)。
 
 ---
 

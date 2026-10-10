@@ -30,12 +30,12 @@ Add、幂等重放和旧库补索引共用一个抽取器与版本覆盖表 `evi
 当前抽取版本以 [`facts/evidence.py`](../src/tianximem/facts/evidence.py) 的
 `EVIDENCE_VERSION` 为准，原文扫描版本与语义完整性仍分开判断。
 抽取不调用 LLM，也不承诺所有中英文表达或隐含关系均已覆盖。
-小样本和 LLM 兜底原型的失败记录见 [中文事实验证](../eval/reports/chinese-evidence-20261005.md)。
+小样本和 LLM 兜底原型的失败记录见 [中文事实验证](../eval/reports/retrieval-evidence-20261005.md)。
 
 **专用配置键（任职 / 库存 / 活动 / 状态）没有**——未知键**拒绝启动**，所以 2026-10-05
 之前的实验配置只在对应旧提交上跑得起来。已有库内的旧派生表暂留作历史证据，新版本不读写；
 共同索引从原文按需重建。
-设计与验证记录见 [共同取证整理](../eval/reports/unified-evidence-refactor-20261005.md)。
+设计与验证记录见 [共同取证整理](../eval/reports/retrieval-evidence-20261005.md)。
 
 > 对应 PRD §6–§11、§15。**冲突以 PRD 为准。**
 
@@ -80,7 +80,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | 层 | 拥有哪些键 | 例子 |
 | --- | --- | --- |
-| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXIMEM_SQLITE_PATH`、`TIANXIMEM_QDRANT_URL`、`TIANXIMEM_EMBED_CACHE_DIR`、`TIANXIMEM_METRICS_PATH`、`TIANXIMEM_CAPTURE_PATH`、`TIANXIMEM_WORKERS` |
+| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`AML_BASE_URL` + `AML_BASE_URL_2`（对话端点**按序成对**，见 §9）、`TIANXIMEM_SQLITE_PATH`、`TIANXIMEM_QDRANT_URL`、`TIANXIMEM_EMBED_CACHE_DIR`、`TIANXIMEM_METRICS_PATH`、`TIANXIMEM_CAPTURE_PATH`、`TIANXIMEM_WORKERS` |
 | **`configs/<profile>.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.*`、`neighbor.*`、`models.embedder`、`storage.qdrant.collection`、`storage.sqlite.busy_timeout_ms` |
 
 **每个键只有一个家，两边不重叠也不许重叠。** 在 yaml 里写一个 env 拥有的键会**直接报错**
@@ -304,9 +304,9 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
-| `rerank.enabled` | **`true`** | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。**`true` 是提交口径**（2026-09-28）：D8 把排序定为主线，默认关着等于放弃它（A3 在 conv-26 上 +4.3pt）。⚠ 开发期在 `configs/local.yaml` 里**显式关掉**（墙钟约 3×，直接决定迭代速度）——**那是覆盖，不是默认值**。**它值不值是 A3 要回答的**（两臂快照 `configs/runs/a3-{on,off}/`），**别拿默认值当结论** |
+| `rerank.enabled` | **`true`** | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。**`true` 是提交口径**（2026-09-28）：D8 把排序定为主线，默认关着等于放弃它（A3 在 conv-26 上 +4.3pt）。⚠ 开发期在 `configs/local.yaml` 里**显式关掉**（墙钟约 3×，直接决定迭代速度）——**那是覆盖，不是默认值**。**它值不值是 A3 要回答的**（旧 A3 快照已清理；结论见台账），**别拿默认值当结论** |
 | `rerank.timeout_seconds` | **30.0** | **C 类**。实测 100 篇 ≈ 2.2s、200 篇 ≈ 5.3s ⇒ 约 10 倍余量。**太紧 ⇒ 伪降级**（网关排队被报成"reranker 坏了"）；**太松 ⇒ Search 被拖住** |
-| `rerank.envelope` | **`query`**（本机自托管网关；`memory3` 那条路是 `queries`） | ⛔ **B 类**：对面那个网关**收哪种线格式**。`queries` ⇒ vLLM 原生 `{"queries": [...]}`（`memory3.021130.xyz`；发 `query` 被 **400** 拒）。`query` ⇒ 自研封装 `{"query": "..."}`（本机网关，容器里 `host.docker.internal:9002` → 宿主机 `127.0.0.1:8082`；发 `queries` 被 **422** 拒，实测报 `body.query Field required`）。⚠ **它与 `TIANXIMEM_RERANKER_BASE_URL` 是同一件事的两半 ⇒ 换网关必须一起换**；填错的表现与 D12 的降级**一模一样**（每次检索都不精排、服务不报错、响应照旧合法，只在 §14 的 `rerank.degraded` 上看得见）。未知值在启动阶段被 `ConfigError` 拒 |
+| `rerank.envelope` | **`query`**（现役主网关 `memory.021130.xyz`；vLLM 直服那一档是 `queries`） | ⛔ **B 类**：对面那个网关**收哪种线格式**。`query` ⇒ 自研封装 `{"query": "..."}` → 响应 `results[].score`（现役主网关；本机网关 `host.docker.internal:9002` → 宿主机 `127.0.0.1:8082` 同属这一档；发 `queries` 被 **422** 拒，实测报 `body.query Field required`）。`queries` ⇒ vLLM 原生 `{"queries": [...]}` → `data[].score`（`memory3.021130.xyz` 在 2026-09-28～10-09 之间；发 `query` 被 **400** 拒）。⚠ **两条路的客户端都收**，但**发出去的名字只有一个**，且**它与 `TIANXIMEM_RERANKER_BASE_URL` 是同一件事的两半 ⇒ 换网关必须一起换**；填错的表现与 D12 的降级**一模一样**（每次检索都不精排、服务不报错、响应照旧合法，只在 §14 的 `rerank.degraded` 上看得见）。未知值在启动阶段被 `ConfigError` 拒。**两侧都试的探针**：`make check` 与 `make probe-reranker` |
 | `packaging.inject_abs_time` | **`true`**（2026-09-25，**D21**） | ✅ §2 表里 **T1** 的开关。`true` ⇒ 每对正文前加 `[YYYY-MM-DD] `（与 `created_at` **同一口径、同一 `event_time`**）。⚠ **「贵」消融项**：正文改了 embedding 输入也改 ⇒ **改它要重建索引**、两臂必须分集合 |
 | `packaging.annotate_relatives` | **`true`**（2026-09-26） | ✅ **只改 `content`、不碰 embedding**（不变式 **I1 的一个声明式例外**）：`true` ⇒ 正文里的相对时间**就地注解**成绝对日期（`last Tues (July 18, 2023)`），原文一字不动。⇒ **不用重建索引、不用换集合**，随时可开关。实现与"推不出就不动"那条硬纪律在 [`../src/tianximem/common/annotate.py`](../src/tianximem/common/annotate.py)；开关买到的东西见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。⚠ **C 类**：任何调整都要有 ablation 数据 |
 | `budget.max_tokens` | **117,760** | ⛔ **A 类**（AML 定的答案窗口余量）。答案窗口 128k 扣掉输出与安全余量 |
@@ -316,9 +316,9 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `packaging.score_mode` | `reciprocal_rank` | `1/(rank+1)`，**按输出位置**、**不是**原始 RRF 分数 |
 | `packaging.render_template` | `Q:/A:` | **"贵"消融项**：改它等于改变 embedding 输入，**整个向量索引要重建**。唯一实现是 `common/render.py` |
 | `packaging.role_prefix` | `[assistant]` 等标记 | 一个对里有多条非 user 消息时每条带 role 标记 |
-| `TIANXIMEM_RERANKER_BASE_URL` | `https://memory3.021130.xyz/v1` | **env**。主网关（**不是 memory2**，D18） |
-| `TIANXIMEM_RERANKER_API_KEY` | —— | **env**。与 `AML_EMB_*` 是同 host、不同 key |
-| `TIANXIMEM_RERANKER_MODEL` | `qwen3-reranker-4b` | **env**。⚠ **网关可能校验它**（vllm 直服就校验）——填错就是 **404 ⇒ 每次检索都降级**，而服务**不报错**；而**忽略**它的网关会让错 id 静默"能用"。**提交时不得更换**（D12） |
+| `TIANXIMEM_RERANKER_BASE_URL` | `https://memory.021130.xyz/v1` | **env**。主网关（**不是 memory2**，D18） |
+| `TIANXIMEM_RERANKER_API_KEY` | —— | **env**。与 `AML_EMB_*` 同 host、**不同 key** |
+| `TIANXIMEM_RERANKER_MODEL` | `Qwen/Qwen3-Reranker-4B` | **env**。⚠ **网关可能校验它，也可能忽略它**——现役主网关忽略（实测两种写法都 200），vLLM 直服那一档**校验**（填错就是 **404 ⇒ 每次检索都降级**，而服务**不报错**）。⇒ **照端点 `/v1/models` 声称的值填**，两边都对。**提交时不得更换**（D12） |
 
 > ⚠ **`rerank.model` 这个键不存在**：模型名是**端点身份**、不是阈值，所以它住在 `.env` 的
 > `TIANXIMEM_RERANKER_MODEL`（§1.2 的两层分工）。
@@ -370,29 +370,46 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | 配置项 | 提交期 | 开发期 | 住哪 | 说明 |
 | --- | --- | --- | --- | --- |
-| `models.embedder` | `text-embedding-v4` | **`qwen3-embedding-8b`** | **yaml** | **只能用前者**（§2.3）。⚠ 值是**服务端 id**，见下面那条迁移警告 |
-| `models.llm` | `gpt-4o-mini` | qwen3.5-9b | **env**（`AML_MODEL`） | **只能用前者**（§2.3） |
-| `TIANXIMEM_RERANKER_MODEL` | **`qwen3-reranker-4b`** | 同左 | **env** | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12）。⚠ 新网关**校验**它，填错 ⇒ 404 ⇒ 降级 |
-| `models.embed_dim` | **由接口提供** | —— | —— | **不能写死** |
+| `models.embedder` | `text-embedding-v4` | **`Qwen/Qwen3-Embedding-8B`** | **yaml** | **只能用前者**（§2.3）。⚠ 值是**服务端 id**（端点 `/v1/models` 声称的那个），随网关而变；**现役网关忽略 `model`**，所以填错不报错，但它**进缓存坐标系** ⇒ 改它就换缓存文件 |
+| `models.llm` | `gpt-4o-mini` | qwen3.5-9b | **env**（`AML_MODEL`） | **只能用前者**（§2.3）。⚠ 开发期**有两个对话端点**（`memory2` + `memory3`，同一个模型、两把 key）——见下面「对话端点」一条 |
+| `TIANXIMEM_RERANKER_MODEL` | **`Qwen/Qwen3-Reranker-4B`** | 同左 | **env** | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12）。⚠ 网关**可能校验**它、也可能**忽略**它（现役主网关忽略）⇒ **照端点声称的值填** |
+| `models.embed_dim` | **1024** | **1024** | **yaml** | **期望维度**——它是**断言，不是赋值**：维度仍由 §7.4 的接口提供（`dim` 是只读属性，来自真实响应），这一项只回答"这个部署接受多大的向量"，不符就响亮失败。⚠ 它**进缓存坐标系**（换维度 ⇒ 换缓存文件）**也进** `ensure_collection` 的维度自检 |
 
-> ### ⛔ 2026-09-28：模型 id 随网关迁移**全变了**
+> ### 对话端点：**两个，按序成对**（D39，2026-10-09）
 >
-> embedding 与 rerank 从 `memory.021130.xyz`（自研封装）迁到 `memory3.021130.xyz`（**vllm 直服**），
-> 两边的 id **不通用**——它们**是服务端的事**：
+> `memory2` 与 `memory3` 提供的是**同一个** `Qwen/Qwen3.5-9B`（128K），但**各有各的 key**
+> （混用/对调都是 **401**）⇒ 端点按**对**配：`AML_BASE_URL` / `AML_API_KEY`（主）、
+> `AML_BASE_URL_2` / `AML_API_KEY_2`（次），以此类推。**`_2` 缺省 ⇒ 单端点，与从前逐字相同。**
 >
-> | | 旧 host | 新 host |
-> | --- | --- | --- |
-> | embedding id | `Qwen/Qwen3-Embedding-8B` | **`qwen3-embedding-8b`** |
-> | reranker id | `Qwen3-Reranker-4B` | **`qwen3-reranker-4b`** |
-> | embedding **维度** | 1024 | **4096** |
-> | `/models` 列不列 reranker | 列 | **不列**（但 `/rerank` 可用） |
-> | `/rerank` 的请求/响应形状 | `query` → `results[]` | **`queries: [...]` → `data[].score`**（当天网关只改了 nginx.conf：`/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`。**客户端两个信封都收**，逐条实测见 [`../src/tianximem/rank/reranker.py`](../src/tianximem/rank/reranker.py) 顶部的表） |
+> **本进程用哪一对**由 `AML_ENDPOINT_INDEX` 给（0-based；**由 harness 注入，不是 `.env` 的一项**）。
+> 派发方是 [`../eval/experiments/run.py`](../eval/experiments/run.py) 的判分线程池（按 sample 轮转，
+> `--judge-workers` 缺省 = 端点数），注入方是 [`../eval/harness/judge.py`](../eval/harness/judge.py)
+> 的 `_run()`；读它的是 [`../eval/harness/api_config.py`](../eval/harness/api_config.py)。
+> ⚠ **父进程不注入** ⇒ `input-manifest.json` 的 `answer_base` / `judge_base` 仍是**主端点**，
+> 于是轮转不会让 aml-v1 的续跑校验以为"输入变了"。
+
+> ### ⛔ 网关 id 随部署而变——**别按记忆填**
 >
-> ⚠ **维度变了 ⇒ 集合与缓存都要重建**：动作清单在
-> [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的"网关迁移"一节。
-> ⚠ **`configs/runs/` 里那 13 份冻结快照带的是旧 id**——它们是**历史记录**，没改（改了就是伪造当时跑的东西）；
-> 但**重放任何 arm 之前必须先覆盖 `models.embedder`**，否则第一步 embedding 就 404。
-> ⚠ **`tools/check_env.py` 不再写死 id**：它向 `/v1/models` 问，并把用到的 id 打出来——
+> 同一个模型在不同服务端上的 id 不同，而且**网关可能校验它、也可能忽略它**：
+>
+> | 部署 | embedding id | reranker id | 请求字段 | embedding 默认维度 |
+> | --- | --- | --- | --- | --- |
+> | **现役**：`memory.021130.xyz`（自研封装） | **`Qwen/Qwen3-Embedding-8B`** | **`Qwen/Qwen3-Reranker-4B`** | **`query`** → `results[].score` | **1024**（原生 4096，MRL） |
+> | 2026-09-28～10-09：`memory3.021130.xyz`（vLLM 直服） | `qwen3-embedding-8b` | `qwen3-reranker-4b` | `queries` → `data[].score` | 4096 |
+> | 本机自托管（容器 → 宿主机 `127.0.0.1:8082`） | —— | `Qwen/Qwen3-Reranker-4B` | `query` | —— |
+>
+> **id 与字段名都是服务端的事**，两边**可能都不报错地接受错的**（忽略型的网关），
+> 或者**404/400 且服务静默降级**（校验型的网关）⇒ 权威是端点自己：
+> `curl $BASE/models`（要鉴权）+ `make check` / `make probe-reranker`（两条路都试字段名）。
+>
+> ⚠ **维度一变，集合与缓存就要重建**（动作清单在
+> [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的"网关迁移"一节）；
+> **维度没变则是"先验后动"**：拿库里已存的正文重 embed 比余弦，
+> 2026-10-09 实测 **0.9998** ⇒ 同一空间、旧集合可沿用。
+> ⚠ 旧实验快照已从 `configs/runs/` 清理，原字节留在历史提交；恢复方式见
+> [`配置快照说明`](../configs/runs/README.md)。新版本对照仍须核对配置中的模型 id
+> 与端点实际 id 一致，并把兼容覆盖和实际模型身份记入本轮指纹。
+> ⚠ **`tools/check_env.py` 不写死 id**：它向 `/v1/models` 问，并把用到的 id 打出来——
 > 写死会得到一个"永远红"的探针，而"永远红"最后会被人关掉。
 
 > ⚠ **embedding 走 yaml、另两个走 env，这不是笔误**：`models.embedder` 是 profile 之间
@@ -400,7 +417,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > 能被 diff 出来）；而 LLM 与 reranker 的模型名在开发期与提交期**是同一套网关地址上的
 > 不同部署**，属于"端点身份"，所以跟 base_url / key 一起住在 `.env`。
 
-**架构必须 embedder-agnostic**（§2.3）：开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。集合的向量维度**必须由 §7.4 的接口提供**，Step 5 换模型时按新维度**重建集合**。
+**架构必须 embedder-agnostic**（§2.3）：开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。集合的向量维度**由 §7.4 的接口提供**（`dim` 只读、来自真实响应，代码里不写死）；`models.embed_dim` **只是断言**它——不是赋值。Step 5 换模型时按新维度改这一项并**重建集合**。
 
 **为什么 reranker 是唯一能加码的地方**（§11.1）：§2.3 把 embedding 与 LLM 两处都钉死了，**只有 Reranker 不作规定**——所以这是唯一能自己投入算力的环节，也是 §4 认定"排序是最大杠杆"之后唯一还能加码的地方。
 

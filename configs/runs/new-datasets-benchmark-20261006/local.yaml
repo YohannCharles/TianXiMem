@@ -1,5 +1,0 @@
-storage:
-  qdrant:
-    collection: memories_new_datasets_20261006
-rerank:
-  enabled: false

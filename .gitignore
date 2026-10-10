@@ -8,17 +8,28 @@ var/*
 # 唯一的例外：保留 var/CLAUDE.md，让这个目录在 checkout 后依然存在且有说明。
 !var/CLAUDE.md
 
-# ⚠ 派生【产物】要入库，原始数据与运行时状态不入库：
-#      --configs/runs/        每次实验的配置快照      → 提交
+# ⚠ 结论与正式共享材料入库，原始数据、临时实验与运行时状态不入库：
+#      --configs/            活动 profile            → 提交
+#      --configs/runs/       临时实验快照             → 默认忽略；正式对照按需显式提交
 #      --eval/experiments/    T2 的 133 行人工标注    → 提交
 #      --eval/reports/ledger.md  结果台账             → 提交
 #   若你新增一类产出，先问它属于哪一边。
+
+# 旧分支实验已于 2026-10-10 清理；新跑批的快照、探针与产物默认留在本地。
+# 保留目录说明；正式版本对照需要入库的配置/清单经核对后用 git add -f 显式提交。
+/configs/runs/*
+!/configs/runs/README.md
+/eval/reports/runs/*
+!/eval/reports/runs/README.md
 
 # 代理评测的原始逐题产出：体积大、可重跑，
 # 且可能含受许可约束的数据内容（§12.5）。
 eval/reports/**/*.json
 eval/reports/**/*.jsonl
 eval/reports/**/*.csv
+# 评测运行日志及轮转日志：本地诊断产物，不入库。
+eval/reports/**/*.log
+eval/reports/**/*.log.*
 !eval/reports/CLAUDE.md
 
 # ── 密钥 ───────────────────────────────────────────────────────────────
@@ -34,6 +45,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+.codegraph/
+.tmp/
 venv/
 .pytest_cache/
 .mypy_cache/
@@ -67,16 +80,16 @@ eval/datasets/LoCoMo-Refined/
 # 与 `eval/datasets/` 同一类：**逐个忽略克隆下来的目录，不写 `eval/baselines/*`**
 # ——那个写法会把**我们自己写的 `CLAUDE.md` 与将来的包装代码**一起忽略掉。
 #
-# 为什么两个都不入库：
+# 为什么这些副本都不入库：
 #   - 上游是**别人的仓库**，字节从公开源各自取（`git clone`），入库只会带来
 #     "本地副本与上游漂移"的问题，而 B1 的价值恰恰依赖于它**没被改过**
 #   - 嵌套 .git 会被 git 当 submodule 处理，留下 gitlink 记录
 #   - `invmem-candidate/` 额外一层：**全库无 LICENSE**（PRD 附录 B），
 #     分发边界未确认前不提交
 #
-# ⚠ **这两条还有第二个作用，别顺手删**（2026-09-25 实测）：ruff 的
+# ⚠ **这些规则还有第二个作用，别顺手删**（2026-09-25 实测）：ruff 的
 #   `respect-gitignore` 默认为真 ⇒ `make fmt`（`ruff format .`）与
-#   `make lint`（`ruff check .`）**都不会扫这两个目录**。
+#   `make lint`（`ruff check .`）**都不会扫这些目录**。
 #   而 `make fmt` 会**重写**它扫到的文件——一旦这个排除失效，它会把 Vendor
 #   进来的代码格式化掉，**B1 的"保持原样"边界就在一次 `make fmt` 里静默破了**。
 #   实测：`ruff format --check eval/baselines/` 输出为空（一个文件都不扫）。
@@ -85,6 +98,7 @@ eval/datasets/LoCoMo-Refined/
 #   换台机器要能取回同一份。**新增一个 clone 时，在这里补一行它的目录名。**
 eval/baselines/refind/
 eval/baselines/invmem-candidate/
+eval/baselines/memmachine/
 
 # ── 其他 ───────────────────────────────────────────────────────────────
 # 归档只读，整目录不入库。**理由是分发边界，不是体积**（2026-09-24 核对）：

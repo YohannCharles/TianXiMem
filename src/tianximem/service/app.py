@@ -152,6 +152,9 @@ def build_services(config: AppConfig) -> Services:
         EmbeddingCoordinate(
             model=inner.model,
             render_template=template_version(inject_abs_time=config.packaging.inject_abs_time),
+            # ⚠ 声明的是**期望**维度（`models.embed_dim`），不是探测值——探测值第一次调用
+            #   之后才知道，进不了文件名。它进坐标系 ⇒ 换维度自动换文件（见该类 docstring）。
+            dim=config.models.embed_dim,
         ),
     )
     # ⚠ 顺序不能反：前缀层在缓存**之上**（模块 docstring 第 3 条）

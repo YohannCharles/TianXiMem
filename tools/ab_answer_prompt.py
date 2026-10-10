@@ -36,7 +36,7 @@ uv run --env-file .env python tools/ab_answer_prompt.py --run-id tr-splitfix --d
 
 ## 三条纪律
 
-1. **串行**：网关在 Cloudflare 后面（源站 ~125 秒 ⇒ 524）。跑之前确认没有别的链在跑。
+1. **别同时跑两条链**：抢同一份网关与重试预算。`--judge-workers` 是链**内部**的并行，不冲突。
 2. **样本要够**：几十条拒答题上的差可能是噪声。mquake 那次是 201 条、temperason 是 93 条。
 3. **选了谁就把谁搬进 `extra_pipeline.py`** 并加一条数据集分派——**别把候选留在这里**。
 """

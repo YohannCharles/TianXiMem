@@ -7,10 +7,11 @@
 ```text
 recency_only/         A0 —— 不检索，直接按时间倒序返回最近 N 对（⬜ **未实现**，成本约等于零）
 refind/               B1 —— ReFind 原版（MIT，**Vendor，不改动**）
+memmachine/           MemMachine 参考源码（Apache-2.0，固定版本，**只研读，不改动**）
 invmem-candidate/     InvMem 的**候选映射**（无 LICENSE，**只研读**，不是基线）
 ```
 
-**出处、commit SHA 与逐项对照见 [`../../docs/reference-implementations.md`](../../docs/reference-implementations.md)。** 两个克隆目录**都 gitignored**（[`.gitignore`](../../.gitignore) 的"参考实现"一节）——上游是别人的仓库，本地副本不入库。
+**出处、commit SHA 与逐项对照见 [`../../docs/reference-implementations.md`](../../docs/reference-implementations.md)。** 各克隆目录分别 **gitignored**（[`.gitignore`](../../.gitignore) 的"参考实现"一节）——上游副本不入库，来源与学习笔记入库。
 
 > **裸 BM25 不是这里的一条基线**——检索只有混合一种形态，参照点由**混合主路径自身**承担（§13）。
 > **纯 BM25 检索的代码仍然存在**，但身份是 [T2 的检索手段](../experiments/)与 [Checker 判据的一路](../../src/tianximem/retrieve/CLAUDE.md)。
@@ -83,6 +84,15 @@ uv run --env-file .env python -m eval.experiments.run --dataset locomo-refined -
 > **⚠ 这条数据无法在本地检验**（D15）——**若日后分数不及预期，第一个该复检的就是它**。
 
 ---
+
+## MemMachine — 源码参考
+
+项目负责人于 2026-10-08 明确限定为取得源码，供后续学习与改进 TianXiMem。
+当前只研读，不安装依赖、不新增运行适配或正式评测臂。
+上游保持原样，主系统 `src/tianximem/` 不得 import 参考源码（PRD §1）。
+固定来源在 [参考实现清单](../../docs/reference-implementations.md)；源码获取与研读顺序
+见 [MemMachine 学习入口](../../docs/memmachine-reference.md)。
+摘要、LLM 画像抽取与 retrieval agent 的设计仍须按本仓 v2 边界评估。
 
 ## InvMem（榜上 45.06）：**只读，不是基线**
 

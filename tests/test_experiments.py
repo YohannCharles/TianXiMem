@@ -183,6 +183,77 @@ def test_run_round_ingests_searches_and_judges(bench_dir, tmp_path, monkeypatch)
     assert (tmp_path / "runs" / "r1" / "conv-1" / "labels.jsonl").exists()
 
 
+def test_run_round_parallel_judging_matches_serial(bench_dir, tmp_path, monkeypatch):
+    """`--judge-workers > 1` **只并行判分**：逐题结果与串行逐字一致，各 user 仍各有自己的目录。
+
+    这条守的是并行改造最危险的那类后果——**结果少了、串了、或顺序变了**，
+    而屏幕上只会看到"分数不一样"。并行的是**判分子进程**（直连网关、不碰我们的服务），
+    所以 Add / Search 的请求顺序**必须与串行完全相同**。
+    """
+    samples = [_sample(f"conv-{i}") for i in (1, 2, 3)]
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: samples)
+
+    serial_recorder, parallel_recorder = _Recorder(), _Recorder()
+    _, serial = runner.run_round(
+        dataset="locomo-refined",
+        base_url="http://stub",
+        bench_dir=bench_dir,
+        out_dir=tmp_path / "serial",
+        client=serial_recorder.client(),
+    )
+    _, parallel = runner.run_round(
+        dataset="locomo-refined",
+        base_url="http://stub",
+        bench_dir=bench_dir,
+        out_dir=tmp_path / "parallel",
+        client=parallel_recorder.client(),
+        judge_workers=3,
+    )
+
+    # 结果：顺序、qid、判定三样都要一致（少了任何一样都说明并行把东西吞掉了）
+    assert [r.qid for r in parallel] == [r.qid for r in serial]
+    assert [r.is_correct for r in parallel] == [r.is_correct for r in serial]
+    # 打服务的请求序列一致（Add/Search 仍是主线程串行，并行只发生在判分那一段）
+    assert parallel_recorder.requests == serial_recorder.requests
+    # 每个 user 的原始产出照旧落在自己的目录里
+    for i in (1, 2, 3):
+        assert (tmp_path / "parallel" / f"conv-{i}" / "labels.jsonl").exists()
+
+
+def test_judging_rotates_endpoints_and_defaults_to_parallel(
+    bench_dir, tmp_path, monkeypatch, capsys
+):
+    """判分**默认并行到端点数**，且每个 sample 依次领一个对话端点（D39）。
+
+    两个对话网关提供的是**同一个** `Qwen/Qwen3.5-9B` ⇒ 这条只决定"谁来算"，
+    **不该改变任何判定**（上面那条用例守的就是那一半：并行 == 串行，逐题逐字）。
+    """
+    samples = [_sample(f"conv-{i}") for i in (1, 2, 3)]
+    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: samples)
+    monkeypatch.setattr(runner, "ENDPOINTS", (("http://e0/v1", "k0"), ("http://e1/v1", "k1")))
+
+    seen: list[tuple[str, int | None]] = []
+    real_run_judge = runner.run_judge
+
+    def recording(pipeline, items, out_dir, *, dataset="locomo-refined", endpoint_index=None, **kw):
+        seen.append((Path(out_dir).name, endpoint_index))
+        return real_run_judge(pipeline, items, out_dir, dataset=dataset, **kw)
+
+    monkeypatch.setattr(runner, "run_judge", recording)
+    runner.run_round(
+        dataset="locomo-refined",
+        base_url="http://stub",
+        bench_dir=bench_dir,
+        out_dir=tmp_path / "rotating",
+        client=_Recorder().client(),
+    )
+
+    # 依次领号（串行也轮转）：三个 sample 落在 0 / 1 / 0
+    assert seen == [("conv-1", 0), ("conv-2", 1), ("conv-3", 0)]
+    # `judge_workers` 缺省（0）= 自动 = 端点数 ⇒ 这一轮真开了两路
+    assert "判分并行 2 路" in capsys.readouterr().out
+
+
 def test_run_round_skips_ingest_when_asked(bench_dir, tmp_path, monkeypatch):
     """`--skip-ingest` 只掉 Add，**Search 一次都不能少**——少检索就是静默漏题。"""
     recorder = _Recorder()

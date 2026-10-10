@@ -1,7 +1,20 @@
 """环境自检——`make check`。
 
-它回答一个问题：**"现在能不能真的跑一轮？"** 四件事各自独立地报告，
+它回答一个问题：**"现在能不能真的跑一轮？"** 每件事各自独立地报告，
 **一件不通不掩盖其他件**（一次看全比反复试省时间）。
+
+## 对话端点有**多个**（D39），每一个都要探
+
+`memory2` 与 `memory3` 提供同一个 `Qwen/Qwen3.5-9B`，但**各有各的 key**（对调都是 401）
+⇒ 端点按序号后缀列（`AML_BASE_URL` / `AML_BASE_URL_2` …），**逐个探**。
+只探第一个的话，"第二个端点的 key 填错了"要等到判分**轮转到它**才炸——
+而那时整轮的 Add / Search 与前面几题的判分都已经付出去了。
+
+## rerank 的字段名跟着对面那个网关走，**两种都试**
+
+`query`（自研封装）与 `queries`（vLLM 原生）**互斥**：写死哪一个都会让本项在另一半部署上
+**永远红**——而"永远红"最后会被人关掉（那正是本项存在的理由）。
+⇒ 先发 `query`，被 400/422 拒就换 `queries` 再发一次，**并把实际生效的那个写进报告**。
 
 ## 为什么 LLM 那一项额外看"思考泄漏"
 
@@ -29,6 +42,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -58,13 +72,20 @@ def _present(name: str) -> Check:
     return Check(f"环境变量 `{name}`", bool(value), "已填" if value else "**未填**")
 
 
+#: 对话端点的序号后缀。**与 [`../eval/harness/api_config.py`](../eval/harness/api_config.py)
+#: 的 `_SUFFIXES` 是同一套约定**——那边是"谁在用"，这边是"谁在查"；
+#: 本工具**刻意不 import 配置层**（见模块 docstring），所以这套约定在这里写第二遍。
+_ENDPOINT_SUFFIXES = ("", "_2", "_3", "_4")
+
+
 def check_keys() -> list[Check]:
-    """四组端点各自的 base/key。**缺 key 与端点不通是两回事**，分开报。"""
-    out = [
-        _present(name)
-        for name in ("AML_EMB_BASE_URL", "AML_EMB_API_KEY", "AML_BASE_URL", "AML_API_KEY")
-    ]
-    return out
+    """各端点各自的 base/key。**缺 key 与端点不通是两回事**，分开报。"""
+    names = ["AML_EMB_BASE_URL", "AML_EMB_API_KEY"]
+    for suffix in _ENDPOINT_SUFFIXES:
+        if suffix and not _key(f"AML_BASE_URL{suffix}"):
+            continue  # 没配这个端点就不报它的 key——那不是"没填"，是没有这个端点
+        names += [f"AML_BASE_URL{suffix}", f"AML_API_KEY{suffix}"]
+    return [_present(name) for name in names]
 
 
 def check_qdrant(url: str) -> Check:
@@ -205,27 +226,48 @@ def check_reranker(base: str, key: str, model: str = "") -> Check:
     `/rerank` 仍然返回了 2 条结果**（`"model": "qwen3-reranker-4b"`）。
     ⇒ 那样测出来的是"网关上有**某个** reranker"，而不是"**我们要用的那个 id** 可用"——
     **一次假绿**。而 `RemoteReranker` 是**会带 `model` 的**：id 填错就是 404 + 降级。
+
+    ⚠ **请求字段名两种都试**（2026-10-09）：`query`（自研封装，`memory.021130.xyz`）与
+    `queries`（vLLM 原生）**互斥**，没有"都对"的写法。写死哪一个都会在另一半部署上**永远红**，
+    而"永远红"和"真的坏了"在屏幕上一样，最后会被人关掉（那正是本项存在的理由）。
+    两种都被拒才算不通，且报告里写明**实际生效的是哪个**。
     """
     if not base or not key:
         return Check("Reranker 端点", False, "base_url 或 key 未填")
-    try:
+    # 顺序：先试现役主网关的形状（`query`），再退回 vLLM 原生（`queries`）。
+    rejected: list[str] = []
+    for field in ("query", "queries"):
         # ⚠ 请求形状要**跟着 `RemoteReranker` 走**（见 `rank/reranker.py` 的 `_post`）：
         #   那边**刻意不传 `top_n`**——传了会静默截断，返回的就不再是全部候选，
         #   于是"集合有没有被改动"就验不出来了（那是 §11.2 的一条不变量）。
         #   探针若传了它，测的就不是我们真正会发的那个请求。
-        # ⚠ **字段名也要逐字一致**：2026-09-28 网关把 `/v1/rerank` rewrite 到 vLLM 原生
-        #   `/v1/score` 之后，请求要 **`queries`（数组）**——写成旧的 `query` 拿到 **400**，
-        #   于是本项**永远红**。而"永远红"和"真的坏了"在屏幕上一样，最后会被人关掉。
-        payload: dict[str, object] = {"queries": ["q"], "documents": ["a", "b"]}
+        payload: dict[str, object] = {
+            field: "q" if field == "query" else ["q"],
+            "documents": ["a", "b"],
+        }
         if model:
             payload["model"] = model
-        response = httpx.post(
-            f"{base.rstrip('/')}/rerank",
-            headers={"Authorization": f"Bearer {key}"},
-            json=payload,
-            timeout=TIMEOUT,
-        )
-        response.raise_for_status()
+        try:
+            response = httpx.post(
+                f"{base.rstrip('/')}/rerank",
+                headers={"Authorization": f"Bearer {key}"},
+                json=payload,
+                timeout=TIMEOUT,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # 400/422 = **这个字段名不对**，换另一个再试；其余状态码当场报出来。
+            if exc.response.status_code in (400, 422) and field == "query":
+                rejected.append(f"`query` 被 {exc.response.status_code} 拒")
+                continue
+            return Check(
+                "Reranker 端点",
+                False,
+                f"{base} 返回 {exc.response.status_code}（字段名 `{field}`）："
+                f"{exc.response.text[:120]}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return Check("Reranker 端点", False, f"{base} 不可达：{type(exc).__name__}: {exc}")
         body = response.json()
         # ⚠ **容器名收两个**（`results` / `data`）——与 `RemoteReranker._parse` 同一口径：
         #   网关侧的信封并不稳定，而本层**只验连通性**，没有理由比客户端更严格。
@@ -244,15 +286,27 @@ def check_reranker(base: str, key: str, model: str = "") -> Check:
         #   哪个键真的被认，由 `RemoteReranker._parse` 的用例与 `make probe-reranker` 管。
         served = body.get("model", "?")
         asked = model or "（未指定，网关默认）"
-        return Check("Reranker 端点", True, f"要 {asked} ⇒ 服务端 {served}，返回 {len(results)} 条")
-    except Exception as exc:  # noqa: BLE001
-        return Check("Reranker 端点", False, f"{base} 不可达：{type(exc).__name__}: {exc}")
+        note = f"（{rejected[0]}，已换 `{field}`）" if rejected else ""
+        return Check(
+            "Reranker 端点",
+            True,
+            f"要 {asked} ⇒ 服务端 {served}，返回 {len(results)} 条；请求字段 `{field}`{note}",
+        )
+    # 两个字段名都被 400/422 拒 ⇒ 对面那个网关两种都不收（或 base_url 打错了）。
+    tried = "；".join(rejected)
+    return Check("Reranker 端点", False, f"{base} 对 `query` / `queries` 都拒绝：{tried}")
 
 
 def check_llm(base: str, key: str, model: str) -> Check:
-    """LLM 在 **memory2**；同时是 V7 那个探针（见模块 docstring）。"""
+    """**一个**对话端点 + V7 那个探针（见模块 docstring）。
+
+    ⚠ **每个端点各调一次**（D39）：`memory2` 与 `memory3` 是同一个模型、**两把 key**，
+    只探第一个的话，"第二个端点 key 填错了"要等到判分轮转到它才炸——那时前面几题
+    与整轮的 Add / Search 都已经付出去了。名字里带上 host，屏幕上才分得清是哪一台。
+    """
+    name = f"LLM 端点 {urlsplit(base).netloc or '?'}（含 V7 思考探针）"
     if not base or not key:
-        return Check("LLM 端点（含 V7 思考探针）", False, "base_url 或 key 未填")
+        return Check(name, False, "base_url 或 key 未填")
     try:
         started = time.monotonic()
         response = httpx.post(
@@ -266,7 +320,7 @@ def check_llm(base: str, key: str, model: str) -> Check:
         elapsed = time.monotonic() - started
         leaked = len(content.strip()) > 40 or "Thinking" in content
         return Check(
-            "LLM 端点（含 V7 思考探针）",
+            name,
             not leaked,
             f"{elapsed:.1f}s，content={content.strip()[:60]!r}"
             + (
@@ -277,21 +331,36 @@ def check_llm(base: str, key: str, model: str) -> Check:
             ),
         )
     except Exception as exc:  # noqa: BLE001
-        return Check(
-            "LLM 端点（含 V7 思考探针）", False, f"{base} 不可达：{type(exc).__name__}: {exc}"
-        )
+        return Check(name, False, f"{base} 不可达：{type(exc).__name__}: {exc}")
+
+
+def _llm_endpoints(source) -> list[tuple[str, str]]:
+    """`((base, key), ...)`——**与 `api_config` 同一套后缀约定**（见上面那个常量）。"""
+    out: list[tuple[str, str]] = []
+    for suffix in _ENDPOINT_SUFFIXES:
+        base = (source.get(f"AML_BASE_URL{suffix}") or "").strip()
+        if not base:
+            continue
+        out.append((base, (source.get(f"AML_API_KEY{suffix}") or "").strip()))
+    return out
 
 
 def run_all(env: dict[str, str] | None = None) -> list[Check]:
     source = os.environ if env is None else env
     emb_base, emb_key = source.get("AML_EMB_BASE_URL", ""), source.get("AML_EMB_API_KEY", "")
-    llm_base, llm_key = source.get("AML_BASE_URL", ""), source.get("AML_API_KEY", "")
+    # reranker 有自己的一组变量（`TIANXIMEM_RERANKER_*`），回落 embedding 那台——
+    # 二者同网关是**当前部署**的事实，不是规格（`.env.example` 写明它们成对随部署而变）。
+    rr_base = source.get("TIANXIMEM_RERANKER_BASE_URL") or emb_base
+    rr_key = source.get("TIANXIMEM_RERANKER_API_KEY") or emb_key
     return [
         *check_keys(),
         check_qdrant(source.get("TIANXIMEM_QDRANT_URL") or "http://localhost:6333"),
         check_embedding(emb_base, emb_key, source.get("AML_EMB_MODEL", "")),
-        check_reranker(emb_base, emb_key, source.get("TIANXIMEM_RERANKER_MODEL", "")),
-        check_llm(llm_base, llm_key, source.get("AML_MODEL", "")),
+        check_reranker(rr_base, rr_key, source.get("TIANXIMEM_RERANKER_MODEL", "")),
+        *(
+            check_llm(base, key, source.get("AML_MODEL", ""))
+            for base, key in _llm_endpoints(source)
+        ),
     ]
 
 

@@ -400,10 +400,26 @@ helper 自己 `commit()` 则让"半批"落库。**两种情况都不报错。**
 > ⇒ **请求与响应两个信封都换了**（`queries: [...]` / `data[].score`）。
 > 三版信封与逐条实测见 [`../src/tianximem/rank/reranker.py`](../src/tianximem/rank/reranker.py) 顶部的表。
 
+> 📌 **2026-10-09 附记：主网关的 host 又搬回 `memory.021130.xyz`**（embedding + rerank 一起），
+> 而 `memory3.021130.xyz` 改为**第二个对话端点**（与 `memory2` 同一个 `Qwen/Qwen3.5-9B`，128K）。
+> **本条决定仍然不受影响**——它管的是"哪个变量名指哪个服务"，与 host 叫什么无关，
+> 所以下表的语义**一字未改**、只换了 host 名。
+> ⚠ 这一次**维度没变**（两端都是 1024，MRL）⇒ 处置是"**先验后动**"：拿库里已存的正文用新端点
+> 重 embed、与 Qdrant 里存的向量比余弦，实测 **0.9998** ⇒ 同一个向量空间，旧集合可沿用；
+> **缓存那半边由坐标系自动处置**（含模型 id 与 `models.embed_dim`）。判断口径见
+> [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4 的"网关迁移"一节（那里同时留着 09-28 那次
+> "维度变了 ⇒ 必重建"的对照）。
+> ⚠ 新 host 上 reranker **可用**，id 是 **`Qwen/Qwen3-Reranker-4B`**、**收 `query`**（响应 `results[].score`）；
+> 而**忽略 `model` 字段**（实测两种写法都 200）——"填错也不报错"与"404 ⇒ 每次检索都降级"
+> 是同一枚硬币的两面，**照端点声称的值填**。逐条实测见
+> [`../src/tianximem/rank/reranker.py`](../src/tianximem/rank/reranker.py) 顶部的表。
+> 📌 **对话端点有两个**（两条附记各加一个）⇒ 判分怎么分派见 **D39**。
+
 | 变量 | 指向 | 谁读它 |
 | --- | --- | --- |
-| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` | **主网关** `memory3.021130.xyz`（**Embedding**） | [`common/config.py`](../src/tianximem/common/config.py) 的 `load_config()`（**全包唯一读环境变量的地方**，③-d） |
-| `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` | **memory2** `memory2.021130.xyz`（**LLM 对话**） | harness / 归档 pipeline（经 `api_config.py` 适配器） |
+| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` | **主网关** `memory.021130.xyz`（**Embedding**） | [`common/config.py`](../src/tianximem/common/config.py) 的 `load_config()`（**全包唯一读环境变量的地方**，③-d） |
+| `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` | **memory2** `memory2.021130.xyz`（**LLM 对话**，主端点） | harness / 归档 pipeline（经 `api_config.py` 适配器） |
+| `AML_BASE_URL_2` / `AML_API_KEY_2` | **memory3** `memory3.021130.xyz`（**同一个 LLM 对话**，次端点，**另一把 key**） | 同上（**D39**：按 sample 轮转） |
 | `TIANXIMEM_RERANKER_BASE_URL` / `_API_KEY` / `_MODEL` | **主网关**（**Reranker**） | [`rank/reranker.py`](../src/tianximem/rank/reranker.py) 的 `RemoteReranker`（**已接线**，2026-09-24） |
 
 > ⚠ **`AML_EMB_MODEL` 这个变量不存在**：embedding 的**模型名**住在
@@ -986,13 +1002,20 @@ agent 才存在**，那是另一个 Step 的事。⇒ 把它标出 v1，免得 S
    `text-embedding-v4` 这个坐标下** ⇒ 之后真的接上 v4 端点时**全部命中缓存**、根本不调它。
 2. **集合也会串**：同维度 ⇒ Qdrant 不拒绝，只表现为"检索质量差"。
 
+> 📌 **2026-10-09 附记：维度锁定回 1024 ⇒ 上面那条风险回到"默认情形"。**
+> `models.embed_dim`（默认 **1024**）给**维度不符**上了一道闸——它在 `CachingEmbedder`
+> 与 `DiskVectorCache` 两处校验、并进缓存坐标系（`embed/base.py`）。
+> ⚠ 但**它拦不住本节说的那件事**：`text-embedding-v4` 与 Qwen3-Embedding-8B **同维**，
+> 拿提交 profile 去连只服务 Qwen3 的端点 ⇒ **维度确实一致，缓存与集合都不会拒绝**。
+> ⇒ 2026-09-28 那段说的"只剩恰好又同维这一种情形"——**那个情形现在就是默认情形**，
+> 本节这条风险一字不变、仍然要认。
+
 > 📌 **2026-09-28 附记：上面那条"同为 1024 维"的前提当天就变了。** 网关迁移
 > （`memory.021130.xyz` → `memory3.021130.xyz`）之后**开发期是 4096 维**
 > （`make check` 实测 `dim=4096 L2=1.000000`）⇒ "**维度一致 ⇒ 拦不住**"只剩
 > "**恰好又同维**"这一种情形（而 `text-embedding-v4` 的维度**可选**，别指望它
-> 永远不等于我们在用的那个）。**决定与纪律一字不变**，只是现在多半会
-> **响亮失败**（`embed/base.py` 的 `DimensionMismatchError`）而不是静默串——
-> **那是运气，不是保障**：门禁仍然没做。
+> 永远不等于我们在用的那个）。**决定与纪律一字不变**，只是那时多半会
+> **响亮失败**（`embed/base.py` 的 `DimensionMismatchError`）而不是静默串。
 > ⚠ 顺带一条**部分解决**：`tools/check_env.py` 现在**不写死 id**，它向 `/v1/models`
 > 问并把用到的 id 打出来（`model=… dim=… L2=…`）⇒ "声明 vs 事实"从**看不见**变成
 > **人眼可核**；但**自动比对仍未做**（声明住在 `configs/*.yaml`，而这个工具刻意不读配置层）。
@@ -1361,18 +1384,18 @@ clbench 的基线实测死在第 7 个样本）。
 **决策**：`corporatebench` 那类"答案是**整个语料的属性**"的题（计数 / 穷举 / 否定），
 **v1 暂不改动聚合覆盖的服务端架构**。候选改动（让连续同 role 的块也入链/合并）**暂不实施**。
 评测适配的正确性修复与数据集答案提示词不属于这条架构限制；修复与验证见
-[`CorporateBench 修复报告`](../eval/reports/corporatebench-fix-20261004.md)。
+[`CorporateBench 修复报告`](../eval/reports/corporatebench-20261004.md)。
 
 > **后续补充（2026-10-05）**：下面保留当时暂缓邻接整批合并的理由；“只有连链能改”
 > 和“本地无法验证其他改进”已被后续的
-> [来源审计](../eval/reports/corporatebench-aggregate-analysis-20261004.md)与
-> [小规模事实诊断](../eval/reports/corporatebench-oracle-context-20261004.md)纠正，不能再作为
+> [来源审计](../eval/reports/corporatebench-20261004.md)与
+> [小规模事实诊断](../eval/reports/corporatebench-20261004.md)纠正，不能再作为
 > 实施依据。用户已允许调整 Add/Search 内部的存储、检索和打包，输出原文或抽取事实，
 > 并排除盲目邻接扩窗。
 >
 > 上述方案**已实施**：统一为一条共同取证路径（`facts/` + `retrieve/evidence.py`），
 > 结果、边界与未采用方案的保留记录见
-> [共同取证整理](../eval/reports/unified-evidence-refactor-20261005.md)；
+> [共同取证整理](../eval/reports/retrieval-evidence-20261005.md)；
 > 结构与模块分工见[架构](architecture.md) 的「当前共同事实取证结构」。Add 写入的是
 > **有逐字来源的独立事实**（确定性解析、**不调用 LLM**）；名单与计数仍由 AML 侧答案
 > 模型生成，服务端**不预先求和、不生成答案**。
@@ -1406,7 +1429,9 @@ clbench 的基线实测死在第 7 个样本）。
 
 **2. 这条改动的收益，本地测不了。**
 - corp 现在的注入是 100 段 ≈ **33.6k token**（整份语料 118,607 的 28.3%）
-- 开发网关在 Cloudflare 后面，**~40k 就 524**（客户端超时调多大都没用）
+- 开发网关按 2026-10-02 的实测 **~40k 就 524**（客户端超时调多大都没用）；
+  2026-10-09 复测那个上限已消失（4 路 × 110k token 全部 200）⇒ **这条理由被削弱、
+  但没被推翻**：要验的是 **118k token** 的注入，比测过的 110k 还高一档，**没量过**
 - ⇒ 就算放开段数上限，**每题 118k token 的注入在这台网关上一道都跑不通**
 - ⇒ 那会是一次**既改跨全赛道语义、又无法验证收益**的改动
 
@@ -1543,4 +1568,61 @@ add/search 原文）本地的复放，**不套 `run.py` 的通用路径**，而�
 官方采集原文不属于公开可下载数据，不通过此入口补造。
 
 用法与出处见 [`benchmark-data.md`](benchmark-data.md)，
-迁移校验与测试结果见 [`../eval/reports/dataset-layout-20261006.md`](../eval/reports/dataset-layout-20261006.md)。
+迁移校验与测试结果见 [`../eval/reports/datasets-20261006.md`](../eval/reports/datasets-20261006.md)。
+
+
+## D36 · Search 原文引句投影
+
+2026-10-10 按用户要求撤销本轮产品实现及配置开关，编号保留为实验历史，
+不再作为当前架构许可。候选源码、评测产物与原始报告保留；
+范围及验证见 [回退记录](../eval/reports/memory-governance-rollback-20261010.md)。
+
+## D37 · 显式遗忘的检索抑制
+
+2026-10-10 按用户要求撤销本轮产品实现及配置开关，编号保留为实验历史，
+不再作为当前架构许可。候选源码、评测产物与原始报告保留；
+范围及验证见 [回退记录](../eval/reports/memory-governance-rollback-20261010.md)。
+
+## D38 · 长历史综合的完整用户引句
+
+2026-10-10 按用户要求撤销本轮产品实现及配置开关，编号保留为实验历史，
+不再作为当前架构许可。候选源码、评测产物与原始报告保留；
+范围及验证见 [回退记录](../eval/reports/memory-governance-rollback-20261010.md)。
+
+---
+
+## D39 · 判分在**两个对话端点**间轮转，默认并行度 = 端点数（2026-10-09）
+
+**决策**：`memory2` 与 `memory3` 提供的是**同一个** `Qwen/Qwen3.5-9B`（128K）、
+**各有各的 key**（对调都是 401）⇒
+
+* 对话端点按**序号后缀成对**配置：`AML_BASE_URL` / `AML_API_KEY`（主）、
+  `AML_BASE_URL_2` / `AML_API_KEY_2`（次），缺哪个停哪个（**不填 `_2` ⇒ 单端点，行为与从前逐字相同**）；
+* **本进程用哪一对**由 `AML_ENDPOINT_INDEX` 决定（0-based），**由 harness 注入、不是 `.env` 的一项**；
+  缺省 = 0 = 主端点；
+* [`../eval/experiments/run.py`](../eval/experiments/run.py) 的判分线程池**按 sample 轮转**，
+  `--judge-workers` 缺省从 `1` 改成 **`0` = 自动 = 端点数**（写 `1` 仍是强制串行）。
+
+**为什么这么切**：轮转的粒度只能落在**子进程**上——端点是在
+[`../eval/harness/api_config.py`](../eval/harness/api_config.py) 里按进程定死的，
+而归档 pipeline 的答案/判分每一步都是**一个 subprocess**（它们内部对题目是串行的，
+而那是**只读归档**，不许改）。⇒ 派发方是线程池、注入方是
+[`../eval/harness/judge.py`](../eval/harness/judge.py) 的 `_run()`——**这是唯一能让两个判分子进程
+打不同端点的地方**（`os.environ` 是进程全局，线程池里改不了）。
+
+**⚠ 父进程不注入**：`run.py` 的前置检查与 `input-manifest.json` 的 `answer_base` / `judge_base`
+读到的仍是**主端点** ⇒ 轮转**不会**让 aml-v1 的续跑校验以为"输入变了"（那条校验逐字节比 manifest）。
+
+**边界（三条）**：
+
+1. **只影响"谁来算"**：两个端点是同一个模型、同一个 `AML_MODEL` ⇒ 判定不该有任何差别，
+   并行与串行的逐题结果仍须逐字一致（`tests/test_experiments.py` 钉住）。
+2. **判分之外不动**：Add / Search 仍在主线程串行（打的是我们自己的服务）；`aml-v1` 分支
+   **不轮转**（它是对外重放路径，manifest 与行为保持逐字不变）。
+3. **不是在加并发上限**：`--judge-workers` 控制的是**判分子进程数**。旧结论"必须串行"
+   （开发网关在 CF 后面、源站时限 ~125s ⇒ 524）**已于 2026-10-09 复测推翻**（4 路 × 110k token
+   全部 200、无 524，见 [`../eval/experiments/CLAUDE.md`](../eval/experiments/CLAUDE.md)）。
+
+**落地口径**：`.env.example` 的 `AML_BASE_URL_2` / `AML_API_KEY_2`；
+`tools/check_env.py` 逐个端点各探一次（**V7 思考探针**也在每个端点上跑一遍）；
+接线状态见 [`../docs/config-reference.md`](../docs/config-reference.md) §9 的"对话端点"一条。

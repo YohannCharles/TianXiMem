@@ -60,7 +60,7 @@ python -m eval.datasets.prepare --list # 可准备的数据集
 旧平铺目录与测试 fixture 仍可只读加载。新机器不必建立旧目录。
 迁移命令为 `python -m eval.datasets.prepare --migrate-from <旧目录> --dir <数据根目录>`：
 先核对所有文件与目标冲突，再移动，未登记文件也保留在 `.legacy/unregistered/`。
-验证记录见 [`../eval/reports/dataset-layout-20261006.md`](../eval/reports/dataset-layout-20261006.md)。
+验证记录见 [`../eval/reports/datasets-20261006.md`](../eval/reports/datasets-20261006.md)。
 
 ## 公开数据的 AML 输入适配
 
@@ -123,7 +123,7 @@ LoCoMo 的公开题库没有逐题到达时刻和反馈写回，当前先投喂�
 验证证据；不完整、缺失或乱序片段不补全，也不从 Add 池取证。
 该保守限制可能降低严格证据分。它仍使用固定上游标签与完整证据组评分，
 与采集重放的 label-only 口径分开。
-实现与本地验证见 [接入报告](../eval/reports/aml-input-adapters-20261006.md)。
+实现与本地验证见 [接入报告](../eval/reports/datasets-20261006.md)。
 
 ---
 
@@ -275,7 +275,7 @@ BEAM 得用 `rubric`（10 个 probing 组的答案字段各不相同，只有 `r
 
 ⚠ **新增的四份归档各自有一条坑**，都写在脚本的文件头：
 HaluMem 是 **CC-BY-NC-ND-4.0**（禁再分发）；MuSiQue 的采集语料已与 Full-dev 候选段落源序对齐，
-原生包装与采集有差异，核对依据见 [输入审计](../eval/reports/aml-input-alignment-20261006.md)；
+原生包装与采集有差异，核对依据见 [输入审计](../eval/reports/datasets-20261006.md)；
 FEVEROUS 的金标是 **label + evidence id**，
 采集重放只判 label；独立 FEVEROUS pipeline 判标签与完整证据组，见下文；
 HybridQA 的 dev 够用（test 的答案封存）。
@@ -304,6 +304,9 @@ make eval DATASET=mquake-remastered ARGS='--limit 1 --spread'
 （多跳那条是 `llm_judge_mcd`）。`extra_pipeline.py` **照它实现，prompt 直接从它读**。
 ⚠ 它的**形状是照上游评测循环复刻的**：一个 Sample = 一个（persona, 检查点），记忆只喂到该检查点
 ——**不读未来**，代价是投喂量 ≈ 5.4×（见 `eval/datasets/medmemorybench.py` 的 docstring）。
+临床多跳的 native 作答格式与旧答案复用纪律见
+[`eval/harness/CLAUDE.md`](../eval/harness/CLAUDE.md) 的对应小节；
+本地格式对照与证据缺口诊断见 [临床多跳报告](../eval/reports/optimization-20261007.md)。
 
 **HaluMem 和 MuSiQue 也已接入独立本地评测**：
 
@@ -317,7 +320,7 @@ make baseline DATASET=musique
 [`halumem.py`](../eval/datasets/halumem.py) / [`musique.py`](../eval/datasets/musique.py) 的
 docstring；冻结抽样由 [`recipes.py`](../eval/experiments/recipes.py) 声明。
 实际数据计数、覆盖范围与验证结果见
-[接入报告](../eval/reports/halumem-musique-pipelines-20261006.md)。
+[接入报告](../eval/reports/datasets-20261006.md)。
 
 **HybridQA 和 FEVEROUS 也已接入独立本地评测**：
 
@@ -343,7 +346,7 @@ Wikipedia 的检索成绩，也不复刻 AML 候选池。输入构造的唯一�
 [`hybridqa.py`](../eval/datasets/hybridqa.py) / [`feverous.py`](../eval/datasets/feverous.py)，
 评分入口在 [`corpusqa_pipeline.py`](../eval/harness/corpusqa_pipeline.py)。
 下载规模、空间要求、冻结样本及验证结果见
-[接入报告](../eval/reports/hybridqa-feverous-pipelines-20261006.md)。
+[接入报告](../eval/reports/datasets-20261006.md)。
 
 ---
 

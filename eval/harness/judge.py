@@ -64,6 +64,7 @@ from eval.jsonl_io import LINE_BREAKS as _LINE_BREAKS
 from eval.jsonl_io import jsonl_line as _jsonl_line
 
 from .annotate import MARKS, annotate
+from .api_config import ENV_ENDPOINT_INDEX
 from .driver import SearchHit
 
 __all__ = [
@@ -470,20 +471,34 @@ def build_official_items(
     return items
 
 
-def _subprocess_env() -> dict[str, str]:
+def _subprocess_env(endpoint_index: int | None = None) -> dict[str, str]:
     """注入 `PYTHONPATH` 让 `from api_config import (...)` 找到本目录那份。
 
     `sys.path.insert(0, <不存在路径>)` 不会中断 import——它只是塞进一个没有该模块的
     条目，import 继续往后找到这里。归档因此**保持只读**。
+
+    `endpoint_index` 非 None ⇒ 一并写进 `AML_ENDPOINT_INDEX`：子进程里 import 的
+    `api_config` 据此选中那一号对话端点（`memory2` / `memory3` 是同一个模型、两把 key，
+    **D39**）。⚠ 它是**每个子进程**唯一的端点开关——父进程 `os.environ` 是共享的，
+    在线程池里改不了（见 `api_config` 的模块 docstring）。
     """
     env = dict(os.environ)
+    if endpoint_index is not None:
+        env[ENV_ENDPOINT_INDEX] = str(endpoint_index)
     harness_dir = str(Path(__file__).resolve().parent)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = harness_dir + (os.pathsep + existing if existing else "")
     return env
 
 
-def _run(pipeline: Path, argv: list[str], *, timeout: float | None, attempts: int = 3) -> None:
+def _run(
+    pipeline: Path,
+    argv: list[str],
+    *,
+    timeout: float | None,
+    attempts: int = 3,
+    endpoint_index: int | None = None,
+) -> None:
     """跑一个 pipeline 子命令，**瞬时故障自动重试**。
 
     ## 为什么必须重试（2026-09-26，一次真实事故）
@@ -498,12 +513,15 @@ def _run(pipeline: Path, argv: list[str], *, timeout: float | None, attempts: in
 
     ⚠ **重试次数要有界**：真 bug（形状不符、数据坏了）重试 3 次还是失败 ⇒ 照样抛，
     错误信息原样带出去——**不把"一直失败"伪装成"在重试"**。
+
+    `endpoint_index` 透传给 `_subprocess_env()`：它决定这个子进程打哪个对话端点
+    （`None` = 不注入 ⇒ 子进程用主端点）。
     """
     last: RuntimeError | None = None
     for attempt in range(1, attempts + 1):
         completed = subprocess.run(
             [sys.executable, str(pipeline), *argv],
-            env=_subprocess_env(),
+            env=_subprocess_env(endpoint_index),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -891,6 +909,7 @@ def run_judge(
     dataset: str = "locomo-refined",
     max_tokens: int = 1024,
     timeout: float | None = None,
+    endpoint_index: int | None = None,
 ) -> list[JudgeResult]:
     """跑 `answer` → `evaluate` 两步，返回逐题结果。
 
@@ -905,6 +924,10 @@ def run_judge(
     （所以中断后重跑是安全的）；`evaluate` 以 `"w"` **覆盖**打开。
     而两个 pipeline 的 `evaluate` 都在 ID 集合不一致时 **`raise SystemExit`**——
     **漏跑几题是硬失败，不是静默掉分**。
+
+    `endpoint_index` 是**这次调用**用哪一号对话端点（D39）：两步都用同一个
+    （同一次调用内不切换），而不同 sample 之间由调用方轮转——派发在
+    [`../experiments/run.py`](../experiments/run.py) 的判分线程池。
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     input_path = out_dir / "input.jsonl"
@@ -932,6 +955,7 @@ def run_judge(
         pipeline,
         ["answer", "--input", str(input_path), "--output", str(answers_path), *answer_extra],
         timeout=timeout,
+        endpoint_index=endpoint_index,
     )
     _run(
         pipeline,
@@ -946,6 +970,7 @@ def run_judge(
             *evaluate_extra,
         ],
         timeout=timeout,
+        endpoint_index=endpoint_index,
     )
 
     if dataset == "clbench":

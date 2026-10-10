@@ -17,9 +17,23 @@ var/
 ├── tianxi.db.pre-official 旧库留档（2026-10-01，**add 形态改成 official 之前**那一代）
 ├── embed_cache/           embedding 缓存（§7.2）——**可重建，但重建要花钱**
 ├── capture/               请求原文采集（`capture.enabled`）——**诊断产物，可弃**
-├── logs/                  服务日志（如 `serve.log`）
 └── <实验与跑批的临时目录、日志>  快照库、逐题答案——**可弃**
 ```
+
+> **2026-10-10：早期实验目录已清理。** 15 个跑批目录（`optimization-12h-20261007`、
+> `new-datasets-benchmark-20261006`、`facts-benchmark-20261005`、`targeted-six-hours-20261005`、
+> `unified-evidence-20261005`、`generic-evidence-20261005`、`chinese-evidence-20261005`、
+> `generalization-20261005`、`ab-{new,old}`、`d24-locomo`、`order-{a,b}`、
+> `order-probe-cache`、`logs/`）按"可弃"口径删除，**释放 ~6.9 GB**。
+> ⇒ **各报告里指向这些路径的引用不再有效**（`eval/reports/*.md` 里有十余处叙述性指向，
+> 少数复现命令随之作废）。删除前已把"不在任何 ref、且不可重建"的部分摘进
+> 当时 `eval/reports/runs/` 的同名 `var-artifacts-20261010/` 目录
+> （补丁、配置快照、修订版代码），并建 tag `archive/optimization-12h-baseline`
+> 保活原 `baseline` worktree 的悬空提交链。清理方法（逐文件 `hash-object` 比对）
+> 与逐目录清单保存在清理前提交 `05c0c35` 中。
+> 同日随后按用户要求清理旧分支实验，以上摘出材料也已移入本地归档；
+> 当前恢复入口见 [`评测产物说明`](../eval/reports/runs/README.md)。
+> `capture/`（官方请求原文）与两个 `pre-*` 祖库**未动**；`embed_cache/` 因仍在服务使用中保留。
 
 **整目录 gitignored**（`.gitignore` 的"运行时产物"段），**只保留本文件**，让它在 checkout 后依然存在且有说明。
 

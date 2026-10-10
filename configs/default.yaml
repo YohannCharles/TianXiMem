@@ -17,10 +17,12 @@
 # ══ 模型（§2.3）══════════════════════════════════════════════════════════
 models:
   # C —— profile 之间**唯一真正该变**的东西。
-  # 开发期用 Qwen3-Embedding-8B（自建网关，见 .env 的 AML_EMB_BASE_URL）。
+  # 开发期用 Qwen3-Embedding-8B（自建主网关 `memory.021130.xyz`，见 .env 的 `AML_EMB_BASE_URL`）。
+  # ⚠ 这个值是**服务端 id**（端点 `/v1/models` 列出来的那个），随网关变；该网关实测**忽略**
+  #   `model` 字段，所以填错不报错——但**缓存坐标系含它**，改它 = 换一份缓存文件。
   # Step 5 必须换成 text-embedding-v4（§2.3 规定，不可协商）——
   # ⚠ 换模型 = 换向量维度 ⇒ **整个 Qdrant 集合要重建**，且 embedding 缓存整体失效。
-  embedder: qwen3-embedding-8b
+  embedder: Qwen/Qwen3-Embedding-8B
 
 # ══ 存储（§6）═══════════════════════════════════════════════════════════
 storage:
@@ -170,16 +172,19 @@ rerank:
   #   ⚠ 那条修复**动了精排的输入口径**（max_length 2048 ⇒ 约 0.26% 的候选被截断，
   #   而 A3 那个 +4.3pt 是在 4096 下测的）⇒ **重放 A3 臂之前先看那条记录的说明**。
   enabled: true
-  # C —— **对面那个网关收哪种线格式**。两个自托管网关互斥，没有"都对"的写法：
-  #   * `queries` —— **vLLM 原生 score 形状**（`queries: [...]` 数组）。
-  #     `https://memory3.021130.xyz/v1`（2026-09-28 迁移后的口径）。发 `query` ⇒ **400**。
-  #   * `query`   —— **自研封装的**形状（单个字符串）。
-  #     本机自托管网关（容器里 `host.docker.internal:9002` → 宿主机 `127.0.0.1:8082`）。
+  # C —— **对面那个网关收哪种线格式**。两种互斥，没有"都对"的写法：
+  #   * `query`   —— **自研封装的**形状（单个字符串）。**现役**：开发期主网关
+  #     `https://memory.021130.xyz/v1`（2026-10-09 起），以及容器里打的那台本机自托管网关
+  #     （`host.docker.internal:9002` → 宿主机 `127.0.0.1:8082`）。
   #     发 `queries` ⇒ **422**（实测：pydantic 报 `body.query Field required`）。
+  #   * `queries` —— **vLLM 原生 score 形状**（`queries: [...]` 数组）。
+  #     `https://memory3.021130.xyz/v1` 在 2026-09-28～10-09 之间是这一档（那天只改了 nginx.conf，
+  #     `/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`）⇒ 发 `query` ⇒ **400**。
+  #     ⚠ 那个 host 自 2026-10-09 起改提供对话模型，**这条已无部署在用**。
   #
-  # ⛔ **本部署取 `query`**：服务跑在本机、打的也是本机的网关（`deploy/.env` 两个
-  #   `*_BASE_URL` 都是 `http://host.docker.internal:9002/v1`）。**它与 base_url 是同一件事
-  #   的两半 ⇒ 换网关必须一起换**：哪天改指 `memory3`，这一行同时要改回 `queries`。
+  # ⛔ **本部署取 `query`**：两处要打的网关都是自研封装那一档。**它与 base_url 是同一件事
+  #   的两半 ⇒ 换网关必须一起换**；`make probe-reranker` / `make check` 两种都试，会印出
+  #   实际生效的是哪个。
   #
   # ⚠⚠ **填错的表现与 D12 的降级一模一样**：每次检索都不精排、**服务不报错、响应照旧合法**，
   #   只在 §14 里 `rerank.calls` 涨而 `rerank.degraded` 同步涨时看得出来。

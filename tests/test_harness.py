@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import ast
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -494,6 +496,68 @@ def test_run_judge_wires_through_and_parses(stub_pipeline, tmp_path):
     assert all(r.is_correct and r.label == "CORRECT" for r in results)
     # 注入的记忆确实到了脚本侧（桩脚本把它当成 generated_answer 回写）
     assert results[0].generated_answer == "memory text"
+
+
+# ── 对话端点的轮转（D39）──
+
+
+def test_subprocess_env_injects_the_endpoint_index():
+    """`endpoint_index` → `AML_ENDPOINT_INDEX`：子进程里 `api_config` 唯一的端点开关。
+
+    ⚠ 缺省（`None`）**必须什么都不注入**——那正是父进程走的那条路（`run.py` 的前置检查与
+    `input-manifest.json` 的指纹都读父进程的值）。注入一个每进程都变的轮转值，会让
+    **续跑校验**以为"输入变了"，而那是本仓最不该有的噪声。
+    """
+    from eval.harness import api_config, judge
+
+    assert api_config.ENV_ENDPOINT_INDEX not in judge._subprocess_env()
+    assert judge._subprocess_env(2)[api_config.ENV_ENDPOINT_INDEX] == "2"
+
+
+def test_endpoint_index_selects_that_endpoint_in_the_subprocess():
+    """真子进程：`AML_BASE_URL_2` + `AML_ENDPOINT_INDEX=1` ⇒ 选中的是**第二个**端点。
+
+    ⚠ 端点是 `(url, key)` **成对**的：两个对话网关各有各的 key（混用是 **401**），
+    所以这里同时断言 url 与 key 都跟着序号走，且 `JUDGE_*` 回落的是**同一个**端点。
+    """
+    from eval.harness import judge
+
+    env = judge._subprocess_env(1) | {
+        "AML_BASE_URL": "http://primary/v1",
+        "AML_API_KEY": "k0",
+        "AML_BASE_URL_2": "http://secondary/v1",
+        "AML_API_KEY_2": "k1",
+        "AML_JUDGE_BASE_URL": "",
+        "AML_JUDGE_API_KEY": "",
+    }
+    code = "import api_config as a; print(a.ANSWER_API_BASE, a.ANSWER_API_KEY, a.JUDGE_API_BASE)"
+    done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == ["http://secondary/v1", "k1", "http://secondary/v1"]
+
+
+def test_endpoint_without_a_key_fails_loudly_at_import():
+    """配了 `AML_BASE_URL_2` 却没配 `AML_API_KEY_2` ⇒ **导入期就炸**。
+
+    ⚠ 这一条挡的是**晚失败**：那把 key 缺着，第一次打到第二个端点时才 401——
+    而那时整轮的 Add / Search 与前面几题的判分都已经付出去了（同
+    `judge_preconditions()` 的理由）。父进程 import 时就会炸，所以代价在跑之前。
+    """
+    from eval.harness import judge
+
+    env = judge._subprocess_env() | {
+        "AML_BASE_URL": "http://primary/v1",
+        "AML_API_KEY": "k0",
+        "AML_BASE_URL_2": "http://secondary/v1",
+        "AML_API_KEY_2": "",
+    }
+    done = subprocess.run(
+        [sys.executable, "-c", "import api_config"], env=env, capture_output=True, text=True
+    )
+
+    assert done.returncode != 0
+    assert "AML_API_KEY_2" in done.stderr
 
 
 def test_run_judge_creates_output_dir(stub_pipeline, tmp_path):

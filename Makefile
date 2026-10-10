@@ -197,10 +197,9 @@ baseline:  ## 跑一轮**冻结口径**的基线/对照（§13）：DATASET / AR
 # `eval/experiments/recipes.py` 给，不手抄数字——抄错一个数的后果是分数看起来完全正常、却不可比。
 # ⚠ 它**拒绝**与手写的 `--limit` / `--spread` 同时给（那两个只在做消融或冒烟时才用）。
 # ⚠ 墙钟差着量级：locomo ≈44 分（**建议当唯一哨兵**）、mquake ≈4 分、
-#   clbench ≈7 小时、lme ≈12–20 小时。见 `eval/reports/ledger.md`。
-# ⛔ **一次只跑一条**：网关在 Cloudflare 后面（源站时限 ~125 秒 ⇒ HTTP 524），
-#   并发会把 524 从"不会发生"变成"随机发生"，**而客户端超时调多大都没用**。
-#   别被"本机 CPU 只用了 2%"误导——瓶颈在远端网关。
+#   clbench ≈3.5 小时、beam ≈1 小时、lme ≈12–20 小时。见 `eval/reports/ledger.md`。
+# ✅ **可以加 `ARGS='--judge-workers 4'`**（2026-10-09 实测 4 路 × 110k token 无 524）：
+#   并行的是**判分**子进程，Add / Search 仍串行。⚠ 但**别同时跑两条不同的链**（没测过）。
 # ⚠ 本仓噪声底是 **346 题上 ~1pt** ⇒ 几十题的小跑法读不出改动。
 # 用法：make baseline DATASET=locomo-refined
 #       make baseline DATASET=clbench ARGS='--run-id clb-after-rerank --switches {…}'
@@ -211,7 +210,7 @@ replay-official:  ## 重放官方采集流量并判分（README §6.2 线①）�
 # 先灌完再问会读到未来。payload 用采集原文（不加前缀、不重切批）。
 # ⚠ 前置：套件得先重建过——`uv run python tools/build_official_kit.py`（读采集目录里那三份）。
 # ⚠ 冒烟用 `ARGS='--users 1 --max-questions 3'`；正式的用 `ARGS='--users 261 --run-id …'`。
-# ⚠ 与 `make eval` 同一条纪律：**一次只跑一条**（网关在 Cloudflare 后面）。
+# ⚠ 与 `make eval` 同一条纪律：**别同时跑两条不同的链**（抢同一份网关与重试预算）。
 
 t1:  ## §13 的 T1 实验：时间戳前缀 带/不带（**改渲染 = 重建索引**）
 	uv run --env-file $(ENV_FILE) python -m eval.experiments.t1_timestamp
