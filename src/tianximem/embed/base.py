@@ -15,9 +15,10 @@
 缓存键 = **渲染后文本的内容哈希**，**不是 `memory_id`**——渲染模板或日期口径一变，
 同一个 `id` 的文本就跟着变，用 `id` 当键会拿到**陈旧向量**（§7.2）。
 
-坐标系（模型标识 + 渲染模板版本）**直接进缓存文件名**：`<cache_dir>/<coordinate_key>.db`
-（文件里也存一份）。这样"整体失效"是**结构性**的——Step 5 换了模型或改了模板 ⇒ 换一个
-坐标系键 ⇒ **换一个文件** ⇒ 旧缓存不可能被静默命中（§12.1 R1 对冲 1）；旧文件随手删掉即可。
+坐标系（模型标识 + 渲染模板版本 + **期望维度**）**直接进缓存文件名**：
+`<cache_dir>/<coordinate_key>.db`（文件里也存一份）。这样"整体失效"是**结构性**的——
+Step 5 换了模型、改了模板、或改了 `models.embed_dim` ⇒ 换一个坐标系键 ⇒ **换一个文件**
+⇒ 旧缓存不可能被静默命中（§12.1 R1 对冲 1）；旧文件随手删掉即可。
 
 ## 一个刻意的表示统一
 
@@ -120,24 +121,38 @@ class Embedder(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingCoordinate:
-    """缓存的坐标系：**模型标识 + 渲染模板版本**。
+    """缓存的坐标系：**模型标识 + 渲染模板版本 + 期望维度**。
 
-    维度**不在这里**——它在第一次调用之后才知道，所以按条目校验（见 `DiskVectorCache`）。
+    ## `dim` 为什么在这里（2026-10-09 改）
+
+    原设计是"维度不进坐标系——它要等第一次调用之后才知道，所以按条目校验"。
+    那个设计**默认换维度必然换模型**（模型名变了 ⇒ 坐标系自动变 ⇒ 换文件）。
+
+    2026-10-09 实测打破了它：网关侧把 embedding 输出从 4096 改成 1024，而**模型名没变**
+    ⇒ 同一个坐标系命中 4096 维的旧缓存 ⇒ 撞 1024 维的集合，服务端 500。
+
+    ⇒ 现在坐标系里放的是**部署声明的期望维度**，不是探测到的：探测值本来就在第一次调用
+    之后才知道、进不了文件名；而声明值（`models.embed_dim`）在装配时就有 ⇒ 换维度就换
+    坐标系键、就换文件，**旧缓存不可能被静默命中**。
     """
 
     model: str
     render_template: str = TEMPLATE_VERSION
+    #: 部署声明的期望维度（`models.embed_dim`）。`None` = 不校验、也不进坐标系键——
+    #: 只留给不关心维度的调用方（自造坐标系的单元测试）。
+    dim: int | None = None
 
     def key(self) -> str:
         raw = json.dumps(
-            {"model": self.model, "render_template": self.render_template},
+            {"model": self.model, "render_template": self.render_template, "dim": self.dim},
             ensure_ascii=False,
             sort_keys=True,
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     def describe(self) -> str:
-        return f"{self.model} @ render={self.render_template}"
+        suffix = "" if self.dim is None else f" dim={self.dim}"
+        return f"{self.model} @ render={self.render_template}{suffix}"
 
 
 class DiskVectorCache:
@@ -246,6 +261,14 @@ class DiskVectorCache:
             raise DimensionMismatchError(
                 f"缓存条目自称 {dim} 维，实际 blob 是 {vec.shape[0]} 维（{self._path}）"
             )
+        # 坐标系键里已经含 `dim`（换维度就换文件），所以这一层是**第二道锁**：
+        # 文件被人手工复制、或坐标系被绕过时，这里响而不是静默用错缓存。
+        expected = self._coordinate.dim
+        if expected is not None and dim != expected:
+            raise DimensionMismatchError(
+                f"缓存条目是 {dim} 维，但坐标系声明 {expected} 维"
+                f"（{self._coordinate.describe()}；{self._path}）"
+            )
         return [float(x) for x in vec]
 
     def put_many(self, items: Iterable[tuple[str, Sequence[float]]]) -> int:
@@ -337,11 +360,20 @@ class CachingEmbedder:
                 raise EmbeddingError(f"内层返回 {len(fresh)} 个向量，但请求了 {len(misses)} 条文本")
             prepared = [to_float32(v) for v in fresh]
 
-            # 维度自检：与内层已知维度、与缓存里既有维度都必须一致
+            # 维度自检：与**部署声明的**期望维度、与缓存里既有维度都必须一致
             dims = {len(v) for v in prepared}
             if len(dims) > 1:
                 raise DimensionMismatchError(f"同一次响应里出现了多种维度：{sorted(dims)}")
             new_dim = next(iter(dims))
+            # 这是"这个部署只接受 `models.embed_dim` 这么大的向量"那道闸。
+            # ⚠ 全命中缓存时**走不到这里**——那条路径由 `DiskVectorCache.get()` 逐条拦
+            #   （2026-10-09 的静默命中正是全命中，见 `EmbeddingCoordinate` 的 docstring）。
+            expected = self._cache.coordinate.dim
+            if expected is not None and new_dim != expected:
+                raise DimensionMismatchError(
+                    f"Embedder 返回 {new_dim} 维，但配置声明 {expected} 维"
+                    f"（`models.embed_dim`；坐标系 {self._cache.coordinate.describe()}）"
+                )
             cached_dims = self._cache.known_dims()
             if cached_dims and cached_dims != {new_dim}:
                 raise DimensionMismatchError(

@@ -70,7 +70,11 @@ D35 后官方脚本位于 `dataset/.upstream/aml/`，`parents[2]` 指向数据�
 
 **⚠ 不要在仓库外创建它。** 那份就是本目录里的 [`api_config.py`](./api_config.py)（AML 公开的那份是 520 字节、无凭据），由 `judge.run_judge()` 起 subprocess 时把**本目录**放进 `PYTHONPATH` 找到（`judge._subprocess_env`）——`sys.path.insert(0, <不存在路径>)` 只是塞进一个没有该模块的条目，**import 会继续往后找到 `PYTHONPATH` 里的那份**，于是归档保持只读、`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。
 
-**两边的名字不一样**——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组：**适配器负责接上**（`JUDGE_*` 留空即回落 `ANSWER_*`——网关只有一个对话模型）。**那七个名字里不含 embedding**：归档 pipeline 不向量化，Qwen3-Embedding-8B 只属于 `src/tianximem`。
+**两边的名字不一样**——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组：**适配器负责接上**（`JUDGE_*` 留空即回落**本进程所选**的对话端点——两个端点（`memory2` / `memory3`）是**同一个**对话模型）。**那七个名字里不含 embedding**：归档 pipeline 不向量化，Qwen3-Embedding-8B 只属于 `src/tianximem`。
+
+⚠ **端点是按进程选的**（**D39**）：`api_config` 读 `AML_ENDPOINT_INDEX`（由 `judge._run()` 注入），
+所以判分线程池能把不同 sample 派到不同端点；**没注入就是主端点**（父进程那条路——
+`input-manifest.json` 的指纹要的就是它，见 [`./api_config.py`](./api_config.py) 的模块 docstring）。
 
 > **回归用例**：`tests/test_harness.py` 里那个桩 pipeline **真的 `import api_config`**——这条路径断了会立刻红。
 
@@ -130,7 +134,7 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 直接 `render_memories`；其余适配器都截）——**待补**。
 这属于本地答案输入口径的显式改动，不能认定 AML 线上也是同一输入方式。
 旧完整历史答案与成绩不能直接复用；适配器校验输入版本和指纹，重跑使用新 run-id。
-验证与复现见 [`../reports/personamem-pipeline-fix-20261006.md`](../reports/personamem-pipeline-fix-20261006.md)。
+验证与复现见 [`../reports/personamem-20261009.md`](../reports/personamem-20261009.md)。
 
 ### HybridQA / FEVEROUS 的本地文本检索适配
 
@@ -145,7 +149,7 @@ FEVEROUS 的 `feverous-claim-pages-evidence-v3` 对无效 JSON、标签或不可
 上游评分源码保持原字节并校验哈希，通过函数节点调用避免执行其命令行入口。
 逐题 `metrics` 经 `run_record.py` 汇总到 `scores.dataset_score`；
 FEVEROUS 的严格分包含完整证据组要求，采集重放仍按其原有 label-only 口径。
-输入范围、聚合指标及验证见 [接入报告](../reports/hybridqa-feverous-pipelines-20261006.md)。
+输入范围、聚合指标及验证见 [接入报告](../reports/datasets-20261006.md)。
 官方采集重放入口已经把 Search 结果注入开放题 prompt，不受选择题入口的修复影响。
 
 `aml-v1` 使用独立的 FEVEROUS JSON 证据契约；完整可解析的 Search 页面可提供原生 ID，
@@ -158,7 +162,7 @@ FEVEROUS 的严格分包含完整证据组要求，采集重放仍按其原有 l
 `extra_pipeline.py` 对输入 `category=multi_hop_clinical_deduction` 使用病史依据与
 推理格式，仍只将问题和 Search 文本放入提示词。格式路由不读 gold；没有该公开
 分类字段的采集请求保留原有入口。诊断、适用范围和原始就诊对照见
-[临床多跳报告](../reports/clinical-multihop-20261007.md)。
+[临床多跳报告](../reports/optimization-20261007.md)。
 
 这类答案记录 `answer_contract`、`input_fingerprint` 和实际答案输出预算。
 提示词、问题、Search 文本、答案端点/模型或输出预算变化后，`answer` 拒绝续用旧答案，

@@ -268,7 +268,10 @@ def test_http_round_reaches_real_answer_and_judge_functions(bench, tmp_path, mon
             },
         )
 
-    def run_real_functions(pipeline, items, out_dir, *, dataset):
+    def run_real_functions(pipeline, items, out_dir, *, dataset, endpoint_index=None):
+        # `endpoint_index` 是 D39 的端点轮转（`run_round` 一定传）——本用例关心的是
+        # 答案/裁判两个函数真的被调到，端点选哪一号与它无关，所以收下不用。
+        del endpoint_index
         module = capture_pipeline if dataset == "halumem" else extra
         assert pipeline == pipeline_for(bench, dataset)
         input_path, answers, labels = (

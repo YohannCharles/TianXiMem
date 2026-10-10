@@ -16,7 +16,7 @@ uv run python tools/diagnose_run.py --run-id base-mqk
 | mquake | 0.400 | prompt **少了冲突解决规则**、又禁掉了数据集**设计上就要求**的世界知识 |
 | corporatebench | 0.260 | 覆盖限制 + 聚合作答 + 评测适配（详见下面的修复报告） |
 
-CorporateBench 的修复与重判记录见 `eval/reports/corporatebench-fix-20261004.md`。
+CorporateBench 的修复与重判记录见 `eval/reports/corporatebench-20261004.md`。
 
 修完前三个：**0.551 / 0.424 / 0.540**。
 

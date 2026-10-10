@@ -1,7 +1,0 @@
-storage:
-  qdrant:
-    collection: memories_generic_candidate_20261005
-rerank:
-  enabled: false
-capture:
-  enabled: false

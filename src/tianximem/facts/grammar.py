@@ -6,6 +6,7 @@ import calendar
 import re
 from email.utils import parseaddr
 
+from tianximem.facts.assertions import interrogative
 from tianximem.facts.conversation import NAME, SPEAKER, named_utterances, sentences
 from tianximem.facts.evidence import (
     EvidenceFact,
@@ -181,7 +182,9 @@ def chinese_quantity(text: str) -> int | None:
 def _chinese_role(sentence: str, actor: str) -> tuple[str, str, str, str] | None:
     text = sentence.strip().rstrip("。！？")
     if actor == "I":
-        if text.startswith(("我", "你", "他", "她", "它")):
+        # 您 / 咱们 等不归"我"；漏掉它们会让 "您觉得这是正常的" 被拆成
+        # 主体="您觉得这"、关系="正常"这样的假事实。
+        if text.startswith(("我", "你", "您", "他", "她", "它", "咱", "俺", "大家", "我们")):
             return None
         named = re.fullmatch(rf"({NAME})((?:目前|现在|仍然)?(?:是|在).+)", text)
         if not named:
@@ -469,7 +472,10 @@ def extract_evidence(
             safe_attributes = not (_UNSAFE.search(body) or _PLANNED.search(body))
             for sentence in sentences(body):
                 sentence = sentence.strip()
-                if _UNSAFE.search(sentence) or _PLANNED.search(sentence):
+                # 疑问句不是事实：MedMemoryBench 的 "您觉得这是正常的吗？" 曾被拆成
+                # 主体="您觉得这"、关系="吗"、客体="正常"。
+                # （全库对拍：净删 11 条假事实、零附带删除。）
+                if interrogative(sentence) or _UNSAFE.search(sentence) or _PLANNED.search(sentence):
                     continue
                 chinese_role = _chinese_role(sentence, actor) if safe_attributes else None
                 if chinese_role:

@@ -26,14 +26,19 @@ __all__ = ["DEFAULT_MODEL", "Qwen3EmbeddingEmbedder"]
 #: 开发期模型名。⚠ 与 `common/config.py` 的 `ModelsConfig.embedder` 默认值是**同一个值**
 #: （那边是配置的默认，这里是直接构造这个类时的默认）。两处相等由
 #: `tests/test_config.py::test_model_default_is_the_same_in_both_places` 钉住。
-DEFAULT_MODEL: str = "qwen3-embedding-8b"
+#:
+#: ⚠ 这个 id 是**服务端的事**，随网关而变：2026-09-28 迁到 vLLM 直服时是
+#: `qwen3-embedding-8b`，2026-10-09 回到自研封装（`memory.021130.xyz`）后是
+#: **`Qwen/Qwen3-Embedding-8B`**（该网关实测**忽略** `model` 字段，两个名字都通——
+#: 写端点声称的那个，声明与 `/v1/models` 才对得上）。
+DEFAULT_MODEL: str = "Qwen/Qwen3-Embedding-8B"
 
 
 class Qwen3EmbeddingEmbedder(OpenAICompatEmbedder):
-    """远程 Qwen3-Embedding-8B（自建网关，OpenAI 兼容 `/embeddings`）。
+    """远程 Qwen3-Embedding-8B（自建主网关 `memory.021130.xyz`，OpenAI 兼容 `/embeddings`）。
 
-    ⚠ 网关与 LLM 的那一路**同 host 但 key 不同**（`.env` 里 `AML_EMB_API_KEY`
-    与 `AML_API_KEY` 是两个值，别混用）。
+    ⚠ 它与 LLM 那一路**不同 host、不同 key**（`.env` 里 `AML_EMB_*` 与 `AML_*`
+    是两套值，别混用）；同网关的 reranker 用**第三个**变量名（`TIANXIMEM_RERANKER_*`）。
     """
 
     def __init__(

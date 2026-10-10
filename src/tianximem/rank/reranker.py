@@ -6,36 +6,43 @@ Hybrid Retrieval → RRF → memory_id 稳定去重 → 【rerank（恰好一次
 ```
 
 * [`Reranker`][Reranker] —— 协议。**只收文本、只回分数**，不知道 `memory_id` / SQLite / Qdrant
-* [`RemoteReranker`][RemoteReranker] —— 主网关（`memory3.021130.xyz`）的 HTTP 客户端
+* [`RemoteReranker`][RemoteReranker] —— 主网关（`memory.021130.xyz`）的 HTTP 客户端
 * [`RerankUnavailable`][RerankUnavailable] —— "可降级"的唯一信号
 
 ## 线格式：**实测出来的，不是猜的**（可复现的探针：`tools/probe_reranker.py`）
 
-⛔ **2026-09-28 网关侧只改了 nginx.conf**：`/v1/rerank` 现在 **rewrite 到 vLLM 原生 `/v1/score`**
-⇒ **请求与响应两个信封同时换了**。变更前后都由真请求实测，不是照文档抄的：
+⛔ **网关侧改过两次线格式，每次都是真请求实测出来的**（照文档抄会踩空）：
+2026-09-28 `memory3.…` 只改了 nginx.conf（`/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`）；
+2026-10-09 主网关回到 `memory.021130.xyz` 的自研封装 ⇒ **服务端收哪种，由 `rerank.envelope` 声明**。
 
-| 信封 | 我们发什么 | 响应容器 | 分数键 | 什么时候 / 在哪见过 |
+| 信封 | 我们发什么 | 响应容器 | 分数键 | 还用不用 |
 | --- | --- | --- | --- | --- |
-| A | `query`（字符串） | `results` | `score` | `memory.021130.xyz`；**本机自托管网关** |
-| B | `query`（字符串） | `results` | `relevance_score` | `memory3.…` 换 nginx 之前 |
-| **C** | **`queries: [...]`** | **`data`** | `score` | `memory3.…` 现在（vLLM 原生） |
+| **A** | **`query`（字符串）** | `results` | `score` | **现役** |
+| B | `query`（字符串） | `results` | `relevance_score` | 历史 |
+| C | `queries: [...]` | `data` | `score` | 历史 |
 
-**发 A 还是 C，由 `rerank.envelope` 挑**（两个网关互斥，没有"都对"的写法）：
+⚠ 三版的实测出处：**A** 见于现役主网关 `memory.021130.xyz`（2026-10-09 起）
+与本机自托管网关；**B / C** 都出自 `memory3.021130.xyz`（C 是当天只改 nginx.conf、
+`/v1/rerank` rewrite 到 vLLM 原生 `/v1/score` 之后那一档）。那台自 2026-10-09 起
+**改提供对话模型** ⇒ B / C 已无部署在用，留着只为认出旧流量。
 
-* `envelope: "queries"`（**默认**）⇒ 发 C：
+**发 A 还是 C，由 `rerank.envelope` 挑**（两种互斥，没有"都对"的写法）：
+
+* `envelope: "query"`（**默认**）⇒ 发 A（现役主网关；宿主机 `127.0.0.1:8082`
+  上的本机自研封装同属这一档）：
 
 ```http
-POST {base_url}/rerank          # base_url 形如 https://memory3.021130.xyz/v1
+POST {base_url}/rerank          # base_url 形如 https://memory.021130.xyz/v1
 Authorization: Bearer <key>
 Content-Type: application/json
 
-{"model": "qwen3-reranker-4b", "queries": ["..."], "documents": ["...", "..."]}
+{"model": "Qwen/Qwen3-Reranker-4B", "query": "...", "documents": ["...", "..."]}
 ```
 
-* `envelope: "query"` ⇒ 发 A（**本机自托管网关**，宿主机 `127.0.0.1:8082` 上的自研封装）：
+* `envelope: "queries"` ⇒ 发 C：
 
 ```json
-{"model": "Qwen/Qwen3-Reranker-4B", "query": "...", "documents": ["...", "..."]}
+{"model": "qwen3-reranker-4b", "queries": ["..."], "documents": ["...", "..."]}
 ```
 
 ⚠ **两边的名字与类型都不同，而且各自拒对面那一个**（都实测过）：vLLM 收到 `query` ⇒ **400**
@@ -49,7 +56,7 @@ Content-Type: application/json
 **响应：两个容器、两个分数键，`_parse` 四种组合都收**（A/B 共用 `results`）：
 
 ```json
-// 现在实际回的（C）
+// 信封 C 实际回的（`memory3.…` 那一档；现役的 A 是 `results[]` + `score`）
 {"id": "score-98439a73…", "object": "list", "created": 1790580559,
  "model": "qwen3-reranker-4b",
  "data": [{"index": 0, "object": "score", "score": 0.9989734888076782},

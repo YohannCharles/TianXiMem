@@ -39,8 +39,8 @@ uv run python eval/experiments/replay_official.py --users 1 --max-questions 3
 uv run python eval/experiments/replay_official.py --users 261 --run-id official-capture-top261
 ```
 
-⚠ **跑之前服务得起着**（`make serve`），且**一次只跑一条链**——网关在 Cloudflare 后面，
-并发会把 524 从"不会发生"变成"随机发生"（[`CLAUDE.md`](./CLAUDE.md) 的执行纪律）。
+⚠ **跑之前服务得起着**（`make serve`），且**别同时跑两条不同的链**——那两条抢同一份
+网关与重试预算（[`CLAUDE.md`](./CLAUDE.md) 的执行纪律）。
 """
 
 from __future__ import annotations

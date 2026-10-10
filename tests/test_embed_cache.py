@@ -64,6 +64,50 @@ def test_dim_change_across_calls_fails_loudly() -> None:
         emb.encode(["b"])
 
 
+# ── 期望维度（`models.embed_dim`）：**声明**的那道闸（2026-10-09）──────────
+
+
+def test_coordinate_key_carries_the_declared_dim() -> None:
+    """**换维度 ⇒ 换坐标系键 ⇒ 换缓存文件**——旧缓存不可能被静默命中。
+
+    这是 2026-10-09 那个坑的正面防护：网关侧把 embedding 输出从 4096 改成 1024，
+    而**模型名没变**，于是同一个坐标系命中了 4096 维的旧缓存，撞上 1024 维的集合。
+    """
+    assert (
+        EmbeddingCoordinate(model="m", dim=4096).key()
+        != EmbeddingCoordinate(model="m", dim=1024).key()
+    )
+    # `None`（不校验）也是一个真实取值，不是"省略"——它同样占一个独立的键
+    assert (
+        EmbeddingCoordinate(model="m").key()
+        != EmbeddingCoordinate(model="m", dim=1024).key()
+    )
+
+
+def test_declared_dim_rejects_a_different_fresh_embedding(tmp_path) -> None:
+    """声明 1024 而内层给 5 维 ⇒ 响亮失败，不让它流进集合。"""
+    wrapped, _ = _wrap(FakeEmbedder(dim=5), tmp_path, EmbeddingCoordinate(model="m", dim=1024))
+    with pytest.raises(DimensionMismatchError, match="配置声明 1024 维"):
+        wrapped.encode(["hello world"])
+
+
+def test_declared_dim_also_guards_a_cache_only_hit(tmp_path) -> None:
+    """**全命中缓存**那条路也拦得住——它走的是另一个方法（`DiskVectorCache.get`）。
+
+    ⚠ 2026-10-09 的形状正是全命中：新维度下**一个内层调用都没有**，所以
+    `CachingEmbedder.encode` 里那段维度自检根本执行不到。坐标系键虽然已经含 `dim`，
+    但文件被复制 / 坐标系被绕过时仍需要这道锁（与 `_verify_coordinate` 同类）。
+    """
+    cache = DiskVectorCache(tmp_path / "c", EmbeddingCoordinate(model="m", dim=1024))
+    with sqlite3.connect(cache.path) as conn:  # 绕过 put_many，塞一条维度不符的条目
+        conn.execute(
+            "INSERT OR REPLACE INTO vectors (content_hash, dim, vec, created_at) VALUES (?,?,?,0)",
+            (_hash("hello"), 5, np.zeros(5, dtype=np.float32).tobytes()),
+        )
+    with pytest.raises(DimensionMismatchError, match="坐标系声明 1024 维"):
+        cache.get("hello")
+
+
 def test_cached_embedder_falls_back_to_cache_dim(tmp_path) -> None:
     """内层还没调过时，若缓存里只有一个维度，可以用它——但它来自**缓存**，不是常量。
 

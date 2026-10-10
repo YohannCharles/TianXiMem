@@ -6,15 +6,15 @@
 > ⚠ 最终采用的形态**与本文提案不逐条相同**（统一成一条共同取证路径，且未采用
 > `document_metadata` 与语义抽取等条目）——**本文按提出时原貌保留，作为方案与取舍的底稿**；
 > 实施结果、未采用方案的保留记录与偏离声明见
-> [共同取证整理](../eval/reports/unified-evidence-refactor-20261005.md) 与
+> [共同取证整理](../eval/reports/retrieval-evidence-20261005.md) 与
 > [decisions.md](decisions.md) 的 D33 补充。
 
 建议保留现有 SQLite 原文真源、Qdrant 派生索引及最终双预算打包，在它们之间加入
 **有来源的事实表示、条件检索和按对象／事件选择证据**。先从可识别的邮件、邀请、
 议程和纪要做起，普通对话沿用原路径。
 
-实施效果尚未验证。依据是 [来源覆盖审计](../eval/reports/corporatebench-aggregate-analysis-20261004.md)
-与 [仅替换记忆的诊断](../eval/reports/corporatebench-oracle-context-20261004.md)；
+实施效果尚未验证。依据是 [来源覆盖审计](../eval/reports/corporatebench-20261004.md)
+与 [仅替换记忆的诊断](../eval/reports/corporatebench-20261004.md)；
 诊断中的理想事实含 KB 专用关系，不能直接当成 Add 抽取结果或实际检索收益。
 
 ## 当前代码中的具体缺口
@@ -214,6 +214,6 @@ Search 只返回原文或事实，完整范围需要原文中的全集声明、�
 | `common/render.py`、`common/config.py` | 固定事实渲染及版本、参数唯一入口；API 响应保持原契约 |
 
 这是一份按用户新约束提出的设计扩展；**实施结果与本文提案不逐条相同**——最终形态、
-未采用的取舍与偏离声明见 [共同取证整理](../eval/reports/unified-evidence-refactor-20261005.md)
+未采用的取舍与偏离声明见 [共同取证整理](../eval/reports/retrieval-evidence-20261005.md)
 与 [decisions.md](decisions.md) 的 D33 补充。原 v1 的“不抽事实”及 D33 的暂缓状态
 是历史设计背景，已被 2026-10-05 的授权与实施取代。

@@ -248,11 +248,11 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 `prepare.py` 负责暂存下载、校验、已声明补丁与原子发布。
 HybridQA 的固定语料包提取出逐表文件并记录成员哈希；FEVEROUS 从官方 ZIP 提取
 原始 SQLite，再构建可重建的 title/intro FTS5 缓存。候选生成范围只在
-[`feverous.py`](./feverous.py) 声明，数据规模和验证见 [接入报告](../reports/hybridqa-feverous-pipelines-20261006.md)。
+[`feverous.py`](./feverous.py) 声明，数据规模和验证见 [接入报告](../reports/datasets-20261006.md)。
 评测 CLI 在执行前显式调用 `ensure_dataset`；loader 和模块 import 不联网。
 `__init__.py` 按需导出加载器；仅下载/校验时不要求安装 pyarrow。
 目录纪律见 [`../../dataset/CLAUDE.md`](../../dataset/CLAUDE.md)。
 
 HaluMem 和 MuSiQue 的独立评测口径、复用的评分来源、未覆盖的上游指标见各自
 加载器 docstring；使用方法与验证见
-[`../reports/halumem-musique-pipelines-20261006.md`](../reports/halumem-musique-pipelines-20261006.md)。
+[`../reports/datasets-20261006.md`](../reports/datasets-20261006.md)。

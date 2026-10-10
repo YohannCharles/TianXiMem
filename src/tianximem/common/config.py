@@ -98,7 +98,7 @@ ENV_WORKERS: Final[str] = "TIANXIMEM_WORKERS"
 #: reranker 的三个变量。**名字沿用 `.env.example` 里那三个**（`.env.example` 是它们的家，
 #: 本表只是代码侧的引用点，两处由 `tests/test_config.py` 的静态断言钉住）。
 #:
-#: ⚠ **主网关**（`memory3.021130.xyz`），不是 memory2——两个网关 host 与 key 都不同（D18）。
+#: ⚠ **主网关**（`memory.021130.xyz`），不是 memory2——两个网关 host 与 key 都不同（D18）。
 #: ⚠ 它对服务**不是必需**的（D12）：缺了照常启动、走 `rerank_disabled` 路径
 #: ——**这与 embedding 的三个变量正相反**。
 ENV_RERANKER_BASE_URL: Final[str] = "TIANXIMEM_RERANKER_BASE_URL"
@@ -190,18 +190,20 @@ DEFAULT_RERANK_TIMEOUT_S: Final[float] = 30.0
 
 #: rerank 请求里那**一个字段叫什么**（`rerank.envelope`）。
 #:
-#: 两个自托管网关的线格式**互斥**，而且**填错哪边都不报错**：
+#: 自托管网关的线格式**互斥**，而且**填错哪边都不报错**：
 #:
-#: * `"queries"` —— **vLLM 原生 score 形状**（`queries: [...]`，数组）。提交期的主网关
-#:   `memory3.021130.xyz` 就是这一档。给它发 `query` ⇒ **400**。
-#: * `"query"` —— **自研封装**的形状（单数字符串）。本机自托管网关
-#:   （容器里 `host.docker.internal:9002` → 宿主机 `127.0.0.1:8082`），
-#:   给它发 `queries` ⇒ **422**。
+#: * `"query"` —— **自研封装**的形状（单数字符串）。现役主网关
+#:   `memory.021130.xyz` 就是这一档；本机自托管网关（容器里
+#:   `host.docker.internal:9002` → 宿主机 `127.0.0.1:8082`）也是。给它发 `queries` ⇒ **422**。
+#: * `"queries"` —— **vLLM 原生 score 形状**（`queries: [...]`，数组）。
+#:   2026-09-28 起 `memory3.021130.xyz` 是这一档（当天网关只改了 nginx.conf，
+#:   `/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`）。给它发 `query` ⇒ **400**。
+#:   ⚠ `memory3` 自 2026-10-09 起改提供对话模型，**这条已无部署在用**，留着只为认出它。
 #:
 #: ⚠ **代价是静默的**：D12 把远端问题一律吞成 `RerankUnavailable` ⇒ 发错字段名的表现是
 #:   **每次检索都降级、服务不报错、响应照旧合法**，只在 §14 的 `rerank.degraded` 计数上看得见。
 #:   ⇒ 它是**端点身份的一部分**，跟着 `TIANXIMEM_RERANKER_BASE_URL` 一起换，**不是可调旋钮**。
-DEFAULT_RERANK_ENVELOPE: Final[str] = "queries"
+DEFAULT_RERANK_ENVELOPE: Final[str] = "query"
 
 #: `rerank.envelope` 的取值域。见 `DEFAULT_RERANK_ENVELOPE` 的两条格式与各自的拒绝码。
 RERANK_ENVELOPES: Final[frozenset[str]] = frozenset({"queries", "query"})
@@ -265,7 +267,15 @@ class ModelsConfig:
     #: ⚠ **这里是模型名的家**，不是 `.env`：它是 profile 之间**唯一真正该变**的东西，
     #: 而 `local.yaml` / `submit.yaml` 存在的理由就是让"哪些量随模型变"能被看见
     #: （config-reference §9）。
-    embedder: str = "qwen3-embedding-8b"
+    embedder: str = "Qwen/Qwen3-Embedding-8B"
+
+    #: **期望的向量维度**——它是**断言，不是赋值**：维度仍然来自真实响应（§7.4 的
+    #: `dim` 只读属性），这一项只回答"这个部署接受多大的向量"，不符就响亮失败。
+    #: ⚠ 它**进缓存坐标系**（`embed/base.py` 的 `EmbeddingCoordinate`）⇒ 换维度自动换一个
+    #: 缓存文件，旧缓存不可能被静默命中（2026-10-09 那次"改了维度却命中旧向量"就是这么发生的）。
+    #: ⚠ §2.3 规定的两个模型——`text-embedding-v4`（提交期）与 Qwen3-Embedding-8B（开发期）
+    #: ——**同为 1024 维**，所以这一个值同时覆盖两个 profile。
+    embed_dim: int = 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -636,9 +646,12 @@ def _storage(raw: object) -> StorageConfig:
 
 
 def _models(raw: object) -> ModelsConfig:
-    g = _group(raw, where="models", allowed={"embedder"})
+    g = _group(raw, where="models", allowed={"embedder", "embed_dim"})
     return ModelsConfig(
-        embedder=_str(g.get("embedder"), where="models.embedder", default="qwen3-embedding-8b")
+        embedder=_str(
+            g.get("embedder"), where="models.embedder", default="Qwen/Qwen3-Embedding-8B"
+        ),
+        embed_dim=_int(g.get("embed_dim"), where="models.embed_dim", default=1024),
     )
 
 
@@ -742,8 +755,9 @@ def _rerank(raw: object) -> RerankConfig:
     if envelope not in RERANK_ENVELOPES:
         raise ConfigError(
             f"`rerank.envelope` 只能是 {sorted(RERANK_ENVELOPES)}，收到 {envelope!r}\n"
-            "  `queries` = vLLM 原生 score 形状（`memory3.021130.xyz`）；\n"
-            "  `query`   = 自研封装（本机网关，容器里走 `host.docker.internal:9002`）。\n"
+            "  `query`   = 自研封装（现役主网关 `memory.021130.xyz`；本机网关同上）；\n"
+            "  `queries` = vLLM 原生 score 形状（`memory3.021130.xyz` 在 2026-09-28 之后\n"
+            "              那一阵用过，2026-10-09 起改提供对话模型）；\n"
             "  ⚠ 它与 `TIANXIMEM_RERANKER_BASE_URL` 是同一件事的两半：**换网关要一起换**。"
         )
     return RerankConfig(

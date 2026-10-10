@@ -624,7 +624,7 @@ Question: {question}
 Answer:"""
 
 # Native question category selects the QA format; gold remains judge-only.
-# Evidence and matched-budget comparison: reports/clinical-multihop-20261007.md.
+# Evidence and matched-budget comparison: reports/optimization-20261007.md.
 MMB_MCD_ANSWER_CONTRACT = "medmemorybench-clinical-evidence-v1"
 MMB_MCD_ANSWER_PROMPT = (
     "You are an assistant answering from the patient's retrieved visit history.\n"
