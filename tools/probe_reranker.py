@@ -129,11 +129,15 @@ class _StubQdrant:
     def exists(self) -> bool:
         return True
 
-    def hybrid_search(self, *, user_id: str, query_text: str, dense_vector, top_k: int):  # noqa: ANN001, ANN201
+    def hybrid_search(self, *, user_id: str, query_text: str, dense_vector):  # noqa: ANN001, ANN201
+        # ⚠ **不收 `top_k`**：V13（2026-09-26）之后截断在 `HybridRetriever.search` 里、
+        # 在 `(-score, memory_id)` 排完之后做，store 这一层回**全部**融合结果。
+        # 桩跟着真实签名走——否则本探针第 ② 段会直接 `TypeError`（而第 ① 段照样绿，
+        # 屏幕上看起来像"探针过了"）。
         self.queries.append(query_text)
         return [
             ScoredMemoryId(mid, 1.0 - rank * self._STEP)
-            for rank, mid in enumerate(self._ids[:top_k])
+            for rank, mid in enumerate(self._ids)
         ]
 
 

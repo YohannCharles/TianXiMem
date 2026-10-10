@@ -1022,15 +1022,15 @@ README.md
     f079d020d55c744ec43992d15e48b4e03a75c7f7c9a3544a1f621d39e5fc3b84
 HaluMem-Medium.jsonl
     486fbc130a5c8781a2af27ffa508a1d7855245137aa449c193ac4d29c45634e7
-eval_tools.py
+https://raw.githubusercontent.com/MemTensor/HaluMem/718f16ff0c83413b1c86fa83fc13cc1a639871f9/eval/eval_tools.py
     0c08e5ecb8c93945bafc4bd0336bd6c9756b40d175f442ce44aca4a43169ee3b
 """,
     "hybridqa": """
 README.md
     f9a7981378ad0edad312220240871af8f6782d6ce94a7b32e0a23b1d1ce7fd41
-dev.json
+https://raw.githubusercontent.com/wenhuchen/HybridQA/db22fda8c5951438fade3c69d75b350335ba93b3/released_data/dev.json
     424272b233735a70ed8ef5af4a615373d114f472168c686c4370d54c92d58ac1
-dev_reference.json
+https://raw.githubusercontent.com/wenhuchen/HybridQA/db22fda8c5951438fade3c69d75b350335ba93b3/released_data/dev_reference.json
     617cd141a09550e85a0634b68b2e16727a87f9a6005002d31f40d839dfa389ed
 """,
     "musique": """

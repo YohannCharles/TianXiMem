@@ -489,7 +489,7 @@ def test_thresholds_are_not_overridable_from_env(config_dir: Path) -> None:
 
     assert cfg.retrieval.prefetch_limit == 200  # yaml 说了算
     assert cfg.retrieval.rrf.k == RRF_K
-    assert cfg.models.embedder == "qwen3-embedding-8b"
+    assert cfg.models.embedder == "Qwen/Qwen3-Embedding-8B"
     assert cfg.capture.enabled is yaml_enabled  # ← env 说的是相反的值，但一点用都没有
 
 

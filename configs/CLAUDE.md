@@ -2,7 +2,7 @@
 
 > **状态**：`default.yaml` 与 `local.yaml` **已建**，由
 > [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py) 加载。
-> **`runs/` 已建**：**44 个目录**的对照臂配置快照（分类与重放注意见下节）。
+> **`runs/` 仅保留新实验入口说明**：旧分支快照已于 2026-10-10 清理；后续计划只重跑 `v1.0`、`v1.2`。
 > `submit.yaml` **已建**（2026-09-28）——**现在只有 `models.embedder` 一项**
 > （`text-embedding-v4`）；**由模型派生的量（token 预算实测量、全部标定阈值）待 Step 5 重标定后往这里补**。
 > **完整配置项清单见 [`../docs/config-reference.md`](../docs/config-reference.md)**（每个配置项、默认值、出处 §）。本文件只说**为什么这么组织**。
@@ -30,7 +30,7 @@
 
 ## 三个 profile
 
-**profile 清单（文件 / 用途 / 模型 / 状态）在 [`../docs/config-reference.md`](../docs/config-reference.md) §1**，本文件不复制。**`runs/<arm>/` 不是 profile**，是对照臂的冻结快照（见下节）。
+**profile 清单（文件 / 用途 / 模型 / 状态）在 [`../docs/config-reference.md`](../docs/config-reference.md) §1**，本文件不复制。**`runs/<arm>/` 不是 profile**，用于新对照臂的冻结快照（目录状态见下节）。
 
 > ⚠ **`local.yaml` 必须保持短。** 它存在的意义就是让"开发期与提交期差在哪"一眼可见；
 > 重述默认值等于把那个信息淹掉。`local.yaml` / `submit.yaml` **只覆盖模型与由模型派生的量**
@@ -52,50 +52,24 @@
 
 ---
 
-## 目录里最终会有什么
+## 目录与后续实验
 
 ```text
 configs/
-├── default.yaml     # 基线：全部有消费方的阈值与模型名（含共同取证的四个检索键）
-├── local.yaml       # 开发期覆盖（**只写与基线不同的键**）
-├── submit.yaml      # 提交期覆盖（🟡 已建：模型名；阈值待 Step 5 重标定）
-└── runs/            # 每次对照实验的配置快照（哪个实验、什么时候、哪套模型）✅ 44 个目录
+├── default.yaml     # 活动基线配置
+├── local.yaml       # 开发期覆盖
+├── submit.yaml      # 提交期覆盖；模型切换仍待 Step 5 重标定
+└── runs/README.md   # 新实验快照入口；旧分支实验已清理
 ```
 
-`runs/` 的用途：`docs/experiments.md` 要求记录**配置指纹**。让每个实验留下**冻结的配置副本**，而不是"当时的 local.yaml 大概是这样"——**后者在 Step 5 之后就无法重建了**。
-（跑某个 arm 用 `TIANXIMEM_CONFIG_DIR=configs/runs/<arm>` 指向那份快照。）
+`runs/` 保留为新跑批快照的落点，`TIANXIMEM_CONFIG_DIR` 的读取方式不变。
+旧 T1/A3、共同取证、记忆治理、PersonaMem 和外部基线等实验快照
+已从当前工作树移出；历史记录从清理前提交恢复，原快照字节不改写。
+目录状态、历史恢复与版本对照要求统一见 [`runs/README.md`](runs/README.md)。
 
-44 个目录大致分四类，重放前先确认手上这份落在哪一类：
-
-- **2026-09 的对照臂**：`t1-*` / `a3-*` / `annotate` / `seed-*` / `cov-wide` / `clbench` / `lme`——
-  T1/A3 四份由 [`../eval/experiments/t1_timestamp.py`](../eval/experiments/t1_timestamp.py) 与
-  [`a3_rerank.py`](../eval/experiments/a3_rerank.py) 的 `--freeze`（脚手架 `arms.py`）生成；其余几份是一次性冻结
-  （各份 `local.yaml` 头部写着当时动了哪几件事）；数字在 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。
-- **两个外部基线**：`refind`（B1）与 `invmem-qwen`（候选仓库 + 我们的 embedding shim）——这两份记的是
-  **另一个服务**的启动环境变量，不是我们的 yaml（loader 读不了它们）；口径见
-  [`../eval/baselines/CLAUDE.md`](../eval/baselines/CLAUDE.md)。
-- **共同取证的各阶段臂**（`*-20261005`）：
-  - **加载得起来**：`chinese-evidence-20261005`、`unified-evidence-20261005/{candidate,generalization}`、
-    `facts-benchmark-20261005/{on,off}`（本轮冻结配置；`grounded_evidence` 的开 / 关两臂），以及
-    `goal-20261005-{baseline,employment,subject}`（这三份的 `retrieval` 段不含已删除的业务键；
-    其中 `-baseline` 还缺 `grounded_evidence` 键 ⇒ 事实取证按**关闭**跑）。
-  - **加载会报错、只供对应旧提交复现**：其余带业务专用键的 `goal-20261005-*`、
-    `generalization-20261005`、`generic-evidence-20261005/*`、`unified-evidence-20261005/baseline`——
-    那些业务专用键（`employment_facts` / `statement_source_limit` / …）**不在当前键集里**，
-    **当前代码遇到它们拒绝启动**。
-  - 报告见 [`../eval/reports/`](../eval/reports/) 的 `*-20261005.md`。
-- **新数据集接入臂**（`new-datasets-benchmark-20261006`）：HaluMem / MuSiQue / HybridQA / FEVEROUS
-  等的接入基准——`default.yaml` 与基线**逐字相同**，`local.yaml` 只覆盖集合名与
-  `rerank.enabled: false`（当前键集，可加载）。报告见
-  [`../eval/reports/new-datasets-benchmark-20261006.md`](../eval/reports/new-datasets-benchmark-20261006.md)。
-
-> ⛔ **2026-09 那批快照的 `models.embedder` 是旧网关 id**（`Qwen/Qwen3-Embedding-8B`；现役 id
-> `qwen3-embedding-8b`，对照表见 [`../docs/config-reference.md`](../docs/config-reference.md) §9）。
-> **故意不改**：它们是**历史记录**，改了就等于伪造"当时跑的是什么"。
-> ⇒ **重放那一批之前必须先把 `models.embedder` 覆盖成当前 id**，否则第一步 embedding 就 404。
-> 另外**维度也从 1024 变成了 4096** ⇒ 那批 arm 产出的集合与缓存**作废**
-> （动作见 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §4）。**20261005 起冻结的快照已是当前 id**——
-> 重放它们不用覆盖。
+后续计划仅重跑 Git 标签 `v1.0`、`v1.2` 的服务，配置从各自标签取得。
+新对照仍按 §13 冻结配置、数据及模型指纹；临时快照默认忽略，
+正式比较需要共享的配置经核对后显式提交。
 
 > ⚠ **`default.yaml` 只收"有代码消费方"的键**（③-d）。`checker.*` / `agent.*` 的落点已写在
 > [`../docs/config-reference.md`](../docs/config-reference.md)，但**没有搬进 yaml**——消费方还没接线

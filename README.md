@@ -116,6 +116,9 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 | [`tests/`](./tests/) | 单元测试（记忆块组合 / 幂等 / 契约 / 隔离 / 开关纯度） | — |
 | [`var/`](./var/) | 运行时产物（**gitignored**，只保留说明） | §6.1 |
 
+MemMachine 参考源码位于 [`eval/baselines/memmachine/`](eval/baselines/memmachine/)，
+研读路径与 TianXiMem 改进方向见 [MemMachine 学习入口](docs/memmachine-reference.md)。当前仅供源码参考。
+
 ---
 
 ## 路线图
@@ -154,7 +157,7 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 | # | 阻塞项 | 状态 |
 | --- | --- | --- |
 | 1 | **`api_config.py`** | ✅ **不是环境依赖**：**AML 公开仓自己就发布了这个文件**（520 字节、无凭据、只读 `os.environ`），放**仓库内** + 由 harness 在 subprocess 里注入 `PYTHONPATH` 即可——**"clone 下来不能直接跑"不成立**。实现见 [`eval/harness/api_config.py`](./eval/harness/api_config.py) |
-| 2 | **本地评测数据** | ✅ 已整理为 `dataset/`，来源与哈希在 [`eval/datasets/manifest.py`](./eval/datasets/manifest.py)。按需准备，验证见 [迁移报告](./eval/reports/dataset-layout-20261006.md)。 |
+| 2 | **本地评测数据** | ✅ 已整理为 `dataset/`，来源与哈希在 [`eval/datasets/manifest.py`](./eval/datasets/manifest.py)。按需准备，验证见 [迁移报告](./eval/reports/datasets-20261006.md)。 |
 | 3 | **Windows 那台机器的 `tmp_path` 故障** | ⬜ **仍开着，且与代码无关**（是机器状态）。绕法见 [`docs/roadmap.md`](./docs/roadmap.md) 的 Step 0 |
 
 **reranker 走自建网关**（`TIANXIMEM_RERANKER_BASE_URL` + `rerank.envelope` 两半必须配套，观测点与两种信封见 [`src/tianximem/rank/CLAUDE.md`](./src/tianximem/rank/CLAUDE.md)）。它是 Step 3 及之后的**基础设施前置项**，不是代码任务——而 v1 不做 agentic 之后，**Rerank + Context Packaging 就是主线上的新增价值**，所以这条前置项直接压在主线上。开发期由 `configs/local.yaml` 显式关掉（墙钟约 3×）；关掉时链路照常（记 `rerank_disabled`）。
@@ -183,7 +186,7 @@ make baseline DATASET=feverous         # claim 候选整页上的标签及证据
 ```
 
 HybridQA / FEVEROUS 的语料下载、输入范围与评分见
-[接入报告](./eval/reports/hybridqa-feverous-pipelines-20261006.md)。FEVEROUS 首次准备会下载
+[接入报告](./eval/reports/datasets-20261006.md)。FEVEROUS 首次准备会下载
 完整 Wikipedia 数据库并生成候选检索索引，空间与耗时也记录在那里。
 
 **四件事先知道，否则会卡在半路：**

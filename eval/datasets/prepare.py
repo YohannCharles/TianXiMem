@@ -16,6 +16,7 @@ import tarfile
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -73,7 +74,9 @@ def apply_local_patch(entry: dict, path: Path) -> tuple[bool, str]:
         return False, "无需修订"
     patched, count = LOCAL_PATCHES[patch_id](path.read_text(encoding="utf-8"))
     if count:
-        path.write_text(patched, encoding="utf-8")
+        # ⚠ `newline=""`：禁止 Windows 把写出的 '\n' 翻译成 '\r\n'。清单里的本地 sha256 是在
+        #    Linux（读写都不翻译）上算的；翻译会让补丁后的字节对不上本地哈希（响亮失败）。
+        path.write_text(patched, encoding="utf-8", newline="")
     return bool(count), f"修订 {count} 处（{patch_id}）"
 
 
@@ -110,7 +113,12 @@ def entries_for(dataset: str, *, purpose: str = "eval") -> list[dict]:
 
 def _download(url: str, dest: Path) -> None:
     """仅下载到调用者的临时文件，最终路径由校验后的发布步骤写入。"""
-    request = urllib.request.Request(url, headers={"User-Agent": "tianximem/prepare-dataset"})
+    # ⚠ 先做百分号编码：清单里有真实带空格的路径（doc-pp 的 `ACL 2025_*` 资产），
+    #    `urllib` 对它们直接抛 `InvalidURL`（httpx 会自动编码，所以旧工具从没暴露过）。
+    request = urllib.request.Request(
+        urllib.parse.quote(url, safe=":/%#?=@[]!$&'()*+,;"),
+        headers={"User-Agent": "tianximem/prepare-dataset"},
+    )
     with urllib.request.urlopen(request, timeout=60) as response:
         dest.parent.mkdir(parents=True, exist_ok=True)
         with dest.open("wb") as handle:

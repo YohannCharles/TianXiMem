@@ -1,7 +1,0 @@
-storage:
-  qdrant:
-    collection: memories_goal_20261005
-rerank:
-  enabled: false
-capture:
-  enabled: false

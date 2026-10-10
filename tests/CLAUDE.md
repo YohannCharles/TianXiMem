@@ -26,6 +26,8 @@ test_datasets_extra.py  `official-extra` 各份 + PersonaMem 的加载层（合�
                         **纯函数判分**（MQuAKE 别名表 / CorporateBench 标量·布尔·集合 /
                         MedMemoryBench 的字符串·选项集合 / 三处裁判 JSON 解析：**嵌套**那条、
                         **未转义引号**那条、**非布尔 `is_correct`** 那条）+ TempReason 的**切句**
+test_medmemorybench_answer.py 临床多跳实际作答入口的 Search 注入与金标隔离、
+                        旧答案/输入/模型/预算变化的续跑守卫，其他医学题类保持原格式
 test_grounded_evidence.py 共同取证的 Add→Search 闭环：来源与问题**共用同一关系绑定**、
                         库存/数量证据保原文顺序、不确定/计划/引用/他人声明不构成正向事实、
                         冲突或超限退回原文

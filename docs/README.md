@@ -33,7 +33,8 @@
 | [decisions.md](./decisions.md) | 哪些决策被推翻过、为什么、影响哪些节（**逐条 `Dn` + 待决事项**） | 想改一个"已锁定"的决定之前 |
 | [submission.md](./submission.md) | Smoke/Full 还剩几次、版本冻结在哪、S 未知清了没有 | 每次发 Smoke / Full 之前 |
 | [benchmark-data.md](./benchmark-data.md) | 归档里哪些文件是真数据、schema 落差在哪、许可证什么情况 | 写 harness / 加载器时 |
-| [reference-implementations.md](./reference-implementations.md) | 榜单前两名（InvMem / ReFind）的代码里有什么可学、什么别学、代码在哪（含 commit） | 想"看别人怎么解同一道题"时 |
+| [reference-implementations.md](./reference-implementations.md) | ReFind / InvMem 候选 / MemMachine 的源码来源、许可与固定 commit | 研读外部实现时 |
+| [memmachine-reference.md](./memmachine-reference.md) | MemMachine 参考源码的获取方式、研读路径与改进方向 | 研读记忆机制、选择下一项改进时 |
 | [add-search-improvement-plan.md](./add-search-improvement-plan.md) | 如何在 Add/Search 内增加可查证的事实、条件检索及对象／事件证据选择（**已实施，2026-10-05**；正文为方案底稿，最终形态见共同取证整理） | 评估文档类列表与计数的改进时 |
 
 > **[`benchmark-data.md`](./benchmark-data.md) 尤其要看**：材料目录 `dataset/` **仅 `CLAUDE.md` 入库**；下载内容与临时文件被忽略。准备流程与出处在那份文档里。

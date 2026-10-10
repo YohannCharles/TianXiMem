@@ -1,8 +1,9 @@
 # 参考实现对照
 
-> 最后核对：2026-09-25，对应 PRD §1 / §4 / §11 / §13。**冲突以 PRD 为准。**
+> 最后核对：2026-10-08 增补 MemMachine；ReFind / 候选映射笔记保留原核对范围。对应 PRD §1 / §4 / §11 / §13。**冲突以 PRD 为准。**
 
-**这份文档回答一个问题：榜单前两名（InvMem 45.06、ReFind 44.97）的代码里，哪些细节值得我们抄、哪些是坑。**
+**这份文档登记外部参考源码的来源与版本，并保留 ReFind / InvMem 候选映射的对照笔记。**
+新增的 MemMachine 源码研读路径与改进方向见 [学习入口](memmachine-reference.md)。
 
 它**不是规格**，也**不改变任何已锁定的决策**——本文里"能改变下一步动作"的结论，要先登记进 [`experiments.md`](./experiments.md) / [`open-questions.md`](./open-questions.md) 才算有身份。
 
@@ -10,14 +11,16 @@
 
 ## 0. 代码在哪（可复现）
 
-两个仓库都以 `git clone --depth 1` 落在 [`../eval/baselines/`](../eval/baselines/) 下，**整目录 gitignored**（见 [`.gitignore`](../.gitignore) 的"参考实现"一节）：上游是别人的仓库，字节从公开源各自取，本地副本不进版本库。
+这些仓库以浅克隆落在 [`../eval/baselines/`](../eval/baselines/) 下，各克隆目录分别 **gitignored**（见 [`.gitignore`](../.gitignore) 的"参考实现"一节）：字节从公开源各自取，本地副本不进版本库，来源与学习笔记入库。
 
 | 目录 | 上游 | 克隆时的 commit | 许可 | 是什么 |
 | --- | --- | --- | --- | --- |
 | `eval/baselines/refind/` | `github.com/imlrz/ReFind` | `a80175c`（2026-08-14） | **MIT** | ReFind 原版（B1） |
 | `eval/baselines/invmem-candidate/` | `github.com/wenxiaof345-ctrl/vanilla-rag-memory` | `31ab7bf`（2026-08-11） | **无 LICENSE** | InvMem 的**候选映射**，仅研读 |
+| `eval/baselines/memmachine/` | [MemMachine/MemMachine](https://github.com/MemMachine/MemMachine) | `ad8ff24b0b5c73f189eab9bb7342d4655ab85ca6`（tag `v0.4.0`，2026-10-06 上游提交） | [Apache-2.0](https://github.com/MemMachine/MemMachine/blob/ad8ff24b0b5c73f189eab9bb7342d4655ab85ca6/LICENSE) | 源码参考与学习对象（未接入评测）；[学习入口](memmachine-reference.md) |
 
 要换台机器取回同一份：`git clone https://github.com/<上游>.git eval/baselines/<目录>` 然后 `git checkout <commit>`。
+MemMachine 的源码获取与版本核对命令见 [学习入口](memmachine-reference.md#获取同一份源码)，不安装依赖。
 
 **⚠ 目录名 `invmem-candidate/` 是刻意的。** 榜单显示名到这份 repo 的映射**是第三方推断**（PRD 附录 B），仓库里**从不出现 "InvMem" 一词**，也**没有 LICENSE**。本次复核的结果是**方法指纹全中**：
 
