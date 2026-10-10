@@ -55,6 +55,38 @@ class SearchObservation:
     grounded_projection: str | None = None
     selected_facts: int = 0
     selected_sources: int = 0
+
+    route: str = "not_recorded"
+    """这一次**实际走的**策略：`disabled` / `COUNT` / `MULTI_HOP` / `DEFAULT`。
+
+    ⚠ `disabled` 说明**路由器没开**——它与 `DEFAULT` **不是一回事**：
+    后者是"路由器开着、分类结果是默认路"，前者是"根本没有分类这一步"。
+    两者在响应上完全一样（都是原混合检索链），**只有这里能分开**。
+    """
+
+    route_status: str = "not_recorded"
+    """路由的三种状态：`disabled`（没开）/ `success`（模型正常分类）/ `degraded`（降级）。
+
+    ⚠ 与 `rerank` 的 `disabled` / `degraded` 三分法同形，**理由也同一条**（D12）：
+    混为一谈会把"端点一直挂"看成"我们本来就没开路由"。
+    """
+
+    route_reason: str | None = None
+    """**分类本身**降级的原因（`llm_unavailable: …` / `invalid_output` …）。成功时为 `None`。"""
+
+    route_fallback: str | None = None
+    """分类成功、但**选中的那条路没跑成**的原因。今天只有 `agentic_unavailable`。
+
+    ⚠ 它与 `route_reason` 是两件事：一个是"没分成类"，一个是"分对了但执行器不在"。
+    """
+
+    route_latency_ms: float | None = None
+    """这一次路由本身的墙钟耗时（**是 `latency_ms` 的一个可归因子集**，不是并列的量）。
+
+    ⚠ 没有路由时为 `None`——**不要记 0**：0 会让"Router On"与"Router Off"两臂的
+    平均路由耗时都算得出来，而其中一臂的 0 是假的（§6 的成本分析会读错）。
+    """
+
     returned_segments: int = 0
     truncated_by_budget: bool = False
     truncated_by_top_k: bool = False
@@ -103,6 +135,19 @@ class SnapshotMetricsSink:
     grounded_outcomes: dict[str, int] = field(default_factory=dict)
     grounded_operators: dict[str, int] = field(default_factory=dict)
     grounded_projections: dict[str, int] = field(default_factory=dict)
+    #: 路由的三个分布 + 耗时。**它们是"路由到底有没有在跑"的唯一出口**
+    #: （响应里装不下——形状是契约；§14 那条 V12 的同款处境）。
+    router_routes: dict[str, int] = field(default_factory=dict)
+    router_statuses: dict[str, int] = field(default_factory=dict)
+    router_reasons: dict[str, int] = field(default_factory=dict)
+    router_fallbacks: dict[str, int] = field(default_factory=dict)
+    #: 路由调用的次数与耗时之和。⚠ **`router_calls` 数的是"真的分类过"的次数**
+    #: （即 `route_latency_ms` 非 None 的那些），所以 `router_calls <= searches`——
+    #: 两者之差就是"没开路由器"的那些请求。**均值必须按 `router_calls` 除**，
+    #: 按 `searches` 除会把两臂混成一个没有解释的数。
+    router_calls: int = 0
+    router_latency_ms_sum: float = 0.0
+    router_latency_ms_max: float = 0.0
     selected_facts: int = 0
     selected_sources: int = 0
     returned_segments: int = 0
@@ -125,9 +170,19 @@ class SnapshotMetricsSink:
                 (self.grounded_outcomes, observation.grounded_status),
                 (self.grounded_operators, observation.grounded_operator),
                 (self.grounded_projections, observation.grounded_projection),
+                (self.router_routes, observation.route),
+                (self.router_statuses, observation.route_status),
+                (self.router_reasons, observation.route_reason),
+                (self.router_fallbacks, observation.route_fallback),
             ):
                 if value:
                     counts[value] = counts.get(value, 0) + 1
+            if observation.route_latency_ms is not None:
+                self.router_calls += 1
+                self.router_latency_ms_sum += observation.route_latency_ms
+                self.router_latency_ms_max = max(
+                    self.router_latency_ms_max, observation.route_latency_ms
+                )
             self.selected_facts += observation.selected_facts
             self.selected_sources += observation.selected_sources
             self.returned_segments += observation.returned_segments
@@ -165,6 +220,23 @@ class SnapshotMetricsSink:
                 "selected_facts": self.selected_facts,
                 "selected_sources": self.selected_sources,
             },
+            "router": {
+                "routes": dict(self.router_routes),
+                "statuses": dict(self.router_statuses),
+                "reasons": dict(self.router_reasons),
+                "fallbacks": dict(self.router_fallbacks),
+                "latency_ms": {
+                    # ⚠ 分母是 `router_calls`（真的分类过的次数）**不是** `searches`
+                    #   ——见 `router_calls` 字段的说明。
+                    "count": self.router_calls,
+                    "mean": (
+                        round(self.router_latency_ms_sum / self.router_calls, 3)
+                        if self.router_calls
+                        else None
+                    ),
+                    "max": round(self.router_latency_ms_max, 3),
+                },
+            },
             "packaging": {
                 "returned_segments": self.returned_segments,
                 "truncated_by_budget": self.truncated_by_budget,
@@ -177,6 +249,11 @@ class SnapshotMetricsSink:
                 "`rerank.degraded` 是**端点不可用而退回 RRF 顺序**——"
                 "混为一谈会把「端点一直挂」看成「我们本来就没打算用它」（D12）。"
                 "共同取证成功与空库短路不调用精排，也不计入 disabled。"
+                "⚠ 路由器同型：`router.statuses.disabled` 是**没开路由**、"
+                "`router.routes.DEFAULT` 是**开着但这一题分到了默认路**——"
+                "两者在响应上完全一样，只有这里能分开。"
+                "⚠ `router.latency_ms` 的分母是 `router.calls`（真的分类过的次数），"
+                "**不是** `searches`：两臂对照时按 `searches` 平均会把没开路由的那一臂算成 0。"
             ),
         }
 

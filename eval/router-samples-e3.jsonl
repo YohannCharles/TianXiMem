@@ -1,0 +1,62 @@
+# ⚠ 第三批样本（E3，2026-10-10）：**与 `router-samples.jsonl`(46) 和 `router-samples-e2.jsonl`(37)
+# 零重叠**（已断言），全部从 LoCoMo-Refined / LongMemEval-S 里另取。
+#
+# 目的：用户要求"换一批问题再测一次，看路由效果"——即**同一版提示词在没见过的问题上的表现**。
+# ⚠ `expected_route` 仍是**人读提示词逐条判的**，数据集自带的 `category` / `question_type`
+# 一个都没用（它们描述答案类型，不是检索依赖结构）。
+#
+# 这一批刻意压了几种**判据边界**进去：
+#   * 属有关系链（`Melanie's daughter's birthday` / `John's cousin's dog`）——
+#     v3/v4 的提示词把 `"X's spouse's company"` 明列为依赖，这一类最容易被过判成 MULTI_HOP；
+#   * `Which <X> did <人> <动词> on <日期>` ——单条事实（DEFAULT）还是名单（COUNT）？
+#   * `how often` / `how many <时间单位> passed between …` ——v4 明写 `how often` 是 COUNT 信号、
+#     但"时间单位"属被排除的 measurement。
+{"dataset": "locomo-refined", "question_id": "conv-26#q0067", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「慈善赛跑」——先取事件，再取之后 Melanie 想通了什么。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0103", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "两级链：先解出「Melanie 的女儿」是谁、再定位她的生日会，才能问那场演出。属有关系链的**强形状**。"}
+{"dataset": "locomo-refined", "question_id": "conv-47#q0132", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "**双重属有**（John 的堂/表亲 → 那个人的狗）——中间实体必须逐级解开。"}
+{"dataset": "locomo-refined", "question_id": "conv-48#q0012", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "**双重属有**（Deborah 的母亲 → 那位母亲的爱好）。"}
+{"dataset": "locomo-refined", "question_id": "conv-49#q0115", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「那幅画被发表」那件事——先取事件，再取谁帮的忙。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0085", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「他的篮球生涯」——先取它，再取之后想做什么。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0159", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "与 q0085 同锚点、换了情态动词（`could` 而非 `want to`）。⚠ boundary：**成对留着**，用来测路由器对同锚点不同措辞是否稳定。"}
+{"dataset": "longmemeval-s", "question_id": "bbf86515", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "依赖 + 计数（先定位两个活动，再算间隔）⇒ 按 v4 的优先级规则归 MULTI_HOP。"}
+{"dataset": "longmemeval-s", "question_id": "a3838d2b", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "同上：`before the 'Run for the Cure' event` 是锚点，且要计数。"}
+{"dataset": "longmemeval-s", "question_id": "10e09553", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "同上，且带**比较级锚点**（`the earlier fishing trip`）——先要定出哪次更早。"}
+{"dataset": "longmemeval-s", "question_id": "830ce83f", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「她最近那次搬迁」——先认出是哪次搬迁，再取迁往何处。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0033", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "单一属有关系（Melanie 的女儿 → 生日）。⚠ boundary：**属有关系本身算不算依赖**是 v3/v4 判据里最容易过判的一处。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0097", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "`Who invited Nate ...?` ⚠ boundary：`who <动词>` 在 v4 的信号词表里没有被点名；判 MULTI_HOP 是靠「关系链」那一条。"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0057", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "`Who inspired Maria to start volunteering?` ⚠ boundary：同 q0097，`who <动词>` 形状。"}
+{"dataset": "longmemeval-s", "question_id": "f4f1d8a4", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "`Who gave me a new stand mixer as a birthday gift?` ⚠ boundary：单跳也能答（送礼人可能就在一句话里）。"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0008", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "两个限定条件（年幼时 + 家里困难）叠在同一个锚点上。⚠ boundary：也可能是「一次带条件的事实查询」。"}
+
+{"dataset": "locomo-refined", "question_id": "conv-42#q0178", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0010", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（提到过几次赢）。"}
+{"dataset": "locomo-refined", "question_id": "conv-44#q0049", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数。"}
+{"dataset": "locomo-refined", "question_id": "conv-44#q0013", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（约了几次）。"}
+{"dataset": "locomo-refined", "question_id": "conv-47#q0004", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数。"}
+{"dataset": "locomo-refined", "question_id": "conv-47#q0012", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（`till date` = 跨历史的完整集合）。"}
+{"dataset": "locomo-refined", "question_id": "conv-44#q0037", "expected_route": "COUNT", "boundary": false, "label_note": "计数 + **当前状态**（`as of December 2023`），要从被多次更新的名单里取那一刻的基数。"}
+{"dataset": "locomo-refined", "question_id": "conv-44#q0005", "expected_route": "COUNT", "boundary": true, "label_note": "`How many years passed between …` ⚠ boundary：`years` 是 v4 明写要排除的 measurement，但问的是**两个事件之间的聚合** ⇒ 判 COUNT。"}
+{"dataset": "locomo-refined", "question_id": "conv-44#q0028", "expected_route": "COUNT", "boundary": true, "label_note": "同上（`months passed between`）。"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0063", "expected_route": "COUNT", "boundary": false, "label_note": "`How often` ——v4 的信号词表里明写了它 ⇒ COUNT。"}
+{"dataset": "locomo-refined", "question_id": "conv-44#q0075", "expected_route": "COUNT", "boundary": false, "label_note": "`How often`，同上。"}
+{"dataset": "locomo-refined", "question_id": "conv-47#q0016", "expected_route": "COUNT", "boundary": false, "label_note": "`Which countries has James visited?` 完成时 + 复数 ⇒ 完整名单。"}
+{"dataset": "locomo-refined", "question_id": "conv-47#q0022", "expected_route": "COUNT", "boundary": true, "label_note": "`Which countries did James visit in July 2022?` ⚠ boundary：名单式问法（COUNT）vs 被日期框住的单次（DEFAULT）——**与右边那批 DEFAULT 的 `Which ... on <日期>` 成对**，专门测这条线。"}
+{"dataset": "locomo-refined", "question_id": "conv-30#q0018", "expected_route": "COUNT", "boundary": false, "label_note": "`Which events has Jon participated in …` 完成时 + 复数 ⇒ 完整集合。"}
+{"dataset": "locomo-refined", "question_id": "conv-30#q0023", "expected_route": "COUNT", "boundary": false, "label_note": "`Which cities has Jon visited?` 同类。"}
+
+{"dataset": "locomo-refined", "question_id": "conv-44#q0000", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ **直接数值属性（年份）**——v4 的反向边界要拦住的一类。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0012", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 直接度量（距今多久）。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0053", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 直接度量（练了多久的艺术）。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0114", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 直接度量，与 q0053 同族。"}
+{"dataset": "locomo-refined", "question_id": "conv-30#q0025", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 直接度量（开工作室花了多久）。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0003", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 直接度量。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0036", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 直接度量。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0024", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（哪一周去了 UK）——被日期框住的**一次**，不是名单。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0032", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实，同上。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0046", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（哪个月在意大义）。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0050", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（某日签了哪支队）。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0127", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（某人某日推荐了哪本书）——两个具名的人，但不是依赖链。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0153", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实，同上。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0036", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（养伤期间在读哪本书）。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0011", "expected_route": "DEFAULT", "boundary": true, "label_note": "`Which city was John in before traveling to Chicago?` ⚠ boundary：带 `before` ——v4 把 `before` 列为依赖信号词，但这里「去芝加哥」是**已知的时间锚**，不是要检索出来的中间实体。"}
+{"dataset": "locomo-refined", "question_id": "conv-47#q0019", "expected_route": "DEFAULT", "boundary": true, "label_note": "`Which country did James book tickets for in July 2022?` ⚠ boundary：`Which X did ...` 的形状之争（与对边的 COUNT 成对）。"}

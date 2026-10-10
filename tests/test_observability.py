@@ -160,7 +160,10 @@ def test_concurrent_searches_report_only_their_own_rerank_increment(wired, tmp_p
             pool.submit(pipeline.run, user_id="u1", query="question", top_k=100) for _ in range(2)
         ]
         assert all(f.result().items for f in futures)
-    snapshot = json.loads(path.read_text())
+    # ⚠ `encoding="utf-8"` 不能省：快照的 `note` 是中文，而 `read_text()` 的默认编码是
+    #   **本机 locale**（中文 Windows 上是 GBK）⇒ 解码会在第一个多字节序列上炸。
+    #   与 `eval/datasets/prepare.py` 那两处 Windows 修复是同一类问题；本文件四处都补了。
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
     assert snapshot["searches"] == 2
     assert snapshot["rerank"]["calls"] == 2
     assert snapshot["grounded_evidence"]["outcomes"] == {"disabled": 2}
@@ -171,7 +174,7 @@ def test_concurrent_metrics_snapshot_does_not_lose_records(tmp_path):
     sink = SnapshotMetricsSink(path=path)
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(lambda _: sink.record(_obs(grounded_status="no_match")), range(80)))
-    assert json.loads(path.read_text()) == sink.snapshot()
+    assert json.loads(path.read_text(encoding="utf-8")) == sink.snapshot()
     assert sink.snapshot()["searches"] == 80
     assert sink.snapshot()["grounded_evidence"]["outcomes"] == {"no_match": 80}
 

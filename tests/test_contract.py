@@ -379,6 +379,36 @@ def test_http_rejects_illegal_request_at_the_boundary(wired: Wired) -> None:
     assert resp.status_code == 422
 
 
+def test_blank_query_is_rejected_with_422_and_that_is_deliberate(wired: Wired) -> None:
+    """★ **空白 query 在边界拿到 422——这是 2026-10-10 刻意保留的，并带着一条已知风险。**
+
+    ⚠ **风险写在用例里，因为它不是没人想过**：官方只说 `query` 必填、
+    **没承诺它永远非空**，而 **AML 不重试 4xx**（§2.2 的重试只覆盖我们的失败）
+    ⇒ 真跑批时遇到一次空 query，**那个评测阶段会直接废掉**。
+    当时比较过两条路（改成 200 + `{"data": []}` / 保持 422），
+    **决定是保持 422**（理由与取舍见 `docs/decisions.md` D40 的第四段补记）。
+
+    ⛔ **所以这条用例的作用不是"证明它好"，是钉住"它现在是这样"**：
+    哪天要改成 200 + 空结果，改的人必须同时改这里与那份决策记录，
+    **不能悄悄改**——否则"空 query 会 422"这件事就没人记得了。
+
+    ⚠ 另有一条守卫兜住**绕过 HTTP 的调用方**：
+    [`test_router.py`](./test_router.py) 的 `test_blank_query_short_circuits_before_the_router`
+    断言管线对空白 query 短路成空结果、**且一次 LLM 调用都不发生**。
+    """
+    from fastapi.testclient import TestClient
+
+    from tianximem.service import create_app
+
+    with TestClient(create_app(wired.services)) as client:
+        for blank in ("", "   ", chr(9)):
+            resp = client.post("/search", json={"user_id": "u1", "query": blank, "top_k": 100})
+            assert resp.status_code == 422, f"{blank!r} 应当 422（当前口径）"
+        # 阳性对照：非空 query 照常 200——否则上面那条可能只是"什么都 422"
+        ok = client.post("/search", json={"user_id": "u1", "query": "q", "top_k": 100})
+    assert ok.status_code == 200
+
+
 def test_http_health_is_an_unauthenticated_2xx(wired: Wired) -> None:
     """S4：平台探的是**与 Add 同源的 `/health`**，无需鉴权，任意 2xx 即正常。
 

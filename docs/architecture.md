@@ -94,6 +94,7 @@ Add、重放和有界旧库补索引共用抽取器；索引尚未覆盖当前�
 ### Search 路径（§5 流程图）
 
 ```text
+（`router.enabled = false` 时从这里开始 —— **默认**）
 （共同取证不适用时）
 query → BM25 ┐
              ├→ Weighted RRF → memory_id 稳定去重 → Evidence Checker
@@ -112,6 +113,29 @@ query → BM25 ┐
                                                           ↓
                                               ≤ top_k（精确计数，**数的是段**）
 ```
+
+#### 开了路由器时，上面那条链的前面多一层（**D40**，默认关）
+
+```text
+Search(query, top_k)
+   → 【QueryRouter】一次 LLM 调用 → COUNT / MULTI_HOP / DEFAULT（**严格三选一**）
+        │
+        ├ COUNT     → 现有共同取证（compile_query → 取证决策 → 打包）
+        │              无法编译 / 不齐 / 超限 ⇒ **整体回退 DEFAULT**
+        ├ MULTI_HOP → 多跳执行器（`AgenticSearch`）——⛔ **本仓没有实现**
+        │              ⇒ 回退 DEFAULT，并记 `route_fallback = agentic_unavailable`
+        └ DEFAULT   → 原混合检索链（**不再先试共同取证**）
+                          ↑
+              这两条最终**汇入同一个尾巴**：去重 → 精排（恰好一次）→ 扩窗 → 合并 → 打包
+```
+
+> ⚠ **路由不改写查询、不生成答案、不产出事实绑定字段**（§2.1 / §7.2 照旧）：
+> 它只决定走哪条路。⛔ 也**不设置信度阈值**——分类是类别选择，不是打分。
+>
+> ⚠ **它带来一处真实的行为改动**：`DEFAULT` 类问题失去共同取证那条确定性短路。
+> 这是"用确定性换分类能力"的取舍 ⇒ 所以**默认关着**，且代价必须有回归数据
+> （见 [`../eval/reports/`](../eval/reports/) 的路由报告）。键与口径见
+> [`config-reference.md`](./config-reference.md) **§5.7**；决策见 **D40**。
 
 > **`top_k` 数的是段、不是 raw memory**：扩窗会把 raw 条数抬到 `top_k` 之上，
 > 而相邻块的合并又把它降回来 ⇒ **截断只能在合并之后做**。

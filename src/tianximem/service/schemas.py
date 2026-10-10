@@ -74,6 +74,17 @@ class SearchRequest(BaseModel):
     ⚠ **`query` 只校验"非空白"，绝不改写它**——§7.2 要求查询**原样送进去**
     （v1 没有 Query Analyzer）。所以这里**不做 `.strip()` 赋值**，
     只用它来判断合法性。
+
+    ## ⚠ 2026-10-10：这个 422 是**有意保留的**，而它带着一条已知风险
+
+    空白 `query` 在这里拿到 **422**。官方只说 `query` 必填、**没承诺它永远非空**，
+    而 **AML 不重试 4xx**（§2.2 的重试只覆盖我们的失败）⇒ 真跑批时遇到一次空 query，
+    **那个评测阶段会直接废掉**——这一条是**已知且被接受的风险**，
+    不是没人想过的边角（决定与理由见 `docs/decisions.md` **D40** 的第四段补记）。
+
+    ⇒ **另有一条守卫兜住进程内调用方**：`SearchPipeline._search` 对空白 query
+    短路成 `data: []`（`grounded_status = "blank_query"`）。HTTP 到不了那里
+    （这一层先 422），但**任何绕过 HTTP 的调用方**都不会把空查询喂给路由器。
     """
 
     user_id: str = Field(min_length=1)

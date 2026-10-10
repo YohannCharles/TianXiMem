@@ -58,6 +58,9 @@ __all__ = [
     "ENV_EMBED_BASE_URL",
     "ENV_EMBED_CACHE_DIR",
     "ENV_FILE",
+    "ENV_LLM_API_KEY",
+    "ENV_LLM_BASE_URL",
+    "ENV_LLM_MODEL",
     "ENV_METRICS_PATH",
     "ENV_PROFILE",
     "ENV_QDRANT_URL",
@@ -70,10 +73,15 @@ __all__ = [
     "DEFAULT_PREFETCH_LIMIT",
     "DEFAULT_RADIUS",
     "DEFAULT_RERANK_TIMEOUT_S",
+    "DEFAULT_ROUTER_MAX_OUTPUT_TOKENS",
+    "DEFAULT_ROUTER_PROMPT_VERSION",
+    "DEFAULT_ROUTER_TIMEOUT_S",
     "DEFAULT_WEIGHTS",
     "RRF_K",
+    "AgenticConfig",
     "AppConfig",
     "ConfigError",
+    "RouterConfig",
     "assert_single_process",
     "load_config",
 ]
@@ -104,6 +112,25 @@ ENV_WORKERS: Final[str] = "TIANXIMEM_WORKERS"
 ENV_RERANKER_BASE_URL: Final[str] = "TIANXIMEM_RERANKER_BASE_URL"
 ENV_RERANKER_API_KEY: Final[str] = "TIANXIMEM_RERANKER_API_KEY"
 ENV_RERANKER_MODEL: Final[str] = "TIANXIMEM_RERANKER_MODEL"
+
+#: LLM 对话端点的三个变量（§2.3 的 `models.llm`）。
+#:
+#: ⚠ **名字不是新起的**——`AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` 是**仓库里已有的**
+#: 那一组（`.env.example` 与 `docs/config-reference.md` §9 早就声明了它们，口子是给
+#: 归档 pipeline 与 eval harness 用的，经 `eval/harness/api_config.py` 读）。
+#: 本表只是**把同一组变量搬进唯一的读环境变量入口**——服务侧要读它们，
+#: 而"全包只有 `common/config.py` 能读环境变量"是一条有静态测试钉住的结构性质
+#: （`tests/test_config.py::test_only_config_reads_the_environment`）。
+#: ⛔ **不许另起一套名字**（例如 `TIANXIMEM_LLM_*`）：那会造出"同一个端点有两个家"，
+#: 而照着 `.env.example` 填的人只会填对其中一个（另一处永远是空，且**不报错**）。
+#:
+#: ⚠ **端点是按"对"配的**（D39）：`AML_BASE_URL_2` / `AML_API_KEY_2` 是**次端点**，
+#: 它们服务的是 harness 的**判分并行**（"这一次判分用第几个端点"由 `AML_ENDPOINT_INDEX`
+#: 指派）。那是**调度概念，不是这台机器的配置** ⇒ **服务侧只接主端点这一对**，
+#: 不把 `_2` 那一套拉进来（拉进来会得到一个"服务用哪个端点取决于环境变量"的静默分叉）。
+ENV_LLM_BASE_URL: Final[str] = "AML_BASE_URL"
+ENV_LLM_API_KEY: Final[str] = "AML_API_KEY"
+ENV_LLM_MODEL: Final[str] = "AML_MODEL"
 #: `.env` 文件的位置（默认 cwd 下的 `.env`）。⚠ 它**不是**一个配置项，是"去哪读环境"。
 ENV_FILE: Final[str] = "TIANXIMEM_ENV_FILE"
 
@@ -214,6 +241,38 @@ RERANK_ENVELOPES: Final[frozenset[str]] = frozenset({"queries", "query"})
 #: 而单个 1.5 GB 的 JSONL 打不开 ⇒ 分成 ~30 份、每份都能直接看。
 #: `capture.enabled` 忘了关的代价就是"记满一块盘"，由人盯着（跑完关掉）。
 DEFAULT_CAPTURE_MAX_BYTES: Final[int] = 50 * 1024 * 1024
+
+#: 查询路由器的超时（秒）。**C 类自设阈值**（`router.timeout_seconds`）。
+#:
+#: ⚠ 与 `DEFAULT_RERANK_TIMEOUT_S` 的**方向不同**，别照抄那一条：
+#: * reranker 的超时是"等多久"——它排在检索链**中间**，太紧会把**排队**报成"端点坏了"；
+#: * 路由器的超时是"**在检索开始之前**允许拖多久"。它在链的**最前面**，而
+#:   一次 Search 的上限是 30 分钟（§2.2）⇒ 它拖住的不是别的组件，是**整条链的起点**。
+#:
+#: 所以本值**刻意比 reranker 紧**（10s vs 30s）：路由器只回一个词，
+#: 而它的降级路径**有定义**（回 `DEFAULT` = 原混合检索）。超时的代价是"少省一次检索"，
+#: 不是"检索不到"——**没有理由为它等 30 秒**。
+#: ⚠ 这是**观测值不是规格**：换模型或换网关后要重新量（开发机主网关上的 P95 见
+#: `eval/reports/` 的路由报告）。
+DEFAULT_ROUTER_TIMEOUT_S: Final[float] = 10.0
+
+#: 路由器单次生成的输出上限（token）。**C 类自设阈值**（`router.max_output_tokens`）。
+#:
+#: ⚠ 它是**成本护栏，不是"提示词已经要求它只回一个词"的冗余**：生成是逐 token 的，
+#: 而模型没有义务遵守 `OUTPUT FORMAT`。给 8 已经比最长的那个枚举值（`MULTI_HOP`，2 个
+#: token 上下）宽出几倍 ⇒ **超出的部分一定是模型在附加解释**，而那正是我们要截断的东西。
+#: ⚠ 别调到 1：`MULTI_HOP` 会被截成 `MULTI`（输出非法 ⇒ 全部降级成 `DEFAULT` 且**不报错**）。
+DEFAULT_ROUTER_MAX_OUTPUT_TOKENS: Final[int] = 8
+
+#: 路由器提示词的默认版本（`router.prompt_version`）。
+#:
+#: ⚠ **它必须与 `retrieve/router.py` 的 `ROUTER_PROMPT_VERSION` 一致**，而这里**不能 import 那边**
+#: （`common/` 是最底层，反过来 import `retrieve/` 是分层错误）。
+#: ⇒ 两处各写一个字面量、由**构造期**兜住：`QueryRouter` 在版本不认识时**响亮失败**，
+#: 所以不一致的表现是"服务起不来"，**不是**"悄悄用了另一版"。
+#: ⚠ 本常量存在的理由只有一个：**别让同一个值在 `RouterConfig` 的默认值与
+#: `_router()` 的缺省里各写一遍**（2026-10-10 就真的漂过一次：dataclass 是 v3、缺省还是 v1）。
+DEFAULT_ROUTER_PROMPT_VERSION: Final[str] = "v4"
 
 
 # ── 配置树 ─────────────────────────────────────────────────────────────
@@ -412,6 +471,68 @@ class CaptureConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RouterConfig:
+    """三分类查询路由器（`retrieve/router.py`）。**Search 的最上层查询编排。**
+
+    ⚠ **默认 `false`，而且这是刻意的**：打开它会**改变 Search 的路径选择**
+    （`DEFAULT` 类问题不再先试共同取证，见 `pipeline._search`），
+    而 `configs/default.yaml` 是**提交口径**——一个未经代理评测标定的行为改动
+    **不该默认生效**。要跑对照就用 profile 覆盖（`TIANXIMEM_PROFILE`）或臂快照。
+
+    ⚠ **模型名不在这里**：`router.model` 这一项由**全局的 `models.llm`** 满足
+    （`.env` 的 `AML_MODEL`）——**不另开一个键**。理由与 §4.4 的"不得引入第二套独立的
+    模型配置或环境变量加载机制"是同一条：两处都能设的模型名，最终会变成
+    "run record 里写的模型不是实际打的那个"。
+
+    ⚠ **没有置信度阈值，这是有意的**（§4：不设置路由置信度阈值）。分类是**类别选择**，
+    不是打分；引入一个未经标定的数字，等于把一个"要么对要么错"的问题换成一个
+    "阈值定在哪"的问题，而后者需要一份**我们没有**的校准集。
+    """
+
+    #: §15 的消融开关之一。`false` ⇒ **不构造路由器**，这条链上**一次 LLM 调用都不发生**，
+    #: 且共同取证分支照旧无条件先试（= 本开关存在之前的行为）。
+    #:
+    #: ⚠ 它与 `rerank.enabled` 同属"✅ 真能关"那一档，**但两者的缺省语义不同**：
+    #: 精排缺省开（D8 把排序定为主线），路由缺省关（未经标定）。
+    enabled: bool = False
+    #: 单次路由调用的超时（秒）。见模块顶部 `DEFAULT_ROUTER_TIMEOUT_S` 的说明
+    #: （它与 reranker 的超时**方向不同**，别照抄那一条）。
+    timeout_seconds: float = DEFAULT_ROUTER_TIMEOUT_S
+    #: 单次生成的输出上限（token）。见 `DEFAULT_ROUTER_MAX_OUTPUT_TOKENS`。
+    max_output_tokens: int = DEFAULT_ROUTER_MAX_OUTPUT_TOKENS
+    #: 生成温度。**默认 0 是"这一步要可复现"的声明**（§6 的可复现性要求）。
+    #: ⚠ 网关**可能忽略它**（实测有些自研封装不接这个字段）——那就没有确定性保证，
+    #: 而"重放同一批问题得到不同路由"会表现为分数抖动。所以 §6 那条"在一小组边界问题上
+    #: 重复调用、观察路由是否稳定"**必须真跑**，不能靠这个键的存在当保证。
+    temperature: float = 0.0
+    #: 提示词版本（`retrieve/router.py` 的 `ROUTER_PROMPT_VERSION`）。
+    #:
+    #: ⚠ **它是一条断言，不是说明**：与代码里的常量不符 ⇒ **构造期响亮失败**。
+    #: 理由是 §6 的可复现性——"改了两轮提示词却忘了改版本号"的表现是
+    #: **两份 run record 声称同一份提示词**，而那种漂移查不出来。
+    prompt_version: str = DEFAULT_ROUTER_PROMPT_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class AgenticConfig:
+    """多跳执行器（`MULTI_HOP` 分支）——**连接点已就位，执行器没有实现**。
+
+    ⚠ **本键现在是 🟡 而不是 ⛔**：`router.enabled` 打开之后，`MULTI_HOP` 会被真的分出来，
+    而它要去的地方就是这里。**但那一头还没有代码**（v1 不做 agentic，D13）
+    ⇒ 每条 `MULTI_HOP` 都会降级成 `DEFAULT` 并**记下原因**
+    （`route_fallback = agentic_unavailable`）——**不是假装跑过了多跳**。
+
+    ⚠ **不要因为这个键存在就以为多跳能用**：它今天唯一的作用是把
+    "我们还没接执行器"这件事**写进配置**，好让降级原因是一个**有名字的**事实，
+    而不是一句解释。接上执行器之后它才有第二个作用。
+    """
+
+    #: 是否启用多跳执行器。**执行器不存在 ⇒ 打开它只会让每次 `MULTI_HOP` 都降级**
+    #: （并在启动时留一条 WARNING，同 `build_reranker` 的口径）。
+    enabled: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class ServerConfig:
     """服务进程形态（§15）。"""
 
@@ -432,6 +553,8 @@ class AppConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     packaging: PackagingConfig = field(default_factory=PackagingConfig)
     rerank: RerankConfig = field(default_factory=RerankConfig)
+    router: RouterConfig = field(default_factory=RouterConfig)
+    agentic: AgenticConfig = field(default_factory=AgenticConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
 
@@ -458,6 +581,19 @@ class AppConfig:
     #: 空 ⇒ `NullMetricsSink`（不写任何东西）——**缺省不是错误**，与 reranker 同一套口径。
     metrics_path: str = ""
 
+    #: LLM 对话端点的三件套（`AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`）。
+    #:
+    #: ⚠ **它们是"端点身份"那一档，所以跟 `base_url` / `key` 一起住 `.env`**
+    #: （与 `reranker_*` 完全同型；理由见 `docs/config-reference.md` §9 那条
+    #: "embedding 走 yaml、另两个走 env，这不是笔误"）。
+    #:
+    #: ⚠ **允许为空**（默认就是空的）：绝大多数部署**没有** `router.enabled`
+    #: ⇒ 它们不需要这三个值，而"缺了就拒绝启动"会让服务平白多一个启动依赖。
+    #: 真正需要它们的是 `validate()` 里那一条——**只在 `router.enabled = true` 时**才要求。
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+
 
 # ── yaml 读取：**不认识的键一律报错** ────────────────────────────────────
 
@@ -472,6 +608,8 @@ _TOP_LEVEL_KEYS: Final[frozenset[str]] = frozenset(
         "budget",
         "packaging",
         "rerank",
+        "router",
+        "agentic",
         "capture",
     }
 )
@@ -771,6 +909,52 @@ def _rerank(raw: object) -> RerankConfig:
     )
 
 
+def _router(raw: object) -> RouterConfig:
+    """查询路由器。**两个布尔项都要显式挡掉 `bool` 之外的取值**（同 `_rerank`）。"""
+    g = _group(
+        raw,
+        where="router",
+        allowed={
+            "enabled",
+            "timeout_seconds",
+            "max_output_tokens",
+            "temperature",
+            "prompt_version",
+        },
+    )
+    enabled = g.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ConfigError(f"`router.enabled` 必须是布尔值，收到 {enabled!r}")
+    return RouterConfig(
+        enabled=False if enabled is None else enabled,
+        timeout_seconds=_float(
+            g.get("timeout_seconds"),
+            where="router.timeout_seconds",
+            default=DEFAULT_ROUTER_TIMEOUT_S,
+        ),
+        max_output_tokens=_int(
+            g.get("max_output_tokens"),
+            where="router.max_output_tokens",
+            default=DEFAULT_ROUTER_MAX_OUTPUT_TOKENS,
+        ),
+        temperature=_float(g.get("temperature"), where="router.temperature", default=0.0),
+        prompt_version=_str(
+            g.get("prompt_version"),
+            where="router.prompt_version",
+            default=DEFAULT_ROUTER_PROMPT_VERSION,
+        ),
+    )
+
+
+def _agentic(raw: object) -> AgenticConfig:
+    """多跳执行器。**只有"开不开"一项**——执行器本身还不存在（D13）。"""
+    g = _group(raw, where="agentic", allowed={"enabled"})
+    enabled = g.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ConfigError(f"`agentic.enabled` 必须是布尔值，收到 {enabled!r}")
+    return AgenticConfig(enabled=False if enabled is None else enabled)
+
+
 def _capture(raw: object) -> CaptureConfig:
     """诊断开关——**路径不在这里**（它归 env，由 `load_config` 覆盖）。"""
     g = _group(raw, where="capture", allowed={"enabled", "max_bytes"})
@@ -851,10 +1035,62 @@ def validate(cfg: AppConfig) -> AppConfig:
             "多进程各自的 Qdrant 客户端）⇒ 在那之前保持这条约束，"
             "**不要用「位置已经是请求的纯函数了」当理由把它去掉**。"
         )
-
+    _validate_router(cfg)
     return replace(
         cfg,
         retrieval=replace(cfg.retrieval, rrf=replace(cfg.retrieval.rrf, weights=(w_bm25, w_dense))),
+    )
+
+
+def _validate_router(cfg: AppConfig) -> None:
+    """路由器的三件套——**只在它真的开着时才要求**。
+
+    ⚠ **为什么这里配错了要拒绝启动，而不是像 reranker 那样"缺了就降级 + WARNING"**
+    （那条口径见 `build_reranker`）——两者的**失败后果不对称**：
+
+    * 精排缺端点 ⇒ 名次退回 RRF。**检索仍然完整**，降级是**有定义的**，
+      而且 run record 里 `rerank_disabled` 会如实记着。D12 接受这个代价，因为
+      精排是"唯一不被规则保证可用"的组件。
+    * 路由开着却没端点 ⇒ **每一次请求都退 `DEFAULT`**。结果不是"少一点排序质量"，
+      而是**"Router On" 这个实验臂根本没有路由器**——跑出来的分数会被读成
+      "路由没有帮助"，而归因完全错。**这正是 §13 要挡的那一类静默失败。**
+
+    所以：**开着就必须配齐**（`validate()` 在启动阶段响亮失败），而"不想配"
+    的出口是**把 `enabled` 设为 `false`**（默认值）。这与 `embed_base_url` 那种
+    "缺了就拒绝启动"同型，只是加了 `enabled` 这个前提条件。
+    """
+    if not cfg.router.enabled:
+        return
+    for value, name, env in (
+        (cfg.llm_base_url, "llm.base_url", ENV_LLM_BASE_URL),
+        (cfg.llm_api_key, "llm.api_key", ENV_LLM_API_KEY),
+        (cfg.llm_model, "llm.model", ENV_LLM_MODEL),
+    ):
+        if not value or not value.strip():
+            raise ConfigError(
+                f"`router.enabled = true`，但缺少配置 `{name}`（来源：`{env}`）。\n"
+                "  路由器要调用对话端点才能分类，而缺端点的表现是**每次请求都降级**——"
+                "跑出来的就是「Router On」这一臂其实没开路由器（见 `_validate_router` 的说明）。\n"
+                "  ⇒ 填好 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`，"
+                "或把 `router.enabled` 改回 `false`。"
+            )
+    if cfg.router.timeout_seconds <= 0:
+        raise ConfigError(
+            f"`router.timeout_seconds` 必须为正：{cfg.router.timeout_seconds}\n"
+            "  非正值会让每次路由都立刻超时 ⇒ **每次都降级**，而响应看起来完全合法。"
+        )
+    if cfg.router.max_output_tokens <= 0:
+        raise ConfigError(
+            f"`router.max_output_tokens` 必须为正：{cfg.router.max_output_tokens}\n"
+            "  ⚠ 尤其不要设成 1：`MULTI_HOP` 会被截断成 `MULTI` ⇒ 输出非法 ⇒ "
+            "**全部降级成 `DEFAULT`，而且不报错**。"
+        )
+    if cfg.router.temperature < 0:
+        raise ConfigError(f"`router.temperature` 不得为负：{cfg.router.temperature}")
+    _require(
+        cfg.router.prompt_version,
+        where="router.prompt_version",
+        source="configs/*.yaml",
     )
 
 
@@ -955,11 +1191,19 @@ def load_config(
             budget=_budget(data.get("budget")),
             packaging=_packaging(data.get("packaging")),
             rerank=_rerank(data.get("rerank")),
+            router=_router(data.get("router")),
+            agentic=_agentic(data.get("agentic")),
             capture=capture,
             server=ServerConfig(workers=workers),
             # 密钥与端点不在 yaml 里（见模块 docstring 的两层分工）
             embed_base_url=(src.get(ENV_EMBED_BASE_URL) or "").strip(),
             embed_api_key=(src.get(ENV_EMBED_API_KEY) or "").strip(),
+            # ⚠ 这三个**允许为空**（默认就是空的）：不需要路由器的部署不必配它们。
+            #   真正要求它们的是 `_validate_router()`——**只在 `router.enabled` 时**。
+            #   ⚠ 端点与 key 是**一对**，`_2` 那一套是 harness 的调度概念，服务不接（见常量注释）。
+            llm_base_url=(src.get(ENV_LLM_BASE_URL) or "").strip(),
+            llm_api_key=(src.get(ENV_LLM_API_KEY) or "").strip(),
+            llm_model=(src.get(ENV_LLM_MODEL) or "").strip(),
             # ⚠ 这三个**允许为空**：空 ⇒ 不构造 reranker（D12 的降级形态，不是配置错误）
             reranker_base_url=(src.get(ENV_RERANKER_BASE_URL) or "").strip(),
             reranker_api_key=(src.get(ENV_RERANKER_API_KEY) or "").strip(),

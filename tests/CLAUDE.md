@@ -63,6 +63,10 @@ test_datasets.py        `eval/datasets/` schema 落差（合成 fixture 为主�
 test_benchmark_archive.py 归档的**已声明本地修订**（补丁必须声明，不许悄悄改）
 test_corporatebench_pipeline.py CorporateBench 判分与 harness 接线
 test_probes.py          truncation_probe / reorder_probe 的纯函数（判分那步不在本文件）
+test_router.py          三分类查询路由器（**D40**）：严格解析（`NOT MULTI_HOP` 必须读成**非法**）、
+                        HTTP 层的十种坏形状、**降级绝不 500**、路由真的决定走哪条分支、
+                        `MULTI_HOP` 无执行器时的响亮降级、`②–⑦` 与混合链**共用同一个尾巴**、
+                        §13 的开关纯度（**关掉时零 LLM 调用**）、装配与配置校验
 ```
 
 > ⚠ **§13 的开关纯度没有独立文件**。断言住在**各自开关所在的模块**里：
@@ -199,6 +203,7 @@ test_idempotency.py  批次级守卫
 | `packaging.annotate_relatives: false` | **名次 / `id` / `created_at` / `score` / 段数 / token 口径全不变**，而且**被索引的文本逐字相同**（只是 `content` 少了那层括号注） |
 | `dense: false` | ——（**无下游依赖**：D15 删掉了裸 BM25 模式与"验证后再加 dense"的分阶段，所以没有任何东西依赖它） |
 | `retrieval.grounded_evidence: false` | **整条共同取证不执行**：Search **原混合检索链逐字不变**（候选 / 段 / 打包 / 响应形状照旧）；Add **不写事实索引**（真源与幂等重放不变） |
+| `router: false`（**默认**） | **一次 LLM 调用都不发生**（`OpenAiChat.calls == 0`），且共同取证分支**照旧无条件先试**（= 本接缝之前的行为）——⚠ 这是"关"分支唯一能自证的方式，因为**开着时 `DEFAULT` 类问题会失去那条短路**（D40 的代价） |
 
 > ✅ **`rerank` 的纯度断言**：
 > `test_reranker.py::test_candidate_set_is_unchanged_by_rerank` 断言"精排把顺序整个倒过来之后，

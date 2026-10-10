@@ -10,7 +10,24 @@ dense.py     语义那一路：Embedder 调用（**每查询恰好 1 次**）
 fusion.py    **检索策略与参数所有权**（prefetch_limit / weights / k / top_k）
 checker.py   §8 名次一致性判据
 evidence.py  共同证据执行器：执行 facts/query 的共同计划（筛选/连接/区间/当前输入）+ 来源覆盖审查
+router.py    **三分类查询路由器**（COUNT / MULTI_HOP / DEFAULT）——Search 的最上层编排，**默认关**（D40）
 ```
+
+> ### ⚠ `router.py` 是本目录唯一**调用 LLM** 的东西
+>
+> 它只做一件事：**把一个字符串映射成三个枚举值之一**（走 [`../llm/`](../llm/) 的协议）。
+> ⛔ 它**不查库、不取事实、不产出绑定字段**（`subject_key` 之类）——让模型吐绑定键
+> 只有两种结局：静默匹配不上，或**带着逐字引句静默选错事实**。
+> 选出来的路怎么走在 [`../service/pipeline.py`](../service/pipeline.py)。
+> 键与口径见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) **§5.7**。
+> ⚠ **它不改写问题**（§7.2 的"查询原样送"照旧）：路由只决定走哪条路。
+> ⚠ **提示词只有一版**（`ROUTER_PROMPT`，`ROUTER_PROMPT_VERSION = "v4"`）——
+> 2026-10-10 按要求把 v1/v2/v3 删掉了。**代价记在那份报告里**：
+> "换提示词值不值"的基线**从此不能再原样重跑**。历史与实测见
+> [`../../eval/reports/router-v4-20261010.md`](../../eval/reports/router-v4-20261010.md)。
+> ⛔ **提示词里没有 `NONE`**：空 / 无效输入归**入口**（HTTP 边界 + `SearchPipeline`
+> 的 `blank_query` 短路），**不外包给 LLM**——它既多花一次调用，又要靠模型
+> 执行一条它没有强制力的规矩。
 
 > ### ⚠ 分工：**参数归本目录，执行归 `store/`**
 >

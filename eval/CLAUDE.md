@@ -22,6 +22,30 @@
 > `experiments/` = **怎么跑**（arm 定义与 runner）·
 > `reports/` = **数字**。
 
+### `router-samples.jsonl` —— 查询路由的人工标注集（**D40**）
+
+路由器的三分类评测样本，46 题，**只存 `dataset` / `question_id` / `expected_route` /
+`boundary` / `label_note`**——⛔ **不存问题原文**：那是数据集内容，没理由进 git 再存一份
+（与 `dataset/` 同一套口径）。问题由 [`../tools/router_eval.py`](../tools/router_eval.py)
+经 `benchmark_dir()` 现读（D16）。
+
+> ⚠ **`expected_route` 是人读着提示词的定义逐条判的，不是数据集自带的类目。**
+> LoCoMo 的 `category` 与 LongMemEval 的 `question_type` 描述的是**答案类型**，
+> **不是检索依赖结构**——样本里 LoCoMo 标成 `category=1`（multi-hop）的题有一半
+> 按本判据其实是 `DEFAULT`。**拿数据集类目当路由真值会得到一份看不出来的假分数。**
+> 标注口径与逐条判据、以及本轮结论见
+> [`reports/router-20261010.md`](./reports/router-20261010.md)（v1）与
+> [`reports/router-v2-20261010.md`](./reports/router-v2-20261010.md)（v2 对照）。
+
+同目录另有两份，**都只存 id / 标签 / 判据，不含问题原文**：
+
+| 文件 | 是什么 |
+| --- | --- |
+| [`router-samples-e2.jsonl`](./router-samples-e2.jsonl) | **留出样本**（37 条，与上面那份**零重叠**）：验证新版提示词是只适配了原来那批，还是有泛化能力 |
+| [`router-samples-e3.jsonl`](./router-samples-e3.jsonl) | **第三批留出样本**（47 条，与前两批**零重叠**）：2026-10-10 按要求"换一批新题"验证 v4，结论见 [`reports/router-v4-20261010.md`](./reports/router-v4-20261010.md) |
+| [`router-probes.jsonl`](./router-probes.jsonl) | **构造探针**（9 条：没有答案 4 + 注入 5）。⛔ **不是数据集样本**（这两类在真实数据集里不存在），**单独报告、不参与任何数据集样本的指标**。⚠ 原来的 5 条 `none-input` 已删——空 / 无效输入**归入口**，不再是路由器的事（`NONE` 已取消） |
+| [`router-prompt-examples.jsonl`](./router-prompt-examples.jsonl) | **提示词自带例子的回喂探针**（10 条）：把提示词里印着答案的那些例子**原样当查询喂回去**。⇒ 答错 = **没在按提示词办事**，与"标签有没有争议"完全无关。**这是把「提示词没生效」和「判据本身模糊」分开的唯一办法**（2026-10-10 就是靠它把根因定位到判据口径上的，见 v2 报告 §5.5） |
+
 ---
 
 ## ⚠ 一条贯穿全目录的边界：**harness 打 HTTP，不 import `src/`**

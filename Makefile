@@ -1,7 +1,7 @@
 # TianXiMem — 常用命令入口
 #
 # 已经能真跑：`sync` / `lock` / `fmt` / `lint` / `typecheck` / `test` / `check` / `serve` /
-#            `contract-check` / `probe-reranker` / `eval` / `t1` / `t2` / `t2-dump` /
+#            `contract-check` / `probe-reranker` / `router-eval` / `eval` / `t1` / `t2` / `t2-dump` /
 #            `qdrant-up` / `qdrant-down` / `data-check` / `fetch-data`。
 # 其余目标仍指向尚未存在的模块，先以 echo 占位——**别让它们静默成功**，
 # 否则会误以为某一步已经实现。Step 0 / Step 1 起逐个替换为真命令。
@@ -31,8 +31,12 @@ DATASET_FLAG = $(if $(filter all,$(DATASET)),--tier all,--dataset $(DATASET))
 # 默认 1 = 测 D25 本身；`PROCESSES=4` = 测「多 worker 到底安不安全」。
 PROCESSES ?= 1
 
+# `make router-eval` 的落点与额外参数（变体见那个目标的说明）。
+ROUTER_OUT ?= eval/reports/runs/router-$(shell date +%Y%m%d)
+ARGS ?=
+
 .PHONY: help sync check fmt lint typecheck test qdrant-up qdrant-down serve contract-check probe-reranker \
-        order-probe image-build up down deploy-check \
+        router-eval order-probe image-build up down deploy-check \
         eval replay-official t1 t2 t2-dump smoke clean \
         fetch-data data-check data-patch
 
@@ -168,6 +172,18 @@ probe-reranker:  ## 精排探针：打真网关，验连通性 + 它在链上真
 # 退出码：0 端点与线格式都正常 · 1 端点不可用或线格式不符 · 2 没配 reranker。
 # ⚠ **顺序有没有变不影响退出码**——那是信息，不是判据（一个诚实但保守的 reranker
 #    完全可能给出与 RRF 相同的顺序）。
+
+router-eval:  ## 查询路由的三分类小样本评测（46 题，真端点，**不消耗 Smoke 配额**）
+	uv run --env-file $(ENV_FILE) python tools/router_eval.py --out $(ROUTER_OUT) $(ARGS)
+# 落点默认 eval/reports/runs/router-$(STAMP)：`summary.json`（混淆矩阵 + 逐类 P/R/F1 + 成本）
+# 与 `rows.jsonl`（逐题预测）。
+# ⚠ 它**只调路由器**——不发 Add / Search、不建集合、不写真源 ⇒ 开发机上可以反复跑。
+# ⚠ 需要 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（缺了在跑之前直说）。
+# ⚠ **`router.enabled` 的开与关不影响本目标**：工具是"显式要评测路由器"，
+#    那个键管的是**服务的默认行为**（默认关，D40）。
+# 常用变体：`ARGS='--boundary-only --repeat 3'`（稳定性）· `ARGS='--smoke'`（端到端冒烟）。
+# 判据与结论见 eval/reports/router-20261010.md——⚠ **别只读准确率**：那一条在有类别塌缩时
+# 会给出一个好看的假数（退化解"永远答 DEFAULT"就有 0.47）。
 
 order-probe:  ## D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言真源**逐字一致**
 	uv run python tools/order_probe.py --processes $(PROCESSES)
