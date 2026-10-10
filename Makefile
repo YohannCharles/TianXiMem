@@ -35,8 +35,13 @@ PROCESSES ?= 1
 ROUTER_OUT ?= eval/reports/runs/router-$(shell date +%Y%m%d)
 ARGS ?=
 
+# `make coq-eval` 的落点（变体见那个目标的说明）。
+# ⚠ 它的 `ARGS` 与上面那个**共用同一个变量**——同时传两份只在同一次 make 里才有意义，
+#    而那两个目标不会同时跑（一个调路由器、一个调多跳，落点也不同）。
+COQ_OUT ?= eval/reports/runs/coq-$(shell date +%Y%m%d)
+
 .PHONY: help sync check fmt lint typecheck test qdrant-up qdrant-down serve contract-check probe-reranker \
-        router-eval order-probe image-build up down deploy-check \
+        router-eval coq-eval order-probe image-build up down deploy-check \
         eval replay-official t1 t2 t2-dump smoke clean \
         fetch-data data-check data-patch
 
@@ -184,6 +189,20 @@ router-eval:  ## 查询路由的三分类小样本评测（46 题，真端点，
 # 常用变体：`ARGS='--boundary-only --repeat 3'`（稳定性）· `ARGS='--smoke'`（端到端冒烟）。
 # 判据与结论见 eval/reports/router-20261010.md——⚠ **别只读准确率**：那一条在有类别塌缩时
 # 会给出一个好看的假数（退化解"永远答 DEFAULT"就有 0.47）。
+
+coq-eval:  ## 多跳检索（Chain-of-Query）的四臂真实评测：E0/E1/E2 ＋ 每轮精排消融
+	uv run --env-file $(ENV_FILE) python tools/coq_eval.py --out $(COQ_OUT) $(ARGS)
+# 落点默认 eval/reports/runs/coq-$(STAMP)：`report.json`（各臂准确率 + §14 用量 + 证据覆盖）
+# 与 `<臂>-hits.json`（逐题返回的 id）与 `<臂>/`（逐题答案与判分）。
+# ⚠ **它会真的调网关**（embedding / 精排 / 对话模型）并**新建一个隔离 Qdrant collection**
+#    + 一份隔离 SQLite 真源（`$(COQ_OUT)/coq-eval.db`）——**不碰开发库**。
+# ⚠ 需要 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（多跳与路由器共用）
+#    与 `TIANXIMEM_RERANKER_*`（每轮精排要用它）。
+# ⚠ 跑一次要**几十分钟**（4 臂 × 25 题，多跳臂每题最多 3 次 LLM + 4 次精排）。
+#    续跑：`ARGS='--skip-add'`（复用已经建好的隔离真源）。
+# 常用变体：`ARGS='--arms e0,e1,e2,a --limit-questions 5'`（先冒烟）·
+#    `ARGS='--skip-judge'`（只测检索覆盖，不叫裁判）。
+# 口径与结论见 eval/reports/coq-multihop-20261010.md。
 
 order-probe:  ## D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言真源**逐字一致**
 	uv run python tools/order_probe.py --processes $(PROCESSES)

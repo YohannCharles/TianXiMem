@@ -22,6 +22,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from tianximem.agent import AgenticResult, AgenticStats
 from tianximem.common.config import (
     AgenticConfig,
     AppConfig,
@@ -53,6 +54,38 @@ from tianximem.service.pipeline import SearchPipeline
 from tianximem.store.sqlite_store import SqliteStore
 
 # ── 假客户端：**协议级**（见模块 docstring）────────────────────────────
+
+
+def _agentic_result(
+    candidates: list[Candidate],
+    *,
+    rerank_query: str | None = None,
+    fallback_reason: str | None = None,
+) -> AgenticResult:
+    """一个满足 `AgenticSearch` 形状的返回值。
+
+    ⚠ 它与真执行器一样**不精排**：`rerank_query` 是交给编排层的那一句联合 Query
+    （§9.1）。默认 `None` ⇒ 编排层用原问题——正是混合链那条路的行为。
+    """
+    rounds = 1 if candidates else 0
+    return AgenticResult(
+        candidates=tuple(candidates),
+        rerank_query=rerank_query,
+        stats=AgenticStats(
+            rounds=(),
+            stop_reason="max_rounds" if candidates else "retrieval_error",
+            fallback_reason=fallback_reason,
+            candidate_count=len(candidates),
+            unique_candidate_count=len({c.memory_id for c in candidates}),
+            selected_evidence_count=0,
+            joint_query_count=rounds,
+            llm_calls=0,
+            rerank_calls=0,
+            latency_ms=0.0,
+        ),
+        fallback_reason=fallback_reason,
+    )
+
 
 
 class FakeLlm:
@@ -576,11 +609,11 @@ def test_multi_hop_with_an_executor_feeds_the_shared_tail(tmp_path) -> None:
     seen: list[dict] = []
 
     class FakeAgentic:
-        def search(self, *, user_id: str, query: str, top_k: int) -> list[Candidate]:
+        def search(self, *, user_id: str, query: str, top_k: int) -> AgenticResult:
             seen.append({"user_id": user_id, "query": query, "top_k": top_k})
             # ⚠ **故意重复一条**：去重是在调用方（`_rank_and_package`）做的，
             #   执行器返回带重复的候选正是它该被覆盖的形状。
-            return [Candidate(ids[0], 0), Candidate(ids[0], 1)]
+            return _agentic_result([Candidate(ids[0], 0), Candidate(ids[0], 1)])
 
     router, _ = _router("MULTI_HOP")
     service = _pipeline(store, router=router, agentic=FakeAgentic())
@@ -698,19 +731,60 @@ def test_services_close_releases_the_llm_client(tmp_path) -> None:
     assert client._client is None  # noqa: SLF001 — 断言连接池**真的**被释放了
 
 
-def test_agentic_enabled_is_not_silently_ignored(tmp_path, caplog) -> None:
-    """⛔ **打开 `agentic.enabled` 不会让多跳变得可用**——本仓没有执行器（D13）。
+def test_agentic_is_not_built_when_disabled(tmp_path) -> None:
+    """`agentic.enabled = false`（默认）⇒ **`None`** ⇒ 每条 `MULTI_HOP` 都降级。
 
-    所以它必须**响亮**：留一条 WARNING。安静地让每条 `MULTI_HOP` 降级，
-    会把"多跳没跑成"表现成"跑出来和默认路一样"，而那会被读成"多跳没有帮助"。
+    ⚠ 这条同时钉住"关着的时候零成本"：只有 `CoqAgent` 存在，才会有每轮一次的
+    LLM 调用与每轮一次的精排。装配侧不构造它，那两笔开销**结构性地**不可能发生。
+    """
+    config = replace(_config(tmp_path), agentic=AgenticConfig(enabled=False))
+    services = build_services(config)
+    assert services.search.agentic is None
+
+
+def test_agentic_is_built_with_the_executor_timeout_not_the_router_one(tmp_path) -> None:
+    """开 `agentic.enabled` ⇒ 真的接上执行器，而且**用 `agentic.timeout_seconds`**。
+
+    ⚠ 两个消费者的超时**刻意不同**（路由器 10s / 多跳 30s，理由见 `config.py` 的常量），
+    而 `OpenAiCompatChat` 的超时是构造期固定的 ⇒ 它们必须**各持一个客户端**。
+    把两个超时合成一个"全局 LLM 超时"在代码上更省事，但那会把两个依据完全不同的量绑死，
+    而这里正是唯一能发现那件事的地方。
+    """
+    from tianximem.agent import CoqAgent
+
+    config = replace(
+        _config(tmp_path),
+        router=RouterConfig(enabled=False),
+        agentic=AgenticConfig(enabled=True, timeout_seconds=12.5),
+    )
+    services = build_services(config)
+    try:
+        agentic = services.search.agentic
+        assert isinstance(agentic, CoqAgent)
+        client = agentic.llm
+        assert isinstance(client, OpenAiCompatChat)
+        # ⚠ 超时是构造期固定的 ⇒ 这是唯一能看见"用的是哪一个"的地方。
+        assert client._timeout == 12.5  # noqa: SLF001 — 断言**不是**路由器的 10s
+        # ⚠ 关掉路由器之后**一个路由器客户端都不该被构造**（§13 的开关纯度）。
+        assert services.search.router is None
+        services.close()
+        assert client._client is None  # noqa: SLF001 — 连接池**真的**被释放了
+    finally:
+        services.close()
+
+
+def test_agentic_force_is_loud_because_it_bypasses_the_router(tmp_path, caplog) -> None:
+    """`agentic.force`（§12.3 的 E1）**必须响亮**：它绕过路由器。
+
+    ⚠ 没有这条 WARNING，跑完之后分不出"分数变了"是 CoQ 的效果还是
+    "路由器被绕过"造成的——而 E1 那一臂的全部意义就是**把这两件事分开**。
     """
     import logging
 
-    config = replace(_config(tmp_path), agentic=AgenticConfig(enabled=True))
+    config = replace(_config(tmp_path), agentic=AgenticConfig(enabled=True, force=True))
     with caplog.at_level(logging.WARNING):
-        services = build_services(config)
-    assert services.search.agentic is None
-    assert any("agentic.enabled" in record.message for record in caplog.records)
+        build_services(config)
+    assert any("agentic.force" in record.message for record in caplog.records)
 
 
 # ── ⑦ 配置层：开着却没端点 ⇒ **启动阶段响亮失败** ─────────────────────

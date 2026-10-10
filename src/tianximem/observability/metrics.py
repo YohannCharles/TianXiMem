@@ -75,9 +75,9 @@ class SearchObservation:
     """**分类本身**降级的原因（`llm_unavailable: …` / `invalid_output` …）。成功时为 `None`。"""
 
     route_fallback: str | None = None
-    """分类成功、但**选中的那条路没跑成**的原因。今天只有 `agentic_unavailable`。
+    """分类成功、但**选中的那条路没跑成**的原因（`agentic_unavailable` / `retrieval_error` …）。
 
-    ⚠ 它与 `route_reason` 是两件事：一个是"没分成类"，一个是"分对了但执行器不在"。
+    ⚠ 它与 `route_reason` 是两件事：一个是"没分成类"，一个是"分对了但执行器没跑成"。
     """
 
     route_latency_ms: float | None = None
@@ -85,6 +85,51 @@ class SearchObservation:
 
     ⚠ 没有路由时为 `None`——**不要记 0**：0 会让"Router On"与"Router Off"两臂的
     平均路由耗时都算得出来，而其中一臂的 0 是假的（§6 的成本分析会读错）。
+    """
+
+    agentic_status: str = "not_recorded"
+    """多跳执行器这一次的状态：`disabled`（没走到那条路）/ `success` / `degraded`。
+
+    ⚠ 与 `rerank` 的三分法**同一条纪律**（D12）：`disabled` 指的是
+    **"这条路没被走到"**（路由判了别的、或执行器没装），不是"走了 0 轮"。
+    把两者混起来，"多跳值不值"这个问题的分母就没了。
+    """
+
+    agentic_rounds: int = 0
+    """**实际执行的检索轮数**（含第一轮）。§14 的"Agent 平均轮数"就是它。"""
+
+    agentic_stop_reason: str | None = None
+    """它为什么停（§11 的 `stop_reason`）：`sufficient` / `max_rounds` / `duplicate_query` …
+
+    ⚠ 与 `route_fallback` 是两件事：一个是"这条路的结局"，一个是"它压根没跑成"。
+    """
+
+    agentic_llm_calls: int = 0
+    """多跳自己发起的 LLM 调用数（**每轮最多一次**）。"""
+
+    agentic_rerank_calls: int = 0
+    """多跳**每轮内部**的精排调用数。
+
+    ⚠ 它**不包含**最终那一次精排——那一次算在 `rerank_calls` 里（§9.4 的"最多四次"=
+    这里的 ≤3 ＋ 那里的一次）。⛔ 把两次混进同一个数，§9.4 那个上限就没法核对了。
+    """
+
+    agentic_selected_evidence: int = 0
+    """跨轮累积的"模型选中"的证据条数（§8.1 的 `selected_evidence_ids`）。"""
+
+    agentic_candidates: int = 0
+    """去重后的跨轮候选总数（§9.2）。
+
+    ⚠ 它是**去重后**的，与 `rounds × per_round_top_k` 不是一回事。
+    """
+
+    agentic_joint_queries: int = 0
+    """最终联合精排 Query 里**实际执行过的**查询条数（含原始问题）。"""
+
+    agentic_latency_ms: float | None = None
+    """多跳执行器本身的墙钟耗时。
+
+    ⚠ 没走到那条路时为 `None`——**不要记 0**（同 `route_latency_ms`）。
     """
 
     returned_segments: int = 0
@@ -150,6 +195,20 @@ class SnapshotMetricsSink:
     router_latency_ms_max: float = 0.0
     selected_facts: int = 0
     selected_sources: int = 0
+    #: 多跳执行器的分布与总量（§14）。⛔ **`agentic_calls` 数的是"真的跑过多跳"的次数**
+    #: （即 `agentic_latency_ms` 非 None 的那些）——均值必须按它除，不是按 `searches`。
+    #: 与路由器那条「`router_calls <= searches`」同型。
+    agentic_statuses: dict[str, int] = field(default_factory=dict)
+    agentic_stops: dict[str, int] = field(default_factory=dict)
+    agentic_calls: int = 0
+    agentic_rounds_sum: int = 0
+    agentic_llm_calls: int = 0
+    agentic_rerank_calls: int = 0
+    agentic_selected_evidence: int = 0
+    agentic_candidates: int = 0
+    agentic_joint_queries: int = 0
+    agentic_latency_ms_sum: float = 0.0
+    agentic_latency_ms_max: float = 0.0
     returned_segments: int = 0
     truncated_by_budget: int = 0
     truncated_by_top_k: int = 0
@@ -185,6 +244,24 @@ class SnapshotMetricsSink:
                 )
             self.selected_facts += observation.selected_facts
             self.selected_sources += observation.selected_sources
+            for counts, value in (
+                (self.agentic_statuses, observation.agentic_status),
+                (self.agentic_stops, observation.agentic_stop_reason),
+            ):
+                if value:
+                    counts[value] = counts.get(value, 0) + 1
+            if observation.agentic_latency_ms is not None:
+                self.agentic_calls += 1
+                self.agentic_rounds_sum += observation.agentic_rounds
+                self.agentic_llm_calls += observation.agentic_llm_calls
+                self.agentic_rerank_calls += observation.agentic_rerank_calls
+                self.agentic_selected_evidence += observation.agentic_selected_evidence
+                self.agentic_candidates += observation.agentic_candidates
+                self.agentic_joint_queries += observation.agentic_joint_queries
+                self.agentic_latency_ms_sum += observation.agentic_latency_ms
+                self.agentic_latency_ms_max = max(
+                    self.agentic_latency_ms_max, observation.agentic_latency_ms
+                )
             self.returned_segments += observation.returned_segments
             self.truncated_by_budget += observation.truncated_by_budget
             self.truncated_by_top_k += observation.truncated_by_top_k
@@ -235,6 +312,27 @@ class SnapshotMetricsSink:
                         else None
                     ),
                     "max": round(self.router_latency_ms_max, 3),
+                },
+            },
+            "agentic": {
+                "statuses": dict(self.agentic_statuses),
+                "stops": dict(self.agentic_stops),
+                "rounds": self.agentic_rounds_sum,
+                "llm_calls": self.agentic_llm_calls,
+                "rerank_calls": self.agentic_rerank_calls,
+                "selected_evidence": self.agentic_selected_evidence,
+                "candidates": self.agentic_candidates,
+                "joint_queries": self.agentic_joint_queries,
+                "latency_ms": {
+                    # ⚠ 分母是 `agentic_calls`（真的跑过多跳的次数）**不是** `searches`
+                    #   ——见 `agentic_calls` 字段的说明。
+                    "count": self.agentic_calls,
+                    "mean": (
+                        round(self.agentic_latency_ms_sum / self.agentic_calls, 3)
+                        if self.agentic_calls
+                        else None
+                    ),
+                    "max": round(self.agentic_latency_ms_max, 3),
                 },
             },
             "packaging": {

@@ -274,6 +274,76 @@ DEFAULT_ROUTER_MAX_OUTPUT_TOKENS: Final[int] = 8
 #: `_router()` 的缺省里各写一遍**（2026-10-10 就真的漂过一次：dataclass 是 v3、缺省还是 v1）。
 DEFAULT_ROUTER_PROMPT_VERSION: Final[str] = "v4"
 
+#: 多跳执行器的**检索轮数上限**（`agentic.max_rounds`）。**含第一轮**。
+#:
+#: ⚠ PRD §9 写的是 4 轮，**这里是 3**，两处不一致是**刻意的**：
+#: §9 描述的是 ReFind 形状的通用 Agent（4 轮、每轮 top_k=5、三个工具），
+#: 而本阶段只实现方案要求的那部分（3 轮、每轮 Top20、**没有工具**）。
+#: ⛔ **不要拿 §9 的 4 去"修正"这个值**——那会同时改掉轮数与每轮候选数两个量，
+#: 而它们是一道题（§10："种子数、窗口大小、Top-K、token 预算，是同一道题"）。
+#: ⚠ §9 还有一句必须记住：**"4 是检索轮数的上限，不是 LLM 调用次数的上限"**
+#: ⇒ §14 要看的是**平均轮数与平均调用数**，不是拿这个数去卡。
+DEFAULT_COQ_MAX_ROUNDS: Final[int] = 3
+
+#: 每轮交给 CoQ 的候选数（`agentic.per_round_top_k`）——**每轮精排之后取前 N 条**。
+#:
+#: ⚠ 它与"进精排的候选数"是**两个量**：后者取请求的 `top_k`（AML 固定 100），
+#: 顺序必须是"融合池 → 精排 → 取 N"。反过来（先截 N 再精排）只会重排一堆已经被
+#: 提前排除掉的候选，**而结果看起来完全正常**（§3.2 专门点了这个坑）。
+DEFAULT_COQ_PER_ROUND_TOP_K: Final[int] = 20
+
+#: 提前停止所需的置信度（`agentic.sufficiency_threshold`）。
+#:
+#: ⚠ 它**只用在"已经判定充分"之后**：先 `is_sufficient = true`，再看置信度够不够。
+#: ⛔ **不要反过来**读成"置信度低于它就要继续检索"——原版提示词在证据不足却提不出
+#: 更好 Query 时会原样回吐原问题，那也是一种正常的停止（§7.5 明确禁止那种实现）。
+#: ⚠ 这个数来自提示词**自带的**标尺（0.90–1.00 很确定 / 0.60–0.89 中等），
+#: 不是本项目的标定结果 ⇒ 它没被本仓的评测标过，别当成已校准的阈值。
+DEFAULT_COQ_SUFFICIENCY_THRESHOLD: Final[float] = 0.8
+
+#: 多跳执行器单次 LLM 调用的超时（秒，`agentic.timeout_seconds`）。
+#:
+#: ⚠ **与路由器的 10s 不是一回事**：路由器只回一个词（`max_output_tokens = 8`），
+#: 而这里要回一个 JSON 对象（含一句改写 Query）。三轮各等一次 ⇒ 它按
+#: **3 × 单次超时**计算，仍远在 30 分钟的单请求上限之内（§2.2）。
+DEFAULT_COQ_TIMEOUT_S: Final[float] = 30.0
+
+#: 多跳执行器单次生成的输出上限（token，`agentic.max_output_tokens`）。
+#:
+#: ⚠ 它**不是**路由器的 8：那里只回一个枚举值，这里要回四个字段的 JSON
+#: （其中 `new_query` 是一句自然语言）。给 256 是**成本护栏**——
+#: 够写一句查询加上 JSON 骨架，而超出的部分一定是模型在附加解释。
+DEFAULT_COQ_MAX_OUTPUT_TOKENS: Final[int] = 256
+
+#: 每轮喂给模型的文档总量上限（token，`agentic.max_prompt_tokens`）。
+#:
+#: ⚠ **它和 `budget.max_tokens`（117,760）不是同一个东西**，⛔ 不要复用那一个：
+#: 那个是 **AML 答案窗口**的预算，而这里是**发给 9B 模型的一次 prompt**。
+#: 拿 117k 当上限等于没有上限——每轮 20 篇文档会被原样全塞进去，
+#: 而"超了"这件事**不会报错**，只会让检索变慢、变贵、变不准。
+#: ⚠ 预算的分配顺序是有约束的：**先给此前已选中的证据留够**，剩下的才按名次补本轮
+#: 候选（§4.4）——历史证据不能因为本轮名次低就被悄悄挤掉。
+DEFAULT_COQ_MAX_PROMPT_TOKENS: Final[int] = 6000
+
+#: 多跳提示词的默认版本（`agentic.prompt_version`）。
+#:
+#: ⚠ 与 `DEFAULT_ROUTER_PROMPT_VERSION` **同一条纪律**：这里**不能 import**
+#: [`../agent/coq_prompt.py`](../agent/coq_prompt.py)（`common/` 是最底层）。
+#: 两处各写一个字面量、由**构造期**兜住：`CoqAgent` 在版本不认识时**响亮失败**，
+#: 所以不一致的表现是"服务起不来"，**不是**"悄悄用了另一版"。
+#: 名字沿用方案 §10.4 的 `coq-original`（含义：原版，没有本项目自己的改动）。
+DEFAULT_COQ_PROMPT_VERSION: Final[str] = "coq-original"
+
+#: `agentic.final_rerank_query_mode` 的取值域。
+#:
+#: * `"combined"` —— 原问题 ＋ **实际执行过的**改写 Query（§9.1 的联合精排，**主方案**）
+#: * `"original"` —— 只用原问题（§12.6 列出的后续消融项，本阶段**不做那个实验**，
+#:   但把开关留下：它单独改变的量只有一个，是个合格的对照）
+#:
+#: ⚠ 两种都**不重复原问题**：`combined` 拼的是"执行过的那些"，而第一轮执行的就是原问题，
+#: 所以原问题**天然只出现一次**。
+FINAL_RERANK_QUERY_MODES: Final[tuple[str, ...]] = ("combined", "original")
+
 
 # ── 配置树 ─────────────────────────────────────────────────────────────
 # 字段名与 `docs/config-reference.md` 的点分键**逐段对应**（`storage.sqlite.path`
@@ -515,21 +585,71 @@ class RouterConfig:
 
 @dataclass(frozen=True, slots=True)
 class AgenticConfig:
-    """多跳执行器（`MULTI_HOP` 分支）——**连接点已就位，执行器没有实现**。
+    """多跳执行器（`MULTI_HOP` 分支）——**执行器已经实现**，默认仍然关着。
 
-    ⚠ **本键现在是 🟡 而不是 ⛔**：`router.enabled` 打开之后，`MULTI_HOP` 会被真的分出来，
-    而它要去的地方就是这里。**但那一头还没有代码**（v1 不做 agentic，D13）
-    ⇒ 每条 `MULTI_HOP` 都会降级成 `DEFAULT` 并**记下原因**
-    （`route_fallback = agentic_unavailable`）——**不是假装跑过了多跳**。
+    ⚠ 与 `RouterConfig` 的关系是**两条独立的开关**，别把它们读成一个：
 
-    ⚠ **不要因为这个键存在就以为多跳能用**：它今天唯一的作用是把
-    "我们还没接执行器"这件事**写进配置**，好让降级原因是一个**有名字的**事实，
-    而不是一句解释。接上执行器之后它才有第二个作用。
+    | | 作用 |
+    | --- | --- |
+    | `router.enabled` | **选路**（三个枚举值之一）。开它 ⇒ `DEFAULT` 类问题不再先试共同取证 |
+    | `agentic.enabled` | **执行器在不在**。开它 ⇒ `MULTI_HOP` 真的跑多轮检索，而不是降级 |
+
+    今天**只有两个都开着**，多跳那条路才会真的跑起来；只开 `agentic` 而不开 `router`
+    则一条请求都不会走到这里（除非用了 `force`，那是实验开关，见下）。
+
+    ⚠ **默认全关**：一条会多花 3 次 LLM ＋ 最多 3 次精排的路，**不该默认生效在提交口径上**。
     """
 
-    #: 是否启用多跳执行器。**执行器不存在 ⇒ 打开它只会让每次 `MULTI_HOP` 都降级**
-    #: （并在启动时留一条 WARNING，同 `build_reranker` 的口径）。
+    #: 是否构造多跳执行器。`false`（默认）⇒ `build_agentic` 返回 `None`
+    #: ⇒ 每条 `MULTI_HOP` 降级回 `DEFAULT` 并记 `route_fallback = agentic_unavailable`。
     enabled: bool = False
+
+    #: **实验开关：绕过路由器，把所有查询按 `MULTI_HOP` 处理**（§12.3 的 E1）。
+    #:
+    #: ⚠ 它存在的**唯一**理由是 E1 那一臂要"独立验证 CoQ 的检索能力"——不绕过路由器，
+    #: 测出来的就是"路由器 × 多跳"的合成效果，两者分不开（§12.3 明说了这件事）。
+    #: ⛔ **它不是给提交口径用的**：打开它等于关掉 `COUNT` / `DEFAULT` 两条路的选择能力。
+    #: 关闭它（默认）时这条链与本开关存在之前**逐字相同**。
+    force: bool = False
+
+    #: 检索轮数上限，**含第一轮**（§7.4）。见 `DEFAULT_COQ_MAX_ROUNDS` 里与 PRD §9 的差异说明。
+    max_rounds: int = DEFAULT_COQ_MAX_ROUNDS
+
+    #: 每轮交给 CoQ 的候选数（精排**之后**取前 N 条）。
+    per_round_top_k: int = DEFAULT_COQ_PER_ROUND_TOP_K
+
+    #: 提前停止的置信度门槛。⚠ 只在"已判定充分"之后起作用，见该常量的说明。
+    sufficiency_threshold: float = DEFAULT_COQ_SUFFICIENCY_THRESHOLD
+
+    #: 每轮 prompt 的 token 上限。**与 `budget.max_tokens` 不是同一个量**。
+    max_prompt_tokens: int = DEFAULT_COQ_MAX_PROMPT_TOKENS
+
+    #: 单次生成的输出上限（token）。
+    max_output_tokens: int = DEFAULT_COQ_MAX_OUTPUT_TOKENS
+
+    #: 单次调用的超时（秒）。
+    timeout_seconds: float = DEFAULT_COQ_TIMEOUT_S
+
+    #: 生成温度。**默认 0 是"这一步要可复现"的声明**（§6）。
+    temperature: float = 0.0
+
+    #: **每轮内部精排开关**（§12.4 的那个消融：A = 直接用 RRF 顺序取 Top-N；
+    #: B = 先精排再取 Top-N）。默认 `true` = 方案的主方案。
+    #:
+    #: ⚠ 它**只影响交给 LLM 的那 20 条**：最终精排由调用方做，与这个开关无关。
+    #: 关掉它**不改候选集合**，只改名次顺序 —— 所以它是一个合格的对照
+    #: （§13："开关必须只影响它命名的那一件事"）。
+    round_rerank_enabled: bool = True
+
+    #: 最终精排 Query 的构造方式（§9.1）。取值域见 `FINAL_RERANK_QUERY_MODES`。
+    final_rerank_query_mode: str = "combined"
+
+    #: 提示词版本（`agent/coq_prompt.py` 的 `COQ_PROMPT_VERSION`）。
+    #:
+    #: ⚠ **它是一条断言，不是说明**：与代码里的常量不符 ⇒ **构造期响亮失败**。
+    #: 同 `router.prompt_version`：删掉了历史版本之后，"改提示词忘了改版本号"的表现是
+    #: **两份 run record 声称同一份提示词**，而那种漂移查不出来。
+    prompt_version: str = DEFAULT_COQ_PROMPT_VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -947,12 +1067,86 @@ def _router(raw: object) -> RouterConfig:
 
 
 def _agentic(raw: object) -> AgenticConfig:
-    """多跳执行器。**只有"开不开"一项**——执行器本身还不存在（D13）。"""
-    g = _group(raw, where="agentic", allowed={"enabled"})
-    enabled = g.get("enabled")
-    if enabled is not None and not isinstance(enabled, bool):
-        raise ConfigError(f"`agentic.enabled` 必须是布尔值，收到 {enabled!r}")
-    return AgenticConfig(enabled=False if enabled is None else enabled)
+    """多跳执行器（`MULTI_HOP`）。**每一个键都只影响它命名的那一件事**（§13）。
+
+    ⚠ `enabled` 是唯一的开关；`force` 是**实验**开关（E1 要绕过路由器），
+    其余都是上限/阈值。⛔ 这里刻意**没有**"轮数 × 每轮条数"之外的检索参数：
+    每轮召回深度取**请求的 `top_k`**，不为多跳另造一套（§3.2）。
+    """
+    g = _group(
+        raw,
+        where="agentic",
+        allowed={
+            "enabled",
+            "force",
+            "max_rounds",
+            "per_round_top_k",
+            "sufficiency_threshold",
+            "max_prompt_tokens",
+            "max_output_tokens",
+            "timeout_seconds",
+            "temperature",
+            "round_rerank_enabled",
+            "final_rerank_query_mode",
+            "prompt_version",
+        },
+    )
+    for name in ("enabled", "force", "round_rerank_enabled"):
+        value = g.get(name)
+        if value is not None and not isinstance(value, bool):
+            raise ConfigError(f"`agentic.{name}` 必须是布尔值，收到 {value!r}")
+    mode = _str(
+        g.get("final_rerank_query_mode"),
+        where="agentic.final_rerank_query_mode",
+        default="combined",
+    )
+    if mode not in FINAL_RERANK_QUERY_MODES:
+        # 取值域在**这里**就挡住：一个拼错的模式会让"联合精排"静默退化成"只用原问题"，
+        # 而两者的分数差正好是本阶段要测的东西（§9.1）——**那种静默会直接污染结论**。
+        raise ConfigError(
+            f"`agentic.final_rerank_query_mode` 必须是 {FINAL_RERANK_QUERY_MODES} 之一，"
+            f"收到 {mode!r}"
+        )
+    return AgenticConfig(
+        enabled=bool(g.get("enabled") or False),
+        force=bool(g.get("force") or False),
+        max_rounds=_int(
+            g.get("max_rounds"), where="agentic.max_rounds", default=DEFAULT_COQ_MAX_ROUNDS
+        ),
+        per_round_top_k=_int(
+            g.get("per_round_top_k"),
+            where="agentic.per_round_top_k",
+            default=DEFAULT_COQ_PER_ROUND_TOP_K,
+        ),
+        sufficiency_threshold=_float(
+            g.get("sufficiency_threshold"),
+            where="agentic.sufficiency_threshold",
+            default=DEFAULT_COQ_SUFFICIENCY_THRESHOLD,
+        ),
+        max_prompt_tokens=_int(
+            g.get("max_prompt_tokens"),
+            where="agentic.max_prompt_tokens",
+            default=DEFAULT_COQ_MAX_PROMPT_TOKENS,
+        ),
+        max_output_tokens=_int(
+            g.get("max_output_tokens"),
+            where="agentic.max_output_tokens",
+            default=DEFAULT_COQ_MAX_OUTPUT_TOKENS,
+        ),
+        timeout_seconds=_float(
+            g.get("timeout_seconds"),
+            where="agentic.timeout_seconds",
+            default=DEFAULT_COQ_TIMEOUT_S,
+        ),
+        temperature=_float(g.get("temperature"), where="agentic.temperature", default=0.0),
+        round_rerank_enabled=bool(g.get("round_rerank_enabled", True)),
+        final_rerank_query_mode=mode,
+        prompt_version=_str(
+            g.get("prompt_version"),
+            where="agentic.prompt_version",
+            default=DEFAULT_COQ_PROMPT_VERSION,
+        ),
+    )
 
 
 def _capture(raw: object) -> CaptureConfig:
@@ -1036,6 +1230,7 @@ def validate(cfg: AppConfig) -> AppConfig:
             "**不要用「位置已经是请求的纯函数了」当理由把它去掉**。"
         )
     _validate_router(cfg)
+    _validate_agentic(cfg)
     return replace(
         cfg,
         retrieval=replace(cfg.retrieval, rrf=replace(cfg.retrieval.rrf, weights=(w_bm25, w_dense))),
@@ -1092,6 +1287,65 @@ def _validate_router(cfg: AppConfig) -> None:
         where="router.prompt_version",
         source="configs/*.yaml",
     )
+
+
+def _validate_agentic(cfg: AppConfig) -> None:
+    """多跳执行器的键——**只在它真的开着时才要求端点，但取值范围**任何时候都要对**。
+
+    ⚠ **端点那一半与 `_validate_router` 的理由完全相同**（都是"开着就必须配齐"）：
+    `agentic.enabled` 开着却没有对话端点 ⇒ 每一轮 LLM 都失败 ⇒ 每条 `MULTI_HOP`
+    都带着候选回退 ⇒ 跑出来的分数被读成"多跳没有帮助"。**归因错了，不是质量差。**
+
+    ⚠ 取值范围那一半**不看 `enabled`**：一个 `max_rounds: 0` 在关着的时候无害，
+    但**打开它的那一刻**会造出"一轮都不跑、却声称走过多跳"的状态——
+    而这正是本模块存在的意义（把启动期的错误挡在启动期）。
+
+    它**不检查 `force` 本身**：那是实验开关，本身合法，只是不该出现在提交口径里
+    （口径由 run record 的配置指纹负责留痕，不是由校验器负责禁止）。
+    ⚠ 但它**必须与 `enabled` 一起用**——见下面那条检查。
+    """
+    if cfg.agentic.force and not cfg.agentic.enabled:
+        raise ConfigError(
+            "`agentic.force = true` 但 `agentic.enabled = false`。\n"
+            "  `force` 的含义是「绕过路由器、一律走 MULTI_HOP」，而**执行器没装**时"
+            "这条指令无处可去 ⇒ 每一个查询都会安静地按原路走，**而你以为在跑 E1**。\n"
+            "  ⇒ 两个一起打开，或两个都关掉。"
+        )
+    if cfg.agentic.enabled:
+        for value, name, env in (
+            (cfg.llm_base_url, "llm.base_url", ENV_LLM_BASE_URL),
+            (cfg.llm_api_key, "llm.api_key", ENV_LLM_API_KEY),
+            (cfg.llm_model, "llm.model", ENV_LLM_MODEL),
+        ):
+            if not value or not value.strip():
+                raise ConfigError(
+                    f"`agentic.enabled = true`，但缺少配置 `{name}`（来源：`{env}`）。\n"
+                    "  多跳执行器每一轮都要调一次对话端点；缺端点 ⇒ **每一轮都失败**，"
+                    "于是「Agent On」这一臂其实没有执行器（见 `_validate_agentic` 的说明）。\n"
+                    "  ⇒ 填好 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`，"
+                    "或把 `agentic.enabled` 改回 `false`。"
+                )
+    if cfg.agentic.max_rounds < 1:
+        raise ConfigError(
+            f"`agentic.max_rounds` 必须 ≥ 1（**含第一轮**）：{cfg.agentic.max_rounds}\n"
+            "  0 会让多跳一轮都不跑却仍然返回**空候选**——那不是降级，是「假装跑过了」。"
+        )
+    if cfg.agentic.per_round_top_k < 1:
+        raise ConfigError(f"`agentic.per_round_top_k` 必须 ≥ 1：{cfg.agentic.per_round_top_k}")
+    if not 0.0 <= cfg.agentic.sufficiency_threshold <= 1.0:
+        raise ConfigError(
+            "`agentic.sufficiency_threshold` 必须在 0..1 之间："
+            f"{cfg.agentic.sufficiency_threshold}\n"
+            "  ⚠ 它只在**已经判定充分**之后起作用（见 `DEFAULT_COQ_SUFFICIENCY_THRESHOLD`）。"
+        )
+    for name in ("max_prompt_tokens", "max_output_tokens"):
+        if getattr(cfg.agentic, name) <= 0:
+            raise ConfigError(f"`agentic.{name}` 必须为正：{getattr(cfg.agentic, name)}")
+    if cfg.agentic.timeout_seconds <= 0:
+        raise ConfigError(f"`agentic.timeout_seconds` 必须为正：{cfg.agentic.timeout_seconds}")
+    if cfg.agentic.temperature < 0:
+        raise ConfigError(f"`agentic.temperature` 不得为负：{cfg.agentic.temperature}")
+    _require(cfg.agentic.prompt_version, where="agentic.prompt_version", source="configs/*.yaml")
 
 
 def assert_single_process() -> None:
