@@ -53,6 +53,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eval.datasets.locomo import load_locomo  # noqa: E402
+from eval.datasets.musique import (  # noqa: E402
+    load_musique_haystack,
+    supporting_snippets,
+)
 from eval.harness import (  # noqa: E402
     ServiceClient,
     build_input_items,
@@ -89,6 +93,26 @@ ARMS: tuple[Arm, ...] = (
 )
 
 
+#: 本工具支持的两个题池。⚠ **形状正好相反**，所以 `_select` 要分开：
+#: LoCoMo 是 `N 题 : 1 段对话`，musique-haystack 是 `N 题 : 1 个 haystack`。
+DATASETS: dict[str, dict[str, str]] = {
+    "locomo-refined": {
+        "manifest": "eval/coq-multihop.jsonl",
+        "judge": "locomo-refined",
+        "note": "只取 LoCoMo 的 `category == \"1\"`、25 道 ⇒ **不要与 346 题那条 overall 直接比**。"
+        "⚠ 人工复核发现这 25 道里真正的链式依赖几乎没有（见 coq-multihop-20261010.md §5）。",
+    },
+    "musique-haystack": {
+        "manifest": "eval/coq-musique.jsonl",
+        "judge": "musique",
+        "note": "MuSiQue 的 25 道**4 跳严格链**，语料是这 25 道题自己的段落并成的**一个** haystack"
+        "（427 段）⇒ 池子大于 `top_k`，检索真的有得选。",
+    },
+}
+
+DEFAULT_DATASET = "locomo-refined"
+
+
 def _load_manifest(path: Path) -> dict[str, list[str]]:
     """`user_id → [question_id]`。**只读 id**——题目原文从 `dataset/` 现取（§12.5）。"""
     wanted: dict[str, list[str]] = {}
@@ -102,12 +126,23 @@ def _load_manifest(path: Path) -> dict[str, list[str]]:
     return wanted
 
 
-def _select(bench_dir: Path, wanted: dict[str, list[str]]) -> list:
+def _select(bench_dir: Path, wanted: dict[str, list[str]], *, dataset: str) -> list:
     """把清单落成 `Sample`（**只保留清单里那几道题**）。
 
-    ⚠ 用 `replace` 缩 `questions` 而不是筛掉整个 sample：`build_input_items` 只认
-    `sample.questions`，而 ADD 要的是**整段对话**（题是长在对话上的）。
+    两个数据集的**形状正好相反**，所以这里要分开：
+
+    * **LoCoMo-Refined**：`N 题 : 1 段对话`。⚠ 用 `replace` 缩 `questions` 而不是筛掉整个
+      sample——ADD 要的是**整段对话**（题是长在对话上的）。
+    * **musique-haystack**：`N 题 : 1 个 haystack`。清单里**所有题共用一个 `user_id`**，
+      而语料是这些题**自己的段落并起来**的（见
+      [`../eval/datasets/musique.py`](../eval/datasets/musique.py) 的 `load_musique_haystack`）
+      ——**不能**退回 `load_musique`，那样每题只剩 20 段，
+      池子小于 `top_k` ⇒ 检索无事可做。
     """
+    if dataset == "musique-haystack":
+        qids = [qid for qids in wanted.values() for qid in qids]
+        return [load_musique_haystack(bench_dir, qids)]
+
     by_user = {sample.user_id: sample for sample in load_locomo(bench_dir)}
     selected = []
     for user_id, qids in wanted.items():
@@ -120,6 +155,36 @@ def _select(bench_dir: Path, wanted: dict[str, list[str]]) -> list:
             raise SystemExit(f"✗ {user_id} 的清单里有 {len(missing)} 题不在数据集里：{missing[:3]}")
         selected.append(replace(sample, questions=tuple(index[qid] for qid in qids)))
     return selected
+
+
+def _require_source_rows(samples, sqlite_path: Path) -> None:
+    """**真源里必须有行**，否则响亮失败。
+
+    ⚠ 这一条是**踩出来的**：`--skip-add` 复用的是 **Qdrant 集合**，而 **SQLite 真源是按
+    `--out` 目录走的**。换一个 `--out` 再 `--skip-add` ⇒ 集合里有 id、真源里没正文
+    ⇒ 检索"成功"、返回却全是缺行的空结果 ⇒ **`data: []`，而它看起来像"这题没有相关记忆"**。
+    （2026-10-11 实测：同一个集合，一个 out 目录 25/25 命中，另一个 0/25。）
+
+    判据取"用户里有没有行"而不是"行数对不对"——前者足够挡住这个陷阱，后者要重算一遍配对。
+    """
+    import sqlite3
+
+    users = [sample.user_id for sample in samples]
+    if not sqlite_path.exists():
+        raise SystemExit(f"✗ {sqlite_path} 不存在——`--skip-add` 要**同一个 `--out`**")
+    with sqlite3.connect(sqlite_path) as conn:
+        for user_id in users:
+            found = conn.execute(
+                "SELECT COUNT(*) FROM qa_pairs WHERE user_id = ?", (user_id,)
+            ).fetchone()[0]
+            if not found:
+                raise SystemExit(
+                    f"✗ 真源 {sqlite_path} 里没有 {user_id!r} 的任何记忆。\n"
+                    "  `--skip-add` 只跳过 ADD，**不会**把真源建出来——"
+                    "要么去掉 `--skip-add`，要么用它所属的那个 `--out`。\n"
+                    "  ⚠ 不管这一条的话，检索会安静地返回 `data: []`，"
+                    "而它看起来像「这题没有相关记忆」。"
+                )
 
 
 def _arm_config(
@@ -343,6 +408,24 @@ def _gold_evidence_texts(bench_dir: Path) -> dict[str, tuple[str, ...]]:
     return out
 
 
+def _gold_evidence(samples, bench_dir: Path, *, dataset: str) -> dict[str, tuple[str, ...]]:
+    """`question_id → 金标证据的**可比较文本**`。**按数据集各取各的**（两份口径不可比）。
+
+    * **LoCoMo**：读原始 `questions.jsonl` 的 `evidence_messages[].text`——那是**原文**。
+      ⚠ 不能用 `Question.evidence`：那是 `D2:8` 这种**消息 id**，而我们**从不输出**它
+      （第一版覆盖率拿 id 去匹配，四臂一律 0/25，看着像"一条证据都没检索到"，**而那是假的**）。
+    * **musique-haystack**：取支持段落正文的**前 60 字**（`supporting_snippets`）。
+      ⚠ **不用 `title`**：它是维基文章名，一文多 chunk ⇒ 召回同文章的另一段也会算命中。
+
+    ⚠ **两个口径不可比**（一个是句级原文包含、一个是段级标题包含）⇒
+      `report.json` 里两个数据集的 `coverage` **不要放在一起读**。
+    """
+    if dataset == "musique-haystack":
+        qids = [q.qid for sample in samples for q in sample.questions]
+        return supporting_snippets(bench_dir, qids)
+    return _gold_evidence_texts(bench_dir)
+
+
 def _evidence_coverage(samples, hits: dict[str, list], gold: dict[str, tuple[str, ...]]) -> dict:
     """金标证据有没有出现在**返回给 AML 的那份文本**里（§12.5 的两个指标）。
 
@@ -351,7 +434,7 @@ def _evidence_coverage(samples, hits: dict[str, list], gold: dict[str, tuple[str
     | `any_hit` | 至少命中一条金标证据的题数（"有没有捞到"） |
     | `full_hit` | **全部**金标证据都在的题数（"完整证据链"的近似） |
 
-    ⚠ 这是**文本包含**口径，不是 id 映射（见 `_gold_evidence_texts` 的说明）：
+    ⚠ 这是**文本包含**口径，不是 id 映射（见 `_gold_evidence` 的说明）：
     它可能**高估**（同一句话出现在别的记忆块里也算命中）。⇒ 当**上界**读，
     别当精确的召回率。完整链路要的是"消息 id → 我们的 `memory_id`"那层映射，本仓还没有。
     """
@@ -383,7 +466,8 @@ def _evidence_coverage(samples, hits: dict[str, list], gold: dict[str, tuple[str
 def main(argv: list[str] | None = None) -> int:
     _force_utf8_stdio()
     parser = argparse.ArgumentParser(description="多跳检索的小规模真实评测")
-    parser.add_argument("--manifest", default="eval/coq-multihop.jsonl")
+    parser.add_argument("--dataset", default=DEFAULT_DATASET, choices=list(DATASETS))
+    parser.add_argument("--manifest", default=None, help="默认按 --dataset 取")
     parser.add_argument("--out", required=True, help="产物目录（逐题落盘，可续跑）")
     parser.add_argument("--bench-dir", default=None, help="默认取 TIANXIMEM_BENCHMARK_DIR")
     parser.add_argument("--collection", default=None, help="默认 coq-eval-<日期>")
@@ -410,9 +494,11 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     collection = args.collection or f"coq-eval-{time.strftime('%Y%m%d')}"
 
-    gold_evidence = _gold_evidence_texts(bench_dir)
-    wanted = _load_manifest(Path(args.manifest))
-    samples = _select(bench_dir, wanted)
+    dataset = args.dataset
+    manifest_path = Path(args.manifest or DATASETS[dataset]["manifest"])
+    wanted = _load_manifest(manifest_path)
+    samples = _select(bench_dir, wanted, dataset=dataset)
+    gold_evidence = _gold_evidence(samples, bench_dir, dataset=dataset)
     if args.limit_questions is not None:
         # ⚠ **跨对话累计的总数**，不是"每段各取 N"——后者在三段对话上会取到 3N 题，
         #   而"取 1 题冒烟"实际跑了 3 题（题数看起来对不上，却不会报错）。
@@ -427,14 +513,14 @@ def main(argv: list[str] | None = None) -> int:
         samples = capped
     question_count = sum(len(s.questions) for s in samples)
     print(
-        f"清单 {args.manifest}：{len(samples)} 段对话 / {question_count} 题\n"
+        f"清单 {manifest_path}（{dataset}）：{len(samples)} 个 user / {question_count} 题\n"
         f"隔离 collection = {collection}",
         flush=True,
     )
 
     base = load_config()
     sqlite_path = out_dir / "coq-eval.db"
-    pipeline = pipeline_for(bench_dir, "locomo-refined")
+    pipeline = pipeline_for(bench_dir, DATASETS[dataset]["judge"])
     chosen = [arm for arm in ARMS if arm.key in {k.strip() for k in args.arms.split(",")}]
     if not chosen:
         raise SystemExit("✗ --arms 里一个已知的臂都没有")
@@ -474,6 +560,8 @@ def main(argv: list[str] | None = None) -> int:
                     # ⚠ **不是第一臂就一律不 ADD**：四臂必须读**同一份**记忆状态（§12.3），
                     #   再灌一遍既浪费又会改变真源（幂等守卫会挡住重复写，但那是白跑一趟）。
                     print("    （记忆已在：不重复 ADD）", flush=True)
+                if position == 0:
+                    _require_source_rows(samples, sqlite_path)
                 hits = _search_all(samples, client)
                 (out_dir / f"{arm.key}-hits.json").write_text(
                     json.dumps(
@@ -513,7 +601,10 @@ def main(argv: list[str] | None = None) -> int:
                     for sample in samples:
                         items += build_input_items(sample, hits)
                     results = run_judge(
-                        pipeline, items, out_dir / arm.key, dataset="locomo-refined"
+                        pipeline,
+                        items,
+                        out_dir / arm.key,
+                        dataset=DATASETS[dataset]["judge"],
                     )
                     correct = sum(1 for r in results if r.is_correct)
                     entry["judged"] = len(results)
@@ -529,7 +620,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     print("\n\n════ 汇总 ════")
-    header = f"{'臂':<28} {'答对':>6} {'题数':>5} {'准确率':>8} {'证据≥1':>7} {'证据全':>7}"
+    header = f"{'臂':<30} {'答对':>6} {'题数':>5} {'准确率':>8} {'证据≥1':>7} {'证据全':>7}"
     print(header)
     for arm in chosen:
         entry = report.get(arm.key, {})
@@ -541,7 +632,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(f"\n产物：{out_dir}（report.json / <臂>-hits.json / <臂>/ 逐题答案与判分）")
     print(
-        "⚠ 这里只取 `category == \"1\"` 的 25 道多跳题 ⇒ **不要与 346 题那条 overall 直接比**。"
+        f"⚠ {DATASETS[dataset]['note']}"
     )
     if any(arm.agentic for arm in chosen):
         print(
