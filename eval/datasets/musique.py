@@ -171,13 +171,33 @@ def _is_entity_answer(answer: object) -> bool:
     return sum(char.isalpha() or char.isspace() for char in text) >= 3
 
 
+def _does_not_leak_the_intermediate_entity(row: dict) -> bool:
+    """⭐ **用户看到的那句问题里，不许出现任何中间跳的答案。**
+
+    ⚠ 这是"是不是真链"唯一一条**独立于 `#k` 记法**的判据。前面几条都用
+    `question_decomposition` 的 `#k` 占位符来判——而那个占位符**本来就是记法**，
+    等于用标注证明标注。只有这一条问的是：**把标注全拿掉，读题的人能不能直接查?**
+
+    实测（2026-10-11）：原判据选出的 25 道里有 **2 道泄题**——
+    `4hop1__21282_…` 的题面直接写了 `Angela Merkel`、`4hop1__40316_…` 直接写了 `NES`，
+    而它们正是链中间那一跳的答案 ⇒ 那两道退化成"一次查找"。
+    加上这条之后候选从 814 降到 **798**，而选出的 25 道里**恰好换掉那 2 道**。
+    """
+    question = str(row["question"]).lower()
+    return not any(
+        str(hop["answer"]).lower() in question
+        for hop in (row.get("question_decomposition") or [])[:-1]
+    )
+
+
 def select_chain_question_ids(rows: list[dict], *, limit: int = 25) -> list[str]:
     """按**确定性规则**挑出链式依赖题（`eval/coq-musique.jsonl` 头部写的生成规则）：
 
     1. `answerable == True`；
     2. **严格链**（见 `_is_strict_chain`）；
     3. **≥3 跳**，且 hop1..hop(n-1) 的答案都是**实体**；
-    4. 排序 `(-跳数, id)` 后**贪心**：新题与已选题的 hop 集合**共享 <2 个元素**才收
+    4. ⭐ **题面不泄中间实体**（见 `_does_not_leak_the_intermediate_entity`）；
+    5. 排序 `(-跳数, id)` 后**贪心**：新题与已选题的 hop 集合**共享 <2 个元素**才收
        —— 共享 ≥2 跳 = 同一条骨架换了个入口，收进来就是重复出题。
 
     ⚠ 规则写**在代码里**而不是只写在清单的注释里：清单是可被替换的产物，
@@ -191,6 +211,8 @@ def select_chain_question_ids(rows: list[dict], *, limit: int = 25) -> list[str]
         if len(hops) < 3 or not _is_strict_chain(hops):
             continue
         if not all(_is_entity_answer(hop.get("answer")) for hop in hops[:-1]):
+            continue
+        if not _does_not_leak_the_intermediate_entity(row):
             continue
         candidates.append(
             (len(hops), str(row["id"]), frozenset(str(row["id"]).split("__")[1].split("_")))

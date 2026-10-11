@@ -138,6 +138,25 @@ def test_selection_is_deterministic_and_prefers_deeper_chains() -> None:
     assert select_chain_question_ids(rows, limit=25) == picked  # 可重放
 
 
+def test_selection_drops_questions_whose_question_text_leaks_the_intermediate_entity() -> None:
+    """⭐ **唯一一条独立于 `#k` 记法的判据**：把标注拿掉，读题的人能不能直接查？
+
+    前面几条都在读 `question_decomposition` 的占位符——那是**用标注证明标注**。
+    这一条读的是**用户真正看到的那句话**。
+
+    ⚠ 2026-10-11 实测：原判据选出的 25 道里有 **2 道泄题**（题面直接写了链中间那一跳的答案），
+    那两道退化成"一次查找"。加上这条之后候选 814 → 798，**恰好换掉那 2 道**。
+    """
+    leaking = _row("3hop1__a_b_c", hops=_CHAIN3)
+    # 把 hop2 的答案写进题面
+    leaking["question"] = "Who is Some Spouse married to and where?"
+    assert select_chain_question_ids([leaking], limit=25) == []
+
+    clean = _row("3hop1__a_b_c", hops=_CHAIN3)
+    clean["question"] = "Where was the spouse of the director of the film born?"
+    assert select_chain_question_ids([clean], limit=25) == ["3hop1__a_b_c"]
+
+
 def test_selection_drops_questions_whose_hop_answers_are_not_entities() -> None:
     """中间跳答案是日期的题**即使结构上是严格链**也要丢掉。"""
     numeric = _row(
