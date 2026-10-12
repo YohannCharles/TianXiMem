@@ -175,6 +175,20 @@ def _is_entity_answer(answer: object) -> bool:
     return sum(char.isalpha() or char.isspace() for char in text) >= 3
 
 
+def _appears_as_a_word(haystack: str, needle: str) -> bool:
+    """`needle` 是否作为**一个独立的词**出现在 `haystack` 里（忽略大小写）。
+
+    ⚠ **不能写成 `needle in haystack`**：中间跳的答案常常只有两三个字母
+    （`NES` / `US` / `two`），子串匹配会把 `**geNESis**` 也算成"题面泄了 NES"。
+    实测（2026-10-12，子 agent 独立复核）：纯子串版本**误杀 15 条**
+    （整个 `…_15840_36002` 家族，Genesis vs NES）；改成词边界后候选 798 → **813**。
+    ⚠ 边界用 `(?<![A-Za-z0-9])` 而不是 `\b`：答案里可能带标点（`$72,641`、`May 4`），
+    而 `\b` 在标点那侧不成立。
+    """
+    pattern = rf"(?<![A-Za-z0-9]){re.escape(needle)}(?![A-Za-z0-9])"
+    return re.search(pattern, haystack, re.IGNORECASE) is not None
+
+
 def _does_not_leak_the_intermediate_entity(row: dict) -> bool:
     """⭐ **用户看到的那句问题里，不许出现任何中间跳的答案。**
 
@@ -183,13 +197,25 @@ def _does_not_leak_the_intermediate_entity(row: dict) -> bool:
     等于用标注证明标注。只有这一条问的是：**把标注全拿掉，读题的人能不能直接查?**
 
     实测（2026-10-11）：原判据选出的 25 道里有 **2 道泄题**——
-    `4hop1__21282_…` 的题面直接写了 `Angela Merkel`、`4hop1__40316_…` 直接写了 `NES`，
-    而它们正是链中间那一跳的答案 ⇒ 那两道退化成"一次查找"。
-    加上这条之后候选从 814 降到 **798**，而选出的 25 道里**恰好换掉那 2 道**。
+    `4hop1__21282_…` 的题面直接写了 `Angela Merkel`；另一道当时记的是 `4hop1__40316_…`
+    写了 `NES`，**那条记录本身是错的**（见下）。加上这条之后候选从 814 降到 **798**，
+    而选出的 25 道里换掉了那 2 道。
+
+    ### ⚠ 2026-10-12 更正：判据必须是**词边界**
+
+    上一版写的是 `answer in question`（子串）。于是中间跳答案是 `NES` 时，
+    题面里的 **`geNESis`** 也算命中 ⇒ **误杀 15 条**（整个 `…_15840_36002` 家族）；
+    当时记成"`40316` 写了 `NES`"，正是这个 bug 的产物。
+    改成词边界（`_appears_as_a_word`）后候选 **798 → 813**，`40316` 回到候选池。
+
+    ⚠ 这一次修正**会改动已交付清单**：`40316` 按 id 序在 `…_497223_15840_36002`
+    这条骨架上排到前面，于是 `46196`（原清单成员）被"共享 ≥2 跳"挤出 ⇒
+    **一道题换一道题**。⇒ 清单要重新生成，而**跑批与分解探针的产物都随之作废**
+    （见 [`eval/reports/coq-musique-20261011.md`](../reports/coq-musique-20261011.md)）。
     """
-    question = str(row["question"]).lower()
+    question = str(row["question"])
     return not any(
-        str(hop["answer"]).lower() in question
+        _appears_as_a_word(question, str(hop["answer"]))
         for hop in (row.get("question_decomposition") or [])[:-1]
     )
 

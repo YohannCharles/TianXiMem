@@ -170,6 +170,33 @@ def test_selection_drops_questions_whose_hop_answers_are_not_entities() -> None:
     assert select_chain_question_ids([numeric], limit=25) == []
 
 
+def test_the_leak_check_matches_whole_words_not_substrings() -> None:
+    """⭐ 泄题判据必须是**词边界**：`NES` 不该被 `geNESis` 命中。
+
+    ⚠ 实测（2026-10-12，子 agent 独立复核）：纯子串版本**误杀 15 条**——
+    中间跳答案是 `NES` 时，题面里的 `Genesis` 也算命中，整个 `…_15840_36002`
+    家族被整批丢掉；改成词边界后候选 798 → **813**。
+    ⚠ 被误杀**不会报错**：它只是安静地少收几道题，而"少收"与"本来就没有"看起来一样。
+    """
+    from eval.datasets.musique import _appears_as_a_word
+
+    assert _appears_as_a_word("Which Genesis game?", "NES") is False  # 误杀点
+    assert _appears_as_a_word("the NES platform", "NES") is True
+    assert _appears_as_a_word("a nes game", "NES") is True  # 忽略大小写
+    assert _appears_as_a_word("(NES)", "NES") is True  # 标点那侧也要算边界
+    assert _appears_as_a_word("the $72,641 budget", "$72,641") is True  # 带标点的答案
+    assert _appears_as_a_word("x $72,6410 y", "$72,641") is False  # 右边界仍要成立
+
+    # 端到端：Genesis 那条题面不该被当成泄题（`NES` 是中间跳答案）
+    clean = _row(
+        "3hop1__a_b_c",
+        hops=[("q1", "NES"), ("#1 >> r2", "Some Person"), ("#2 >> r3", "Final Answer")],
+        answer="Final Answer",
+    )
+    clean["question"] = "Which company published the Genesis game?"
+    assert select_chain_question_ids([clean], limit=25) == ["3hop1__a_b_c"]
+
+
 def test_selection_rejects_two_questions_sharing_a_chain_skeleton() -> None:
     """共享 ≥2 跳 = 同一条骨架换了个入口 ⇒ 只收一条（否则 25 道里会有一堆"同一题"）。"""
     shared = ("c", "d")
