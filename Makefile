@@ -41,7 +41,7 @@ ARGS ?=
 COQ_OUT ?= eval/reports/runs/coq-$(shell date +%Y%m%d)
 
 .PHONY: help sync check fmt lint typecheck test qdrant-up qdrant-down serve contract-check probe-reranker \
-        router-eval coq-eval coq-decompose order-probe image-build up down deploy-check \
+        router-eval coq-eval coq-decompose order-probe export-multihop image-build up down deploy-check \
         eval replay-official t1 t2 t2-dump smoke clean \
         fetch-data data-check data-patch
 
@@ -226,6 +226,15 @@ order-probe:  ## D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言
 # ⚠ 跑完**不会自动清库**：`var/order-a/` `var/order-b/` 留着供比对（都在 gitignore 里）。
 #    Qdrant 里那两个 `memories_ab_order_*` 集合也是——要清就手动 drop。
 # 判据与 D25 的关系见 eval/reports/ledger.md 的「D25」一节。
+
+export-multihop:  ## 打包链式多跳题集（含共享语料池）给外部项目用 → var/exports/
+	uv run python tools/export_multihop_kit.py $(ARGS)
+# 产物：`var/exports/musique-multihop-<日期>/{questions.jsonl, haystack-corpus.jsonl, README.md}`
+#       ＋同名 `.zip`。⚠ **含数据集原文** ⇒ 只进 `var/`（gitignored），⛔ 绝不进 git。
+# ⭐ 它**逐条校验后才打包**：可答 / 严格链 / **每一跳的答案（含末答）都在支持段落正文里**
+#    / 题面不泄中间跳。任一条不过就点名报出并**非零退出**——这种包交出去比不交更糟。
+# ⚠ 包里那个 `haystack-corpus.jsonl` 是**前提不是附件**：只喂目标题自己那 20 段，
+#    证据就全在里面、检索无事可做、链式依赖自动消失（2026-10-10 栽过，见 README）。
 
 eval:  ## 跑一轮代理评测（§13）：DATASET / ARGS 可覆盖
 	uv run --env-file $(ENV_FILE) python -m eval.experiments.run --dataset $(DATASET) $(ARGS)

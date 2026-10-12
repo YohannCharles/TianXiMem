@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 from eval.datasets.musique import (
     ANSWER_CONTRACT,
+    BROKEN_GOLD,
     HAYSTACK_USER,
     LOOSE_ANSWER_CONTRACT,
     REFUSAL,
@@ -214,10 +215,16 @@ def test_the_haystack_merges_every_questions_paragraphs_into_one_user(tmp_path: 
     _write(
         tmp_path,
         [
-            _row("3hop1__a_b_c", hops=_CHAIN3,
-                 paragraphs=[_paragraph("Alpha", 0, supporting=True), _paragraph("Beta", 1)]),
-            _row("3hop1__d_e_f", hops=_CHAIN3,
-                 paragraphs=[_paragraph("Beta", 0), _paragraph("Gamma", 1, supporting=True)]),
+            _row(
+                "3hop1__a_b_c",
+                hops=_CHAIN3,
+                paragraphs=[_paragraph("Alpha", 0, supporting=True), _paragraph("Beta", 1)],
+            ),
+            _row(
+                "3hop1__d_e_f",
+                hops=_CHAIN3,
+                paragraphs=[_paragraph("Beta", 0), _paragraph("Gamma", 1, supporting=True)],
+            ),
         ],
     )
     sample = load_musique_haystack(tmp_path, ["3hop1__a_b_c", "3hop1__d_e_f"])
@@ -310,9 +317,9 @@ def test_the_shipped_manifest_is_internally_consistent() -> None:
         for line in Path("eval/coq-musique.jsonl").read_text(encoding="utf-8").split("\n")
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    assert len(rows) == 25
+    assert len(rows) == 50
     assert {row["corpus"] for row in rows} == {"self"}
-    assert {row["hops"] for row in rows} == {4}
+    assert {row["hops"] for row in rows} == {3, 4}  # 4 跳 29 · 3 跳 21
     assert {row["user_id"] for row in rows} == {HAYSTACK_USER}
     # 两两之间最多共享 1 个 hop —— 即"没有两条是同一个骨架"
     hop_sets = [set(row["hop_ids"]) for row in rows]
@@ -322,6 +329,8 @@ def test_the_shipped_manifest_is_internally_consistent() -> None:
     # ⛔ 题面 / 答案一个字都不许进清单
     for row in rows:
         assert set(row) == {"dataset", "user_id", "question_id", "hops", "hop_ids", "corpus"}
+    # ⛔ 金标坏掉的 10 条（只读一份声明，不需要数据集）一条都不许混进来
+    assert not ({row["question_id"] for row in rows} & set(BROKEN_GOLD))
 
 
 # ── ⑤ 两套判分口径（2026-10-12）────────────────────────────────────────
@@ -376,3 +385,82 @@ def test_the_default_contract_is_the_strict_one() -> None:
     """⚠ 默认不许变：`judge_musique` 不带 `contract` 时必须走严口径。"""
     gold = _musique_gold("five")
     assert judge_musique("up to five games per year", gold)[0] is False
+
+
+# ── 交付给另一个项目的那份包（`tools/export_multihop_kit.py`）──────────
+
+
+def _export_row(hops: list[tuple[str, str]], *, support_bodies: list[str]) -> dict:
+    # ⚠ 末答**必须**等于最后一跳的答案（真数据就是这样）——否则 `verify` 会（正确地）
+    #    报"末答不在支持段落里"，而那是夹具造的假缺陷。
+    row = _row(
+        "4hop1__a_b_c_d" if len(hops) == 4 else "3hop1__a_b_c", hops=hops, answer=hops[-1][1]
+    )  # noqa: E501
+    for index, paragraph in enumerate(row["paragraphs"]):
+        paragraph["is_supporting"] = index < len(support_bodies)
+        paragraph["paragraph_text"] = (
+            support_bodies[index] if index < len(support_bodies) else "无关的干扰段落。"
+        )
+    return row
+
+
+def test_export_verification_passes_only_when_every_answer_is_in_the_evidence() -> None:
+    """⭐ 用户要的那条保证：**每一跳的答案都必须在支持段落正文里找得到**。
+
+    这一条是"这份包能不能交出去"的判据——答案不在原文里的题**下游根本做不了**，
+    而它交出去**不会报错**，只会让别人测出一堆假失败。
+    """
+    from tools.export_multihop_kit import verify
+
+    hops = [("Who directed it?", "Some Director"), ("#1 >> spouse", "Some Spouse")]
+    good = _export_row(
+        hops, support_bodies=["Some Director directed it.", "Some Spouse is the spouse."]
+    )
+    assert verify(["4hop1__a_b_c_d"], {"4hop1__a_b_c_d": good}) == []
+
+    # 把某一跳的答案从证据里拿掉 ⇒ 必须点名报出来（**不是静默放过**）
+    bad = _export_row(hops, support_bodies=["Some Director directed it.", "毫不相关的句子。"])
+    problems = verify(["4hop1__a_b_c_d"], {"4hop1__a_b_c_d": bad})
+    assert len(problems) == 1 and "第 2 跳" in problems[0]
+
+
+def test_export_verification_rejects_the_other_traps() -> None:
+    """拒答题 / 并行分支 / 泄题 / 末答为空——四条都要响亮失败。"""
+    from tools.export_multihop_kit import verify
+
+    hops = [("Who directed it?", "Some Director"), ("#1 >> spouse", "Some Spouse")]
+    bodies = ["Some Director directed it.", "Some Spouse is the spouse."]
+
+    parallel = _export_row(
+        [("Who directed it?", "Some Director"), ("Who wrote it?", "Some Writer")],
+        support_bodies=bodies,
+    )
+    assert any(
+        "不是严格链" in item for item in verify(["4hop1__a_b_c_d"], {"4hop1__a_b_c_d": parallel})
+    )  # noqa: E501
+
+    empty = _export_row(hops, support_bodies=bodies)
+    empty["answer"] = ""
+    assert any("末答为空" in item for item in verify(["4hop1__a_b_c_d"], {"4hop1__a_b_c_d": empty}))
+
+    # 题面直接写了中间跳的答案 ⇒ 退化成"一次查找"
+    leaking = _export_row(hops, support_bodies=bodies)
+    leaking["question"] = "Who is Some Director married to?"
+    assert any(
+        "泄了中间跳" in item for item in verify(["4hop1__a_b_c_d"], {"4hop1__a_b_c_d": leaking})
+    )
+
+
+def test_the_export_readme_warns_that_the_pool_is_mandatory() -> None:
+    """⚠ README 必须把"**必须并成一个池子**"写在明面上——那是这份题集能测多跳的前提。
+
+    只喂目标题自己那 20 段 ⇒ 证据全在里面 ⇒ 检索无事可做、链式依赖消失，
+    而**测出来的分数看起来完全正常**。
+    """
+    from tools.export_multihop_kit import render_readme
+
+    text = render_readme(50, 822, {4: 29, 3: 21})
+    assert "822" in text and "50 道" in text
+    assert "4 跳 29 道 · 3 跳 21 道" in text
+    assert "必须把这些段落并成一个池子" in text
+    assert "CC BY-NC 4.0" in text and "训练" in text  # 许可与"不得训练"都要在

@@ -218,22 +218,21 @@ def test_the_markdown_dump_never_claims_a_verdict_it_does_not_have() -> None:
 # ── 交付的那份标签本身（不读数据集的题面）──────────────────────────────
 
 
-def test_the_shipped_labels_cover_the_manifest_exactly() -> None:
-    """⚠ **覆盖率对不上就是错的**：少一题 → 分母变小；多一题 → 那道题没在清单里。
+def test_the_shipped_labels_are_well_formed() -> None:
+    """⚠ **不再断言"标签覆盖清单"**：这份标签是 **2026-10-12 那次 25 题的探针** 的判定记录，
+    而清单随后已经变成 **50 条**（换掉了 1 道、剔掉 10 道金标坏掉的、又补了 25 道）
+    ⇒ 两者**本来就不该相等**。逐题对照留在探针的产物 `decompositions.md` 里。
 
-    `coq-musique.jsonl` 全是 4 跳题（`hops == 4`），所以金标步数**没有变化**，
-    清单里那 25 条 id 就是这份标签的全部应判集合。
+    能钉的是**形状**：条数、id 形状（`4hop1__` + 4 个 hop id 段）、词表封闭、id 不重复。
+    ⚠ 下次跑探针时这份标签要**跟着重生成**（覆盖 50 条），那时再恢复覆盖率断言。
     """
-    manifest = [
-        json.loads(line)["question_id"]
-        for line in Path("eval/coq-musique.jsonl").read_text(encoding="utf-8").split("\n")
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
     labels = load_labels(Path("eval/coq-decompose-labels.jsonl"))
-    assert set(labels) == set(manifest)
-    assert len(labels) == 25
-    # 每一类都真出现过（否则词表里那条是死代码）
-    assert set(labels.values()) <= set(DEFECTS)
+    assert len(labels) == 25  # 那次探针的题数
+    for question_id, defect in labels.items():
+        prefix, _, hop_part = question_id.partition("__")
+        assert prefix in {"3hop1", "4hop1"}, question_id
+        assert len(hop_part.split("_")) == int(prefix[0]), question_id
+        assert defect in DEFECTS, question_id
 
 
 def test_the_shipped_labels_store_no_question_text() -> None:

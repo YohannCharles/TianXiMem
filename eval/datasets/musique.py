@@ -253,14 +253,44 @@ def _does_not_leak_the_intermediate_entity(row: dict) -> bool:
     )
 
 
-def select_chain_question_ids(rows: list[dict], *, limit: int = 25) -> list[str]:
+#: ⛔ **金标坏掉的题**——**声明的排除名单**（id → 理由）。2026-10-12，子 agent 逐题读证据查出。
+#:
+#: ⚠ **它们过得了全部形式判据**：每一跳的答案串确实在支持段落里逐字存在、
+#: 题面不泄中间实体、严格链、可答。坏的是**链的推理**——只有把证据读一遍才看得见
+#: ⇒ **写不成规则，只能声明**。与 [`manifest.py`](manifest.py) 的 `local_patch` 同一条纪律：
+#: **本地修订必须声明**，不许悄悄改；也**不许**只删掉清单里的行而不在这里记理由。
+#:
+#: 三类（A/B/C 的定名见 [`../../eval/reports/coq-musique-20261011.md`](../../eval/reports/coq-musique-20261011.md) §7）：  # noqa: E501
+#:
+#: * **A 跨地区消歧**：中间跳的答案是**短地名**，而同一题的语料里有两处同名不同地
+#:   （`Atlanta` 在佐治亚，也在密歇根；`Winchester` 在伊利诺伊，也在弗吉尼亚）
+#:   ⇒ 逐字包含检查**原理上看不见**，而链真的断了。
+#: * **B 答非所问**：问"哪个城市"金标给**州名**、问"哪个州"给**城市名**
+#:   ⇒ 把 `#1` 填进下一跳后不成话。
+#: * **C 金标事实错**：能被它自己的支持段落直接反驳。
+BROKEN_GOLD: dict[str, str] = {
+    "4hop1__129682_59747_211319_557671": "A 跨地区消歧：H2 是佐治亚的 Atlanta，H3 却用密歇根那条的县",  # noqa: E501
+    "4hop1__364476_439408_131976_90181": "A 跨地区消歧：H1 的支持段落写的是伊利诺伊的 Winchester，H2 用弗吉尼亚",  # noqa: E501
+    "4hop1__43565_624859_355213_203322": "A 跨地区消歧：H2 出生地是俄亥俄的 Cleveland，H3 解到北卡的县",  # noqa: E501
+    "3hop1__128554_39743_24526": "A 跨地区消歧：H1 问城市给的是弗吉尼亚【市】（明尼苏达），链却按弗吉尼亚【州】走",  # noqa: E501
+    "4hop1__236903_153080_159767_81096": "B 答非所问：问 city，金标给州名 Arizona",
+    "4hop1__726391_153080_33952_33939": "B 答非所问：问 city，金标给州名 Arizona",
+    "3hop1__131783_131926_90707": "B 答非所问：问州，金标给城市 Minneapolis",
+    "3hop1__104996_160713_77246": "B 答非所问：问 majority religion（名词）给形容词 Hindu；末跳金标是短语",  # noqa: E501
+    "3hop1__106042_64399_52278": "B 答非所问：H1 金标填进 H2 后不成话；末跳金标是两个先后主体",
+    "4hop1__159467_725495_49925_267352": "C 金标事实错：支持段落明写 Luther 发起的是 Reformation，金标给 German Renaissance",  # noqa: E501
+}
+
+
+def select_chain_question_ids(rows: list[dict], *, limit: int = 50) -> list[str]:
     """按**确定性规则**挑出链式依赖题（`eval/coq-musique.jsonl` 头部写的生成规则）：
 
     1. `answerable == True`；
     2. **严格链**（见 `_is_strict_chain`）；
     3. **≥3 跳**，且 hop1..hop(n-1) 的答案都是**实体**；
     4. ⭐ **题面不泄中间实体**（见 `_does_not_leak_the_intermediate_entity`）；
-    5. 排序 `(-跳数, id)` 后**贪心**：新题与已选题的 hop 集合**共享 <2 个元素**才收
+    5. ⛔ **不在 `BROKEN_GOLD` 里**（金标坏掉的题，形式判据看不见，只能声明）；
+    6. 排序 `(-跳数, id)` 后**贪心**：新题与已选题的 hop 集合**共享 <2 个元素**才收
        —— 共享 ≥2 跳 = 同一条骨架换了个入口，收进来就是重复出题。
 
     ⚠ 规则写**在代码里**而不是只写在清单的注释里：清单是可被替换的产物，
@@ -269,6 +299,8 @@ def select_chain_question_ids(rows: list[dict], *, limit: int = 25) -> list[str]
     candidates: list[tuple[int, str, frozenset[str]]] = []
     for row in rows:
         if not row.get("answerable"):
+            continue
+        if str(row["id"]) in BROKEN_GOLD:
             continue
         hops = row.get("question_decomposition") or []
         if len(hops) < 3 or not _is_strict_chain(hops):
