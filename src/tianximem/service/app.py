@@ -40,15 +40,17 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from tianximem.agent import CoqAgent
 from tianximem.common.config import (
     ENV_RERANKER_API_KEY,
     ENV_RERANKER_BASE_URL,
     AppConfig,
+    ConfigError,
     assert_single_process,
     load_config,
 )
 from tianximem.common.render import template_version
-from tianximem.common.tokens import load_counter
+from tianximem.common.tokens import TokenCounter, load_counter
 from tianximem.embed.base import (
     CachingEmbedder,
     DiskVectorCache,
@@ -63,13 +65,15 @@ from tianximem.embed.text_embedding_v4 import (
 from tianximem.embed.text_embedding_v4 import (
     TextEmbeddingV4Embedder,
 )
+from tianximem.llm import LlmClient, OpenAiCompatChat
 from tianximem.observability import MetricsSink, NullMetricsSink, SnapshotMetricsSink
-from tianximem.rank import RemoteReranker
+from tianximem.rank import RemoteReranker, Reranker
 from tianximem.retrieve import DenseArm, EvidenceChecker, HybridRetriever, make_hybrid_params
+from tianximem.retrieve.router import QueryRouter
 from tianximem.service.capture import CaptureMiddleware, RequestCapture
 from tianximem.service.errors import register_error_handlers
-from tianximem.service.pipeline import AddPipeline, SearchPipeline
-from tianximem.service.routes import build_router
+from tianximem.service.pipeline import AddPipeline, AgenticSearch, SearchPipeline
+from tianximem.service.routes import build_router as build_http_router
 from tianximem.store.qdrant_store import QdrantStore
 from tianximem.store.sqlite_store import SqliteStore
 
@@ -77,8 +81,10 @@ __all__ = [
     "Services",
     "build_capture",
     "build_embedder",
+    "build_llm",
     "build_metrics_sink",
     "build_reranker",
+    "build_query_router",
     "build_services",
     "create_app",
     "create_app_from_env",
@@ -109,12 +115,23 @@ class Services:
 
         ⚠ reranker 从**流水线**上取（而不是在这里再存一份），免得出现"装配时接上了、
         关闭时漏掉"的两份状态——那种漏掉的表现是**连接池在退出时没释放**，
-        平时完全看不出来。
+        平时完全看不出来。**路由器与 LLM 客户端同一条口径**（同一个理由）。
         """
         self.qdrant.close()
         reranker = self.search.reranker
         if isinstance(reranker, RemoteReranker):
             reranker.close()
+        router = self.search.router
+        if router is not None and isinstance(router.client, OpenAiCompatChat):
+            router.client.close()
+        agentic = self.search.agentic
+        # ⚠ 判**具体类型**而不是 `getattr(agentic, "llm", None)`：`AgenticSearch` 是
+        #   `@runtime_checkable` 协议，而它的成员只有方法——往协议上加一条 `llm`
+        #   会让 `isinstance()` 直接抛 `TypeError`（运行时可检查协议不允许数据成员）。
+        #   判具体类型还有一个好处：**接错了执行器时这里什么都不做，而不是去关一个
+        #   属于别人的连接池**。
+        if isinstance(agentic, CoqAgent) and isinstance(agentic.llm, OpenAiCompatChat):
+            agentic.llm.close()
         if self.capture is not None:
             self.capture.close()
 
@@ -164,6 +181,16 @@ def build_services(config: AppConfig) -> Services:
     )
     dense = DenseArm(embedder)
 
+    # ⚠ 这四个**先建成局部变量**，因为多跳执行器与 `SearchPipeline` 必须拿到
+    #   **同一批对象**。在两边各 `HybridRetriever(...)` / `build_reranker(...)` 一次
+    #   能跑，但会得到两个 Qdrant 客户端、两份精排客户端、两个分词器——
+    #   **而行为看起来完全一样**，只在资源与"到底调了谁"上出错。
+    retriever = HybridRetriever(store=qdrant, dense=dense)
+    # ⚠ 分词器**在这里就加载**（不是第一次请求时才加载）：它要联网取 BPE 文件
+    #   （`common/tokens.py`），把失败暴露在**启动时**而不是某个用户的请求里。
+    counter = load_counter(config.budget.tokenizer)
+    reranker = build_reranker(config)
+
     return Services(
         store=store,
         qdrant=qdrant,
@@ -178,7 +205,7 @@ def build_services(config: AppConfig) -> Services:
         search=SearchPipeline(
             store=store,
             qdrant=qdrant,
-            retriever=HybridRetriever(store=qdrant, dense=dense),
+            retriever=retriever,
             # ⚠ `EvidenceChecker()` **不带 instrument** ⇒ 落到 `NullCheckerInstrument`，
             #   即**每轮判定被丢弃**。**这是刻意的，不是漏接**：聚合口 `observability/`
             #   只承接 §14 那几个量（延迟 + rerank 计数），**没有收 checker 判定的入口**；
@@ -186,13 +213,11 @@ def build_services(config: AppConfig) -> Services:
             #   且那串记录没有任何读取方。
             #   ⇒ D13 的"**每轮判定必须记录**"**至今未满足**，别把它当成已满足。
             checker=EvidenceChecker(),
-            # ⚠ 分词器**在这里就加载**（不是第一次请求时才加载）：它要联网取 BPE 文件
-            #   （`common/tokens.py`），把失败暴露在**启动时**而不是某个用户的请求里。
-            counter=load_counter(config.budget.tokenizer),
+            counter=counter,
             budget_tokens=config.budget.max_tokens,
             seed_limit=config.neighbor.expansion_seed_limit,
             radius=config.neighbor.radius,
-            reranker=build_reranker(config),
+            reranker=reranker,
             inject_abs_time=config.packaging.inject_abs_time,
             seed_placement=config.neighbor.seed_placement,
             annotate_relatives=config.packaging.annotate_relatives,
@@ -200,11 +225,141 @@ def build_services(config: AppConfig) -> Services:
             evidence_limit=config.retrieval.evidence_limit,
             evidence_hop_limit=config.retrieval.evidence_hop_limit,
             fact_backfill_limit=config.retrieval.fact_backfill_limit,
+            router=build_query_router(config),
+            # ⚠ 多跳执行器**默认不构造**（`agentic.enabled = false`）⇒ 每条
+            #   `MULTI_HOP` 降级成 `DEFAULT` 并记 `route_fallback = agentic_unavailable`。
+            agentic=build_agentic(
+                config,
+                store=store,
+                retriever=retriever,
+                counter=counter,
+                reranker=reranker,
+            ),
+            # ⚠ **实验开关**（`agentic.force`）：绕过路由器一律走 MULTI_HOP。
+            #   `_validate_agentic` 已经挡住"force 开着但 enabled 关着"那种
+            #   **安静地什么都不做**的组合。
+            agentic_force=config.agentic.force,
             metrics=build_metrics_sink(config),
         ),
         # ⚠ 采集**在装配时就打开**（见 `build_capture`）：写不了要在启动日志里说，
         #   而不是等跑完一整场才发现文件是空的。
         capture=build_capture(config),
+    )
+
+
+def build_llm(config: AppConfig, *, timeout: float | None = None) -> LlmClient | None:
+    """按配置构造 LLM 客户端；**该没有的时候就是 `None`**。
+
+    ⚠ **只在有一个真消费者时才构造**（今天两个：查询路由器与多跳执行器）。
+    ⛔ **不要"顺手先造出来"**：一个没人用的 HTTP 客户端在 `Services.close()` 上
+    多一条要记得关的连接池，而"记得关"正是会漏的那一步。
+
+    ⚠ **超时是参数**（不是从 `config` 里取一个"通用值"）：两个消费者的超时
+    **刻意不同**，理由见 `DEFAULT_ROUTER_TIMEOUT_S` / `DEFAULT_COQ_TIMEOUT_S`——
+    路由器只回一个词（10s），多跳要回一个 JSON 对象（30s）。
+    合成一个"全局 LLM 超时"会把这两个量绑死，而它们各自的依据完全不一样。
+
+    ⚠ **端点缺一时 `validate()` 已经在启动阶段拒绝过**（`_validate_router` /
+    `_validate_agentic` 的理由：开着却没端点 ⇒ 每一臂都降级，而结论会被读成
+    "这一路没有帮助"）。所以这里**不需要** `build_reranker` 那样的 WARNING。
+
+    ⚠ 两个消费者**各持一个客户端**（而不是共用一个）：它们超时不同，
+    而 `OpenAiCompatChat` 的超时是构造期固定的。代价是两条连接池——
+    `Services.close()` 两处都要关，两处都写了。
+    """
+    if not (config.router.enabled or config.agentic.enabled):
+        return None
+    return OpenAiCompatChat(
+        base_url=config.llm_base_url,
+        api_key=config.llm_api_key,
+        model=config.llm_model,
+        timeout=config.router.timeout_seconds if timeout is None else timeout,
+    )
+
+
+def build_query_router(config: AppConfig) -> QueryRouter | None:
+    """按配置构造查询路由器。**`router.enabled = false` ⇒ `None`**（默认就是它）。
+
+    与 `build_reranker` **同一套口径**（"该没有的时候就是 `None`"），但**缺省方向相反**：
+    精排缺省开（D8 把排序定为主线），路由缺省关（未经代理评测标定，
+    见 `RouterConfig` 的说明）。
+
+    ⚠ **构造不打网络**：探活会把启动变成一次远程依赖，而路由器**已有一条实现且已测的
+    降级路径**（回 `DEFAULT` = 原混合检索）。同 `build_reranker`。
+
+    ⛔ **判据是 `config.router.enabled` 本身，不是"客户端拿到没有"**：
+    自 2026-10-10 起 `build_llm` 在**任一**消费者开着时都会给出客户端
+    （多跳执行器也要一个）⇒ 拿 `client is None` 当路由器开关，会造出
+    "只开 `agentic`、却装上了路由器"这种状态——**而它看起来一切正常**
+    （§13 的开关纯度就是被这种东西破坏的）。回归用例：
+    `tests/test_router.py::test_agentic_is_built_with_the_executor_timeout_not_the_router_one`。
+    """
+    if not config.router.enabled:
+        logger.info("router.enabled = false ⇒ 不构造查询路由器，Search 走原来的路径选择")
+        return None
+    client = build_llm(config, timeout=config.router.timeout_seconds)
+    if client is None:  # pragma: no cover - `_validate_router` 已在启动阶段挡住
+        raise ConfigError("router.enabled = true 但 LLM 客户端没构造出来（端点缺失？）")
+    return QueryRouter(
+        client,
+        max_output_tokens=config.router.max_output_tokens,
+        temperature=config.router.temperature,
+        # ⚠ 与代码里的 `ROUTER_PROMPT_VERSION` 不符 ⇒ **构造期响亮失败**（见那两处的说明）。
+        prompt_version=config.router.prompt_version,
+    )
+
+
+def build_agentic(
+    config: AppConfig,
+    *,
+    store: SqliteStore,
+    retriever: HybridRetriever,
+    counter: TokenCounter,
+    reranker: Reranker | None,
+) -> AgenticSearch | None:
+    """多跳执行器（`MULTI_HOP`）。**`agentic.enabled = false` ⇒ `None`**（默认就是它）。
+
+    ⚠ **它的依赖是注入进来的，不是自己造的**：`store` / `retriever` / `reranker`
+    都必须与 `SearchPipeline` 用的是**同一批对象**。
+    自己再 `HybridRetriever(store=QdrantStore(...))` 造一个，会得到第二个 Qdrant 客户端
+    与第二份向量缓存句柄——**而两边的行为看起来一模一样**，只在资源与一致性上出错。
+
+    ⚠ **每轮召回深度取请求的 `top_k`**（AML 固定 100），所以这里没有那个参数：
+    §3.2 要的顺序是"融合池 → 精排 → 取 N"，而前两步用的正是默认 Search 的既有口径。
+    ⛔ 不为多跳另造一套 `prefetch_limit` / `weights`。
+
+    ⚠ **它自己不带 `enabled` 判断的副本**：`AgenticConfig.enabled` 在这里读一次，
+    之后"装上了就是开"（与 `SearchPipeline._agentic` 的口径一致）。
+    """
+    if not config.agentic.enabled:
+        logger.info("agentic.enabled = false ⇒ 不构造多跳执行器，MULTI_HOP 一律降级回 DEFAULT")
+        return None
+    client = build_llm(config, timeout=config.agentic.timeout_seconds)
+    if client is None:  # pragma: no cover - `_validate_agentic` 已在启动阶段挡住
+        raise ConfigError("agentic.enabled = true 但 LLM 客户端没构造出来（端点缺失？）")
+    if config.agentic.force:
+        # ⚠ 这条 WARNING 是**实验臂的标签**：日志里没有它，跑完分不出
+        #   "分数变了"是 CoQ 的效果还是路由器被绕过造成的（§12.3 的 E1 就是后者）。
+        logger.warning(
+            "`agentic.force = true`：**绕过路由器**，所有查询按 MULTI_HOP 处理"
+            "（§12.3 的 E1）。⛔ 这不是提交口径——它关掉了 COUNT / DEFAULT 的选择能力。"
+        )
+    return CoqAgent(
+        store=store,
+        retriever=retriever,
+        llm=client,
+        counter=counter,
+        reranker=reranker,
+        max_rounds=config.agentic.max_rounds,
+        per_round_top_k=config.agentic.per_round_top_k,
+        sufficiency_threshold=config.agentic.sufficiency_threshold,
+        max_prompt_tokens=config.agentic.max_prompt_tokens,
+        max_output_tokens=config.agentic.max_output_tokens,
+        temperature=config.agentic.temperature,
+        round_rerank_enabled=config.agentic.round_rerank_enabled,
+        final_rerank_query_mode=config.agentic.final_rerank_query_mode,
+        inject_abs_time=config.packaging.inject_abs_time,
+        prompt_version=config.agentic.prompt_version,
     )
 
 
@@ -344,7 +499,9 @@ def create_app(services: Services) -> FastAPI:
 
     app = FastAPI(title="TianXiMem", lifespan=lifespan)
     register_error_handlers(app)
-    app.include_router(build_router(add_pipeline=services.add, search_pipeline=services.search))
+    app.include_router(
+        build_http_router(add_pipeline=services.add, search_pipeline=services.search)
+    )
     # ⚠ **不装**是常态（默认关）：那时请求路径上一个字节都没多。
     if services.capture is not None:
         app.add_middleware(CaptureMiddleware, capture=services.capture)

@@ -401,10 +401,13 @@ def _build_extra_items(
                 raise ValueError(f"HaluMem {question.qid}：缺参考回答")
             items[-1]["gold_answers"] = [gold["answer"]]
         if sample.dataset == "musique":
-            from eval.datasets.musique import ANSWER_CONTRACT
+            from eval.datasets.musique import answer_contract_for
 
-            # 采集重放仍用原有答案 prompt；新的独立入口显式选择自己的作答契约。
-            items[-1]["answer_contract"] = ANSWER_CONTRACT
+            # ⭐ **只挑"链式多跳"那一档**：它没有拒答题 ⇒ 不给拒答出口
+            #    （那句子不是保险，是出口：实测这一档 10/25 是模型自己弃答，
+            #    而它要测的是"检索有没有把证据送到它面前"）。
+            # ⛔ MuSiQue 原生的可答/不可答变体**照旧**——整档大数据评测确实要考拒答。
+            items[-1]["answer_contract"] = answer_contract_for(question.category)
         if sample.dataset in {"hybridqa", "feverous"}:
             from eval.datasets.feverous import ANSWER_CONTRACT as FEVEROUS_CONTRACT
             from eval.datasets.hybridqa import ANSWER_CONTRACT as HYBRIDQA_CONTRACT

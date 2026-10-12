@@ -13,8 +13,8 @@
 
 | 层 | 拥有哪些键 | 例子 |
 | --- | --- | --- |
-| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`TIANXIMEM_SQLITE_PATH`、`TIANXIMEM_METRICS_PATH`、`TIANXIMEM_WORKERS` |
-| **`configs/*.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.rrf.k`、`models.embedder`、`storage.qdrant.collection` |
+| **`.env`**（环境变量） | 密钥、端点、**路径**、进程形态（worker 数） | `AML_EMB_BASE_URL`、`AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（**查询路由器的对话端点**，D40；⭐ **模型名也是端点身份，所以跟 base_url 一起住 .env**）、`TIANXIMEM_SQLITE_PATH`、`TIANXIMEM_METRICS_PATH`、`TIANXIMEM_WORKERS` |
+| **`configs/*.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.rrf.k`、`models.embedder`、`storage.qdrant.collection`、`router.enabled`（开关与阈值在 yaml，**端点不在**——每条都只有一个家） |
 
 **两者不重叠，也不许重叠。** 两处都能设的值，最终会变成"跑出来的结果和 yaml 里写的不一样，
 而没人知道为什么"。在 yaml 里写一个 env 拥有的键（比如 `storage.sqlite.path`）会**直接报错**，

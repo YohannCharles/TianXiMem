@@ -1,0 +1,46 @@
+{"dataset": "locomo-refined", "question_id": "conv-26#q0060", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「roadtrip」——要先取到它的日期，才能把「之后的那次 hike」这个查询表述出来。"}
+{"dataset": "locomo-refined", "question_id": "conv-48#q0066", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "嵌套关系链：先解出「给 Deborah 写那句激励语的朋友」是谁（这是未知的中间实体），再查那个人的状态。"}
+{"dataset": "locomo-refined", "question_id": "conv-49#q0065", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「旧 Prius 抛锚」那件事——先取事件，再取之后换的车。"}
+{"dataset": "longmemeval-s", "question_id": "dd2973ad", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "两级依赖：先找到「看医生」那天的日期，再由它推出「前一天」，才能去取那晚的就寝时间。第二个查询的表述完全依赖第一个结果。"}
+{"dataset": "longmemeval-s", "question_id": "a3045048", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "两个事件 + 显式先后依赖（下单在生日派对之前）。⚠ 按提示词的优先级规则，**依赖型多跳优先于计数**——它同时要求算天数。"}
+{"dataset": "longmemeval-s", "question_id": "6613b389", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "依赖链（先订婚、后纪念日）+ 计数。判 MULTI_HOP 是按优先级规则；⚠ 标为 boundary：把「锚点已在问句里点名」算不算「必须先检索才能表述」是这套判据最模糊的一处。"}
+{"dataset": "longmemeval-s", "question_id": "0bb5a684", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "同上：两个事件 + 依赖排序（工作坊在团队会议之前）+ 计数。⚠ boundary：与 COUNT 的优先级之争。"}
+{"dataset": "longmemeval-s", "question_id": "77eafa52", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「最初报价」，要先取到它才能比出「多付了多少」。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0070", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "锚点是「2023 年 8 月的那次旅行」。⚠ boundary：这是本判据最容易过判的一族（`after the X` 句式）——很多这类问题其实一句话里就同时给出了锚点与答案。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0055", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "嵌套：先解出 Caroline 推荐的是哪本书，再确认 Melanie 读了它。⚠ boundary：两件事也可能落在同一条记录里。"}
+{"dataset": "locomo-refined", "question_id": "conv-50#q0071", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「与 Frank Ocean 的巡演」——先取它，再取之后计划试的运动。"}
+{"dataset": "locomo-refined", "question_id": "conv-44#q0064", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「攀岩课」——先取它，再取之后打算试的户外活动。与 q0060 / q0070 同族（`after the X`），刻意都留着：它们一起测「路由器会不会对这一族过判」。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0030", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（`How many times`），而且需要跨会话把全部海边行程收齐，不是取一条孤立事实。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0059", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0038", "expected_route": "COUNT", "boundary": false, "label_note": "复数 + 全部列举（`pets' names`）——要的是完整集合，不是一条事实。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0045", "expected_route": "COUNT", "boundary": false, "label_note": "同上：`What instruments` 问的是乐器全集。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0128", "expected_route": "COUNT", "boundary": false, "label_note": "`What books has Melanie read?` ——完成时 + 复数，要跨会话收齐整个阅读史。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0062", "expected_route": "COUNT", "boundary": false, "label_note": "同上：`What items has Melanie bought?` 是完整集合。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0016", "expected_route": "COUNT", "boundary": true, "label_note": "`Where has Melanie camped?` ——完成时暗示要收齐所有露营地点。⚠ boundary：问句里**没有**显式的「全部 / 哪些 / 多少」，是否算「显式要求完整集合」是本判据的第二处模糊点。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0042", "expected_route": "COUNT", "boundary": false, "label_note": "`What symbols are important to Caroline?` 复数集合 ⇒ COUNT。⚠ 它离 DEFAULT 很近，但「符号」这一项在 LoCoMo 里确实是被逐次收集的多条记录，而问句要的是那个集合 ⇒ 判 COUNT 而不是不算数的边界项。"}
+{"dataset": "longmemeval-s", "question_id": "89941a93", "expected_route": "COUNT", "boundary": false, "label_note": "`how many bikes do I **currently** own` ——从一个被多次更新的历史里取**当前状态**，正是提示词 COUNT 的第 3 条。"}
+{"dataset": "longmemeval-s", "question_id": "9ea5eabc", "expected_route": "COUNT", "boundary": false, "label_note": "`my **most recent** family trip` ——同上，latest state from a history of updates。"}
+{"dataset": "longmemeval-s", "question_id": "0a995998", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 需要收齐全部「要取回或退回的衣服」。"}
+{"dataset": "longmemeval-s", "question_id": "28dc39ac", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（`in total`）。"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_7f6b06db", "expected_route": "COUNT", "boundary": false, "label_note": "`the order of the three trips` ——要先把三次旅行**全部**取齐，再排序；取不齐就排不出序。"}
+{"dataset": "longmemeval-s", "question_id": "945e3d21", "expected_route": "COUNT", "boundary": true, "label_note": "`How often do I attend yoga classes` ——频率要跨历史的完整记录。⚠ boundary：没有显式数字词，可能被读成一次属性查询。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0003", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性查询。⚠ 数据集把它标成 category 1（multi-hop），但按检索依赖结构它就是一次直取——**数据集的类目标签不是路由真值**。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0007", "expected_route": "DEFAULT", "boundary": false, "label_note": "同 q0003：数据集标 multi-hop，实际是单条属性。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0011", "expected_route": "DEFAULT", "boundary": false, "label_note": "带相对时间的一次属性查询（`4 years ago`）——普通时间问题，不是依赖型检索。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0036", "expected_route": "DEFAULT", "boundary": false, "label_note": "`Who ...` 单条主体关系。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0041", "expected_route": "DEFAULT", "boundary": false, "label_note": "两人比较（`both painted`）——提示词把**直接比较**明确划进 DEFAULT。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0066", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0075", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0076", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0074", "expected_route": "DEFAULT", "boundary": false, "label_note": "普通时间/时长问题——提示词把 ordinary date or numerical questions 划进 DEFAULT。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0088", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条关系（推荐了哪本书）。⚠ 与 q0055 是一对**同族不同路由**的题：那条要先解出书名再确认对方读了它，这条只问书名本身。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0090", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性。"}
+{"dataset": "locomo-refined", "question_id": "conv-30#q0003", "expected_route": "DEFAULT", "boundary": false, "label_note": "两人比较。"}
+{"dataset": "longmemeval-s", "question_id": "e47becba", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（学位）。"}
+{"dataset": "longmemeval-s", "question_id": "6ade9755", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性。"}
+{"dataset": "longmemeval-s", "question_id": "c5e8278d", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性（改姓之前）。问句里带了 `before`，但那是**查询条件**不是依赖锚点——不该按 `after/before the X` 那一族过判成 MULTI_HOP。"}
+{"dataset": "longmemeval-s", "question_id": "5d3d2817", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性（上一份职业）。"}
+{"dataset": "longmemeval-s", "question_id": "51a45a95", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（在哪儿用掉的优惠券）。"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_4929293a", "expected_route": "DEFAULT", "boundary": false, "label_note": "直接比较两件事的先后——提示词把它划进 DEFAULT。"}
+{"dataset": "longmemeval-s", "question_id": "d7c942c3", "expected_route": "DEFAULT", "boundary": true, "label_note": "跨两个人的比较（妈妈 vs 我）。⚠ boundary：需要比较两个不同主体的记录，容易被读成轻度多跳；按提示词「直接比较 ⇒ DEFAULT」判 DEFAULT。"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_a56e767c", "expected_route": "DEFAULT", "boundary": true, "label_note": "`How many movie festivals that I attended?` ⚠ boundary：问句残缺（不成句），语义上想表达计数。判 DEFAULT 的依据是——**残缺的意图不该由路由器猜**，不确定一律 DEFAULT（提示词的不确定出口）。"}

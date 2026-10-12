@@ -58,6 +58,9 @@ __all__ = [
     "ENV_EMBED_BASE_URL",
     "ENV_EMBED_CACHE_DIR",
     "ENV_FILE",
+    "ENV_LLM_API_KEY",
+    "ENV_LLM_BASE_URL",
+    "ENV_LLM_MODEL",
     "ENV_METRICS_PATH",
     "ENV_PROFILE",
     "ENV_QDRANT_URL",
@@ -70,10 +73,15 @@ __all__ = [
     "DEFAULT_PREFETCH_LIMIT",
     "DEFAULT_RADIUS",
     "DEFAULT_RERANK_TIMEOUT_S",
+    "DEFAULT_ROUTER_MAX_OUTPUT_TOKENS",
+    "DEFAULT_ROUTER_PROMPT_VERSION",
+    "DEFAULT_ROUTER_TIMEOUT_S",
     "DEFAULT_WEIGHTS",
     "RRF_K",
+    "AgenticConfig",
     "AppConfig",
     "ConfigError",
+    "RouterConfig",
     "assert_single_process",
     "load_config",
 ]
@@ -104,6 +112,25 @@ ENV_WORKERS: Final[str] = "TIANXIMEM_WORKERS"
 ENV_RERANKER_BASE_URL: Final[str] = "TIANXIMEM_RERANKER_BASE_URL"
 ENV_RERANKER_API_KEY: Final[str] = "TIANXIMEM_RERANKER_API_KEY"
 ENV_RERANKER_MODEL: Final[str] = "TIANXIMEM_RERANKER_MODEL"
+
+#: LLM 对话端点的三个变量（§2.3 的 `models.llm`）。
+#:
+#: ⚠ **名字不是新起的**——`AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` 是**仓库里已有的**
+#: 那一组（`.env.example` 与 `docs/config-reference.md` §9 早就声明了它们，口子是给
+#: 归档 pipeline 与 eval harness 用的，经 `eval/harness/api_config.py` 读）。
+#: 本表只是**把同一组变量搬进唯一的读环境变量入口**——服务侧要读它们，
+#: 而"全包只有 `common/config.py` 能读环境变量"是一条有静态测试钉住的结构性质
+#: （`tests/test_config.py::test_only_config_reads_the_environment`）。
+#: ⛔ **不许另起一套名字**（例如 `TIANXIMEM_LLM_*`）：那会造出"同一个端点有两个家"，
+#: 而照着 `.env.example` 填的人只会填对其中一个（另一处永远是空，且**不报错**）。
+#:
+#: ⚠ **端点是按"对"配的**（D39）：`AML_BASE_URL_2` / `AML_API_KEY_2` 是**次端点**，
+#: 它们服务的是 harness 的**判分并行**（"这一次判分用第几个端点"由 `AML_ENDPOINT_INDEX`
+#: 指派）。那是**调度概念，不是这台机器的配置** ⇒ **服务侧只接主端点这一对**，
+#: 不把 `_2` 那一套拉进来（拉进来会得到一个"服务用哪个端点取决于环境变量"的静默分叉）。
+ENV_LLM_BASE_URL: Final[str] = "AML_BASE_URL"
+ENV_LLM_API_KEY: Final[str] = "AML_API_KEY"
+ENV_LLM_MODEL: Final[str] = "AML_MODEL"
 #: `.env` 文件的位置（默认 cwd 下的 `.env`）。⚠ 它**不是**一个配置项，是"去哪读环境"。
 ENV_FILE: Final[str] = "TIANXIMEM_ENV_FILE"
 
@@ -214,6 +241,108 @@ RERANK_ENVELOPES: Final[frozenset[str]] = frozenset({"queries", "query"})
 #: 而单个 1.5 GB 的 JSONL 打不开 ⇒ 分成 ~30 份、每份都能直接看。
 #: `capture.enabled` 忘了关的代价就是"记满一块盘"，由人盯着（跑完关掉）。
 DEFAULT_CAPTURE_MAX_BYTES: Final[int] = 50 * 1024 * 1024
+
+#: 查询路由器的超时（秒）。**C 类自设阈值**（`router.timeout_seconds`）。
+#:
+#: ⚠ 与 `DEFAULT_RERANK_TIMEOUT_S` 的**方向不同**，别照抄那一条：
+#: * reranker 的超时是"等多久"——它排在检索链**中间**，太紧会把**排队**报成"端点坏了"；
+#: * 路由器的超时是"**在检索开始之前**允许拖多久"。它在链的**最前面**，而
+#:   一次 Search 的上限是 30 分钟（§2.2）⇒ 它拖住的不是别的组件，是**整条链的起点**。
+#:
+#: 所以本值**刻意比 reranker 紧**（10s vs 30s）：路由器只回一个词，
+#: 而它的降级路径**有定义**（回 `DEFAULT` = 原混合检索）。超时的代价是"少省一次检索"，
+#: 不是"检索不到"——**没有理由为它等 30 秒**。
+#: ⚠ 这是**观测值不是规格**：换模型或换网关后要重新量（开发机主网关上的 P95 见
+#: `eval/reports/` 的路由报告）。
+DEFAULT_ROUTER_TIMEOUT_S: Final[float] = 10.0
+
+#: 路由器单次生成的输出上限（token）。**C 类自设阈值**（`router.max_output_tokens`）。
+#:
+#: ⚠ 它是**成本护栏，不是"提示词已经要求它只回一个词"的冗余**：生成是逐 token 的，
+#: 而模型没有义务遵守 `OUTPUT FORMAT`。给 8 已经比最长的那个枚举值（`MULTI_HOP`，2 个
+#: token 上下）宽出几倍 ⇒ **超出的部分一定是模型在附加解释**，而那正是我们要截断的东西。
+#: ⚠ 别调到 1：`MULTI_HOP` 会被截成 `MULTI`（输出非法 ⇒ 全部降级成 `DEFAULT` 且**不报错**）。
+DEFAULT_ROUTER_MAX_OUTPUT_TOKENS: Final[int] = 8
+
+#: 路由器提示词的默认版本（`router.prompt_version`）。
+#:
+#: ⚠ **它必须与 `retrieve/router.py` 的 `ROUTER_PROMPT_VERSION` 一致**，而这里**不能 import 那边**
+#: （`common/` 是最底层，反过来 import `retrieve/` 是分层错误）。
+#: ⇒ 两处各写一个字面量、由**构造期**兜住：`QueryRouter` 在版本不认识时**响亮失败**，
+#: 所以不一致的表现是"服务起不来"，**不是**"悄悄用了另一版"。
+#: ⚠ 本常量存在的理由只有一个：**别让同一个值在 `RouterConfig` 的默认值与
+#: `_router()` 的缺省里各写一遍**（2026-10-10 就真的漂过一次：dataclass 是 v3、缺省还是 v1）。
+DEFAULT_ROUTER_PROMPT_VERSION: Final[str] = "v4"
+
+#: 多跳执行器的**检索轮数上限**（`agentic.max_rounds`）。**含第一轮**。
+#:
+#: ⚠ PRD §9 写的是 4 轮，**这里是 3**，两处不一致是**刻意的**：
+#: §9 描述的是 ReFind 形状的通用 Agent（4 轮、每轮 top_k=5、三个工具），
+#: 而本阶段只实现方案要求的那部分（3 轮、每轮 Top20、**没有工具**）。
+#: ⛔ **不要拿 §9 的 4 去"修正"这个值**——那会同时改掉轮数与每轮候选数两个量，
+#: 而它们是一道题（§10："种子数、窗口大小、Top-K、token 预算，是同一道题"）。
+#: ⚠ §9 还有一句必须记住：**"4 是检索轮数的上限，不是 LLM 调用次数的上限"**
+#: ⇒ §14 要看的是**平均轮数与平均调用数**，不是拿这个数去卡。
+DEFAULT_COQ_MAX_ROUNDS: Final[int] = 3
+
+#: 每轮交给 CoQ 的候选数（`agentic.per_round_top_k`）——**每轮精排之后取前 N 条**。
+#:
+#: ⚠ 它与"进精排的候选数"是**两个量**：后者取请求的 `top_k`（AML 固定 100），
+#: 顺序必须是"融合池 → 精排 → 取 N"。反过来（先截 N 再精排）只会重排一堆已经被
+#: 提前排除掉的候选，**而结果看起来完全正常**（§3.2 专门点了这个坑）。
+DEFAULT_COQ_PER_ROUND_TOP_K: Final[int] = 20
+
+#: 提前停止所需的置信度（`agentic.sufficiency_threshold`）。
+#:
+#: ⚠ 它**只用在"已经判定充分"之后**：先 `is_sufficient = true`，再看置信度够不够。
+#: ⛔ **不要反过来**读成"置信度低于它就要继续检索"——原版提示词在证据不足却提不出
+#: 更好 Query 时会原样回吐原问题，那也是一种正常的停止（§7.5 明确禁止那种实现）。
+#: ⚠ 这个数来自提示词**自带的**标尺（0.90–1.00 很确定 / 0.60–0.89 中等），
+#: 不是本项目的标定结果 ⇒ 它没被本仓的评测标过，别当成已校准的阈值。
+DEFAULT_COQ_SUFFICIENCY_THRESHOLD: Final[float] = 0.8
+
+#: 多跳执行器单次 LLM 调用的超时（秒，`agentic.timeout_seconds`）。
+#:
+#: ⚠ **与路由器的 10s 不是一回事**：路由器只回一个词（`max_output_tokens = 8`），
+#: 而这里要回一个 JSON 对象（含一句改写 Query）。三轮各等一次 ⇒ 它按
+#: **3 × 单次超时**计算，仍远在 30 分钟的单请求上限之内（§2.2）。
+DEFAULT_COQ_TIMEOUT_S: Final[float] = 30.0
+
+#: 多跳执行器单次生成的输出上限（token，`agentic.max_output_tokens`）。
+#:
+#: ⚠ 它**不是**路由器的 8：那里只回一个枚举值，这里要回四个字段的 JSON
+#: （其中 `new_query` 是一句自然语言）。给 256 是**成本护栏**——
+#: 够写一句查询加上 JSON 骨架，而超出的部分一定是模型在附加解释。
+DEFAULT_COQ_MAX_OUTPUT_TOKENS: Final[int] = 256
+
+#: 每轮喂给模型的文档总量上限（token，`agentic.max_prompt_tokens`）。
+#:
+#: ⚠ **它和 `budget.max_tokens`（117,760）不是同一个东西**，⛔ 不要复用那一个：
+#: 那个是 **AML 答案窗口**的预算，而这里是**发给 9B 模型的一次 prompt**。
+#: 拿 117k 当上限等于没有上限——每轮 20 篇文档会被原样全塞进去，
+#: 而"超了"这件事**不会报错**，只会让检索变慢、变贵、变不准。
+#: ⚠ 预算的分配顺序是有约束的：**先给此前已选中的证据留够**，剩下的才按名次补本轮
+#: 候选（§4.4）——历史证据不能因为本轮名次低就被悄悄挤掉。
+DEFAULT_COQ_MAX_PROMPT_TOKENS: Final[int] = 6000
+
+#: 多跳提示词的默认版本（`agentic.prompt_version`）。
+#:
+#: ⚠ 与 `DEFAULT_ROUTER_PROMPT_VERSION` **同一条纪律**：这里**不能 import**
+#: [`../agent/coq_prompt.py`](../agent/coq_prompt.py)（`common/` 是最底层）。
+#: 两处各写一个字面量、由**构造期**兜住：`CoqAgent` 在版本不认识时**响亮失败**，
+#: 所以不一致的表现是"服务起不来"，**不是**"悄悄用了另一版"。
+#: 名字沿用方案 §10.4 的 `coq-original`（含义：原版，没有本项目自己的改动）。
+DEFAULT_COQ_PROMPT_VERSION: Final[str] = "coq-original"
+
+#: `agentic.final_rerank_query_mode` 的取值域。
+#:
+#: * `"combined"` —— 原问题 ＋ **实际执行过的**改写 Query（§9.1 的联合精排，**主方案**）
+#: * `"original"` —— 只用原问题（§12.6 列出的后续消融项，本阶段**不做那个实验**，
+#:   但把开关留下：它单独改变的量只有一个，是个合格的对照）
+#:
+#: ⚠ 两种都**不重复原问题**：`combined` 拼的是"执行过的那些"，而第一轮执行的就是原问题，
+#: 所以原问题**天然只出现一次**。
+FINAL_RERANK_QUERY_MODES: Final[tuple[str, ...]] = ("combined", "original")
 
 
 # ── 配置树 ─────────────────────────────────────────────────────────────
@@ -412,6 +541,118 @@ class CaptureConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RouterConfig:
+    """三分类查询路由器（`retrieve/router.py`）。**Search 的最上层查询编排。**
+
+    ⚠ **默认 `false`，而且这是刻意的**：打开它会**改变 Search 的路径选择**
+    （`DEFAULT` 类问题不再先试共同取证，见 `pipeline._search`），
+    而 `configs/default.yaml` 是**提交口径**——一个未经代理评测标定的行为改动
+    **不该默认生效**。要跑对照就用 profile 覆盖（`TIANXIMEM_PROFILE`）或臂快照。
+
+    ⚠ **模型名不在这里**：`router.model` 这一项由**全局的 `models.llm`** 满足
+    （`.env` 的 `AML_MODEL`）——**不另开一个键**。理由与 §4.4 的"不得引入第二套独立的
+    模型配置或环境变量加载机制"是同一条：两处都能设的模型名，最终会变成
+    "run record 里写的模型不是实际打的那个"。
+
+    ⚠ **没有置信度阈值，这是有意的**（§4：不设置路由置信度阈值）。分类是**类别选择**，
+    不是打分；引入一个未经标定的数字，等于把一个"要么对要么错"的问题换成一个
+    "阈值定在哪"的问题，而后者需要一份**我们没有**的校准集。
+    """
+
+    #: §15 的消融开关之一。`false` ⇒ **不构造路由器**，这条链上**一次 LLM 调用都不发生**，
+    #: 且共同取证分支照旧无条件先试（= 本开关存在之前的行为）。
+    #:
+    #: ⚠ 它与 `rerank.enabled` 同属"✅ 真能关"那一档，**但两者的缺省语义不同**：
+    #: 精排缺省开（D8 把排序定为主线），路由缺省关（未经标定）。
+    enabled: bool = False
+    #: 单次路由调用的超时（秒）。见模块顶部 `DEFAULT_ROUTER_TIMEOUT_S` 的说明
+    #: （它与 reranker 的超时**方向不同**，别照抄那一条）。
+    timeout_seconds: float = DEFAULT_ROUTER_TIMEOUT_S
+    #: 单次生成的输出上限（token）。见 `DEFAULT_ROUTER_MAX_OUTPUT_TOKENS`。
+    max_output_tokens: int = DEFAULT_ROUTER_MAX_OUTPUT_TOKENS
+    #: 生成温度。**默认 0 是"这一步要可复现"的声明**（§6 的可复现性要求）。
+    #: ⚠ 网关**可能忽略它**（实测有些自研封装不接这个字段）——那就没有确定性保证，
+    #: 而"重放同一批问题得到不同路由"会表现为分数抖动。所以 §6 那条"在一小组边界问题上
+    #: 重复调用、观察路由是否稳定"**必须真跑**，不能靠这个键的存在当保证。
+    temperature: float = 0.0
+    #: 提示词版本（`retrieve/router.py` 的 `ROUTER_PROMPT_VERSION`）。
+    #:
+    #: ⚠ **它是一条断言，不是说明**：与代码里的常量不符 ⇒ **构造期响亮失败**。
+    #: 理由是 §6 的可复现性——"改了两轮提示词却忘了改版本号"的表现是
+    #: **两份 run record 声称同一份提示词**，而那种漂移查不出来。
+    prompt_version: str = DEFAULT_ROUTER_PROMPT_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class AgenticConfig:
+    """多跳执行器（`MULTI_HOP` 分支）——**执行器已经实现**，默认仍然关着。
+
+    ⚠ 与 `RouterConfig` 的关系是**两条独立的开关**，别把它们读成一个：
+
+    | | 作用 |
+    | --- | --- |
+    | `router.enabled` | **选路**（三个枚举值之一）。开它 ⇒ `DEFAULT` 类问题不再先试共同取证 |
+    | `agentic.enabled` | **执行器在不在**。开它 ⇒ `MULTI_HOP` 真的跑多轮检索，而不是降级 |
+
+    今天**只有两个都开着**，多跳那条路才会真的跑起来；只开 `agentic` 而不开 `router`
+    则一条请求都不会走到这里（除非用了 `force`，那是实验开关，见下）。
+
+    ⚠ **默认全关**：一条会多花 3 次 LLM ＋ 最多 3 次精排的路，**不该默认生效在提交口径上**。
+    """
+
+    #: 是否构造多跳执行器。`false`（默认）⇒ `build_agentic` 返回 `None`
+    #: ⇒ 每条 `MULTI_HOP` 降级回 `DEFAULT` 并记 `route_fallback = agentic_unavailable`。
+    enabled: bool = False
+
+    #: **实验开关：绕过路由器，把所有查询按 `MULTI_HOP` 处理**（§12.3 的 E1）。
+    #:
+    #: ⚠ 它存在的**唯一**理由是 E1 那一臂要"独立验证 CoQ 的检索能力"——不绕过路由器，
+    #: 测出来的就是"路由器 × 多跳"的合成效果，两者分不开（§12.3 明说了这件事）。
+    #: ⛔ **它不是给提交口径用的**：打开它等于关掉 `COUNT` / `DEFAULT` 两条路的选择能力。
+    #: 关闭它（默认）时这条链与本开关存在之前**逐字相同**。
+    force: bool = False
+
+    #: 检索轮数上限，**含第一轮**（§7.4）。见 `DEFAULT_COQ_MAX_ROUNDS` 里与 PRD §9 的差异说明。
+    max_rounds: int = DEFAULT_COQ_MAX_ROUNDS
+
+    #: 每轮交给 CoQ 的候选数（精排**之后**取前 N 条）。
+    per_round_top_k: int = DEFAULT_COQ_PER_ROUND_TOP_K
+
+    #: 提前停止的置信度门槛。⚠ 只在"已判定充分"之后起作用，见该常量的说明。
+    sufficiency_threshold: float = DEFAULT_COQ_SUFFICIENCY_THRESHOLD
+
+    #: 每轮 prompt 的 token 上限。**与 `budget.max_tokens` 不是同一个量**。
+    max_prompt_tokens: int = DEFAULT_COQ_MAX_PROMPT_TOKENS
+
+    #: 单次生成的输出上限（token）。
+    max_output_tokens: int = DEFAULT_COQ_MAX_OUTPUT_TOKENS
+
+    #: 单次调用的超时（秒）。
+    timeout_seconds: float = DEFAULT_COQ_TIMEOUT_S
+
+    #: 生成温度。**默认 0 是"这一步要可复现"的声明**（§6）。
+    temperature: float = 0.0
+
+    #: **每轮内部精排开关**（§12.4 的那个消融：A = 直接用 RRF 顺序取 Top-N；
+    #: B = 先精排再取 Top-N）。默认 `true` = 方案的主方案。
+    #:
+    #: ⚠ 它**只影响交给 LLM 的那 20 条**：最终精排由调用方做，与这个开关无关。
+    #: 关掉它**不改候选集合**，只改名次顺序 —— 所以它是一个合格的对照
+    #: （§13："开关必须只影响它命名的那一件事"）。
+    round_rerank_enabled: bool = True
+
+    #: 最终精排 Query 的构造方式（§9.1）。取值域见 `FINAL_RERANK_QUERY_MODES`。
+    final_rerank_query_mode: str = "combined"
+
+    #: 提示词版本（`agent/coq_prompt.py` 的 `COQ_PROMPT_VERSION`）。
+    #:
+    #: ⚠ **它是一条断言，不是说明**：与代码里的常量不符 ⇒ **构造期响亮失败**。
+    #: 同 `router.prompt_version`：删掉了历史版本之后，"改提示词忘了改版本号"的表现是
+    #: **两份 run record 声称同一份提示词**，而那种漂移查不出来。
+    prompt_version: str = DEFAULT_COQ_PROMPT_VERSION
+
+
+@dataclass(frozen=True, slots=True)
 class ServerConfig:
     """服务进程形态（§15）。"""
 
@@ -432,6 +673,8 @@ class AppConfig:
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     packaging: PackagingConfig = field(default_factory=PackagingConfig)
     rerank: RerankConfig = field(default_factory=RerankConfig)
+    router: RouterConfig = field(default_factory=RouterConfig)
+    agentic: AgenticConfig = field(default_factory=AgenticConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
 
@@ -458,6 +701,19 @@ class AppConfig:
     #: 空 ⇒ `NullMetricsSink`（不写任何东西）——**缺省不是错误**，与 reranker 同一套口径。
     metrics_path: str = ""
 
+    #: LLM 对话端点的三件套（`AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`）。
+    #:
+    #: ⚠ **它们是"端点身份"那一档，所以跟 `base_url` / `key` 一起住 `.env`**
+    #: （与 `reranker_*` 完全同型；理由见 `docs/config-reference.md` §9 那条
+    #: "embedding 走 yaml、另两个走 env，这不是笔误"）。
+    #:
+    #: ⚠ **允许为空**（默认就是空的）：绝大多数部署**没有** `router.enabled`
+    #: ⇒ 它们不需要这三个值，而"缺了就拒绝启动"会让服务平白多一个启动依赖。
+    #: 真正需要它们的是 `validate()` 里那一条——**只在 `router.enabled = true` 时**才要求。
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+
 
 # ── yaml 读取：**不认识的键一律报错** ────────────────────────────────────
 
@@ -472,6 +728,8 @@ _TOP_LEVEL_KEYS: Final[frozenset[str]] = frozenset(
         "budget",
         "packaging",
         "rerank",
+        "router",
+        "agentic",
         "capture",
     }
 )
@@ -771,6 +1029,126 @@ def _rerank(raw: object) -> RerankConfig:
     )
 
 
+def _router(raw: object) -> RouterConfig:
+    """查询路由器。**两个布尔项都要显式挡掉 `bool` 之外的取值**（同 `_rerank`）。"""
+    g = _group(
+        raw,
+        where="router",
+        allowed={
+            "enabled",
+            "timeout_seconds",
+            "max_output_tokens",
+            "temperature",
+            "prompt_version",
+        },
+    )
+    enabled = g.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ConfigError(f"`router.enabled` 必须是布尔值，收到 {enabled!r}")
+    return RouterConfig(
+        enabled=False if enabled is None else enabled,
+        timeout_seconds=_float(
+            g.get("timeout_seconds"),
+            where="router.timeout_seconds",
+            default=DEFAULT_ROUTER_TIMEOUT_S,
+        ),
+        max_output_tokens=_int(
+            g.get("max_output_tokens"),
+            where="router.max_output_tokens",
+            default=DEFAULT_ROUTER_MAX_OUTPUT_TOKENS,
+        ),
+        temperature=_float(g.get("temperature"), where="router.temperature", default=0.0),
+        prompt_version=_str(
+            g.get("prompt_version"),
+            where="router.prompt_version",
+            default=DEFAULT_ROUTER_PROMPT_VERSION,
+        ),
+    )
+
+
+def _agentic(raw: object) -> AgenticConfig:
+    """多跳执行器（`MULTI_HOP`）。**每一个键都只影响它命名的那一件事**（§13）。
+
+    ⚠ `enabled` 是唯一的开关；`force` 是**实验**开关（E1 要绕过路由器），
+    其余都是上限/阈值。⛔ 这里刻意**没有**"轮数 × 每轮条数"之外的检索参数：
+    每轮召回深度取**请求的 `top_k`**，不为多跳另造一套（§3.2）。
+    """
+    g = _group(
+        raw,
+        where="agentic",
+        allowed={
+            "enabled",
+            "force",
+            "max_rounds",
+            "per_round_top_k",
+            "sufficiency_threshold",
+            "max_prompt_tokens",
+            "max_output_tokens",
+            "timeout_seconds",
+            "temperature",
+            "round_rerank_enabled",
+            "final_rerank_query_mode",
+            "prompt_version",
+        },
+    )
+    for name in ("enabled", "force", "round_rerank_enabled"):
+        value = g.get(name)
+        if value is not None and not isinstance(value, bool):
+            raise ConfigError(f"`agentic.{name}` 必须是布尔值，收到 {value!r}")
+    mode = _str(
+        g.get("final_rerank_query_mode"),
+        where="agentic.final_rerank_query_mode",
+        default="combined",
+    )
+    if mode not in FINAL_RERANK_QUERY_MODES:
+        # 取值域在**这里**就挡住：一个拼错的模式会让"联合精排"静默退化成"只用原问题"，
+        # 而两者的分数差正好是本阶段要测的东西（§9.1）——**那种静默会直接污染结论**。
+        raise ConfigError(
+            f"`agentic.final_rerank_query_mode` 必须是 {FINAL_RERANK_QUERY_MODES} 之一，"
+            f"收到 {mode!r}"
+        )
+    return AgenticConfig(
+        enabled=bool(g.get("enabled") or False),
+        force=bool(g.get("force") or False),
+        max_rounds=_int(
+            g.get("max_rounds"), where="agentic.max_rounds", default=DEFAULT_COQ_MAX_ROUNDS
+        ),
+        per_round_top_k=_int(
+            g.get("per_round_top_k"),
+            where="agentic.per_round_top_k",
+            default=DEFAULT_COQ_PER_ROUND_TOP_K,
+        ),
+        sufficiency_threshold=_float(
+            g.get("sufficiency_threshold"),
+            where="agentic.sufficiency_threshold",
+            default=DEFAULT_COQ_SUFFICIENCY_THRESHOLD,
+        ),
+        max_prompt_tokens=_int(
+            g.get("max_prompt_tokens"),
+            where="agentic.max_prompt_tokens",
+            default=DEFAULT_COQ_MAX_PROMPT_TOKENS,
+        ),
+        max_output_tokens=_int(
+            g.get("max_output_tokens"),
+            where="agentic.max_output_tokens",
+            default=DEFAULT_COQ_MAX_OUTPUT_TOKENS,
+        ),
+        timeout_seconds=_float(
+            g.get("timeout_seconds"),
+            where="agentic.timeout_seconds",
+            default=DEFAULT_COQ_TIMEOUT_S,
+        ),
+        temperature=_float(g.get("temperature"), where="agentic.temperature", default=0.0),
+        round_rerank_enabled=bool(g.get("round_rerank_enabled", True)),
+        final_rerank_query_mode=mode,
+        prompt_version=_str(
+            g.get("prompt_version"),
+            where="agentic.prompt_version",
+            default=DEFAULT_COQ_PROMPT_VERSION,
+        ),
+    )
+
+
 def _capture(raw: object) -> CaptureConfig:
     """诊断开关——**路径不在这里**（它归 env，由 `load_config` 覆盖）。"""
     g = _group(raw, where="capture", allowed={"enabled", "max_bytes"})
@@ -851,11 +1229,123 @@ def validate(cfg: AppConfig) -> AppConfig:
             "多进程各自的 Qdrant 客户端）⇒ 在那之前保持这条约束，"
             "**不要用「位置已经是请求的纯函数了」当理由把它去掉**。"
         )
-
+    _validate_router(cfg)
+    _validate_agentic(cfg)
     return replace(
         cfg,
         retrieval=replace(cfg.retrieval, rrf=replace(cfg.retrieval.rrf, weights=(w_bm25, w_dense))),
     )
+
+
+def _validate_router(cfg: AppConfig) -> None:
+    """路由器的三件套——**只在它真的开着时才要求**。
+
+    ⚠ **为什么这里配错了要拒绝启动，而不是像 reranker 那样"缺了就降级 + WARNING"**
+    （那条口径见 `build_reranker`）——两者的**失败后果不对称**：
+
+    * 精排缺端点 ⇒ 名次退回 RRF。**检索仍然完整**，降级是**有定义的**，
+      而且 run record 里 `rerank_disabled` 会如实记着。D12 接受这个代价，因为
+      精排是"唯一不被规则保证可用"的组件。
+    * 路由开着却没端点 ⇒ **每一次请求都退 `DEFAULT`**。结果不是"少一点排序质量"，
+      而是**"Router On" 这个实验臂根本没有路由器**——跑出来的分数会被读成
+      "路由没有帮助"，而归因完全错。**这正是 §13 要挡的那一类静默失败。**
+
+    所以：**开着就必须配齐**（`validate()` 在启动阶段响亮失败），而"不想配"
+    的出口是**把 `enabled` 设为 `false`**（默认值）。这与 `embed_base_url` 那种
+    "缺了就拒绝启动"同型，只是加了 `enabled` 这个前提条件。
+    """
+    if not cfg.router.enabled:
+        return
+    for value, name, env in (
+        (cfg.llm_base_url, "llm.base_url", ENV_LLM_BASE_URL),
+        (cfg.llm_api_key, "llm.api_key", ENV_LLM_API_KEY),
+        (cfg.llm_model, "llm.model", ENV_LLM_MODEL),
+    ):
+        if not value or not value.strip():
+            raise ConfigError(
+                f"`router.enabled = true`，但缺少配置 `{name}`（来源：`{env}`）。\n"
+                "  路由器要调用对话端点才能分类，而缺端点的表现是**每次请求都降级**——"
+                "跑出来的就是「Router On」这一臂其实没开路由器（见 `_validate_router` 的说明）。\n"
+                "  ⇒ 填好 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`，"
+                "或把 `router.enabled` 改回 `false`。"
+            )
+    if cfg.router.timeout_seconds <= 0:
+        raise ConfigError(
+            f"`router.timeout_seconds` 必须为正：{cfg.router.timeout_seconds}\n"
+            "  非正值会让每次路由都立刻超时 ⇒ **每次都降级**，而响应看起来完全合法。"
+        )
+    if cfg.router.max_output_tokens <= 0:
+        raise ConfigError(
+            f"`router.max_output_tokens` 必须为正：{cfg.router.max_output_tokens}\n"
+            "  ⚠ 尤其不要设成 1：`MULTI_HOP` 会被截断成 `MULTI` ⇒ 输出非法 ⇒ "
+            "**全部降级成 `DEFAULT`，而且不报错**。"
+        )
+    if cfg.router.temperature < 0:
+        raise ConfigError(f"`router.temperature` 不得为负：{cfg.router.temperature}")
+    _require(
+        cfg.router.prompt_version,
+        where="router.prompt_version",
+        source="configs/*.yaml",
+    )
+
+
+def _validate_agentic(cfg: AppConfig) -> None:
+    """多跳执行器的键——**只在它真的开着时才要求端点，但取值范围**任何时候都要对**。
+
+    ⚠ **端点那一半与 `_validate_router` 的理由完全相同**（都是"开着就必须配齐"）：
+    `agentic.enabled` 开着却没有对话端点 ⇒ 每一轮 LLM 都失败 ⇒ 每条 `MULTI_HOP`
+    都带着候选回退 ⇒ 跑出来的分数被读成"多跳没有帮助"。**归因错了，不是质量差。**
+
+    ⚠ 取值范围那一半**不看 `enabled`**：一个 `max_rounds: 0` 在关着的时候无害，
+    但**打开它的那一刻**会造出"一轮都不跑、却声称走过多跳"的状态——
+    而这正是本模块存在的意义（把启动期的错误挡在启动期）。
+
+    它**不检查 `force` 本身**：那是实验开关，本身合法，只是不该出现在提交口径里
+    （口径由 run record 的配置指纹负责留痕，不是由校验器负责禁止）。
+    ⚠ 但它**必须与 `enabled` 一起用**——见下面那条检查。
+    """
+    if cfg.agentic.force and not cfg.agentic.enabled:
+        raise ConfigError(
+            "`agentic.force = true` 但 `agentic.enabled = false`。\n"
+            "  `force` 的含义是「绕过路由器、一律走 MULTI_HOP」，而**执行器没装**时"
+            "这条指令无处可去 ⇒ 每一个查询都会安静地按原路走，**而你以为在跑 E1**。\n"
+            "  ⇒ 两个一起打开，或两个都关掉。"
+        )
+    if cfg.agentic.enabled:
+        for value, name, env in (
+            (cfg.llm_base_url, "llm.base_url", ENV_LLM_BASE_URL),
+            (cfg.llm_api_key, "llm.api_key", ENV_LLM_API_KEY),
+            (cfg.llm_model, "llm.model", ENV_LLM_MODEL),
+        ):
+            if not value or not value.strip():
+                raise ConfigError(
+                    f"`agentic.enabled = true`，但缺少配置 `{name}`（来源：`{env}`）。\n"
+                    "  多跳执行器每一轮都要调一次对话端点；缺端点 ⇒ **每一轮都失败**，"
+                    "于是「Agent On」这一臂其实没有执行器（见 `_validate_agentic` 的说明）。\n"
+                    "  ⇒ 填好 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`，"
+                    "或把 `agentic.enabled` 改回 `false`。"
+                )
+    if cfg.agentic.max_rounds < 1:
+        raise ConfigError(
+            f"`agentic.max_rounds` 必须 ≥ 1（**含第一轮**）：{cfg.agentic.max_rounds}\n"
+            "  0 会让多跳一轮都不跑却仍然返回**空候选**——那不是降级，是「假装跑过了」。"
+        )
+    if cfg.agentic.per_round_top_k < 1:
+        raise ConfigError(f"`agentic.per_round_top_k` 必须 ≥ 1：{cfg.agentic.per_round_top_k}")
+    if not 0.0 <= cfg.agentic.sufficiency_threshold <= 1.0:
+        raise ConfigError(
+            "`agentic.sufficiency_threshold` 必须在 0..1 之间："
+            f"{cfg.agentic.sufficiency_threshold}\n"
+            "  ⚠ 它只在**已经判定充分**之后起作用（见 `DEFAULT_COQ_SUFFICIENCY_THRESHOLD`）。"
+        )
+    for name in ("max_prompt_tokens", "max_output_tokens"):
+        if getattr(cfg.agentic, name) <= 0:
+            raise ConfigError(f"`agentic.{name}` 必须为正：{getattr(cfg.agentic, name)}")
+    if cfg.agentic.timeout_seconds <= 0:
+        raise ConfigError(f"`agentic.timeout_seconds` 必须为正：{cfg.agentic.timeout_seconds}")
+    if cfg.agentic.temperature < 0:
+        raise ConfigError(f"`agentic.temperature` 不得为负：{cfg.agentic.temperature}")
+    _require(cfg.agentic.prompt_version, where="agentic.prompt_version", source="configs/*.yaml")
 
 
 def assert_single_process() -> None:
@@ -955,11 +1445,19 @@ def load_config(
             budget=_budget(data.get("budget")),
             packaging=_packaging(data.get("packaging")),
             rerank=_rerank(data.get("rerank")),
+            router=_router(data.get("router")),
+            agentic=_agentic(data.get("agentic")),
             capture=capture,
             server=ServerConfig(workers=workers),
             # 密钥与端点不在 yaml 里（见模块 docstring 的两层分工）
             embed_base_url=(src.get(ENV_EMBED_BASE_URL) or "").strip(),
             embed_api_key=(src.get(ENV_EMBED_API_KEY) or "").strip(),
+            # ⚠ 这三个**允许为空**（默认就是空的）：不需要路由器的部署不必配它们。
+            #   真正要求它们的是 `_validate_router()`——**只在 `router.enabled` 时**。
+            #   ⚠ 端点与 key 是**一对**，`_2` 那一套是 harness 的调度概念，服务不接（见常量注释）。
+            llm_base_url=(src.get(ENV_LLM_BASE_URL) or "").strip(),
+            llm_api_key=(src.get(ENV_LLM_API_KEY) or "").strip(),
+            llm_model=(src.get(ENV_LLM_MODEL) or "").strip(),
             # ⚠ 这三个**允许为空**：空 ⇒ 不构造 reranker（D12 的降级形态，不是配置错误）
             reranker_base_url=(src.get(ENV_RERANKER_BASE_URL) or "").strip(),
             reranker_api_key=(src.get(ENV_RERANKER_API_KEY) or "").strip(),

@@ -22,6 +22,7 @@ metrics.py     ✅ 已实现——§14 指标的**聚合与导出**（出口 = �
 | rerank `calls` / `disabled` / `degraded` + 模型名 | [`../service/`](../service/)（计数住在 `SearchPipeline`） | ✅——**V12 要的那几个量** |
 | 共同取证计划、投影及选择/回退原因 | [`../service/`](../service/) + [`../retrieve/evidence.py`](../retrieve/evidence.py) | ✅；请求局部诊断，不进入响应 |
 | 打包截断及返回片段数 | [`../service/`](../service/) 的打包出口 | ✅；区分槽位、token 与缺失来源 |
+| 路由的类别分布 · 三态（disabled/success/degraded）· 降级原因 · 回退原因 · 路由耗时 | [`../service/`](../service/) + [`../retrieve/router.py`](../retrieve/router.py) | ✅（**D40**）；⚠ **这是"路由到底有没有在跑"的唯一出口**——`routes.DEFAULT`（开着、分到默认路）与 `statuses.disabled`（根本没开）在响应上完全一样，只有这里分得开。`router.latency_ms` 的分母是 `router.calls` **不是** `searches` |
 | embedding 调用数 / 缓存命中率 | [`../embed/`](../embed/)——它是**缓存键**的探针，**不下降说明缓存键写错了** | ⬜ 还没发 |
 | Agent Trigger Rate · 平均轮数 · Rewrite 次数 | [`../agent/`](../agent/)——只有 agent 循环知道被触发了几次 | ⬜ v2（D13） |
 

@@ -31,12 +31,22 @@ from tianximem.retrieve.fusion import (
     dedup_candidates,
     make_hybrid_params,
 )
+from tianximem.retrieve.router import (
+    ROUTER_PROMPT,
+    ROUTER_PROMPT_VERSION,
+    QueryRouter,
+    Route,
+    RouteDecision,
+    parse_route,
+)
 
 __all__ = [
     "BM25_MODEL",
     "DEFAULT_PREFETCH_LIMIT",
     "DEFAULT_WEIGHTS",
     "RRF_K",
+    "ROUTER_PROMPT",
+    "ROUTER_PROMPT_VERSION",
     "SPARSE_VECTOR",
     "Candidate",
     "dedup_candidates",
@@ -49,8 +59,12 @@ __all__ = [
     "HybridRetriever",
     "InMemoryCheckerInstrument",
     "NullCheckerInstrument",
+    "QueryRouter",
     "RetrievalParamError",
+    "Route",
+    "RouteDecision",
     "lexical_query",
     "make_hybrid_params",
+    "parse_route",
     "rank_consistency",
 ]

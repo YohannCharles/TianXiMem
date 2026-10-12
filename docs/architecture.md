@@ -94,6 +94,7 @@ Add、重放和有界旧库补索引共用抽取器；索引尚未覆盖当前�
 ### Search 路径（§5 流程图）
 
 ```text
+（`router.enabled = false` 时从这里开始 —— **默认**）
 （共同取证不适用时）
 query → BM25 ┐
              ├→ Weighted RRF → memory_id 稳定去重 → Evidence Checker
@@ -112,6 +113,51 @@ query → BM25 ┐
                                                           ↓
                                               ≤ top_k（精确计数，**数的是段**）
 ```
+
+#### 开了路由器时，上面那条链的前面多一层（**D40**，默认关）
+
+```text
+Search(query, top_k)
+   → 【QueryRouter】一次 LLM 调用 → COUNT / MULTI_HOP / DEFAULT（**严格三选一**）
+        │
+        ├ COUNT     → 现有共同取证（compile_query → 取证决策 → 打包）
+        │              无法编译 / 不齐 / 超限 ⇒ **整体回退 DEFAULT**
+        ├ MULTI_HOP → 多跳执行器（`AgenticSearch`）——实现在 [`../src/tianximem/agent/`](../src/tianximem/agent/)（**D41**）
+        │              ⚠ 执行器**没装**（`agentic.enabled = false`，默认）⇒ 回退 DEFAULT，
+        │                并记 `route_fallback = agentic_unavailable`
+        │              ⚠ 装上了但一条证据都没拿到就失败 ⇒ 回退 DEFAULT，
+        │                并记 `route_fallback = retrieval_error`（**不是同一个原因**）
+        └ DEFAULT   → 原混合检索链（**不再先试共同取证**）
+                          ↑
+              这三条最终**汇入同一个尾巴**：去重 → 精排（恰好一次）→ 扩窗 → 合并 → 打包
+```
+
+#### 多跳那条路内部（**D41**，`agentic.enabled` 另开）
+
+```text
+原始 Query
+   ├─→ ① 混合召回（**复用同一条 BM25+Dense+RRF**）→ 现有 Reranker → Top-N
+   ├─→ ② 攒证据：本轮 Top-N ＋ 此前已选中的（按稳定 ID 去重、**每轮重建索引映射**）
+   ├─→ ③ **一次** LLM：充分性 ＋ 选证据 ＋ 下一跳 Query（原版 CoQ 提示词，⛔ 不许改）
+   └─→ ④ 停？（已判定充分且置信 ≥ 阈值 / 轮数用尽 / Query 重复或为空 / 出错）
+         否 ⇒ 换 Query 回 ①
+         是 ⇒ 各轮 Top-N 去重合并 ⇒ 交回上面的共同尾巴
+```
+
+> ⚠ **最终精排仍然只做一次**，而且由 `SearchPipeline` 做——执行器交出的不是"排好的
+> 结果"，而是**候选 + 该用哪句 Query 去排**（原问题 ＋ 实际执行过的改写，§9.1）。
+> ⛔ 让执行器自己排最后一次会造出**两次最终精排**。
+> ⚠ 每轮**内部**还会精排一次：那是为了把交给 LLM 的证据筛干净，产出物**不进响应**。
+> ⚠ 与 PRD §9 的参数**不同**（§9 是 4 轮 / 每轮 5 / 三个工具；这里是 3 轮 / 每轮 20 /
+> **没有工具**）——见 **D41**。
+
+> ⚠ **路由不改写查询、不生成答案、不产出事实绑定字段**（§2.1 / §7.2 照旧）：
+> 它只决定走哪条路。⛔ 也**不设置信度阈值**——分类是类别选择，不是打分。
+>
+> ⚠ **它带来一处真实的行为改动**：`DEFAULT` 类问题失去共同取证那条确定性短路。
+> 这是"用确定性换分类能力"的取舍 ⇒ 所以**默认关着**，且代价必须有回归数据
+> （见 [`../eval/reports/`](../eval/reports/) 的路由报告）。键与口径见
+> [`config-reference.md`](./config-reference.md) **§5.7**；决策见 **D40**。
 
 > **`top_k` 数的是段、不是 raw memory**：扩窗会把 raw 条数抬到 `top_k` 之上，
 > 而相邻块的合并又把它降回来 ⇒ **截断只能在合并之后做**。
@@ -136,7 +182,7 @@ query → BM25 ┐
 | `embed/` | `Embedder` 协议 + 两个实现；**落盘的向量缓存** | §7.4、§7.2 |
 | `retrieve/` | BM25；dense；**混合检索的策略与参数所有权**；Evidence Checker；**共同证据执行器**（计划不适用 / 索引未扫完 / 冲突 / 超限 ⇒ 回原链）（**到 rerank 为止**） | §7.1–§7.3、§8 |
 | `rank/` | rerank → **Neighbor Expansion（§10）** → Context Packaging —— "排序 → 扩窗 → 打包"三连环 | §10、§11 |
-| `agent/` | Conditional Agentic Search 循环与三个工具 | §9 |
+| `agent/` | **多跳执行器的编排**：一轮一问的 Chain-of-Query（召回/精排复用下层）、证据按稳定 ID 跨轮累积、每轮重建索引映射、批量预算、失败降级。⛔ **不是通用 Agent**——没有工具调用、不做最终精排、不生成答案 | §9 的**一部分**（见 **D41**） |
 | `llm/` | LLM 后端抽象（`gpt-4o-mini` / qwen3.5-9b） | §2.3、§12.1 |
 | `common/` | **渲染的唯一实现**（QA 对与事实片段）；token 计数；配置加载 + **开关校验** | §11.3、§6.4、§15 |
 | `observability/` | §14 指标（**各层发射、本层聚合**） | §14 |

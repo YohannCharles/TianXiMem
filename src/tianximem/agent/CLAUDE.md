@@ -1,103 +1,94 @@
-# agent/ — Conditional Agentic Search
+# agent/ — 多跳检索执行器（`MULTI_HOP` 那条路）
 
-> ## ⛔ v1 本目录不实现（[`../../../docs/decisions.md`](../../../docs/decisions.md) D13）
->
-> **v1 默认"证据充足"，没有 Agentic Search、没有证据补充、没有关键词重写。** 下文的循环、工具集、参数、监控**整块归 v2**。
->
-> **但 Evidence Checker 的接缝要留在 v1**：实现为**恒返回"充足"**的空实现（[`../retrieve/checker.py`](../retrieve/checker.py)）。⚠ 但 **v1 的装配不带 instrument**（落到 `NullCheckerInstrument`）⇒ **每轮判定被丢弃**，D13 那条"必须记录"**至今未满足**（取舍见 [`../service/app.py`](../service/app.py) 的装配注释）——而 **A4 已移出 v1**（**D26**，两臂都跑不起来），A4a/A4b 的 arm 定义留在 [`../../../docs/experiments.md`](../../../docs/experiments.md)。
->
-> **v1 的代价必须正视**：没有证据补充路径，**召回是一次性天花板**——正确的 QA 对不在初始候选里就永久丢了。**v1 的全部重量因此压在"排序 + token 预算分配"上**，而这正是 [`../rank/`](../rank/) 与 Neighbor Expansion 的职责。
+**PRD**：§9（Conditional Agentic Search）—— ⚠ **本目录只实现其中一小块，见下**
+**决策**：**D41**（2026-10-10）· 键与口径：[`../../docs/config-reference.md`](../../docs/config-reference.md) **§5**
 
-**PRD**：§9（含 §5 的流程图注释）
-
-## 要写什么（v2）
+## 要写什么
 
 ```text
-loop.py     agent 循环：门控、轮数、合并
-tools.py    search_chatrecord / take_note / finish_search
+coq_prompt.py  原版 Chain-of-Query 提示词（⛔ 逐字照用，**只有一版**）
+parse.py       两阶段 JSON 提取 + 严格字段校验（缺字段 ⇒ 异常，**不补默认值**）
+coq.py         状态机：多轮召回 → 每轮精排 → 一次 LLM → 停/继续 → 合并候选
 ```
 
-**只在 Evidence Checker 判定不足时启动。这是本项目的核心 claim，不可砍**（§9）。
-
-> ⚠ **但 v1 里这条 claim 是平凡成立的**（根本没有 agentic），**不是被设计出来的**。若最终材料要引用它，**必须由 v2 或 A4a/A4b 支撑，不能引用 v1 的分数**（D13）。
-
----
-
-## 为什么"条件"两个字是全部重点
-
-§3.1 的核心原则：
-
-> **不让所有 Query 都进入昂贵的 Agentic Search**，优先使用低成本、高稳定性的检索；**只有证据不足时才触发** Agent 多轮搜索。
-
-因此本目录有**两个同等重要的失败方向**：
-
-| 失败 | 表现 | 触发什么动作（§14） |
-| --- | --- | --- |
-| **门控太松** | Agent Trigger Rate 偏高 | Checker 太保守 |
-| **门控太紧** | Agent Trigger Rate **接近 0** | **agent 没起作用**——核心 claim 事实上没有被验证 |
-
-**只看平均分看不出这两种失败**——必须同时看 Trigger Rate。这也是 [`../../../docs/experiments.md`](../../../docs/experiments.md) 把 §13 的 A4 拆成 A4a/A4b 两条读法的原因（两臂都不在 v1，**D26**）。
-
----
-
-## 参数：沿用 ReFind 的形状（§9）
-
-> 这套参数**是在真实评测上跑出来的，改它需要理由**。
+## 它**只有一件事**
 
 ```text
-最多 4 轮
-每轮内部检索 top_k = 5
-工具集：
-  search_chatrecord(query, date_from?, date_to?)  -- 复用 §7 的 hybrid 检索
-  take_note()                                     -- 保存上一轮结果原文，存后即不可再访问
-  finish_search()
+原始 Query
+   ├─→ ① 混合召回（复用 retrieve/）→ 现有 Reranker → Top-N
+   ├─→ ② 攒证据（本轮 Top-N ＋ 此前已选中的，按稳定 ID 去重、重新编号）
+   ├─→ ③ 一次 LLM：充分性 ＋ 选证据 ＋ 下一跳 Query（原版 CoQ 提示词）
+   └─→ ④ 停？（充分且置信 ≥ 阈值 / 轮数用尽 / Query 重复或为空 / 出错）
+         否 ⇒ 换 Query 回 ①；是 ⇒ 各轮 Top-N 去重合并，交回调用方
 ```
 
-- **Agent 只能给出关键词与日期范围**，其余控制由服务端自动施加
-
-### ⚠ `4` 是"检索轮数"的上限，不是"LLM 调用次数"的上限
-
-**ReFind 实测每 query 平均约 5.0 次 LLM 调用**（论文 Table 11：4.99）——一轮里可能**既有决策调用也有收尾调用**。
-
-> **§14 要监控的是这个均值，不要拿 4 去卡它。**
-
-### 复用的四个 chat-native 控制
-
-会话级 rank fusion · 邻域扩展 · 时间收窄 · 已见 session 去重（§9）。这四个**由服务端施加**，不是 agent 的工具。
-
-### 工具命名
-
-> 工具名沿用了 ReFind 论文的 `search_chatrecord`。**我们的实现是自有的，改名无妨，但保持与论文同形有利于对照实验时的归因**（§9）。
-
-**⚠ 一条边界**：`eval/baselines/refind/` 会把 ReFind **原版**（MIT）作为 B1 基线 Vendor 进来，那是**不改动的外部代码**，与"本项目从零搭建、不复用任何既有代码"（§1）**不冲突**——**冲突只会在有人把那份代码 import 进 `src/` 时发生**。**`src/tianximem/agent/` 里的任何一行都必须是我们自己写的。**
+⛔ **它不是一个通用 Agent**：没有工具调用、没有自主规划、没有 SplitQuery 并行子查询、
+不生成答案。**PRD §9 的那些**（`search_chatrecord` / `take_note` / `finish_search`
+三个工具、会话级 rank fusion、时间收窄、已见 session 去重）**一个都不在这里**，
+本阶段明确不做。⚠ **别在这个目录里把它们长出来**——那会同时改掉轮数与每轮候选数
+两个量，而它们是一道预算题（§10）。
 
 ---
 
-## 产出与初始候选是"合并"关系，不是替换（§9）
+## 四条边界（越界都**不会报错**）
 
-**两者一起进 [`../rank/`](../rank/) 的 Rerank，按 `id` 去重。**
-
-**理由**：初始那一路里**往往已经有正确答案**——Agent 的价值是**补上它找不到的那部分，而不是推翻它**。
-
-> 这也是 §4"选择与排序是瓶颈"的直接应用：**Agent 只负责把候选弄全，排序仍归 Rerank。**
-
-**⚠ 与 §13 纯度规则的关系**：A4 关掉 agent 时，**打包顺序与候选数量不得因此改变**——否则对照不成立（逐开关的"关掉时不得改变什么"见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §2）。
-
----
-
-## 重点处理的情况（§9）
-
-Multi-hop · Temporal · Knowledge Update · Ambiguous · 信息分散
-
----
-
-## 监控
-
-本目录是 **Agent Trigger Rate / 平均轮数 / Rewrite 次数**的**发射方**；读法、阈值含义与聚合都在 [`../observability/CLAUDE.md`](../observability/CLAUDE.md)。
+1. **不生成答案、不改写记忆原文**（§2.1 的红线）。文档正文一律走
+   [`../common/render.py`](../common/render.py) 的 `render_pair`（不变式 I1）——
+   与索引侧、精排输入是**同一份渲染**。模型给的 `new_query` **只当检索词**用，
+   ⛔ 绝不把它当成一条记忆内容（§8.3）。
+2. **不做最终精排。** 那一步由 [`../service/pipeline.py`](../service/pipeline.py)
+   对**合并后的列表**做**恰好一次**；本目录只交出 `rerank_query`
+   （原问题 ＋ **实际执行过的**改写，§9.1）。
+   ⚠ **每轮内部**那一次精排是另一件事：产出物不进响应，只为把交给 LLM 的证据筛干净。
+3. **不抛异常。** 所有失败都变成 `AgenticResult` 上的一个具名原因
+   （`fallback_reason` / `stats.stop_reason`）。理由与路由器同一条：
+   一条可选路径的失败**不该让一次正常 Search 变 500**。
+4. **不认识 HTTP、不认识路由器。** 接线在 `service/`。
+   有 AST 用例钉着（`tests/test_agent.py::test_the_agent_never_imports_the_http_layer_or_the_router`）：
+   §13 的消融需要这两条路**各自可关**，互相纠缠会让"关掉它"不再是单变量。
 
 ---
 
-## 依赖
+## 三处"顺序错了也不报错"的地方
 
-- 检索：[`../retrieve/`](../retrieve/)（复用 §7 的 hybrid 检索，**不另起一套**）
-- LLM：[`../llm/`](../llm/)（**agent 是 LLM 的唯一消费者**；v1 不实现 agent、Checker 恒"充足" ⇒ **v1 没有实际调用点**，口径与 [`../llm/CLAUDE.md`](../llm/CLAUDE.md) 一致）
+| 地方 | 错了会怎样 |
+| --- | --- |
+| **每轮先召回、再精排、然后取 Top-N** | 反过来只会重排一堆**已被提前排除**的候选，**结果看起来完全正常**（§3.2） |
+| **每轮重建 `索引 → 稳定 ID` 映射** | 复用上一轮的：模型给的索引指向**别的证据**（§5.2） |
+| **文档渲染只做一次** | 把已带索引头的文本再嵌一次 ⇒ 提示词出现 `[1]\n[0]\nQ: …`，**模型读得懂它**，于是对应关系悄悄错位 |
+
+还有一条**可证的不变式**（别试图为它造测试）：`history_tokens ≤ max_prompt_tokens`
+恒成立——历史证据只可能由**发出去过的**文档组成，而那些已经过预算。
+⇒ `_build_documents` 里"连历史都放不下"那条出口**今天不可达**，证明写在它的 docstring 里。
+
+---
+
+## 提示词是**冻结的**
+
+`coq_prompt.py` 的 `COQ_PROMPT` 是方案第四章的原版，**照用、不改写、不简化、
+不补示例、不改 JSON 字段**。要动它之前先回答一个问题：
+**"这还是原版吗？"**——不是的话，本阶段"以原版 CoQ 为核心"这个前提就没有了。
+
+⚠ 填充用**一遍扫描的 `re.sub`**，不是连续三次 `str.replace`：后者会让一句含字面
+`{used_query}` 的 Query 在**第二次替换时被顶掉**，且**没有任何报错**。
+⛔ 也不要用 `str.format`（Query 里的 `{` 会让它炸，或者替换出没人预期的输入）。
+
+⚠ 提示词里 `{used_query}` 与 `{retrieved_episodes}` **各出现两次**
+（"Inputs (schemas)" 段与末尾各一次）——那是原版的形状，不是重复。
+
+---
+
+## 配置与开关
+
+⚠ **`agentic.enabled`（执行器在不在）与 `router.enabled`（选不选这条路）是两条
+独立的开关**，**两个都开**多跳才真的跑起来。见 [§5](../../docs/config-reference.md)。
+
+每轮**召回深度取请求的 `top_k`**（AML 固定 100）——**不为多跳另造一套检索参数**
+（`prefetch_limit` / `weights` 一个都不在这里）。
+
+## 测试
+
+[`../../tests/test_agent.py`](../../tests/test_agent.py)——**不发任何真请求**：
+假 LLM（协议级替身）、假 retriever、假 Reranker、鸭子类型的假 store。
+⚠ 假 store **只实现执行器真正用到的那两样**（`read()` + `fetch_pairs_by_ids`）——
+用到第三样就说明本目录越界了。

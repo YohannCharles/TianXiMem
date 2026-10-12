@@ -1,0 +1,39 @@
+# ⭐ 多跳检索（Chain-of-Query）小规模评测的**题目清单**。
+#
+# ⚠ **只存 id + 口径，不存题目原文**（`eval/CLAUDE.md` §12.5：数据集原文不进 Git）。
+#    跑的时候按 `user_id` + `question_id` 从 `dataset/locomo-refined/` 现取。
+#
+# 语料：LoCoMo-Refined 的**前 3 段对话**（= 冻结口径 `--limit 3` 的那三段，
+# 与既有基线 0.7775 同口径）。题：只取 `category == "1"`（**多跳**）。
+#
+# 选取规则（**确定性**，可复现）：每段对话的多跳题里，按 `qa_index` 升序
+# **等距**取够配额 —— 见 `tools/coq_eval.py` 的 `select_questions`。
+# 配额 11 / 4 / 10 = 25，与该段的多跳题数（24 / 9 / 23）成比例。
+#
+# ⚠ `evidence` 是数据集自带的**支持证据标注**（`D<session>:<msg>`）。
+#    它只进运行期（用来算证据覆盖率），**不写进本文件**（同样是原文口径）。
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0003", "category": "1", "expects_evidence": 1}
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0007", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0013", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0028", "category": "1", "expects_evidence": 1}
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0030", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0038", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0045", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0050", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0054", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0059", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-26", "question_id": "conv-26#q0062", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-30", "question_id": "conv-30#q0003", "category": "1", "expects_evidence": 4}
+{"dataset": "locomo-refined", "user_id": "conv-30", "question_id": "conv-30#q0009", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-30", "question_id": "conv-30#q0018", "category": "1", "expects_evidence": 3}
+{"dataset": "locomo-refined", "user_id": "conv-30", "question_id": "conv-30#q0021", "category": "1", "expects_evidence": 5}
+{"dataset": "locomo-refined", "user_id": "conv-41", "question_id": "conv-41#q0002", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-41", "question_id": "conv-41#q0006", "category": "1", "expects_evidence": 4}
+{"dataset": "locomo-refined", "user_id": "conv-41", "question_id": "conv-41#q0008", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-41", "question_id": "conv-41#q0012", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-41", "question_id": "conv-41#q0017", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-41", "question_id": "conv-41#q0021", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-41", "question_id": "conv-41#q0024", "category": "1", "expects_evidence": 3}
+{"dataset": "locomo-refined", "user_id": "conv-41", "question_id": "conv-41#q0029", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-41", "question_id": "conv-41#q0032", "category": "1", "expects_evidence": 2}
+{"dataset": "locomo-refined", "user_id": "conv-41", "question_id": "conv-41#q0037", "category": "1", "expects_evidence": 2}

@@ -148,6 +148,75 @@ def test_musique_local_answer_contract_does_not_change_capture_prompt(bench: Pat
     )
 
 
+def test_only_the_chain_lane_drops_the_refusal_exit(bench: Path):
+    """⭐ **拒答出口只从"链式多跳"那一档拿掉**，别处的口径一个字不动。
+
+    ⚠ 用户口径（2026-10-12）：**整体大数据评测确实要考拒答**，那条链必须留着出口；
+    而多跳这一档**没有拒答题** ⇒ 那句子在那里只有一个作用——邀请模型弃答
+    （实测链式 25 题里 **10 道**是模型自己回的 `INSUFFICIENT_EVIDENCE`）。
+
+    ⇒ 判据是**是不是链式那一档**（`…-hop/chain`），**不是**题目可不可答：
+    MuSiQue 原生的 `answerable` / `unanswerable` 两档**都照旧**走 v1（含拒答出口）。
+    """
+    from eval.datasets.musique import CHAIN_CATEGORY, DIRECT_ANSWER_CONTRACT, answer_contract_for
+
+    # 原生两档（含**可答**那一档）都不动 —— 这一条就是"别处不许改"的护栏
+    for variant in ("answerable", "unanswerable"):
+        assert answer_contract_for(f"4-hop/{variant}") == ANSWER_CONTRACT
+    assert answer_contract_for("3-hop/chain") == DIRECT_ANSWER_CONTRACT
+    assert answer_contract_for(f"4-hop/{CHAIN_CATEGORY}") == DIRECT_ANSWER_CONTRACT
+    # 别的数据集压根不走这个函数，但"像链但不是链"的字符串不许漏过去
+    assert answer_contract_for("chain") == ANSWER_CONTRACT
+
+    # 端到端：原生可答那一档的 prompt 里**仍有**拒答出口（`bench` 的第一条就是可答题）
+    native = build_input_items(load_musique(bench, limit=1)[0], {})[0]
+    assert REFUSAL in extra.render_answer_prompt(native)
+
+
+def test_the_chain_lane_answer_prompt_has_no_refusal_exit(tmp_path: Path) -> None:
+    """链式那一档的 prompt 与原生那份**只差那一句**——删的是出口，不是别的规则。"""
+    from eval.datasets.musique import DIRECT_ANSWER_CONTRACT, load_musique_haystack
+
+    _write_jsonl(
+        tmp_path / "musique" / "musique_full_v1.0_dev.jsonl",
+        [
+            {
+                "id": "3hop1__a_b_c",
+                "question": "Where was the spouse of the director of the film born?",
+                "paragraphs": [
+                    {
+                        "idx": i,
+                        "title": f"P{i}",
+                        "paragraph_text": "Some body text long enough to be a paragraph.",
+                        "is_supporting": i == 0,
+                    }
+                    for i in range(3)
+                ],
+                "answer": "Final Answer",
+                "answer_aliases": [],
+                "answerable": True,
+                "question_decomposition": [
+                    {"question": "Who directed the film?", "answer": "Some Director"},
+                    {"question": "#1 >> spouse", "answer": "Some Spouse"},
+                    {"question": "#2 >> birthplace", "answer": "Final Answer"},
+                ],
+            }
+        ],
+    )
+    sample = load_musique_haystack(tmp_path, ["3hop1__a_b_c"])
+    assert sample.questions[0].category.endswith("/chain")
+    item = build_input_items(sample, {})[0]
+    assert item["answer_contract"] == DIRECT_ANSWER_CONTRACT
+    prompt = extra.render_answer_prompt(item)
+    assert REFUSAL not in prompt  # ⛔ 出口拿掉了
+    assert "Do not use outside knowledge" in prompt  # ✅ 别的规则原样
+    assert item["question"] in prompt and "(no memories)" in prompt  # 占位符照常填上
+    # ⚠ 判分口径**不变**：拒答在这一档照样算错，只是不再被提示词邀请
+    gold = sample.questions[0].gold
+    assert extra.judge_musique(REFUSAL, gold, contract=DIRECT_ANSWER_CONTRACT)[0] is False
+    assert extra.judge_musique("Final Answer", gold, contract=DIRECT_ANSWER_CONTRACT)[0] is True
+
+
 def test_musique_spread_covers_hops_and_answerability(bench: Path):
     path = bench / "musique" / "musique_full_v1.0_dev.jsonl"
     rows = [json.loads(line) for line in path.read_text().splitlines()]

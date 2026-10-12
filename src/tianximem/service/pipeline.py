@@ -73,12 +73,14 @@ canonical AddRequest
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from time import monotonic
+from typing import Protocol, runtime_checkable
 
+from tianximem.agent import AgenticResult
 from tianximem.common.config import (
     DEFAULT_EXPANSION_SEED_LIMIT,
     DEFAULT_RADIUS,
@@ -109,10 +111,46 @@ from tianximem.retrieve.evidence import (
     walk_subjects,
 )
 from tianximem.retrieve.fusion import Candidate
+from tianximem.retrieve.router import QueryRouter, Route
 from tianximem.store.qdrant_store import QdrantStore
 from tianximem.store.sqlite_store import QaPair, SqliteStore
 
-__all__ = ["AddOutcome", "AddPipeline", "SearchPipeline"]
+__all__ = ["AddOutcome", "AddPipeline", "AgenticSearch", "SearchPipeline"]
+
+
+@runtime_checkable
+class AgenticSearch(Protocol):
+    """多跳执行器的**接口约定**（§3.3）——实现是 [`../agent/`](../agent/)（2026-10-10）。
+
+    它是 `MULTI_HOP` 那条路的**唯一入口**，形状刻意定成"**再跑一遍底层检索**"：
+
+    ```text
+    agentic.search(user_id=..., query=..., top_k=...) → AgenticResult
+              ↓  与混合检索那条路**汇入同一个尾巴**
+        去重 → 精排（恰好一次，用它给的 rerank_query）→ 扩窗 → 段合并 → 双预算打包
+    ```
+
+    ## 四条约定（写在这里，因为它是"接口"而不是"实现细节"）
+
+    1. **它返回候选，不返回答案**（§2.1 的红线）。多跳只是"多取几轮证据"，
+       产出物仍然是**按名次排列的证据**——`Candidate` 这个类型本身就说明了这一点。
+    2. **它自己去重之前可以有重复**：合并多轮结果会产生同一个 `memory_id` 多次命中，
+       而"去重恰好发生一次、且发生在精排之前"是**调用方（本文件）**的责任
+       （顺序错了不报错：重复项会被排两次、占两个名额）。
+    3. **最终精排不归它做**：那一步**恰好一次**，由本文件对**合并后的那一份列表**做
+       （§7.2 的"每查询恰好一次"同款纪律）。⚠ 但它**可以说该用什么 Query 去排**——
+       那就是 `AgenticResult.rerank_query`（多跳的联合精排，§9.1）。
+       ⛔ 让执行器自己排最后那一次会造出**两次最终精排**，而 §9.4 专门点了这个坑。
+       ⚠ 它**内部**每轮还会精排一次（为了把交给 LLM 的证据筛干净）——
+       那是另一件事，产出物不进响应。
+    4. **它不抛异常**：失败一律变成 `AgenticResult.fallback_reason`。
+       `fallback_reason is not None` ⇒ **回到混合检索**（§10.1 第 6 条）。
+
+    ⚠ **`top_k` 是"每轮取多少"的口径提示，不是最终名额**：最终 `len(data) <= top_k`
+    由打包那一步收口（段级计数，§2.2）。执行器不必也不该自己截断到 `top_k`。
+    """
+
+    def search(self, *, user_id: str, query: str, top_k: int) -> AgenticResult: ...
 
 
 @dataclass(slots=True)
@@ -127,6 +165,30 @@ class _SearchTrace:
     rerank_calls: int = 0
     rerank_disabled: int = 0
     rerank_degraded: int = 0
+    #: 路由（§4.3 的三分法，与 rerank 同形）。
+    #: `disabled` = **路由器没开**；`success` = 模型正常分类；`degraded` = 想用但降级了。
+    #: ⚠ 后两者**必须分得开**——混为一谈会把"端点一直挂"看成"我们本来就没开路由"（D12）。
+    route: str = "disabled"
+    route_status: str = "disabled"
+    #: 分类**本身**降级的原因（`llm_unavailable` / `llm_timeout` / `invalid_output` …）。
+    route_reason: str | None = None
+    #: 分类成功、但**选中的那条路没跑成**的原因（`agentic_unavailable` / `retrieval_error` …）。
+    #: ⚠ 与上面那个字段是两件事：一个是"没分成类"，一个是"分对了但执行器没跑成"。
+    route_fallback: str | None = None
+    route_latency_ms: float | None = None
+    #: 多跳执行器的汇总（§14）。⚠ `agentic_rounds = 0` 且 `agentic_status = "disabled"`
+    #: 表示**这条路没被走到**，不是"走了 0 轮"——两者要分得开（同 rerank 的三分口径）。
+    agentic_status: str = "disabled"
+    agentic_rounds: int = 0
+    #: 它自己停下来的原因（§11 的 `stop_reason`）。⚠ 与 `route_fallback` 是两件事：
+    #: 一个是"这条路的结局"，一个是"它压根没跑成"。
+    agentic_stop_reason: str | None = None
+    agentic_llm_calls: int = 0
+    agentic_rerank_calls: int = 0
+    agentic_selected_evidence: int = 0
+    agentic_candidates: int = 0
+    agentic_joint_queries: int = 0
+    agentic_latency_ms: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,14 +298,23 @@ class SearchPipeline:
     ## 顺序（每一步都有理由，不要调换）
 
     ```text
-    ① 混合检索（BM25 + Dense → RRF）   每路 1 次查询；DenseArm 保证每 query 恰好 1 次 embedding
-    ② memory_id 稳定去重 + 重编号      必须在 rerank **之前**：重复项会被排两次、占两个名额
-    ③ Evidence Checker（v1 恒"充足"）   每轮判定都记账（D13）
-    ④ rerank（**恰好一次**）            `RemoteReranker`；不可用 ⇒ 降级回 RRF 顺序（D12）
-    ⑤ Neighbor Expansion               全部候选保留；只对前 N 条扩 ±radius
-    ⑥ Context Segment Merge            沿显式链合成段（段内 local_index 序）
-    ⑦ Token Budget + Final Packaging   段是原子单位；`<= top_k` 的计数在这里收口
+    ⓿ 查询路由（**仅在 `router.enabled` 时**） 分类 → COUNT / MULTI_HOP / DEFAULT
+    ⓿′ 共同取证分支（`grounded_evidence`）   关着：**无条件先试**；开着：**仅 COUNT 走**
+    ② memory_id 稳定去重 + 重编号             必须在 rerank **之前**：重复项会被排两次、占两个名额
+    ③ Evidence Checker（v1 恒"充足"）          每轮判定都记账（D13）
+    ④ rerank（**恰好一次**）                   `RemoteReranker`；不可用 ⇒ 降级回 RRF 顺序（D12）
+    ⑤ Neighbor Expansion                      全部候选保留；只对前 N 条扩 ±radius
+    ⑥ Context Segment Merge                   沿显式链合成段（段内 local_index 序）
+    ⑦ Token Budget + Final Packaging          段是原子单位；`<= top_k` 的计数在这里收口
     ```
+
+    ⚠ **①–⑦ 是"两条候选来源共用的尾巴"**：`MULTI_HOP` 走的是多跳执行器给的候选
+    （`AgenticSearch`，实现见 [`../agent/`](../agent/)），其余情况走混合检索——
+    之后**逐字共用** `_rank_and_package()`。那一段被抽出来**不是为了好看**：
+    ② 与 ⑦ 是两条"顺序错了不报错"的纪律，写两遍就一定会漂。
+
+    ⚠ **多跳那条路也不会多精排一次**：执行器交出候选 + **该用哪句 Query 精排**
+    （联合精排，§9.1），④ 仍然只做一次——这是结构性的，不是靠记性。
 
     ## 两个"顺序错了也不会报错"的地方
 
@@ -251,6 +322,18 @@ class SearchPipeline:
       在预算里占两个名额——而**名次看起来完全正常**。
     * **`top_k` 必须在扩窗/合并之后生效**：它约束的是**段数**。在扩窗之前按
       raw memory 数截断，会把本该形成段的邻居砍掉，最后返回的段数**少于该有的**。
+
+    ## 路由带来的第三处（**这一处会改行为——所以它默认关着**）
+
+    * **路由开着时，`DEFAULT` 类问题不再先试共同取证。** 共同取证是一条
+      **确定性**的短路（编译问题 → 取值 → 打包），而路由是**模型判断**
+      ⇒ 这是一次"用确定性换分类能力"的取舍，不是白拿的。
+    * ⚠ **它的代价必须被测出来**：`compile_query` 支持 `walk` / `interval` /
+      `current` 这些**非计数**问法，而它们在三分类里大多会落到 `DEFAULT` 或
+      `MULTI_HOP` ⇒ **那些问题会失去专门的取证能力**。回归数据见
+      `eval/reports/` 的路由报告——**不许用"改旧断言"把它盖过去**。
+    * ⇒ 这正是 `router.enabled` **默认 `false`** 的理由：一个未经代理评测标定的
+      行为改动，不该默认生效在提交口径上。
     """
 
     def __init__(
@@ -272,6 +355,9 @@ class SearchPipeline:
         evidence_limit: int = 12,
         evidence_hop_limit: int = 4,
         fact_backfill_limit: int = 1024,
+        router: QueryRouter | None = None,
+        agentic: AgenticSearch | None = None,
+        agentic_force: bool = False,
         metrics: MetricsSink | None = None,
     ) -> None:
         self._store = store
@@ -301,6 +387,22 @@ class SearchPipeline:
         if fact_backfill_limit <= 0:
             raise ValueError("fact_backfill_limit 必须为正")
         self._fact_backfill_limit = fact_backfill_limit
+        #: 查询路由器（`router.enabled`）。**`None` = 没有路由器** ⇒ 这条链上
+        #: 一次 LLM 调用都不发生，且共同取证分支照旧**无条件先试**（= 本接缝存在之前的行为）。
+        #: ⚠ 它是 `None` 的两种来源**要分得开**（WARNING 由装配侧发，见 `build_router`）：
+        #: "明确关掉"（默认）与"开着却没配齐端点"——后者由 `validate()` 在启动时拒绝，
+        #: 所以走到这里时 `None` 只可能是前者。
+        self._router = router
+        #: 多跳执行器（§3.3 的接缝）。实现见 [`../agent/`](../agent/)（2026-10-10）。
+        #: ⚠ **它不需要一个 `enabled` 布尔**：装上了就是开，没装上就是关——
+        #: 再加一个布尔会造出"开关说开着、执行器是 None"这种自相矛盾的状态。
+        #: `agentic.enabled = false`（默认）⇒ 装配侧不给它，于是每条 `MULTI_HOP`
+        #: 都降级成 `DEFAULT` 并记 `agentic_unavailable`。
+        self._agentic = agentic
+        #: **实验开关**（`agentic.force`，§12.3 的 E1）：绕过路由器，一律按 MULTI_HOP 走。
+        #: ⛔ 它不是给提交口径用的——打开它等于关掉另外两条路的选择能力。
+        #: 关着（默认）时这条链与本开关存在之前**逐字相同**。
+        self._agentic_force = agentic_force
         #: 观测值的出口（§14）。**没配就是 `Null`**——与 reranker 同一套口径：缺省不是错误。
         self._metrics = metrics if metrics is not None else NullMetricsSink()
         #: 诊断计数（§14）。**不进响应**——响应的形状是契约，一个字段都不能多。
@@ -348,6 +450,20 @@ class SearchPipeline:
         计数照常累计，只是**永远不写文件**（又一条 V12）。
         """
         return self._metrics
+
+    @property
+    def router(self) -> QueryRouter | None:
+        """当前接的查询路由器（`None` = 没开）。
+
+        与 `reranker` 同一个理由：**装配漏传是静默的**——路由没接上时 Search 照常工作、
+        响应照旧合法，只是**每一题都走原来的路**（而"Router On"那一臂的结论就是错的）。
+        """
+        return self._router
+
+    @property
+    def agentic(self) -> AgenticSearch | None:
+        """当前接的多跳执行器（**今天恒为 `None`**，D13）。"""
+        return self._agentic
 
     def _grounded_decision(self, user_id: str, plan: QueryPlan) -> EvidenceDecision:
         """事实选择与相关原文审查共用一个读快照；选择器仅执行一次。"""
@@ -446,6 +562,20 @@ class SearchPipeline:
                 grounded_projection=trace.grounded_projection,
                 selected_facts=trace.selected_facts,
                 selected_sources=trace.selected_sources,
+                route=trace.route,
+                route_status=trace.route_status,
+                route_reason=trace.route_reason,
+                route_fallback=trace.route_fallback,
+                route_latency_ms=trace.route_latency_ms,
+                agentic_status=trace.agentic_status,
+                agentic_rounds=trace.agentic_rounds,
+                agentic_stop_reason=trace.agentic_stop_reason,
+                agentic_llm_calls=trace.agentic_llm_calls,
+                agentic_rerank_calls=trace.agentic_rerank_calls,
+                agentic_selected_evidence=trace.agentic_selected_evidence,
+                agentic_candidates=trace.agentic_candidates,
+                agentic_joint_queries=trace.agentic_joint_queries,
+                agentic_latency_ms=trace.agentic_latency_ms,
                 returned_segments=len(response.items),
                 truncated_by_budget=response.truncated_by_budget,
                 truncated_by_top_k=response.truncated_by_top_k,
@@ -457,7 +587,7 @@ class SearchPipeline:
     def _search(
         self, *, user_id: str, query: str, top_k: int, trace: _SearchTrace | None = None
     ) -> PackagedResponse:
-        """链本身（顺序见类 docstring）。
+        """链本身（顺序见类 docstring 与下面的注释）。
 
         ⚠ **空库直接返回空结果**（`data: []` 是合法的，§2.1）：集合还不存在时
         Qdrant 会抛"collection not found"，而"没有数据"不是错误。
@@ -469,7 +599,23 @@ class SearchPipeline:
         if top_k <= 0:
             trace.grounded_status = "invalid_top_k"
             return PackagedResponse(items=())
-        if self._grounded_evidence:
+        # ⚠ **空白 query 在这里短路，绝不喂给路由器**（2026-10-10）：
+        #   ① 空查询不是"分类问题"，让模型去判它是把**一个输入校验**外包给 LLM
+        #      ——既贵又不可靠（提示词一旦没有 NONE 这一档，它就只能瞎猜三类之一）；
+        #   ② 契约要的是 `{"data": []}`（§2.1 明确空结果合法），而这条短路给出的**正是它**；
+        #   ③ **放在路由之前**是关键：`_route()` 只要被调到就会花一次 LLM 调用。
+        # 与 `top_k <= 0` 同一条出口、同一个记法（`grounded_status` 是既有先例）。
+        if not query.strip():
+            trace.grounded_status = "blank_query"
+            return PackagedResponse(items=())
+
+        # ⓿ 查询路由（**在一切检索之前**）。`None` = 没开路由器 ⇒ 下面的分支
+        #    与"本接缝存在之前"逐字相同（§13 的开关纯度）。
+        route = self._route(query, trace)
+
+        # ⓿′ 共同取证分支。**它刻意早于 Qdrant 存在性检查**（事实住在 SQLite）。
+        #    ⚠ 开关打开时**只有 `COUNT` 走这里**；没开时**一律走这里**（`route is None`）。
+        if self._grounded_evidence and route in (None, Route.COUNT):
             trace.grounded_status = "no_plan"
             plan = compile_query(query)
             if plan is not None:
@@ -488,9 +634,102 @@ class SearchPipeline:
         if not self._qdrant.exists():
             return PackagedResponse(items=())
 
-        # ① 混合检索
-        candidates = self._retriever.search(user_id=user_id, query=query, top_k=top_k)
+        # ① 取候选。**两条来源，同一个尾巴**：
+        #    多跳执行器（`MULTI_HOP` 且真的接上了）或混合检索（其余全部情况）。
+        rerank_query: str | None = None
+        if route is Route.MULTI_HOP and self._agentic is not None:
+            # ⚠ 执行器**自己去不去重、精不精排**是本文件的责任（见 `AgenticSearch` 的四条约定）：
+            #   它只负责"多取几轮证据"，②–⑦ 与混合那条路**逐字共用**。
+            outcome = self._agentic.search(user_id=user_id, query=query, top_k=top_k)
+            self._record_agentic(trace, outcome)
+            if outcome.fallback_reason is not None:
+                # §10.1 第 6 条：执行器在拿到任何证据之前就失败了 ⇒ **改走混合检索**。
+                # ⚠ 原因**换到 `route_fallback` 上**（不再是 `agentic_unavailable`）：
+                #   "分对了但执行器没接上"与"执行器接上了却没跑成"是两件事，
+                #   混成一个记法会让"多跳这条路的失败率"无法统计。
+                trace.route_fallback = outcome.fallback_reason
+                candidates: Sequence[Candidate] = self._retriever.search(
+                    user_id=user_id, query=query, top_k=top_k
+                )
+            else:
+                candidates = outcome.candidates
+                # 多跳的联合精排（§9.1）：原问题 ＋ **实际执行过的**改写。
+                # ⚠ 最终精排**仍然只有一次**，就在下面那一步——这不是"第二次精排"。
+                rerank_query = outcome.rerank_query
+        else:
+            candidates = self._retriever.search(user_id=user_id, query=query, top_k=top_k)
+        return self._rank_and_package(
+            candidates, query=query, top_k=top_k, trace=trace, rerank_query=rerank_query
+        )
 
+    def _record_agentic(self, trace: _SearchTrace, outcome: AgenticResult) -> None:
+        """把执行器的汇总记进 `trace`（§14）。
+
+        ⚠ **执行器不写 `trace`**：它是被调用的那一层，"怎么记账"属于编排层，
+        与 `rerank` 的分工一样（计数住在 `SearchPipeline`，见 `docs/architecture.md`）。
+        """
+        stats = outcome.stats
+        trace.agentic_status = "success" if outcome.fallback_reason is None else "degraded"
+        trace.agentic_rounds = len(stats.rounds)
+        trace.agentic_stop_reason = stats.stop_reason
+        trace.agentic_llm_calls = stats.llm_calls
+        trace.agentic_rerank_calls = stats.rerank_calls
+        trace.agentic_selected_evidence = stats.selected_evidence_count
+        trace.agentic_candidates = stats.unique_candidate_count
+        trace.agentic_joint_queries = stats.joint_query_count
+        trace.agentic_latency_ms = stats.latency_ms
+
+    def _route(self, query: str, trace: _SearchTrace) -> Route | None:
+        """跑一次分类，把结果记进 `trace`；**没开路由器时返回 `None`**。
+
+        ⚠ **绝不抛异常**：`QueryRouter.route()` 的所有失败形态都已经变成
+        `Route.DEFAULT` + `status="degraded"`（§4.3：路由的失败不能让一次正常 Search 变 500）。
+        本方法只做两件事：**把三分类映射成"走哪条分支"**，以及**记下为什么**。
+
+        ⚠ `MULTI_HOP` 在**没有执行器**时**在这里就把降级原因记下来**——而不是等到分支里。
+        理由：那条路会一直往下走到混合检索，如果不在这里留痕，
+        "分类成功了但执行器不在"与"分类结果就是 DEFAULT"在 §14 上**长得一模一样**。
+        """
+        if self._agentic_force and self._agentic is not None:
+            # ⚠ **实验开关**（`agentic.force`，§12.3 的 E1）：绕过路由器，一律按 MULTI_HOP 走。
+            #   它必须**先于** `self._router is None` 的早返回被检查，否则"只开 agentic
+            #   不开 router"这一臂会安静地什么都不做——正是 E1 要避免的归因错误。
+            #   `trace.route` 记成 `MULTI_HOP` 且 `route_status = "forced"`：
+            #   ⛔ **不要记成 `success`**——那会让"模型分了什么"与"我们强制了什么"分不开。
+            trace.route = Route.MULTI_HOP.value
+            trace.route_status = "forced"
+            return Route.MULTI_HOP
+        if self._router is None:
+            return None
+        decision = self._router.route(query)
+        trace.route = decision.route.value
+        trace.route_status = decision.status
+        trace.route_reason = decision.reason
+        trace.route_latency_ms = decision.latency_ms
+        if decision.route is Route.MULTI_HOP and self._agentic is None:
+            trace.route_fallback = "agentic_unavailable"
+        return decision.route
+
+    def _rank_and_package(
+        self,
+        candidates: Sequence[Candidate],
+        *,
+        query: str,
+        top_k: int,
+        trace: _SearchTrace,
+        rerank_query: str | None = None,
+    ) -> PackagedResponse:
+        """②–⑦：**混合检索与多跳共用同一个尾巴**。
+
+        ⚠ 它只认"一份候选"，**不关心它们从哪来**——这正是 §3.3 要的那个汇合点。
+        把 ②–⑦ 抽出来（而不是在 `_search` 里写第二遍）是**结构性的**：
+        "去重恰好一次、且在精排之前"与"`top_k` 在扩窗/合并之后生效"这两条
+        **顺序错了不报错**的纪律，从此**只有一处实现**。
+
+        ⚠ `rerank_query` **只换精排用的那一句**，不换别的：Checker 的判据、打包的
+        `top_k`、扩窗的种子都仍然看**原问题**。它默认 `None` ⇒ 用 `query`，
+        也就是混合链那条路的行为**逐字不变**。
+        """
         # ② 稳定去重 + 重编号
         ranked = dedup_candidates(candidates)
 
@@ -498,7 +737,9 @@ class SearchPipeline:
         self._checker.decide(query=query)
 
         # ④ rerank —— 恰好一次
-        ranked = self._maybe_rerank(query=query, ranked=ranked, trace=trace)
+        ranked = self._maybe_rerank(
+            query=query if rerank_query is None else rerank_query, ranked=ranked, trace=trace
+        )
 
         # ⑤⑥ 扩窗 + 合并成段
         expansion = expand_neighbors(

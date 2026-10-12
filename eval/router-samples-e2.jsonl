@@ -1,0 +1,39 @@
+{"dataset": "locomo-refined", "question_id": "conv-26#q0137", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「那次 road trip」——先取到它，才表述得出「之后放松时做了什么」。"}
+{"dataset": "locomo-refined", "question_id": "conv-44#q0082", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「牵绳那件事」——先取事件，再取之后怎么把狗安抚下来。"}
+{"dataset": "locomo-refined", "question_id": "conv-48#q0087", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「2023-02-09 那次 mini retreat」——先取它，再取之后的新看法。"}
+{"dataset": "locomo-refined", "question_id": "conv-49#q0061", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「婚礼」——先取它，再取之后与新娘的时间安排。"}
+{"dataset": "locomo-refined", "question_id": "conv-49#q0131", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「他们那次徒步」——先取它，再取之后与 Sam 分享的内容。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0146", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「她那一次挫折」——先取它，再取之后 Nate 给的鼓励。"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0108", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「去医院探望那次」——先取它，再取之后 John 为什么想去参军。"}
+{"dataset": "locomo-refined", "question_id": "conv-50#q0094", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「那次巡演」——先取它，再取之后 Calvin 兴奋的事。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0123", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "锚点是「那场事故」。⚠ boundary：v2 的检验是「必须先找到 X 才能查关于 X 的事实吗」——「the accident」在问句里点了名，但**它的指代必须靠检索才能确定**，所以判 MULTI_HOP；这是本判据最模糊的一族。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0125", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "与 q0123 同族同锚点。⚠ boundary：同上（`after the accident` 这一族刻意留两条，用来测路由器对这一族是过判还是漏判）。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0045", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "`How many of Joanna's writing have made it to the big screen?` ⚠ boundary：**依赖 + 计数混合**（先要认出「她的作品」有哪些，再数其中上大银幕的）——按 v2「同时要求依赖与计数 ⇒ MULTI_HOP」判 MULTI_HOP；也是全样本里唯一一条这种混合型。"}
+
+{"dataset": "locomo-refined", "question_id": "conv-42#q0014", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（`How many times`）。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0049", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0055", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0062", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0063", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0042", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（被拒了几次）。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0054", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0108", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（有多少人出席）。"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0048", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（两件事之间隔了几周）。⚠ 它同时是时间度量，但**问的是两个事件之间的聚合**，不是某个直接数值属性 ⇒ COUNT（v2 的反向边界只排除 date/year/age/measurement 这类**直接属性**）。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0099", "expected_route": "COUNT", "boundary": false, "label_note": "`How often` ——频率要跨历史的完整记录（v2 的「how many occurrences」）。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0052", "expected_route": "COUNT", "boundary": true, "label_note": "`Which tournament did Nate win ...` ⚠ boundary：v2 的 COUNT 含「名单 / 集合成员」，而 `Which X did ...` 是名单式问法 ⇒ 判 COUNT；但它只问**一个**赛事，也可能被读成单条事实 ⇒ 与 DEFAULT 的边界。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0111", "expected_route": "COUNT", "boundary": true, "label_note": "`How many video game tournaments has Nate won by July 10, 2022?` ⚠ boundary：显式计数 **+ 时间上界**（`by <date>`）——上界可能被读成筛选条件而非聚合，两侧都说得通。"}
+
+{"dataset": "locomo-refined", "question_id": "conv-43#q0007", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ **直接数值属性（年份）**——正是 v2 那条反向边界要拦住的一类（v2 的例子表里 `What year did Melanie move to Paris?` 就是 DEFAULT）。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0026", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 直接数值属性（年份），同 q0007。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0010", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 直接度量（时长）——不是集合基数，也不是记录聚合。"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0060", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 直接度量（时长），同 q0010。"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0085", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 直接度量（时长），同 q0010。"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0173", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性（颜色）。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0079", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（多个主体只是同一次活动的参与者，不是依赖链）。"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0131", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实，多主体。"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0077", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实，多主体 + 时间限定。"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0096", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实，多主体 + 时间限定。"}
+{"dataset": "locomo-refined", "question_id": "conv-30#q0002", "expected_route": "DEFAULT", "boundary": false, "label_note": "两人比较 ⇒ 普通比较 ⇒ DEFAULT（v2 明说 ordinary comparisons 不算 MULTI_HOP）。"}
+{"dataset": "locomo-refined", "question_id": "conv-30#q0021", "expected_route": "DEFAULT", "boundary": false, "label_note": "两人比较（是非问）。"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0003", "expected_route": "DEFAULT", "boundary": false, "label_note": "两人比较。"}
+{"dataset": "locomo-refined", "question_id": "conv-30#q0009", "expected_route": "DEFAULT", "boundary": true, "label_note": "`Which city have both Jean and John visited?` ⚠ boundary：以 `Which` 开头（v2 的 COUNT 含名单式问法），但它是**两人交集** ⇒ 按「普通比较」判 DEFAULT。**这一条是 v2 两条判据正面相撞的地方**，单列出来看模型往哪边倒。"}

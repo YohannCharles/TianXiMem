@@ -1,7 +1,7 @@
 # TianXiMem — 常用命令入口
 #
 # 已经能真跑：`sync` / `lock` / `fmt` / `lint` / `typecheck` / `test` / `check` / `serve` /
-#            `contract-check` / `probe-reranker` / `eval` / `t1` / `t2` / `t2-dump` /
+#            `contract-check` / `probe-reranker` / `router-eval` / `eval` / `t1` / `t2` / `t2-dump` /
 #            `qdrant-up` / `qdrant-down` / `data-check` / `fetch-data`。
 # 其余目标仍指向尚未存在的模块，先以 echo 占位——**别让它们静默成功**，
 # 否则会误以为某一步已经实现。Step 0 / Step 1 起逐个替换为真命令。
@@ -31,8 +31,17 @@ DATASET_FLAG = $(if $(filter all,$(DATASET)),--tier all,--dataset $(DATASET))
 # 默认 1 = 测 D25 本身；`PROCESSES=4` = 测「多 worker 到底安不安全」。
 PROCESSES ?= 1
 
+# `make router-eval` 的落点与额外参数（变体见那个目标的说明）。
+ROUTER_OUT ?= eval/reports/runs/router-$(shell date +%Y%m%d)
+ARGS ?=
+
+# `make coq-eval` 的落点（变体见那个目标的说明）。
+# ⚠ 它的 `ARGS` 与上面那个**共用同一个变量**——同时传两份只在同一次 make 里才有意义，
+#    而那两个目标不会同时跑（一个调路由器、一个调多跳，落点也不同）。
+COQ_OUT ?= eval/reports/runs/coq-$(shell date +%Y%m%d)
+
 .PHONY: help sync check fmt lint typecheck test qdrant-up qdrant-down serve contract-check probe-reranker \
-        order-probe image-build up down deploy-check \
+        router-eval coq-eval coq-decompose order-probe export-multihop image-build up down deploy-check \
         eval replay-official t1 t2 t2-dump smoke clean \
         fetch-data data-check data-patch
 
@@ -169,6 +178,44 @@ probe-reranker:  ## 精排探针：打真网关，验连通性 + 它在链上真
 # ⚠ **顺序有没有变不影响退出码**——那是信息，不是判据（一个诚实但保守的 reranker
 #    完全可能给出与 RRF 相同的顺序）。
 
+router-eval:  ## 查询路由的三分类小样本评测（46 题，真端点，**不消耗 Smoke 配额**）
+	uv run --env-file $(ENV_FILE) python tools/router_eval.py --out $(ROUTER_OUT) $(ARGS)
+# 落点默认 eval/reports/runs/router-$(STAMP)：`summary.json`（混淆矩阵 + 逐类 P/R/F1 + 成本）
+# 与 `rows.jsonl`（逐题预测）。
+# ⚠ 它**只调路由器**——不发 Add / Search、不建集合、不写真源 ⇒ 开发机上可以反复跑。
+# ⚠ 需要 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（缺了在跑之前直说）。
+# ⚠ **`router.enabled` 的开与关不影响本目标**：工具是"显式要评测路由器"，
+#    那个键管的是**服务的默认行为**（默认关，D40）。
+# 常用变体：`ARGS='--boundary-only --repeat 3'`（稳定性）· `ARGS='--smoke'`（端到端冒烟）。
+# 判据与结论见 eval/reports/router-20261010.md——⚠ **别只读准确率**：那一条在有类别塌缩时
+# 会给出一个好看的假数（退化解"永远答 DEFAULT"就有 0.47）。
+
+coq-eval:  ## 多跳检索（Chain-of-Query）的四臂真实评测：E0/E1/E2 ＋ 每轮精排消融
+	uv run --env-file $(ENV_FILE) python tools/coq_eval.py --out $(COQ_OUT) $(ARGS)
+# 落点默认 eval/reports/runs/coq-$(STAMP)：`report.json`（各臂准确率 + §14 用量 + 证据覆盖）
+# 与 `<臂>-hits.json`（逐题返回的 id）与 `<臂>/`（逐题答案与判分）。
+# ⚠ **它会真的调网关**（embedding / 精排 / 对话模型）并**新建一个隔离 Qdrant collection**
+#    + 一份隔离 SQLite 真源（`$(COQ_OUT)/coq-eval.db`）——**不碰开发库**。
+# ⚠ 需要 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（多跳与路由器共用）
+#    与 `TIANXIMEM_RERANKER_*`（每轮精排要用它）。
+# ⚠ 跑一次要**几十分钟**（4 臂 × 25 题，多跳臂每题最多 3 次 LLM + 4 次精排）。
+#    续跑：`ARGS='--skip-add'`（复用已经建好的隔离真源）。
+# 常用变体：`ARGS='--arms e0,e1,e2,a --limit-questions 5'`（先冒烟）·
+#    `ARGS='--skip-judge'`（只测检索覆盖，不叫裁判）。
+# 口径与结论见 eval/reports/coq-multihop-20261010.md。
+
+coq-decompose:  ## 多跳分解能力探针：**只看问题**，看模型能不能拆出依赖链（2026-10-12）
+	uv run --env-file $(ENV_FILE) python tools/coq_decompose_probe.py --manifest eval/coq-musique.jsonl --out eval/reports/runs/coq-decompose $(ARGS)
+# ⚠ 它**不打检索、不建集合**，只叫对话模型**拆一次/题** ⇒ 很便宜、可反复跑。
+# ⛔ **判定不由模型做**：`judge` 那一版已作废（它至少错判 4/25，且是事实性错误——连金标几跳都
+#    数错）。现在是**人**逐条读候选 vs 金标，填 `eval/coq-decompose-labels.jsonl` 的 `defect`。
+# ⚠ 结论见 eval/reports/coq-musique-20261011.md §4.6：**模型拆不清**（步数 68%、结构同构 **60%**），
+#    失败形态与 CoQ 循环里的"第二轮重述原问题"**同型** ⇒ 病在提示词侧不在检索侧。
+# 变体：`ARGS='--limit 5'`（冒烟）· `ARGS='--reuse'`（**不调模型**，只拿新标签/新算法重算）。
+# ⚠ 重判**必须**用 `--reuse`：重新摇一次模型就是换一份候选分解，而标签是逐条读着那一份填的。
+# ⭐ 产物里的 `decompositions.md` 是**人读的那一份**（原问题 / 模型拆解 / 金标拆解并排），
+#    逐条复核时直接复制它——⚠ 它含数据集原文，落在 runs/（gitignored）。
+
 order-probe:  ## D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言真源**逐字一致**
 	uv run python tools/order_probe.py --processes $(PROCESSES)
 # ⚠ **它会花掉真实的 embedding 调用**（conv-26 全量 ≈ 216 块）⇒ 不进 `make test`。
@@ -179,6 +226,15 @@ order-probe:  ## D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言
 # ⚠ 跑完**不会自动清库**：`var/order-a/` `var/order-b/` 留着供比对（都在 gitignore 里）。
 #    Qdrant 里那两个 `memories_ab_order_*` 集合也是——要清就手动 drop。
 # 判据与 D25 的关系见 eval/reports/ledger.md 的「D25」一节。
+
+export-multihop:  ## 打包链式多跳题集（含共享语料池）给外部项目用 → var/exports/
+	uv run python tools/export_multihop_kit.py $(ARGS)
+# 产物：`var/exports/musique-multihop-<日期>/{questions.jsonl, haystack-corpus.jsonl, README.md}`
+#       ＋同名 `.zip`。⚠ **含数据集原文** ⇒ 只进 `var/`（gitignored），⛔ 绝不进 git。
+# ⭐ 它**逐条校验后才打包**：可答 / 严格链 / **每一跳的答案（含末答）都在支持段落正文里**
+#    / 题面不泄中间跳。任一条不过就点名报出并**非零退出**——这种包交出去比不交更糟。
+# ⚠ 包里那个 `haystack-corpus.jsonl` 是**前提不是附件**：只喂目标题自己那 20 段，
+#    证据就全在里面、检索无事可做、链式依赖自动消失（2026-10-10 栽过，见 README）。
 
 eval:  ## 跑一轮代理评测（§13）：DATASET / ARGS 可覆盖
 	uv run --env-file $(ENV_FILE) python -m eval.experiments.run --dataset $(DATASET) $(ARGS)
