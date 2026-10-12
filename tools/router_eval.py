@@ -695,6 +695,10 @@ def smoke(runner: Runner, *, out: Path | None) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # ⚠ **兜底，不是修法**：控制台是 GBK 时 `⚠` 这类字符编不出去会抛异常。
+    #    换 `errors="replace"` ⇒ 只把那一个字符降级成 `?`，其余照常打印。
+    #    ⛔ 但**真正的防线**是上面那条「先落盘」——显示层的毛病不许吃掉结果。
+    sys.stdout.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--out", type=Path, help="落盘目录；不给则只打印")
@@ -738,10 +742,22 @@ def main(argv: list[str] | None = None) -> int:
         f"temperature={runner.temperature} max_output_tokens={runner.max_output_tokens}"
     )
     records = evaluate(runner, rows, repeat=args.repeat)
+
+    # ⛔ **先落盘、再打印**（2026-10-12 修）。打印只是显示，而它**会崩**——
+    #    实测：在 Windows 控制台上 `report()` 打了一个 `⚠` ⇒
+    #    `UnicodeEncodeError: 'gbk' codec can't encode character '⚠'`，
+    #    而 `summary.json` / `rows.jsonl` 写在它**后面** ⇒ **200 次真实调用一条没落盘**。
+    #    ⚠ 这正是本仓最忌讳的那类失败：跑了一小时、每次调用都成功、只是没写下来。
+    #    ⇒ **原始逐题记录先写**（它不依赖任何统计量），统计与打印排在后面。
+    if args.out:
+        args.out.mkdir(parents=True, exist_ok=True)
+        with (args.out / "rows.jsonl").open("w", encoding="utf-8", newline="") as handle:
+            for record in records:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
     summary = report(records)
 
     if args.out:
-        args.out.mkdir(parents=True, exist_ok=True)
         stamp = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "config_fingerprint": fingerprint,
@@ -755,9 +771,6 @@ def main(argv: list[str] | None = None) -> int:
         (args.out / "summary.json").write_text(
             json.dumps({**stamp, **summary}, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        with (args.out / "rows.jsonl").open("w", encoding="utf-8", newline="") as handle:
-            for record in records:
-                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         print(f"\n落盘：{args.out}/summary.json · {args.out}/rows.jsonl")
     return 0
 
