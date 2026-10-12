@@ -248,6 +248,7 @@ def _arm_config(
     sqlite_path: Path,
     metrics_path: Path,
     rerank: bool,
+    per_round_top_k: int | None = None,
 ) -> AppConfig:
     """把一条臂压进配置。**只动那四个开关**——其余一切（语料 / 索引 / 预算 / 判分）逐字相同。
 
@@ -282,6 +283,9 @@ def _arm_config(
             enabled=arm.agentic,
             force=arm.force,
             round_rerank_enabled=arm.round_rerank,
+            # ⚠ `None` = **不覆盖**（用配置里的值）。只有显式传了数才换——
+            #   于是"这一臂到底用了哪个 per_round_top_k"永远能从传进来的参数看出来。
+            **({} if per_round_top_k is None else {"per_round_top_k": per_round_top_k}),
         ),
         capture=replace(base.capture, enabled=False),
         metrics_path=str(metrics_path),
@@ -583,6 +587,12 @@ def main(argv: list[str] | None = None) -> int:
         help="复用本轮 <臂>-hits.json 的检索结果，**不重跑 Search**（答案/判分仍会重做）",
     )
     parser.add_argument(
+        "--per-round-top-k",
+        type=int,
+        default=None,
+        help="覆盖 `agentic.per_round_top_k`（每轮精排后交给 CoQ 的条数）；不传就用配置里的值",
+    )
+    parser.add_argument(
         "--limit-questions",
         type=int,
         default=None,
@@ -631,6 +641,18 @@ def main(argv: list[str] | None = None) -> int:
     if not chosen:
         raise SystemExit("✗ --arms 里一个已知的臂都没有")
 
+    # ⚠ **不传就用配置里的值**，并把**实际生效的那个数**写进记录——
+    #   否则"这轮的分数是哪套参数跑出来的"以后没法归因（本仓在这类事上栽过多次）。
+    per_round_top_k = (
+        args.per_round_top_k if args.per_round_top_k is not None else base.agentic.per_round_top_k
+    )
+    if args.per_round_top_k is not None:
+        print(
+            f"⚠ `--per-round-top-k {per_round_top_k}` 覆盖了配置"
+            f"（`agentic.per_round_top_k` = {base.agentic.per_round_top_k}）",
+            flush=True,
+        )
+
     # ⚠ **续跑要合并，不能覆盖**：`--arms e1,a` 这类部分重跑若从头写 `report.json`，
     #   上一次跑出来的 E0 / E2 会**静默消失**——而汇总表会照常打印，只是少两行。
     report: dict[str, dict] = {}
@@ -648,6 +670,7 @@ def main(argv: list[str] | None = None) -> int:
             sqlite_path=sqlite_path,
             metrics_path=out_dir / f"{arm.key}-metrics.json",
             rerank=not args.no_rerank,
+            per_round_top_k=per_round_top_k,
         )
         services = build_services(config)
         # ⚠ 逐轮落盘（§11）：包一层，**只在真的接上了执行器时**包。
@@ -683,6 +706,9 @@ def main(argv: list[str] | None = None) -> int:
                         "agentic.enabled": arm.agentic,
                         "agentic.force": arm.force,
                         "agentic.round_rerank_enabled": arm.round_rerank,
+                        # ⚠ **每轮交给 CoQ 的条数必须记**：它是这一轮真跑的参数，
+                        #   不记的话"改了它之后分数变了"会被当成模型抖动（本仓栽过）。
+                        "agentic.per_round_top_k": per_round_top_k,
                     },
                     "coverage": _evidence_coverage(samples, hits, gold_evidence),
                     "metrics": _snapshot(services),

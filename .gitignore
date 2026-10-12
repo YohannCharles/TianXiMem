@@ -139,4 +139,3 @@ official-dataset-*
 #   哪天要在仓根放真的 .json，**先删这条规则并说清为什么**，别让新文件被静默忽略。
 /*.json
 
-.pytest-tmp-corpus-audit
