@@ -49,6 +49,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from eval.datasets.musique import ANSWER_CONTRACT as MUSIQUE_ANSWER_CONTRACT  # noqa: E402
+from eval.datasets.musique import DIRECT_ANSWER_CONTRACT as MUSIQUE_DIRECT_CONTRACT  # noqa: E402
 from eval.datasets.musique import LOOSE_ANSWER_CONTRACT as MUSIQUE_LOOSE_CONTRACT  # noqa: E402
 from eval.datasets.musique import REFUSAL as MUSIQUE_REFUSAL  # noqa: E402
 from eval.datasets.registry import benchmark_dir  # noqa: E402
@@ -131,7 +132,8 @@ def judge_musique(
 
     | `contract` | 判据 | 什么时候用 |
     | --- | --- | --- |
-    | `musique-local-qa-v1`（默认） | 归一化后**相等**于任一别名 | 一直以来的口径 |
+    | `musique-local-qa-v1`（默认） | 归一化后**相等**于别名 | MuSiQue 原生那一档（含不可答题） |
+    | `musique-local-qa-v3-direct` | **同上，逐字相同** | **链式多跳那一档**——只改答案 prompt |
     | `musique-local-qa-v2-loose` | 别名作为一个词出现在回答里 | 只问"捞到了没有"时 |
 
     ⚠ **宽松口径只放宽一处**：把"答得比金标更具体"也算对
@@ -682,6 +684,20 @@ MUSIQUE_ANSWER_PROMPT = (
     "Retrieved candidate paragraphs:\n{memories}\n\nQuestion: {question}\n\nAnswer:"
 )
 
+#: **链式多跳那一档**（`DIRECT_ANSWER_CONTRACT`）：**不给拒答出口**。
+#:
+#: 与上面那份**只差那一句**——`If the paragraphs are insufficient, return exactly: …`。
+#: ⛔ 那一句在这一档上不是保险，是**出口**：本仓量过两次它的后果（250 题上 160/250 逐字拒答、
+#: 通过 0；TempReason 76 道拒答而证据就在眼前）——只删那句子就分别把 0.3997 拉到 0.4857、
+#: 把 44/76 拉成答对。MuSiQue 链式这 25 题上同样 10/25 是模型自己拒答。
+#: ⚠ 判分**不变**（仍是 v1 的归一化精确匹配）⇒ 拒答在这一档照样算错，只是不再**被提示词邀请**。
+#: ⛔ **只换这一档**：MuSiQue 原生的可答/不可答变体、以及别的数据集，评测口径一个字不改。
+MUSIQUE_DIRECT_ANSWER_PROMPT = (
+    "Answer the question using ONLY the retrieved candidate paragraphs below. "
+    "Do not use outside knowledge. Return only the short answer, without explanation.\n\n"
+    "Retrieved candidate paragraphs:\n{memories}\n\nQuestion: {question}\n\nAnswer:"
+)
+
 #: **MemTrapBench 专用**的答案 prompt——**逐字用官方那份**
 #: （`dataset/.upstream/memtrapbench/eval/shared/prompt_user_mem.txt`，只把两个占位符换名）。
 #:
@@ -819,8 +835,12 @@ def render_answer_prompt(item: dict) -> str:
         "mquake-remastered": MQUAKE_ANSWER_PROMPT,
         "tempreason": TEMPR_ANSWER_PROMPT,
     }.get(item.get("dataset"), ANSWER_PROMPT)
-    if item.get("dataset") == "musique" and item.get("answer_contract") == MUSIQUE_ANSWER_CONTRACT:
-        template = MUSIQUE_ANSWER_PROMPT
+    if item.get("dataset") == "musique":
+        # ⭐ 只有**链式多跳那一档**换 prompt（它没有拒答题）；原生可答/不可答变体走 v1，照旧。
+        template = {
+            MUSIQUE_DIRECT_CONTRACT: MUSIQUE_DIRECT_ANSWER_PROMPT,
+            MUSIQUE_ANSWER_CONTRACT: MUSIQUE_ANSWER_PROMPT,
+        }.get(item.get("answer_contract"), template)
     if item.get("dataset") == "corporatebench":
         return build_corporatebench_answer_prompt(item, scalar_template=ANSWER_PROMPT)
     if _is_mmb_clinical(item):

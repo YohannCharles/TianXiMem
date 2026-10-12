@@ -24,6 +24,39 @@ ANSWER_CONTRACT = "musique-local-qa-v1"
 #: 的对照表）。⚠ 它会把"答得比金标更具体"也算对，**同时制造假阳性** ⇒
 #: **两套口径并排报，不许替换**。2026-10-11 实测它只翻 1 道。
 LOOSE_ANSWER_CONTRACT = "musique-local-qa-v2-loose"
+#: **链式多跳那一档**的答案口径（2026-10-12）：**不给拒答出口**。
+#:
+#: ⛔ 它**不是**"改写严的那条"——**判分与 v1 逐字相同**（都走归一化精确匹配）。
+#: 它只改**答案 prompt**：这一档**必须给出一个答案**，不许回 `INSUFFICIENT_EVIDENCE`。
+#:
+#: **为什么单列一档**：那句"证据不足就回 INSUFFICIENT_EVIDENCE"是个**出口**，
+#: 而本仓已经量过两次它的后果——普通 QA 250 题上 **160/250 逐字拒答、通过 0**，
+#: 只删掉那句话 ⇒ 总分 0.3997 → **0.4857**；TempReason 逐字拒答的 76 道
+#: **证据全部就在眼前**，删掉 ⇒ **44/76 新答对**（0.7711）。
+#: MuSiQue 链式那 25 题上同一个病：**10/25 是模型自己拒答**。
+#: 而多跳这一档要测的是"检索有没有把证据送到它面前"，**不是"它会不会认输"**。
+#:
+#: ⛔ **只改这一档**：MuSiQue 原生的可答/不可答变体、以及**别的数据集**的评测**一律不动**
+#: （那些历史数字要可比）。⇒ 选口径的是 `answer_contract_for(question.category)`，
+#: 判据是"是不是链式那一档"，**不是**题目可不可答。
+DIRECT_ANSWER_CONTRACT = "musique-local-qa-v3-direct"
+
+#: 链式 haystack 那一档的 `category` 后缀（`load_musique_haystack` 产的题都带它）。
+CHAIN_CATEGORY = "chain"
+
+
+def answer_contract_for(category: str) -> str:
+    """这一档该用哪条答案口径。
+
+    ⭐ **只回答"链式多跳"这一档**：它是 `…-hop/chain`，用 `DIRECT_ANSWER_CONTRACT`（无拒答出口）；
+    其余一切（MuSiQue 原生的 `…-hop/answerable` / `…-hop/unanswerable`，以及别的数据集）
+    **照旧走 `ANSWER_CONTRACT`**——它们的评测口径一个字都不改。
+    """
+    return (
+        DIRECT_ANSWER_CONTRACT if str(category).endswith(f"/{CHAIN_CATEGORY}") else ANSWER_CONTRACT
+    )
+
+
 USER_PREFIX = "musique-"
 SHAPE_NOTE = (
     f"MuSiQue-Full dev（{ANSWER_CONTRACT}）：每题一个独立 user，"
