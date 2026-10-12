@@ -213,6 +213,8 @@ coq-decompose:  ## 多跳分解能力探针：**只看问题**，看模型能不
 #    失败形态与 CoQ 循环里的"第二轮重述原问题"**同型** ⇒ 病在提示词侧不在检索侧。
 # 变体：`ARGS='--limit 5'`（冒烟）· `ARGS='--reuse'`（**不调模型**，只拿新标签/新算法重算）。
 # ⚠ 重判**必须**用 `--reuse`：重新摇一次模型就是换一份候选分解，而标签是逐条读着那一份填的。
+# ⭐ 产物里的 `decompositions.md` 是**人读的那一份**（原问题 / 模型拆解 / 金标拆解并排），
+#    逐条复核时直接复制它——⚠ 它含数据集原文，落在 runs/（gitignored）。
 
 order-probe:  ## D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言真源**逐字一致**
 	uv run python tools/order_probe.py --processes $(PROCESSES)

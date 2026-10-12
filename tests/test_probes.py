@@ -21,6 +21,7 @@ from tools.coq_decompose_probe import (
     DEFECTS,
     _summarize,
     load_labels,
+    render_markdown,
     score_labels,
 )
 from tools.reorder_probe import _stem, reorder
@@ -167,6 +168,51 @@ def test_the_report_carries_no_model_verdict_field() -> None:
     )
     assert not [key for key in report if "judge" in key]
     assert report["per_question"]["q1"] == {"status": "ok", "steps": 4, "gold_steps": 4}
+
+
+# ── 人读的那一份（原问题 / 模型拆解 / 金标拆解）──────────────────────────
+
+
+def _row(qid: str, question: str, candidate: list[str], gold: list[str]) -> dict:
+    return {
+        "question_id": qid,
+        "status": "ok",
+        "question": question,
+        "gold_hops": gold,
+        "candidate_hops": candidate,
+    }
+
+
+def test_the_markdown_dump_puts_the_three_readings_side_by_side() -> None:
+    """⭐ 它存在的理由就是**让人能直接复制着逐条复核**：原问题 / 模型拆解 / 金标拆解各一块。"""
+    text = render_markdown(
+        [_row("q1", "Q one?", ["c1", "c2"], ["g1", "g2"])],
+        {"q1": {"defect": "none", "note": ""}},
+        {"q1": ["a1", "a2"]},
+    )
+    assert "> Q one?" in text  # 原问题用引用块，方便复制
+    assert "1. c1" in text and "2. c2" in text  # 模型的步编号
+    assert "1. g1　→　`a1`" in text  # 金标的每跳带上那一跳的答案
+    assert "✅" in text and "合计：结构同构 1/1" in text
+
+
+def test_the_markdown_dump_marks_unjudged_apart_from_wrong() -> None:
+    """未判 ≠ 判错：一个 `❓`、一个 `❌`——**两者的补救动作完全不同**（去判 / 去修）。"""
+    text = render_markdown(
+        [_row("q1", "Q?", ["c"], ["g"]), _row("q2", "Q?", ["c"], ["g"])],
+        {"q1": {"defect": "bundled", "note": "并了两跳"}},
+        {},
+    )
+    assert "❌ 判定：`bundled`" in text and "**判据**：并了两跳" in text
+    assert "❓ 判定：`未判`" in text
+    assert "合计：结构同构 0/2" in text
+    assert "→" not in text.split("## 1.")[-1].split("---")[0]  # 拿不到金标答案就不硬编一列
+
+
+def test_the_markdown_dump_never_claims_a_verdict_it_does_not_have() -> None:
+    """模型没按格式答时**不许省略那一段**——省掉会让"没解析出来"看起来像"这道题不存在"。"""
+    text = render_markdown([_row("q1", "Q?", [], ["g1"])], {}, {})
+    assert "（没解析出来）" in text
 
 
 # ── 交付的那份标签本身（不读数据集的题面）──────────────────────────────

@@ -43,6 +43,14 @@ MuSiQue 的 `question_decomposition` 是**金标分解**（hop N 的问句里写
    只存 `question_id` / `defect` / `note`，⛔ **不存题面**）。
    本工具**只汇总，不代填**；缺标签就只报客观量并直说"未判 N 题"。
 
+## 产物三份（各给一种读者）
+
+| 文件 | 谁看 / 干什么 |
+| --- | --- |
+| `rows.jsonl` | 机器：每题一条，含**题面与模型原始输出**（⚠ 数据集原文 ⇒ gitignored） |
+| `report.json` | 机器：客观结构量 + 标签汇总 |
+| **`decompositions.md`** | **人**：原问题 / 模型拆解 / 金标拆解**并排**，逐条复核时直接复制 |
+
 ### ⛔ 为什么**不要**让模型来判（2026-10-12 实测，这条是踩过才写的）
 
 原实现是"再叫一次对话模型当裁判"。逐条核对下来它**至少错判 4/25**，而且是**事实性错误**：
@@ -311,13 +319,13 @@ def build_client(config):
 # ── 人的判据：读进来、汇总（⛔ 机器不代填）───────────────────────────────
 
 
-def load_labels(path: Path) -> dict[str, str]:
-    """读标签文件 → `{question_id: defect}`。**形状不对就响亮失败**。
+def load_label_rows(path: Path) -> dict[str, dict]:
+    """读标签文件 → `{question_id: 整行}`。**形状不对就响亮失败**。
 
     ⚠ 坏行**不许静默跳过**（少一条 = 分母变小 = 分数悄悄变高，而屏幕上完全正常）。
     一个 id 出现两次同理——那说明两份判读冲突了，挑哪一份都是擅自决定。
     """
-    labels: dict[str, str] = {}
+    rows: dict[str, dict] = {}
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
@@ -330,10 +338,15 @@ def load_labels(path: Path) -> dict[str, str]:
             raise SystemExit(f"✗ {path}:{number} 缺 question_id")
         if defect not in DEFECTS:
             raise SystemExit(f"✗ {path}:{number} 的 defect={defect!r} 不在词表里：{list(DEFECTS)}")
-        if question_id in labels:
+        if question_id in rows:
             raise SystemExit(f"✗ {path}:{number} 的 {question_id} 判了两次")
-        labels[question_id] = defect
-    return labels
+        rows[question_id] = row
+    return rows
+
+
+def load_labels(path: Path) -> dict[str, str]:
+    """`{question_id: defect}`——**判定只用这个词表**（校验在 `load_label_rows`）。"""
+    return {qid: row["defect"] for qid, row in load_label_rows(path).items()}
 
 
 def score_labels(question_ids: list[str], labels: dict[str, str]) -> dict:
@@ -394,7 +407,8 @@ def main(argv: list[str] | None = None) -> int:
 
     report = _summarize(results)
     labels_path = Path(args.labels)
-    if labels_path.exists():
+    label_rows = load_label_rows(labels_path) if labels_path.exists() else {}
+    if label_rows:
         report["labels"] = score_labels(
             [item["question_id"] for item in results], load_labels(labels_path)
         )
@@ -407,12 +421,20 @@ def main(argv: list[str] | None = None) -> int:
     (out_dir / "report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8"
     )
+    # ⭐ 人读的那一份（原问题 / 模型拆解 / 金标拆解并排）——供复制与逐条复核。
+    #    ⚠ 含数据集原文 ⇒ 只落在 runs/（gitignored），**不进 git**。
+    dumped = out_dir / "decompositions.md"
+    dumped.write_text(
+        render_markdown(results, label_rows, _gold_hop_answers(bench_dir, wanted)),
+        encoding="utf-8",
+    )
     print("\n════ 客观结构量（机器算的）════")
     for key, value in report.items():
         if key not in ("per_question", "labels", "wrong_ids", "unjudged_ids"):
             print(f"  {key}: {value}")
     _print_labels(report["labels"], labels_path)
     print(f"\n产物：{out_dir}（report.json / rows.jsonl —— ⚠ 含数据集原文，不进 Git）")
+    print(f"     {dumped}（**人读的那一份**：原问题 / 模型拆解 / 金标拆解）")
     print(f"     {labels_path}（人的判定 —— ⛔ 机器不代填）")
     return 0
 
@@ -496,6 +518,74 @@ def _decompose_all(
         )
         time.sleep(0)  # 让 flush 有个落点；网关侧自己有限流
     return results
+
+
+def _gold_hop_answers(bench_dir: Path, wanted: list[str]) -> dict[str, list[str]]:
+    """`qid → 每一跳的金标答案`——**只给"渲染成人读的那一份"用**。
+
+    ⚠ 判定**不看**它：人的判据在 `coq-decompose-labels.jsonl` 里（那里也记了逐条理由）。
+    这里只是让人在同一个屏幕上看"模型拆到了哪一步"和"金标那一跳的答案是什么"。
+    ⚠ 读不到（数据集不在本机）就返回空表，渲染时省掉那半列——**不报错**：
+    它是**显示**，不是判据。
+    """
+    from eval.datasets.musique import DATA_DIR as MUSIQUE_DIR
+    from eval.datasets.musique import JSONL as MUSIQUE_JSONL
+
+    path = bench_dir / MUSIQUE_DIR / MUSIQUE_JSONL
+    if not path.exists():
+        return {}
+    answers: dict[str, list[str]] = {}
+    wanted_set = set(wanted)
+    for line in path.open(encoding="utf-8"):
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        # ⚠ 只收**可答**那一条：同一个 id 在文件里出现两次（可答 / 不可答变体）。
+        if record.get("answerable") and str(record["id"]) in wanted_set:
+            answers[str(record["id"])] = [
+                str(hop.get("answer", "")) for hop in record["question_decomposition"]
+            ]
+    return answers
+
+
+def render_markdown(
+    results: list[dict], labels: dict[str, dict], gold_answers: dict[str, list[str]]
+) -> str:
+    """人读的那一份：**原问题 / 模型拆解 / 金标拆解**三块并排（供复制与复核）。
+
+    ⚠ 它含**数据集原文**⇒ 只写进 `runs/`（gitignored），⛔ 绝不进 git。
+    """
+    parts = [
+        "# 多跳分解：原问题 / 模型拆解 / 金标拆解",
+        "",
+        "> 数据来源 `rows.jsonl`（⚠ 含数据集原文，⛔ 不进 git）",
+        "> 人的判定在 `eval/coq-decompose-labels.jsonl`；`defect == none` ⇒ 结构同构",
+        "> 模型只拿到**那一句问题**：没有检索结果，也没有金标。",
+        "",
+    ]
+    same = 0
+    for index, row in enumerate(results, 1):
+        qid = row["question_id"]
+        label = labels.get(qid, {})
+        defect = label.get("defect", "未判")
+        same += defect == "none"
+        mark = "✅" if defect == "none" else ("❓" if defect == "未判" else "❌")
+        parts += [f"## {index}. `{qid}`　{mark} 判定：`{defect}`", "", "**原问题**", ""]
+        parts += [f"> {row['question']}", ""]
+        candidate = row["candidate_hops"]
+        parts += [f"**模型拆解（{len(candidate)} 步）**", ""]
+        parts += [f"{k}. {step}" for k, step in enumerate(candidate, 1)] or ["（没解析出来）"]
+        answers = gold_answers.get(qid, [])
+        parts += ["", f"**金标拆解（{len(row['gold_hops'])} 跳）**", ""]
+        parts += [
+            f"{k}. {hop}" + (f"　→　`{answers[k - 1]}`" if k <= len(answers) else "")
+            for k, hop in enumerate(row["gold_hops"], 1)
+        ]
+        if defect not in ("none", "未判") and label.get("note"):
+            parts += ["", f"**判据**：{label['note']}"]
+        parts += ["", "---", ""]
+    parts += [f"## 合计：结构同构 {same}/{len(results)}", ""]
+    return "\n".join(parts)
 
 
 def _print_labels(labels: dict, path: Path) -> None:
