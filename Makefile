@@ -41,7 +41,7 @@ ARGS ?=
 COQ_OUT ?= eval/reports/runs/coq-$(shell date +%Y%m%d)
 
 .PHONY: help sync check fmt lint typecheck test qdrant-up qdrant-down serve contract-check probe-reranker \
-        router-eval coq-eval order-probe image-build up down deploy-check \
+        router-eval coq-eval coq-decompose order-probe image-build up down deploy-check \
         eval replay-official t1 t2 t2-dump smoke clean \
         fetch-data data-check data-patch
 
@@ -203,6 +203,13 @@ coq-eval:  ## 多跳检索（Chain-of-Query）的四臂真实评测：E0/E1/E2 �
 # 常用变体：`ARGS='--arms e0,e1,e2,a --limit-questions 5'`（先冒烟）·
 #    `ARGS='--skip-judge'`（只测检索覆盖，不叫裁判）。
 # 口径与结论见 eval/reports/coq-multihop-20261010.md。
+
+coq-decompose:  ## 多跳分解能力探针：**只看问题**，看模型能不能拆出依赖链（2026-10-12）
+	uv run --env-file $(ENV_FILE) python tools/coq_decompose_probe.py --manifest eval/coq-musique.jsonl --out eval/reports/runs/coq-decompose $(ARGS)
+# ⚠ 它**不打检索、不建集合**，只调对话模型两次/题（一次分解 + 一次裁判）⇒ 很便宜、可反复跑。
+# ⚠ 结论见 eval/reports/coq-musique-20261011.md §4.6：**模型拆不清**（步数 68%、与金标等价 36%），
+#    而失败形态与 CoQ 循环里的"第二轮重述原问题"**同型** ⇒ 病在提示词侧不在检索侧。
+# 变体：`ARGS='--limit 5'`（冒烟）· `ARGS='--no-judge'`（只跑客观结构量）。
 
 order-probe:  ## D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言真源**逐字一致**
 	uv run python tools/order_probe.py --processes $(PROCESSES)
