@@ -206,10 +206,13 @@ coq-eval:  ## 多跳检索（Chain-of-Query）的四臂真实评测：E0/E1/E2 �
 
 coq-decompose:  ## 多跳分解能力探针：**只看问题**，看模型能不能拆出依赖链（2026-10-12）
 	uv run --env-file $(ENV_FILE) python tools/coq_decompose_probe.py --manifest eval/coq-musique.jsonl --out eval/reports/runs/coq-decompose $(ARGS)
-# ⚠ 它**不打检索、不建集合**，只调对话模型两次/题（一次分解 + 一次裁判）⇒ 很便宜、可反复跑。
-# ⚠ 结论见 eval/reports/coq-musique-20261011.md §4.6：**模型拆不清**（步数 68%、与金标等价 36%），
-#    而失败形态与 CoQ 循环里的"第二轮重述原问题"**同型** ⇒ 病在提示词侧不在检索侧。
-# 变体：`ARGS='--limit 5'`（冒烟）· `ARGS='--no-judge'`（只跑客观结构量）。
+# ⚠ 它**不打检索、不建集合**，只叫对话模型**拆一次/题** ⇒ 很便宜、可反复跑。
+# ⛔ **判定不由模型做**：`judge` 那一版已作废（它至少错判 4/25，且是事实性错误——连金标几跳都
+#    数错）。现在是**人**逐条读候选 vs 金标，填 `eval/coq-decompose-labels.jsonl` 的 `defect`。
+# ⚠ 结论见 eval/reports/coq-musique-20261011.md §4.6：**模型拆不清**（步数 68%、结构同构 **60%**），
+#    失败形态与 CoQ 循环里的"第二轮重述原问题"**同型** ⇒ 病在提示词侧不在检索侧。
+# 变体：`ARGS='--limit 5'`（冒烟）· `ARGS='--reuse'`（**不调模型**，只拿新标签/新算法重算）。
+# ⚠ 重判**必须**用 `--reuse`：重新摇一次模型就是换一份候选分解，而标签是逐条读着那一份填的。
 
 order-probe:  ## D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言真源**逐字一致**
 	uv run python tools/order_probe.py --processes $(PROCESSES)

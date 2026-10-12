@@ -24,26 +24,45 @@ uv run --env-file .env python tools/coq_decompose_probe.py \
 ⚠ 本工具**只给问题那一句**：不给检索结果、不给金标、不给分解示例。
 它测的是**模型自己会不会做多跳分解**，不是"CoQ 那套循环跑得好不好"。
 
-## 怎么打分
+## 怎么打分：客观量 + **人来判**
 
 MuSiQue 的 `question_decomposition` 是**金标分解**（hop N 的问句里写 `#k` 字面引用第 k 跳）。
 但模型写的子问题必然是**另一种措辞**（它不知道 `#1` 会被填成什么），所以：
 
-* ⛔ **不做整串比对**（那只会测出措辞差异，不是结构差异）；
-* ✅ 先用**客观结构量**（零成本、无裁判）：
+1. ⛔ **不做整串比对**（那只会测出措辞差异，不是结构差异）；
+2. ✅ **客观结构量**（零成本、无裁判）：
 
-  | 量 | 定义 |
-  | --- | --- |
-  | `hop_count_match` | 模型给的步数 == 金标跳数 |
-  | `back_ref_steps` | 第 2 步起**回指前面某一步**的步数（靠回指词或与前面步骤共享实词判定） |
-  | `final_covers_gold` | **最后一步**是否覆盖金标最后一跳的内容词（"有没有问到点子上"） |
-  | `gold_word_hit` | 金标每一跳的关键词在模型**对应位置**那一步里出现的比例 |
+   | 量 | 定义 |
+   | --- | --- |
+   | `hop_count_match` | 模型给的步数 == 金标跳数 |
+   | `back_ref_steps` | 第 2 步起**回指前面某一步**的步数（靠回指词或与前面步骤共享实词判定） |
+   | `final_covers_gold` | **最后一步**是否覆盖金标最后一跳的内容词（"有没有问到点子上"） |
 
-* ✅ 再用**一次 LLM 裁判**判"这两条分解是不是同一条依赖链、顺序对不对"
-  （裁判只看到**问题 + 两条分解**，⛔ 看不到检索结果）。
+3. ✅ **判定"这两条分解是不是同一条依赖链"这一步由人做**——填
+   [`../eval/coq-decompose-labels.jsonl`](../eval/coq-decompose-labels.jsonl)（一题一行，
+   只存 `question_id` / `defect` / `note`，⛔ **不存题面**）。
+   本工具**只汇总，不代填**；缺标签就只报客观量并直说"未判 N 题"。
 
-⚠ 两套都给，是因为客观量**便宜但只能看形状**，而裁判能看语义——
-**只报其中一个都会被读歪**。
+### ⛔ 为什么**不要**让模型来判（2026-10-12 实测，这条是踩过才写的）
+
+原实现是"再叫一次对话模型当裁判"。逐条核对下来它**至少错判 4/25**，而且是**事实性错误**：
+
+| 题 | 模型裁判说 | 实际 |
+| --- | --- | --- |
+| `4hop1__159467…` | "金标只需要三步" | 金标是**四跳**（`hops=4`），它**没数** |
+| `4hop1__105773…` | "候选多了一步 embassy 查找" | 金标 G2 **就是**那一步 |
+| `4hop1__43565…` | "候选多了一步 city 查找" | 金标 G2 **就是**那一步 |
+| `4hop1__726391…` | "候选跳过了 performer 的 city" | 金标 G2 的答案本来就是**州** |
+
+四个错判同一来源：**裁判看不到每跳的答案**（提示词里刻意不给），于是它只能猜
+"哪一步是必要的"——而"必要"恰恰是要拿金标的**图**去比的。
+它另外还与被测模型**同源**（同一网关的同一个对话模型）。
+⇒ 它给出的 `judge_same = 9/25` **已作废**，不再进任何指标。
+
+> 人的判据（写进 label 的 `defect`，`DEFECTS` 是**封闭词表**）：
+> `none` / `bundled` / `restated` / `underspecified` / `oversplit` / `skipped` / `extra`。
+> **verdict 由 defect 推出**（`none` ⇒ SAME），不单独存一个字段——
+> 少一个可以自相矛盾的字段。
 """
 
 from __future__ import annotations
@@ -54,6 +73,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import Final
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -79,31 +99,21 @@ strings in dependency order.
 Question: {QUESTION}
 """
 
-#: 裁判看到的：**只有**问题与两条分解（⛔ 不给检索结果、不给别的题）。
-JUDGE_PROMPT = """You compare two decompositions of the same multi-hop question.
+#: **人的判据**（⛔ 封闭词表：归一化到这里，否则每次重判都得到另一套说法）。
+#: `verdict` 由它推出——`("none",)` ⇒ SAME，其余 ⇒ DIFFERENT。
+DEFECTS: Final[tuple[str, ...]] = (
+    "none",  # 链条与金标同构
+    "bundled",  # 某一步里有 ≥2 次查找（两头都并：把两跳并成一步）
+    "restated",  # 末步只是把原问题重复一遍（链没有终止在一次查找上）
+    "underspecified",  # 某步丢了题面里的一个**唯一化**限定 ⇒ 该步查到的东西不唯一
+    "oversplit",  # 比金标多拆（把一跳拆成两步）
+    "skipped",  # 漏掉金标某一跳
+    "extra",  # 多出题面不要求的一步
+)
 
-Each decomposition is an ORDERED list of single-fact sub-questions. The question is \
-answerable only by resolving them in order, each step using the previous step's answer.
-
-Judge whether the CANDIDATE captures the SAME dependency chain as the REFERENCE:
-1. same number of required steps (a step that is missing, or an extra step that the \
-question does not require, is a defect);
-2. same ORDER — step k of the candidate must target the same thing as step k of the \
-reference;
-3. each step must be a single lookup, not a bundle of several lookups.
-
-Content words may be paraphrased. Do NOT reward or penalise wording.
-
-Output ONLY a JSON object: {"verdict": "SAME" | "DIFFERENT", "reason": "<one sentence>"}
-
-Question: {QUESTION}
-
-REFERENCE:
-{REFERENCE}
-
-CANDIDATE:
-{CANDIDATE}
-"""
+#: 标签文件的落点。**它提交进 git**（与 `eval/router-samples.jsonl` 同一条纪律：
+#: 只存 id 与判据，⛔ 不存题面）。
+DEFAULT_LABELS: Final[Path] = Path("eval/coq-decompose-labels.jsonl")
 
 #: 回指词——第 2 步起用它指代前面某一步的结果，是"这是一条链"的最直接痕迹。
 _BACK_REF = re.compile(
@@ -116,15 +126,78 @@ _BACK_REF = re.compile(
 #: 太常见的词不算"实词"，否则任何两句都会共享它。
 _STOP = frozenset(
     [
-    "a", "an", "the", "of", "in", "on", "at", "to",
-    "for", "from", "by", "with", "and", "or", "is", "are",
-    "was", "were", "be", "been", "being", "what", "which", "who",
-    "whom", "whose", "when", "where", "why", "how", "did", "does",
-    "do", "done", "has", "have", "had", "that", "this", "it",
-    "its", "their", "his", "her", "they", "them", "he", "she",
-    "as", "into", "during", "before", "after", "before", "than", "then",
-    "name", "named", "called", "one", "two", "three", "not", "no",
-    "any", "all", "some", "more", "most", "other", "others", "same",
+        "a",
+        "an",
+        "the",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "from",
+        "by",
+        "with",
+        "and",
+        "or",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "when",
+        "where",
+        "why",
+        "how",
+        "did",
+        "does",
+        "do",
+        "done",
+        "has",
+        "have",
+        "had",
+        "that",
+        "this",
+        "it",
+        "its",
+        "their",
+        "his",
+        "her",
+        "they",
+        "them",
+        "he",
+        "she",
+        "as",
+        "into",
+        "during",
+        "before",
+        "after",
+        "before",
+        "than",
+        "then",
+        "name",
+        "named",
+        "called",
+        "one",
+        "two",
+        "three",
+        "not",
+        "no",
+        "any",
+        "all",
+        "some",
+        "more",
+        "most",
+        "other",
+        "others",
+        "same",
     ]
 )
 
@@ -136,11 +209,11 @@ _PLACEHOLDER = re.compile(r"\{[A-Z][A-Z_]*\}")
 def fill(template: str, **values: str) -> str:
     """把 `{NAME}` 一遍扫描地填上。
 
-    ⛔ **不用 `str.format`**：`JUDGE_PROMPT` 里本身写着字面 JSON
-    （`{"verdict": "SAME" | "DIFFERENT"}`），`format` 会把它当成占位符抛
-    `KeyError: '"verdict"'`——**实测踩过一次**。
-    ⚠ 也**不用连续 `str.replace`**：填进去的 `CANDIDATE` 是**模型输出**（不可信），
-    里面若恰好有 `{REFERENCE}` 会在下一轮被替掉。一遍扫描从根上排除这件事。
+    ⛔ **不用 `str.format`**：提示词里写着**字面 JSON**（`{"sub_questions": [...]}`），
+    `format` 会把它当成占位符抛 `KeyError`——**实测踩过一次**（当时那句是裁判提示词，
+    现在只剩 `DECOMPOSE_PROMPT`，但字面 JSON 还在）。
+    ⚠ 也**不用连续 `str.replace`**：填进去的值可能是**模型输出**（不可信），
+    里面若恰好有另一个 `{SLOT}` 会在下一轮被替掉。一遍扫描从根上排除这件事。
     """
     slots = {f"{{{name}}}": value for name, value in values.items()}
     return _PLACEHOLDER.sub(lambda match: slots.get(match.group(0), match.group(0)), template)
@@ -235,9 +308,51 @@ def build_client(config):
     )
 
 
-def _render(gold: list[str], candidate: list[str]) -> tuple[str, str]:
-    fmt = lambda steps: "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))  # noqa: E731
-    return fmt(gold), fmt(candidate)
+# ── 人的判据：读进来、汇总（⛔ 机器不代填）───────────────────────────────
+
+
+def load_labels(path: Path) -> dict[str, str]:
+    """读标签文件 → `{question_id: defect}`。**形状不对就响亮失败**。
+
+    ⚠ 坏行**不许静默跳过**（少一条 = 分母变小 = 分数悄悄变高，而屏幕上完全正常）。
+    一个 id 出现两次同理——那说明两份判读冲突了，挑哪一份都是擅自决定。
+    """
+    labels: dict[str, str] = {}
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError as exc:
+            raise SystemExit(f"✗ {path}:{number} 不是 JSON：{exc}") from exc
+        question_id, defect = row.get("question_id"), row.get("defect")
+        if not isinstance(question_id, str) or not question_id:
+            raise SystemExit(f"✗ {path}:{number} 缺 question_id")
+        if defect not in DEFECTS:
+            raise SystemExit(f"✗ {path}:{number} 的 defect={defect!r} 不在词表里：{list(DEFECTS)}")
+        if question_id in labels:
+            raise SystemExit(f"✗ {path}:{number} 的 {question_id} 判了两次")
+        labels[question_id] = defect
+    return labels
+
+
+def score_labels(question_ids: list[str], labels: dict[str, str]) -> dict:
+    """把标签汇总成比率 + **缺陷分布**。缺标签 ⇒ 报出是哪几道，**不拿未判的当对或当错**。"""
+    missing = [qid for qid in question_ids if qid not in labels]
+    judged = [qid for qid in question_ids if qid in labels]
+    same = [qid for qid in judged if labels[qid] == "none"]
+    counts: dict[str, int] = {}
+    for qid in judged:
+        counts[labels[qid]] = counts.get(labels[qid], 0) + 1
+    return {
+        "judged": len(judged),
+        "unjudged": len(missing),
+        "same": len(same),
+        "same_rate": round(len(same) / max(1, len(judged)), 3),
+        "defect_counts": dict(sorted(counts.items(), key=lambda item: -item[1])),
+        "wrong_ids": [qid for qid in question_ids if qid in labels and labels[qid] != "none"],
+        "unjudged_ids": missing,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -247,7 +362,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True)
     parser.add_argument("--bench-dir", default=None)
     parser.add_argument("--limit", type=int, default=None, help="只跑前 N 题（冒烟）")
-    parser.add_argument("--no-judge", action="store_true", help="只跑分解，不叫裁判")
+    parser.add_argument("--labels", default=str(DEFAULT_LABELS), help="人的判定（缺了只报客观量）")
+    parser.add_argument(
+        "--reuse",
+        action="store_true",
+        help="复用 --out/rows.jsonl 里已有的分解，只重新汇总（⛔ 不调模型）",
+    )
     args = parser.parse_args(argv)
 
     import os
@@ -256,11 +376,6 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    from eval.datasets.musique import DATA_DIR as MUSIQUE_DIR
-    from eval.datasets.musique import JSONL as MUSIQUE_JSONL
-
-    from tianximem.common.config import load_config
-
     wanted = [
         json.loads(line)["question_id"]
         for line in Path(args.manifest).read_text(encoding="utf-8").split("\n")
@@ -268,6 +383,64 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if args.limit is not None:
         wanted = wanted[: args.limit]
+
+    if args.reuse:
+        # ⭐ **人在回路里重判不该再摇一次模型**：换一个模型调用就是换一份候选分解，
+        # 而标签是逐条读着**那一份**候选填的 ⇒ 重跑会让标签静默对不上它判的东西。
+        results = _load_rows(out_dir / "rows.jsonl", wanted)
+        print(f"清单 {args.manifest}：{len(wanted)} 题\n复用已有分解：{out_dir / 'rows.jsonl'}")
+    else:
+        results = _decompose_all(args, bench_dir, out_dir, wanted)
+
+    report = _summarize(results)
+    labels_path = Path(args.labels)
+    if labels_path.exists():
+        report["labels"] = score_labels(
+            [item["question_id"] for item in results], load_labels(labels_path)
+        )
+    else:
+        report["labels"] = {
+            "judged": 0,
+            "unjudged": len(results),
+            "note": f"没有 {labels_path}",
+        }
+    (out_dir / "report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
+    print("\n════ 客观结构量（机器算的）════")
+    for key, value in report.items():
+        if key not in ("per_question", "labels", "wrong_ids", "unjudged_ids"):
+            print(f"  {key}: {value}")
+    _print_labels(report["labels"], labels_path)
+    print(f"\n产物：{out_dir}（report.json / rows.jsonl —— ⚠ 含数据集原文，不进 Git）")
+    print(f"     {labels_path}（人的判定 —— ⛔ 机器不代填）")
+    return 0
+
+
+def _load_rows(path: Path, wanted: list[str]) -> list[dict]:
+    """读回上一次的分解结果。**少一道题就响亮失败**（分母悄悄变小 = 分数悄悄变高）。"""
+    if not path.exists():
+        raise SystemExit(f"✗ --reuse 要的是已有的分解，但 {path} 不存在")
+    results = [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    got = {item["question_id"] for item in results}
+    missing = [qid for qid in wanted if qid not in got]
+    if missing:
+        raise SystemExit(
+            f"✗ {path} 里缺这些题（先跑一次不带的）：{missing[:3]}（共 {len(missing)} 个）"
+        )
+    return results
+
+
+def _decompose_all(
+    args: argparse.Namespace, bench_dir: Path, out_dir: Path, wanted: list[str]
+) -> list[dict]:
+    """逐题叫模型拆一次。⚠ 这是**唯一**花钱的那条路（每题一次调用）。"""
+    from eval.datasets.musique import DATA_DIR as MUSIQUE_DIR
+    from eval.datasets.musique import JSONL as MUSIQUE_JSONL
+
+    from tianximem.common.config import load_config
 
     rows: dict[str, dict] = {}
     for line in (bench_dir / MUSIQUE_DIR / MUSIQUE_JSONL).open(encoding="utf-8"):
@@ -281,17 +454,14 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         raise SystemExit(f"✗ 清单里这些 id 不在可答题里：{missing[:3]}")
 
-    config = load_config()
-    client = build_client(config)
+    client = build_client(load_config())
     print(f"清单 {args.manifest}：{len(wanted)} 题（**只给问题那一句**）\n隔离产物：{out_dir}")
 
     results: list[dict] = []
     total = len(wanted)
     for index, qid in enumerate(wanted, 1):
         record = rows[qid]
-        gold_hops = [
-            str(hop["question"]) for hop in record["question_decomposition"]
-        ]
+        gold_hops = [str(hop["question"]) for hop in record["question_decomposition"]]
         question = str(record["question"])
 
         try:
@@ -314,24 +484,10 @@ def main(argv: list[str] | None = None) -> int:
             "raw": raw,
             "shape": score_shape(steps or [], gold_hops),
         }
-        if steps is not None and not args.no_judge:
-            reference, candidate = _render(gold_hops, steps)
-            try:
-                verdict_raw = client.complete(
-                    fill(
-                        JUDGE_PROMPT, QUESTION=question, REFERENCE=reference, CANDIDATE=candidate
-                    ),
-                    max_tokens=200,
-                    temperature=0.0,
-                )
-                entry["judge"] = _parse_verdict(verdict_raw)
-            except Exception as exc:  # noqa: BLE001
-                entry["judge"] = {"verdict": None, "reason": f"{type(exc).__name__}: {exc}"}
         results.append(entry)
         print(
             f"  [{index}/{total}] {qid}  {status}  步数 {entry['shape']['steps']}/"
-            f"{entry['shape']['gold_steps']}  回指 {entry['shape']['back_ref_steps']}  "
-            f"裁判 {entry.get('judge', {}).get('verdict')}",
+            f"{entry['shape']['gold_steps']}  回指 {entry['shape']['back_ref_steps']}",
             flush=True,
         )
         (out_dir / "rows.jsonl").write_text(
@@ -339,38 +495,28 @@ def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
         time.sleep(0)  # 让 flush 有个落点；网关侧自己有限流
+    return results
 
-    report = _summarize(results)
-    (out_dir / "report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8"
+
+def _print_labels(labels: dict, path: Path) -> None:
+    print("\n════ 人的判定（`defect`；verdict 由它推出）════")
+    if not labels.get("judged"):
+        print(f"  ⚠ 未判：{labels.get('unjudged', 0)} 题（{labels.get('note', path)}）")
+        print(f"  ⇒ 逐条读 {Path(path)} 那一行行地填 `question_id` / `defect` / `note`。")
+        return
+    print(
+        f"  判了 {labels['judged']} 题：SAME {labels['same']}（{labels['same_rate']}）"
+        f" · DIFFERENT {labels['judged'] - labels['same']}"
     )
-    print("\n════ 汇总 ════")
-    for key, value in report.items():
-        if key != "per_question":
-            print(f"  {key}: {value}")
-    print(f"\n产物：{out_dir}（report.json / rows.jsonl —— ⚠ 含数据集原文，不进 Git）")
-    return 0
-
-
-def _parse_verdict(text: str) -> dict:
-    for blob in (text.strip(), *_balanced_objects(text)):
-        try:
-            payload = json.loads(blob)
-        except ValueError:
-            continue
-        if isinstance(payload, dict) and payload.get("verdict") in ("SAME", "DIFFERENT"):
-            return {
-                "verdict": payload["verdict"],
-                "reason": str(payload.get("reason", ""))[:300],
-            }
-    return {"verdict": None, "reason": "裁判输出里没有 SAME/DIFFERENT"}
+    print(f"  缺陷分布：{labels['defect_counts']}")
+    if labels["unjudged"]:
+        print(f"  ⚠ 还有 {labels['unjudged']} 题未判：{labels['unjudged_ids']}")
 
 
 def _summarize(results: list[dict]) -> dict:
+    """**只汇总机器算得出来的东西**——判定那半边在 `score_labels`（读人的标签）。"""
     total = len(results)
     parsed = [item for item in results if item["status"] == "ok"]
-    judged = [item for item in results if item.get("judge", {}).get("verdict")]
-    same = [item for item in judged if item["judge"]["verdict"] == "SAME"]
     return {
         "n": total,
         "parsed": len(parsed),
@@ -384,15 +530,11 @@ def _summarize(results: list[dict]) -> dict:
             sum(item["shape"]["back_ref_rate"] for item in parsed) / max(1, len(parsed)), 3
         ),
         "final_covers_gold": sum(1 for item in parsed if item["shape"]["final_covers_gold"]),
-        "judged": len(judged),
-        "judge_same": len(same),
-        "judge_same_rate": round(len(same) / max(1, len(judged)), 3),
         "per_question": {
             item["question_id"]: {
                 "status": item["status"],
                 "steps": item["shape"]["steps"],
                 "gold_steps": item["shape"]["gold_steps"],
-                "verdict": item.get("judge", {}).get("verdict"),
             }
             for item in results
         },
