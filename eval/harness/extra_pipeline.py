@@ -49,6 +49,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from eval.datasets.musique import ANSWER_CONTRACT as MUSIQUE_ANSWER_CONTRACT  # noqa: E402
+from eval.datasets.musique import LOOSE_ANSWER_CONTRACT as MUSIQUE_LOOSE_CONTRACT  # noqa: E402
 from eval.datasets.musique import REFUSAL as MUSIQUE_REFUSAL  # noqa: E402
 from eval.datasets.registry import benchmark_dir  # noqa: E402
 from eval.harness.corporatebench_pipeline import (  # noqa: E402
@@ -121,8 +122,26 @@ def judge_mquake(generated: str, gold: object) -> tuple[bool, str]:
     return False, f"MQuAKE：{len(aliases)} 个别名一个都没出现"
 
 
-def judge_musique(generated: str, gold: object) -> tuple[bool, str]:
-    """本地 MuSiQue：可答题归一化后精确匹配别名，不可答题严格匹配拒答标记。"""
+def judge_musique(
+    generated: str, gold: object, *, contract: str = MUSIQUE_ANSWER_CONTRACT
+) -> tuple[bool, str]:
+    """本地 MuSiQue：可答题**归一化后与别名表比对**，不可答题严格匹配拒答标记。
+
+    ## 两套口径（`contract` 选，**默认严**）
+
+    | `contract` | 判据 | 什么时候用 |
+    | --- | --- | --- |
+    | `musique-local-qa-v1`（默认） | 归一化后**相等**于任一别名 | 一直以来的口径 |
+    | `musique-local-qa-v2-loose` | 别名作为一个词出现在回答里 | 只问"捞到了没有"时 |
+
+    ⚠ **宽松口径只放宽一处**：把"答得比金标更具体"也算对
+    （`five` ← `up to five games per year`）。**它同时会制造假阳性**：
+    金标 `California` 会被 `Rio Linda, California` 命中，而那是**比金标更笼统**的答案，
+    按 MuSiQue 自己的口径**应当算错**。⇒ **两套口径必须并排报，不许拿宽松那套替换严的那套**。
+
+    ⚠ 实测（2026-10-11 那一批 25 题）宽松口径**只翻 1 道**（`…46196…`，gold `five`）。
+    ⇒ 它**不是**"分数低的原因"。改成它之前先看那份逐题对照。
+    """
     if not isinstance(gold, dict) or not isinstance(gold.get("answerable"), bool):
         return False, "MuSiQue：金标缺 bool 类型的 answerable"
     if not gold["answerable"]:
@@ -135,7 +154,12 @@ def judge_musique(generated: str, gold: object) -> tuple[bool, str]:
     }
     if not aliases:
         return False, "MuSiQue：金标答案及别名均为空"
-    return normalize(generated) in aliases, "MuSiQue：参考答案或别名归一化后精确匹配"
+    answer = normalize(generated)
+    if contract == MUSIQUE_LOOSE_CONTRACT:
+        hit = next((alias for alias in sorted(aliases) if _contains(answer, alias)), None)
+        why = f"命中 {hit!r}" if hit else "别名一个都没出现"
+        return hit is not None, f"MuSiQue/{MUSIQUE_LOOSE_CONTRACT}：{why}"
+    return answer in aliases, "MuSiQue：参考答案或别名归一化后精确匹配"
 
 
 def judge_tempreason(generated: str, gold: object) -> tuple[bool, str]:
@@ -911,7 +935,10 @@ def _judge_one(
         ok, why = judge_tempreason(generated, gold)
         return _verdict(qid, ok, why)
     if dataset == "musique":
-        ok, why = judge_musique(generated, gold)
+        # ⚠ 口径由 item 上的 `answer_contract` 决定（默认严的那条）——**不是**全局开关。
+        ok, why = judge_musique(
+            generated, gold, contract=str(item.get("answer_contract") or MUSIQUE_ANSWER_CONTRACT)
+        )
         return _verdict(qid, ok, why)
     if dataset == "docpp":
         return _judge_docpp(qid, item, generated, judge=judge, max_tokens=max_tokens)

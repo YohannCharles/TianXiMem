@@ -20,6 +20,10 @@ DATA_DIR = "musique"
 JSONL = "musique_full_v1.0_dev.jsonl"
 REFUSAL = "INSUFFICIENT_EVIDENCE"
 ANSWER_CONTRACT = "musique-local-qa-v1"
+#: **宽松口径**：金标作为"一个词"出现在回答里即算对（见 `extra_pipeline.judge_musique`
+#: 的对照表）。⚠ 它会把"答得比金标更具体"也算对，**同时制造假阳性** ⇒
+#: **两套口径并排报，不许替换**。2026-10-11 实测它只翻 1 道。
+LOOSE_ANSWER_CONTRACT = "musique-local-qa-v2-loose"
 USER_PREFIX = "musique-"
 SHAPE_NOTE = (
     f"MuSiQue-Full dev（{ANSWER_CONTRACT}）：每题一个独立 user，"

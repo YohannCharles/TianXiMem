@@ -22,13 +22,17 @@ from pathlib import Path
 
 import pytest
 from eval.datasets.musique import (
+    ANSWER_CONTRACT,
     HAYSTACK_USER,
+    LOOSE_ANSWER_CONTRACT,
+    REFUSAL,
     _is_entity_answer,
     _is_strict_chain,
     load_musique_haystack,
     select_chain_question_ids,
     supporting_snippets,
 )
+from eval.harness.extra_pipeline import judge_musique
 
 # ── 造行 ────────────────────────────────────────────────────────────────
 
@@ -291,3 +295,57 @@ def test_the_shipped_manifest_is_internally_consistent() -> None:
     # ⛔ 题面 / 答案一个字都不许进清单
     for row in rows:
         assert set(row) == {"dataset", "user_id", "question_id", "hops", "hop_ids", "corpus"}
+
+
+# ── ⑤ 两套判分口径（2026-10-12）────────────────────────────────────────
+
+
+def _musique_gold(answer: str, *aliases: str) -> dict:
+    return {"answer": answer, "answer_aliases": list(aliases), "answerable": True}
+
+
+def test_the_strict_contract_rejects_a_more_specific_answer() -> None:
+    """严口径（默认）：归一化后必须**相等**。⇒ `five` 会被 `five games` 判错。
+
+    ⚠ 这就是"判分是不是太严"那个问题的**唯一一处实证**：实测三臂各自只翻这 1 道。
+    """
+    gold = _musique_gold("five")
+    assert judge_musique("five", gold, contract=ANSWER_CONTRACT)[0] is True
+    assert judge_musique("Five games", gold, contract=ANSWER_CONTRACT)[0] is False
+
+
+def test_the_loose_contract_accepts_a_more_specific_answer() -> None:
+    """宽松口径：金标作为一个词**出现在**回答里即算对。"""
+    gold = _musique_gold("five")
+    assert judge_musique("five", gold, contract=ANSWER_CONTRACT)[0] is True
+    assert judge_musique("1992", gold, contract=LOOSE_ANSWER_CONTRACT)[0] is False
+    assert (
+        judge_musique("up to five games per year", gold, contract=LOOSE_ANSWER_CONTRACT)[0] is True
+    )
+
+
+def test_the_loose_contract_also_accepts_a_more_general_answer_which_is_wrong() -> None:
+    """⛔ **宽松口径的代价，钉在这里**：它会把"比金标更笼统"的答案也算对。
+
+    金标是县名 `Cabarrus County`，回答成 `North Carolina`（范围更大、且不是所问）
+    ——按 MuSiQue 自己的口径**应当算错**，而宽松口径会放过它。
+    ⇒ **两套口径必须并排报，不许拿宽松那套替换严的那套。**
+    """
+    gold = _musique_gold("Cabarrus County")
+    wrong_but_contained = "Cabarrus County is in North Carolina"
+    assert judge_musique(wrong_but_contained, gold, contract=ANSWER_CONTRACT)[0] is False
+    assert judge_musique(wrong_but_contained, gold, contract=LOOSE_ANSWER_CONTRACT)[0] is True
+
+
+def test_both_contracts_agree_on_the_abstention_branch() -> None:
+    """不可答题那条分支**两套口径完全一样**（它比的不是答案，是拒答标记）。"""
+    gold = {"answer": "", "answer_aliases": [], "answerable": False}
+    for contract in (ANSWER_CONTRACT, LOOSE_ANSWER_CONTRACT):
+        assert judge_musique(REFUSAL, gold, contract=contract)[0] is True
+        assert judge_musique("something", gold, contract=contract)[0] is False
+
+
+def test_the_default_contract_is_the_strict_one() -> None:
+    """⚠ 默认不许变：`judge_musique` 不带 `contract` 时必须走严口径。"""
+    gold = _musique_gold("five")
+    assert judge_musique("up to five games per year", gold)[0] is False
