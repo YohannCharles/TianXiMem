@@ -249,6 +249,7 @@ def _arm_config(
     metrics_path: Path,
     rerank: bool,
     per_round_top_k: int | None = None,
+    max_rounds: int | None = None,
 ) -> AppConfig:
     """把一条臂压进配置。**只动那四个开关**——其余一切（语料 / 索引 / 预算 / 判分）逐字相同。
 
@@ -286,6 +287,7 @@ def _arm_config(
             # ⚠ `None` = **不覆盖**（用配置里的值）。只有显式传了数才换——
             #   于是"这一臂到底用了哪个 per_round_top_k"永远能从传进来的参数看出来。
             **({} if per_round_top_k is None else {"per_round_top_k": per_round_top_k}),
+            **({} if max_rounds is None else {"max_rounds": max_rounds}),
         ),
         capture=replace(base.capture, enabled=False),
         metrics_path=str(metrics_path),
@@ -587,6 +589,12 @@ def main(argv: list[str] | None = None) -> int:
         help="复用本轮 <臂>-hits.json 的检索结果，**不重跑 Search**（答案/判分仍会重做）",
     )
     parser.add_argument(
+        "--max-rounds",
+        type=int,
+        default=None,
+        help="覆盖 `agentic.max_rounds`（检索轮数上限，含第一轮）；不传就用配置里的值",
+    )
+    parser.add_argument(
         "--per-round-top-k",
         type=int,
         default=None,
@@ -652,6 +660,13 @@ def main(argv: list[str] | None = None) -> int:
             f"（`agentic.per_round_top_k` = {base.agentic.per_round_top_k}）",
             flush=True,
         )
+    max_rounds = args.max_rounds if args.max_rounds is not None else base.agentic.max_rounds
+    if args.max_rounds is not None:
+        print(
+            f"⚠ `--max-rounds {max_rounds}` 覆盖了配置"
+            f"（`agentic.max_rounds` = {base.agentic.max_rounds}）",
+            flush=True,
+        )
 
     # ⚠ **续跑要合并，不能覆盖**：`--arms e1,a` 这类部分重跑若从头写 `report.json`，
     #   上一次跑出来的 E0 / E2 会**静默消失**——而汇总表会照常打印，只是少两行。
@@ -671,6 +686,7 @@ def main(argv: list[str] | None = None) -> int:
             metrics_path=out_dir / f"{arm.key}-metrics.json",
             rerank=not args.no_rerank,
             per_round_top_k=per_round_top_k,
+            max_rounds=max_rounds,
         )
         services = build_services(config)
         # ⚠ 逐轮落盘（§11）：包一层，**只在真的接上了执行器时**包。
@@ -709,6 +725,8 @@ def main(argv: list[str] | None = None) -> int:
                         # ⚠ **每轮交给 CoQ 的条数必须记**：它是这一轮真跑的参数，
                         #   不记的话"改了它之后分数变了"会被当成模型抖动（本仓栽过）。
                         "agentic.per_round_top_k": per_round_top_k,
+                        # ⚠ 同上：轮数上限也是"这一轮真跑的参数"，不记就没法归因。
+                        "agentic.max_rounds": max_rounds,
                     },
                     "coverage": _evidence_coverage(samples, hits, gold_evidence),
                     "metrics": _snapshot(services),
