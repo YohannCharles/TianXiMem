@@ -138,3 +138,5 @@ official-dataset-*
 #   仓根现在**一个合法的 .json 都没有**（清单/配置都在子目录），所以这条是准确的。
 #   哪天要在仓根放真的 .json，**先删这条规则并说清为什么**，别让新文件被静默忽略。
 /*.json
+
+.pytest-tmp-corpus-audit

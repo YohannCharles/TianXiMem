@@ -368,3 +368,32 @@ def test_a_clean_arm_is_not_reported_as_degraded() -> None:
     report = {"e1": {"agentic_stop_reasons": {"duplicate_query": 37, "sufficient": 10},
                      "agentic_degraded": 0}}
     assert _degraded_arms(report, chosen) == []
+
+
+def test_the_single_hop_manifest_is_a_non_multi_hop_control() -> None:
+    """⭐ **单跳对照清单**：`category` 不许有 `"1"`（那是多跳）、`expects_evidence` 必须是 1。
+
+    它存在的意义是给多跳那条线一个"**本来就不该多跳**"的对照：
+    同样的服务、同样的语料，每道题一次查找就该答对。
+    ⛔ 若哪天有人把 `category=="1"` 的题塞进来，这份对照就废了——而**分数照常打印**。
+    """
+    rows = [
+        json.loads(line)
+        for line in Path("eval/coq-locomo-singlehop.jsonl")
+        .read_text(encoding="utf-8")
+        .split("\n")
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert len(rows) == 30
+    # ⛔ 不是多跳（1）：也不要 adversarial（5，`answer=null`）
+    assert {row["category"] for row in rows} == {"2", "3", "4"}
+    # ⭐ 单跳的客观判据：证据恰好 1 条 dia-id
+    assert {row["expects_evidence"] for row in rows} == {1}
+    # 与多跳清单**同一批对话** ⇒ 两套题共用一个语料，可直接并排比
+    assert {row["user_id"] for row in rows} == {"conv-26", "conv-30", "conv-41"}
+    assert all(row["dataset"] == "locomo-refined" for row in rows)
+    assert len({row["question_id"] for row in rows}) == 30  # 无重复
+    for row in rows:
+        assert set(row) == {"dataset", "user_id", "question_id", "category", "expects_evidence"}
+        # ⛔ 原文一个字都不许进清单
+        assert "question" not in row and "answer" not in row
