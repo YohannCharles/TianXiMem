@@ -473,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", default=None, help="默认按 --dataset 取")
     parser.add_argument("--out", required=True, help="产物目录（逐题落盘，可续跑）")
     parser.add_argument("--bench-dir", default=None, help="默认取 TIANXIMEM_BENCHMARK_DIR")
-    parser.add_argument("--collection", default=None, help="默认 coq-eval-<日期>")
+    parser.add_argument("--collection", default=None, help="默认 coq-eval-<--out 的目录名>")
     parser.add_argument("--arms", default=",".join(arm.key for arm in ARMS))
     parser.add_argument("--skip-add", action="store_true", help="复用上一次的隔离真源（续跑）")
     parser.add_argument(
@@ -495,7 +495,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    collection = args.collection or f"coq-eval-{time.strftime('%Y%m%d')}"
+    # ⚠ **默认按 `--out` 的目录名取，不是按日期**（2026-10-12 修）：
+    #    同一天跑两轮（改了语料或口径再跑）会**撞在同一个 collection 上**——
+    #    而旧向量**不会报错**，只会静默混进这次检索。实测踩过一次（822 段那轮的
+    #    向量留在库里，新跑那轮是 912 段的语料）。
+    collection = args.collection or f"coq-eval-{Path(args.out).name}"
 
     dataset = args.dataset
     manifest_path = Path(args.manifest or DATASETS[dataset]["manifest"])
