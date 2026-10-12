@@ -183,9 +183,7 @@ def test_the_ablation_arm_differs_from_e1_in_exactly_one_switch(tmp_path) -> Non
     config_a = _arm_config(base, a, **common)
     config_b = _arm_config(base, b, **common)
     differences = {
-        f.name
-        for f in fields(config_a)
-        if getattr(config_a, f.name) != getattr(config_b, f.name)
+        f.name for f in fields(config_a) if getattr(config_a, f.name) != getattr(config_b, f.name)
     }
     assert differences == {"agentic"}
     assert config_a.agentic.round_rerank_enabled is False
@@ -317,7 +315,8 @@ def _hits_row(**extra) -> dict:
 def test_reuse_hits_refuses_the_old_format_instead_of_guessing_content(tmp_path: Path) -> None:
     """旧产物（缺正文）**不能复用**：报错并点名，不许从库里反推。"""
     (tmp_path / "e1-hits.json").write_text(
-        json.dumps({"q1": [_hits_row()]}), encoding="utf-8"  # 没有 content
+        json.dumps({"q1": [_hits_row()]}),
+        encoding="utf-8",  # 没有 content
     )
     with pytest.raises(SystemExit, match="旧格式"):
         _reuse_hits(tmp_path, "e1")
@@ -365,8 +364,12 @@ def test_a_degraded_arm_is_reported_as_degraded() -> None:
 def test_a_clean_arm_is_not_reported_as_degraded() -> None:
     """反例：Team 网关那轮（`llm_unavailable` 0 个）不许被点名——否则告警会变成噪音。"""
     chosen = [a for a in ARMS if a.key == "e1"]
-    report = {"e1": {"agentic_stop_reasons": {"duplicate_query": 37, "sufficient": 10},
-                     "agentic_degraded": 0}}
+    report = {
+        "e1": {
+            "agentic_stop_reasons": {"duplicate_query": 37, "sufficient": 10},
+            "agentic_degraded": 0,
+        }
+    }
     assert _degraded_arms(report, chosen) == []
 
 
@@ -379,9 +382,7 @@ def test_the_single_hop_manifest_is_a_non_multi_hop_control() -> None:
     """
     rows = [
         json.loads(line)
-        for line in Path("eval/coq-locomo-singlehop.jsonl")
-        .read_text(encoding="utf-8")
-        .split("\n")
+        for line in Path("eval/coq-locomo-singlehop.jsonl").read_text(encoding="utf-8").split("\n")
         if line.strip() and not line.lstrip().startswith("#")
     ]
     assert len(rows) == 30

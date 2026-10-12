@@ -70,4 +70,3 @@ openai_chat.py OpenAI 兼容的 `/chat/completions` 客户端     ✅
 它只接收构造方传进来的 `base_url` / `api_key` / `model`。
 
 > ⚠ **本目录是"顺手微调一下"的两处高发地之一**（另一处是 reranker）。**数据不得用于训练，「微调」不是暂不实现、是不允许**——理由与出处提醒见根 `CLAUDE.md`。
-

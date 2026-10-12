@@ -287,7 +287,7 @@ def _payload(text: str, count: int = 3):
 
 def test_think_block_before_the_json_is_still_parsed() -> None:
     """阶段①的**存在理由**：模型常先吐思考再吐对象。"""
-    raw = '<think>\nlet me see\n</think>\n' + _reply(indices=[1], query="next")
+    raw = "<think>\nlet me see\n</think>\n" + _reply(indices=[1], query="next")
     decision = _payload(raw)
     assert decision.evidence_indices == (1,)
     assert decision.new_query == "next"
@@ -301,8 +301,10 @@ def test_clean_json_is_marked_direct() -> None:
 
 def test_braces_inside_a_string_do_not_break_the_scanner() -> None:
     """⚠ 括号平衡必须**看懂字符串**——否则 `{"a": "}"}` 会被切在引号里。"""
-    raw = 'noise {"is_sufficient": false, "evidence_indices": [], ' \
-          '"new_query": "what about {braces} and \\"quotes\\"?", "confidence_score": 0.5} tail'
+    raw = (
+        'noise {"is_sufficient": false, "evidence_indices": [], '
+        '"new_query": "what about {braces} and \\"quotes\\"?", "confidence_score": 0.5} tail'
+    )
     found = extract_json_object(raw)
     assert found is not None
     payload, extraction = found
@@ -327,23 +329,23 @@ def test_no_json_object_at_all_is_rejected() -> None:
         # ⛔ **不能把布尔读成整数索引**：`true` 是 `int` 的实例。
         (
             '{"is_sufficient": false, "evidence_indices": [true], "new_query": "q",'
-            " \"confidence_score\": 0.5}",
+            ' "confidence_score": 0.5}',
             "必须是整数",
         ),
         # ⛔ **越界即异常**，不是"忽略这一条"。
         (
             '{"is_sufficient": false, "evidence_indices": [3], "new_query": "q",'
-            " \"confidence_score\": 0.5}",
+            ' "confidence_score": 0.5}',
             "越界",
         ),
         (
             '{"is_sufficient": 1, "evidence_indices": [], "new_query": "q",'
-            " \"confidence_score\": 0.5}",
+            ' "confidence_score": 0.5}',
             "必须是布尔",
         ),
         (
             '{"is_sufficient": false, "evidence_indices": [], "new_query": "a\\nb",'
-            " \"confidence_score\": 0.5}",
+            ' "confidence_score": 0.5}',
             "单行",
         ),
         (
@@ -353,7 +355,7 @@ def test_no_json_object_at_all_is_rejected() -> None:
         ),
         (
             '{"is_sufficient": false, "evidence_indices": [], "new_query": "q",'
-            " \"confidence_score\": \"high\"}",
+            ' "confidence_score": "high"}',
             "必须是数字",
         ),
     ],
@@ -504,13 +506,15 @@ def test_the_threshold_only_gates_the_early_stop() -> None:
     reply = _reply(sufficient=True, indices=[0], confidence=0.9)
 
     strict = _agent(
-        llm=FakeLlm(reply), retriever=FakeRetriever(default=_candidates("m1")),
+        llm=FakeLlm(reply),
+        retriever=FakeRetriever(default=_candidates("m1")),
         sufficiency_threshold=0.95,
     )
     assert strict.search(user_id="u", query="q", top_k=100).stats.stop_reason == "low_confidence"
 
     loose = _agent(
-        llm=FakeLlm(reply), retriever=FakeRetriever(default=_candidates("m1")),
+        llm=FakeLlm(reply),
+        retriever=FakeRetriever(default=_candidates("m1")),
         sufficiency_threshold=0.5,
     )
     assert loose.search(user_id="u", query="q", top_k=100).stats.stop_reason == "sufficient"
@@ -669,9 +673,7 @@ def test_the_document_order_never_changes_after_the_index_is_built() -> None:
     模型给的索引就指向别的证据，而**这件事不会报错**。
     """
     llm = FakeLlm(_reply(sufficient=True, indices=[0, 1, 2]))
-    agent = _agent(
-        llm=llm, retriever=FakeRetriever(default=_candidates("m1", "m2", "m3"))
-    )
+    agent = _agent(llm=llm, retriever=FakeRetriever(default=_candidates("m1", "m2", "m3")))
     result = agent.search(user_id="u", query="q", top_k=100)
 
     prompt = llm.calls[0]
@@ -852,8 +854,10 @@ def test_an_unexpected_llm_error_is_recorded_differently_from_a_dead_endpoint() 
 
 def test_invalid_output_never_updates_the_evidence_set() -> None:
     """§10.1 第 2 条 + §6.2：**不补默认值、不用无效索引更新证据**。"""
-    llm = FakeLlm('{"is_sufficient": true, "evidence_indices": [99], "new_query": "q",'
-                  ' "confidence_score": 0.9}')
+    llm = FakeLlm(
+        '{"is_sufficient": true, "evidence_indices": [99], "new_query": "q",'
+        ' "confidence_score": 0.9}'
+    )
     agent = _agent(llm=llm, retriever=FakeRetriever(default=_candidates("m1")))
     result = agent.search(user_id="u", query="q", top_k=100)
 

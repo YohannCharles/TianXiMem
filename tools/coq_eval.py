@@ -102,7 +102,7 @@ DATASETS: dict[str, dict[str, str]] = {
     "locomo-refined": {
         "manifest": "eval/coq-multihop.jsonl",
         "judge": "locomo-refined",
-        "note": "只取 LoCoMo 的 `category == \"1\"`、25 道 ⇒ **不要与 346 题那条 overall 直接比**。"
+        "note": '只取 LoCoMo 的 `category == "1"`、25 道 ⇒ **不要与 346 题那条 overall 直接比**。'
         "⚠ 人工复核发现这 25 道里真正的链式依赖几乎没有（见 coq-multihop-20261010.md §5）。",
     },
     "musique-haystack": {
@@ -590,9 +590,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    bench_dir = Path(
-        args.bench_dir or os.environ.get("TIANXIMEM_BENCHMARK_DIR", "dataset")
-    )
+    bench_dir = Path(args.bench_dir or os.environ.get("TIANXIMEM_BENCHMARK_DIR", "dataset"))
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     # ⚠ **默认按 `--out` 的目录名取，不是按日期**（2026-10-12 修）：
@@ -761,9 +759,7 @@ def main(argv: list[str] | None = None) -> int:
             "  ⚠ 常见原因：端点额度/限流（实测 OpenRouter 免费档 402）。"
         )
     print(f"\n产物：{out_dir}（report.json / <臂>-hits.json / <臂>/ 逐题答案与判分）")
-    print(
-        f"⚠ {DATASETS[dataset]['note']}"
-    )
+    print(f"⚠ {DATASETS[dataset]['note']}")
     if any(arm.agentic for arm in chosen):
         print(
             "⚠ 多跳臂的用量看 report.json 的 metrics.agentic："

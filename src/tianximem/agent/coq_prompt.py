@@ -30,7 +30,9 @@ from typing import Final
 #: 名字沿用方案 §10.4 的 `coq-original`（含义是"原版，没有本项目自己的改动"）。
 COQ_PROMPT_VERSION: Final[str] = "coq-original"
 
-COQ_PROMPT: Final[str] = """You are a meticulous expert in retrieval-augmented question answering evaluation and query rewriting.
+COQ_PROMPT: Final[
+    str
+] = """You are a meticulous expert in retrieval-augmented question answering evaluation and query rewriting.
 
 Task: Given (1) an original user query, (2) rewritten queries already tried, and (3) retrieved documents, you must decide whether the documents are sufficient to answer the original query directly, completely, and explicitly. If insufficient, generate the NEXT BEST rewritten subquery to retrieve the missing evidence. If sufficient, set the rewritten query to the original query.
 

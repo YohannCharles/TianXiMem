@@ -87,7 +87,6 @@ def _agentic_result(
     )
 
 
-
 class FakeLlm:
     """`LlmClient` 的替身：回一个**脚本化的**答案，并记下每一次调用。
 
