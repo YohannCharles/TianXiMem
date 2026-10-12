@@ -118,6 +118,23 @@ DATASETS: dict[str, dict[str, str]] = {
 DEFAULT_DATASET = "locomo-refined"
 
 
+def _degraded_arms(report: dict, chosen) -> list[tuple[str, int, dict]]:
+    """哪些臂的多跳循环**被降级过** → `[(标签, 降级题数, 停止原因分布), ...]`。
+
+    ⛔ **存在的理由**（2026-10-12 实测）：`gpt-4o-mini` 那轮 50 题里 **45 题第一轮就
+    `llm_unavailable`**，多跳循环被优雅降级（D12：绝不 500）⇒ 那 45 题返回的其实是
+    **普通混合检索**的结果。而**汇总表照样给了一个看起来正常的准确率**——
+    "降级后的 E1"于是会被读成"E1"。⇒ 判据摆在这里，打印与告警共用它。
+    """
+    out: list[tuple[str, int, dict]] = []
+    for arm in chosen:
+        entry = report.get(arm.key, {})
+        count = entry.get("agentic_degraded", 0)
+        if count:
+            out.append((arm.label, count, entry.get("agentic_stop_reasons", {})))
+    return out
+
+
 def _load_manifest(path: Path) -> dict[str, list[str]]:
     """`user_id → [question_id]`。**只读 id**——题目原文从 `dataset/` 现取（§12.5）。"""
     wanted: dict[str, list[str]] = {}
@@ -683,6 +700,15 @@ def main(argv: list[str] | None = None) -> int:
                         json.dumps(recorder.calls, ensure_ascii=False, indent=1), encoding="utf-8"
                     )
                     entry["recorded_requests"] = len(recorder.calls)
+                    # ⛔ **降级必须摆到台面上**（2026-10-12 修）。
+                    #    实测踩过：`gpt-4o-mini` 那轮 50 题里 **45 题第一轮就
+                    #    `llm_unavailable`**（LLM 调用失败），多跳循环**被优雅降级**
+                    #    （D12：绝不 500）⇒ 那 45 题返回的其实是**普通混合检索**的结果，
+                    #    而**汇总表照样给了一个看起来正常的准确率**。
+                    #    ⇒ 只写在 `rounds.json` 里等于没有告警：降级后的 E1 会被当成 E1。
+                    stops = Counter(record["stop_reason"] for record in recorder.calls)
+                    entry["agentic_stop_reasons"] = dict(stops)
+                    entry["agentic_degraded"] = stops.get("llm_unavailable", 0)
                 if not args.skip_judge:
                     items = []
                     for sample in samples:
@@ -707,15 +733,32 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     print("\n\n════ 汇总 ════")
-    header = f"{'臂':<30} {'答对':>6} {'题数':>5} {'准确率':>8} {'证据≥1':>7} {'证据全':>7}"
+    header = (
+        f"{'臂':<30} {'答对':>6} {'题数':>5} {'准确率':>8} {'证据≥1':>7} {'证据全':>7} {'降级':>5}"
+    )
     print(header)
+    degraded_arms = _degraded_arms(report, chosen)
     for arm in chosen:
         entry = report.get(arm.key, {})
         coverage = entry.get("coverage", {})
+        degraded = entry.get("agentic_degraded", 0)
+        if degraded:
+            degraded_arms.append((arm.label, degraded, entry.get("agentic_stop_reasons", {})))
         print(
             f"{arm.label:<28} {entry.get('correct', '-'):>6} {entry.get('judged', '-'):>5} "
             f"{entry.get('accuracy', '-'):>8} "
-            f"{coverage.get('any_hit', '-'):>7} {coverage.get('full_hit', '-'):>7}"
+            f"{coverage.get('any_hit', '-'):>7} {coverage.get('full_hit', '-'):>7} "
+            f"{degraded or '-':>5}"
+        )
+    if degraded_arms:
+        # ⛔ **不许让一个降级过的臂看起来像跑过了**。
+        print("\n⛔ **这些臂有多跳循环被降级**——上面那一行的准确率**不是**这个臂该有的数：")
+        for label, count, stops in degraded_arms:
+            print(f"    {label}：{count} 题（停止原因 {stops}）")
+        print(
+            "  降级 = LLM 调用失败 ⇒ 那几题走的是**普通混合检索**（D12 的'绝不 500'把它兜住了）。\n"
+            "  ⇒ 这些数**只能用来看'服务没崩'，不能用来回答'多跳有没有用'**。\n"
+            "  ⚠ 常见原因：端点额度/限流（实测 OpenRouter 免费档 402）。"
         )
     print(f"\n产物：{out_dir}（report.json / <臂>-hits.json / <臂>/ 逐题答案与判分）")
     print(

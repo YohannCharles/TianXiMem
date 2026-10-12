@@ -25,6 +25,7 @@ from tests.test_router import _config  # noqa: PLC2701 — 复用同一套"真�
 from tools.coq_eval import (
     ARMS,
     _arm_config,
+    _degraded_arms,
     _load_manifest,
     _require_source_rows,
     _reuse_hits,
@@ -333,3 +334,37 @@ def test_reuse_hits_round_trips_the_saved_content(tmp_path: Path) -> None:
 def test_reuse_hits_without_a_file_falls_back_to_searching(tmp_path: Path) -> None:
     """没有产物 ⇒ 返回 `None`（调用方照常检索），**不是**报错。"""
     assert _reuse_hits(tmp_path, "e1") is None
+
+
+# ── 降级必须可见：`llm_unavailable` 不许被当成"跑过了" ──────────────────
+
+
+def test_a_degraded_arm_is_reported_as_degraded() -> None:
+    """⭐ 实测踩过：`gpt-4o-mini` 那轮 **45/50 题**的 CoQ 第一轮就 `llm_unavailable`
+    ⇒ 那些题返回的是**普通混合检索**的结果（D12 的"绝不 500"把失败兜住了），
+    而**汇总表照样给出一个看起来正常的准确率**。
+
+    这一条钉的是"降级能被点名出来"——否则"降级后的 E1"会被读成"E1"，
+    而那是个**不会报错的错结论**。
+    """
+    chosen = [a for a in ARMS if a.key in {"e1", "e0"}]
+    report = {
+        "e0": {"correct": 11, "judged": 50},  # 基线臂没有多跳循环，不该被点名
+        "e1": {
+            "correct": 11,
+            "judged": 50,
+            "agentic_stop_reasons": {"llm_unavailable": 45, "max_rounds": 5},
+            "agentic_degraded": 45,
+        },
+    }
+    assert _degraded_arms(report, chosen) == [
+        ("E1 强制多跳（绕过路由器）", 45, {"llm_unavailable": 45, "max_rounds": 5})
+    ]
+
+
+def test_a_clean_arm_is_not_reported_as_degraded() -> None:
+    """反例：Team 网关那轮（`llm_unavailable` 0 个）不许被点名——否则告警会变成噪音。"""
+    chosen = [a for a in ARMS if a.key == "e1"]
+    report = {"e1": {"agentic_stop_reasons": {"duplicate_query": 37, "sufficient": 10},
+                     "agentic_degraded": 0}}
+    assert _degraded_arms(report, chosen) == []
