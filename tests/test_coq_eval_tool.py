@@ -13,12 +13,23 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import fields
 from pathlib import Path
 
 import pytest
+from eval.datasets.preprocess import Message, Sample, Session
+from eval.harness import SearchHit
+from eval.harness.add_shape import MAX_MESSAGE_CHARS, shape_batch
 from tests.test_router import _config  # noqa: PLC2701 — 复用同一套"真配置 + 临时路径"
-from tools.coq_eval import ARMS, _arm_config, _load_manifest
+from tools.coq_eval import (
+    ARMS,
+    _arm_config,
+    _load_manifest,
+    _require_source_rows,
+    _reuse_hits,
+    _write_hits,
+)
 
 
 def _arms() -> dict:
@@ -221,3 +232,104 @@ def test_the_shipped_manifest_lists_only_multi_hop_questions() -> None:
         assert set(row) == {"dataset", "user_id", "question_id", "category", "expects_evidence"}
         # ⛔ 原文一个字都不许进清单
         assert "question" not in row and "answer" not in row
+
+
+def _corpus_sample() -> Sample:
+    return Sample(
+        user_id="musique-test",
+        dataset="musique",
+        sessions=(
+            Session(
+                session_id="corpus",
+                messages=(
+                    Message("user", "Title: Same\nFirst chunk."),
+                    Message("user", "Title: Same\nSecond chunk."),
+                    Message("user", "Title: Long\n" + "words " * MAX_MESSAGE_CHARS),
+                ),
+            ),
+        ),
+        questions=(),
+    )
+
+
+def _source_rows(sample: Sample) -> list[tuple]:
+    return [
+        (sample.user_id, session.session_id, payload["content"].strip(), None)
+        for session in sample.sessions
+        for payload in shape_batch(
+            session.messages, dataset=sample.dataset, speaker_names=sample.speaker_names
+        )
+    ]
+
+
+def _write_corpus_store(path: Path, rows: list[tuple]) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE qa_pairs(user_id, session_id, question, answer)")
+        conn.executemany("INSERT INTO qa_pairs VALUES (?, ?, ?, ?)", rows)
+
+
+def test_source_integrity_accepts_all_chunks_and_official_long_message_splits(tmp_path) -> None:
+    sample = _corpus_sample()
+    rows = _source_rows(sample)
+    assert len(rows) > sample.message_count
+    path = tmp_path / "complete.db"
+    _write_corpus_store(path, rows)
+    _require_source_rows([sample], path)
+
+
+@pytest.mark.parametrize("damage", ["missing", "replaced", "extra", "wrong_session", "answer"])
+def test_source_integrity_rejects_nonempty_but_incomplete_or_changed_corpus(
+    tmp_path, damage
+) -> None:
+    """有行或总数相等不足以证明完整；每一块正文及其 session 都须匹配。"""
+    sample = _corpus_sample()
+    rows = _source_rows(sample)
+    if damage == "missing":
+        rows.pop(1)  # 同标题第二段缺失，但用户仍非空
+    elif damage == "replaced":
+        rows[1] = (*rows[1][:2], "Corpus: Title: Same\nUnrelated chunk.", None)
+    elif damage == "extra":
+        rows.append(rows[0])
+    elif damage == "wrong_session":
+        rows[1] = (rows[1][0], "old-corpus", *rows[1][2:])
+    else:
+        rows[1] = (*rows[1][:3], "unexpected answer")
+    path = tmp_path / "damaged.db"
+    _write_corpus_store(path, rows)
+    with pytest.raises(SystemExit, match="真源语料不匹配"):
+        _require_source_rows([sample], path)
+
+
+# ── `--reuse-hits`：旧格式必须**响亮拒绝** ─────────────────────────────
+#
+# ⚠ 这一条是踩出来的：答案步挂了（实测一次 OpenRouter 402）想续跑时，才发现
+#   `<臂>-hits.json` **只存了 `{id, created_at}`、没存正文**——而答案步要用正文拼
+#   `retrieved_context`。⇒ 要么重跑 Search（17 分钟），要么从 SQLite 反推一份
+#   "**看起来一样**"的正文。后者正是本项目最不能接受的失败类型，所以产生产物时
+#   就把正文一起存，并且**拒绝复用旧格式**。
+
+
+def _hits_row(**extra) -> dict:
+    return {"id": "m1", "created_at": "2026-07-26", "score": 1.0, **extra}
+
+
+def test_reuse_hits_refuses_the_old_format_instead_of_guessing_content(tmp_path: Path) -> None:
+    """旧产物（缺正文）**不能复用**：报错并点名，不许从库里反推。"""
+    (tmp_path / "e1-hits.json").write_text(
+        json.dumps({"q1": [_hits_row()]}), encoding="utf-8"  # 没有 content
+    )
+    with pytest.raises(SystemExit, match="旧格式"):
+        _reuse_hits(tmp_path, "e1")
+
+
+def test_reuse_hits_round_trips_the_saved_content(tmp_path: Path) -> None:
+    """新产物带正文 ⇒ 复用后拿到的 `SearchHit` 与当初写进去的逐字段相同。"""
+    original = {"q1": [SearchHit(id="m1", content="Q: 正文", created_at="2026-07-26", score=0.5)]}
+    _write_hits(tmp_path / "e1-hits.json", original)
+    got = _reuse_hits(tmp_path, "e1")
+    assert got is not None and got["q1"][0] == original["q1"][0]
+
+
+def test_reuse_hits_without_a_file_falls_back_to_searching(tmp_path: Path) -> None:
+    """没有产物 ⇒ 返回 `None`（调用方照常检索），**不是**报错。"""
+    assert _reuse_hits(tmp_path, "e1") is None

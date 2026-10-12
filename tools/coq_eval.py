@@ -44,6 +44,7 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -58,11 +59,13 @@ from eval.datasets.musique import (  # noqa: E402
     supporting_snippets,
 )
 from eval.harness import (  # noqa: E402
+    SearchHit,
     ServiceClient,
     build_input_items,
     pipeline_for,
     run_judge,
 )
+from eval.harness.add_shape import DEFAULT_ADD_SHAPE, shape_batch  # noqa: E402
 
 from tianximem.common.config import AppConfig, load_config  # noqa: E402
 from tianximem.service.app import build_services, create_app  # noqa: E402
@@ -105,9 +108,8 @@ DATASETS: dict[str, dict[str, str]] = {
     "musique-haystack": {
         "manifest": "eval/coq-musique.jsonl",
         "judge": "musique",
-        "note": "MuSiQue 的 **50 道严格链**（4 跳 29 + 3 跳 21，2026-10-12 起；"
-        "旧的 25 条见 `eval/reports/coq-musique-20261011.md`），"
-        "语料是这 50 道题自己的段落并成的**一个** haystack（822 段）"
+        "note": "MuSiQue 清单中的严格链式多跳题（题数以本次加载结果为准），"
+        "语料是这些题自己的全部候选段落并成的**一个** haystack"
         "⇒ 池子远大于 `top_k`，检索真的有得选。"
         "⛔ 这一档**没有拒答题**，答案 prompt 也不给拒答出口。",
     },
@@ -160,23 +162,25 @@ def _select(bench_dir: Path, wanted: dict[str, list[str]], *, dataset: str) -> l
     return selected
 
 
-def _require_source_rows(samples, sqlite_path: Path) -> None:
-    """**真源里必须有行**，否则响亮失败。
+def _require_source_rows(samples, sqlite_path: Path, *, add_shape: str = DEFAULT_ADD_SHAPE) -> None:
+    """真源须非空；MuSiQue 须逐条匹配本次候选语料，否则在 Search 前失败。
 
     ⚠ 这一条是**踩出来的**：`--skip-add` 复用的是 **Qdrant 集合**，而 **SQLite 真源是按
     `--out` 目录走的**。换一个 `--out` 再 `--skip-add` ⇒ 集合里有 id、真源里没正文
     ⇒ 检索"成功"、返回却全是缺行的空结果 ⇒ **`data: []`，而它看起来像"这题没有相关记忆"**。
     （2026-10-11 实测：同一个集合，一个 out 目录 25/25 命中，另一个 0/25。）
 
-    判据取"用户里有没有行"而不是"行数对不对"——前者足够挡住这个陷阱，后者要重算一遍配对。
+    LoCoMo 只检查用户非空；MuSiQue 是全 user 段落，逐条独立落库，可直接核对
+    shape_batch 生成的全部载荷（包括长段切片）。不读 gold；计数相等但正文被替换、
+    漏段或混入旧语料也必须失败。
     """
     import sqlite3
 
-    users = [sample.user_id for sample in samples]
     if not sqlite_path.exists():
         raise SystemExit(f"✗ {sqlite_path} 不存在——`--skip-add` 要**同一个 `--out`**")
-    with sqlite3.connect(sqlite_path) as conn:
-        for user_id in users:
+    with sqlite3.connect(sqlite_path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+        for sample in samples:
+            user_id = sample.user_id
             found = conn.execute(
                 "SELECT COUNT(*) FROM qa_pairs WHERE user_id = ?", (user_id,)
             ).fetchone()[0]
@@ -188,6 +192,35 @@ def _require_source_rows(samples, sqlite_path: Path) -> None:
                     "  ⚠ 不管这一条的话，检索会安静地返回 `data: []`，"
                     "而它看起来像「这题没有相关记忆」。"
                 )
+            if sample.dataset == "musique":
+                expected = Counter()
+                for session in sample.sessions:
+                    payloads = shape_batch(
+                        session.messages,
+                        dataset=sample.dataset,
+                        speaker_names=sample.speaker_names,
+                        shape=add_shape,
+                    )
+                    if any(p["role"] != "user" for p in payloads):
+                        raise SystemExit("✗ MuSiQue 语料完整性校验只接受全 user 的候选段落")
+                    expected.update(
+                        (session.session_id, p["content"].strip(), None) for p in payloads
+                    )
+                actual = Counter(
+                    conn.execute(
+                        "SELECT session_id, question, answer FROM qa_pairs WHERE user_id = ?",
+                        (user_id,),
+                    )
+                )
+                missing = sum((expected - actual).values())
+                extra = sum((actual - expected).values())
+                if missing or extra:
+                    raise SystemExit(
+                        f"✗ MuSiQue 真源语料不匹配：应有 {sum(expected.values())} 条载荷，"
+                        f"缺少 {missing} 条，多出或正文不符 {extra} 条。\n"
+                        "  停止 Search；使用与本次清单及语料一致的隔离 `--out` 重新 Add，"
+                        "不要复用修复前的库。"
+                    )
 
 
 def _arm_config(
@@ -304,6 +337,51 @@ def _ingest(samples, client: ServiceClient) -> int:
         total += batches
         print(f"    ADD {sample.user_id}: {batches} 批", flush=True)
     return total
+
+
+def _write_hits(path: Path, hits: dict[str, list]) -> None:
+    """逐题落盘：**id + created_at + score + 正文**（⚠ 含数据集原文 ⇒ runs/ gitignored）。"""
+    path.write_text(
+        json.dumps(
+            {
+                qid: [
+                    {"id": h.id, "created_at": h.created_at, "score": h.score, "content": h.content}
+                    for h in hs
+                ]
+                for qid, hs in hits.items()
+            },
+            ensure_ascii=False,
+            indent=1,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _reuse_hits(out_dir: Path, arm_key: str) -> dict[str, list] | None:
+    """复用上一轮算好的 Search 结果（`--reuse-hits`）；**没有正文就响亮拒绝**。
+
+    ⚠ 旧格式的 `hits` 只存 `{id, created_at}` ⇒ 那**不能**安全复用：答案步需要正文。
+    这种情况下**报错**，而不是从 SQLite 反推一份"看起来一样"的正文——
+    那正是"结果依赖它拿到的到底是哪份文本"这类静默错误的温床。
+    """
+    path = out_dir / f"{arm_key}-hits.json"
+    if not path.exists():
+        print(f"    （--reuse-hits：没有 {path.name}，照常检索）", flush=True)
+        return None
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    missing = [qid for qid, items in raw.items() if any("content" not in it for it in items)]
+    if missing:
+        raise SystemExit(
+            f"✗ {path.name} 是旧格式（缺正文，共 {len(missing)} 题）⇒ **不能安全复用**。\n"
+            "  答案步要用正文拼 retrieved_context，从库里反推会得到'看起来一样'的另一份输入。\n"
+            "  ⇒ 去掉 `--reuse-hits` 重跑这一臂（Search 会重算，那是忠实的）。"
+        )
+    print(f"    （--reuse-hits：复用 {len(raw)} 题的检索结果，**不重跑 Search**）", flush=True)
+    fields = ("id", "content", "created_at", "score")
+    return {
+        qid: [SearchHit(**{k: item[k] for k in fields}) for item in items]
+        for qid, items in raw.items()
+    }
 
 
 def _search_all(samples, client: ServiceClient) -> dict[str, list]:
@@ -483,6 +561,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--skip-judge", action="store_true", help="只跑检索覆盖，不叫裁判")
     parser.add_argument(
+        "--reuse-hits",
+        action="store_true",
+        help="复用本轮 <臂>-hits.json 的检索结果，**不重跑 Search**（答案/判分仍会重做）",
+    )
+    parser.add_argument(
         "--limit-questions",
         type=int,
         default=None,
@@ -521,6 +604,7 @@ def main(argv: list[str] | None = None) -> int:
     question_count = sum(len(s.questions) for s in samples)
     print(
         f"清单 {manifest_path}（{dataset}）：{len(samples)} 个 user / {question_count} 题\n"
+        f"待投喂语料：{sum(s.message_count for s in samples)} 条源消息\n"
         f"隔离 collection = {collection}",
         flush=True,
     )
@@ -568,19 +652,15 @@ def main(argv: list[str] | None = None) -> int:
                     #   再灌一遍既浪费又会改变真源（幂等守卫会挡住重复写，但那是白跑一趟）。
                     print("    （记忆已在：不重复 ADD）", flush=True)
                 if position == 0:
-                    _require_source_rows(samples, sqlite_path)
-                hits = _search_all(samples, client)
-                (out_dir / f"{arm.key}-hits.json").write_text(
-                    json.dumps(
-                        {
-                            qid: [{"id": h.id, "created_at": h.created_at} for h in hs]
-                            for qid, hs in hits.items()
-                        },
-                        ensure_ascii=False,
-                        indent=1,
-                    ),
-                    encoding="utf-8",
-                )
+                    _require_source_rows(samples, sqlite_path, add_shape=client.add_shape)
+                hits = _reuse_hits(out_dir, arm.key) if args.reuse_hits else None
+                if hits is None:
+                    hits = _search_all(samples, client)
+                # ⚠ **必须连正文一起存**（2026-10-12 修）：以前只存 `{id, created_at}`，
+                #   于是"答案步挂了想续跑"只能**重跑 Search**（17 分钟）——
+                #   因为答案步要用正文拼 `retrieved_context`，而从 SQLite 反推正文
+                #   是"看起来一样、其实不是同一份输入"（本项目最忌讳的那类）。
+                _write_hits(out_dir / f"{arm.key}-hits.json", hits)
                 entry: dict = {
                     "label": arm.label,
                     "switches": {

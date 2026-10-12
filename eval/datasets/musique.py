@@ -368,7 +368,7 @@ def load_musique_haystack(bench_dir: str | Path, question_ids: Sequence[str]) ->
     `N 题 : 1 个 haystack`，与 LoCoMo 的 `N 题 : 1 段对话`同形，
     而**与 `load_musique` 的 `1 题 : 1 个 haystack` 相反**。
 
-    ⚠ 段落按 `title` 去重、**保留首次出现的顺序**（确定性）：同一篇维基段落会被多道题共用，
+    ⚠ 段落按标题与正文一起去重、**保留首次出现的顺序**（确定性）：同一篇维基段落会被多道题共用，
     不去重会让池子里出现同一段内容的多个副本——**而那会让"检索到它"变得更容易**。
 
     ⚠ `Question.evidence` 存的是支持段落的 **`title`**，不是 `idx`：并入之后 `idx`
