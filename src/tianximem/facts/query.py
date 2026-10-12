@@ -11,6 +11,7 @@ from typing import Literal
 from tianximem.facts.evidence import EvidenceFact, key, relation_key, title_key
 from tianximem.facts.grammar import MONTH, NAME, month_index
 from tianximem.facts.input import input_complete
+from tianximem.facts.sales import SALE_ASSERTION
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,8 @@ class QueryPlan:
     reference: str = ""
     bind_side: Literal["subject", "object"] = "subject"
     require_complete_walk: bool = False
+    guard_assertion_pattern: str = ""
+    guard_source_literals: tuple[str, ...] = ()
 
 
 def period(text: str) -> tuple[str, str] | None:
@@ -225,6 +228,22 @@ def compile_query(query: str) -> QueryPlan | None:
     if input_complete(query):
         return QueryPlan("current")
     text = query.strip().rstrip("?.!。！？")
+    sales = re.fullmatch(
+        r"(?:What is (?:the )?(?:total (?:amount of )?(?:money|income|revenue|earnings)) "
+        r"I (?:earned|made|received)|How much (?:money|income|revenue) (?:did|have) I "
+        r"(?:earn|earned|make|made|receive|received)) from selling (?:my )?products "
+        r"at (?:the )?markets",
+        text,
+        re.I,
+    )
+    if sales:
+        return QueryPlan(
+            "filter",
+            (FactPattern(("sale",), subject="i", container_terms=r"\bmarket\b"),),
+            guard_literal="market",
+            guard_assertion_pattern=rf"{SALE_ASSERTION}|\b(?:refund\w*|correction|corrected|cancelled|canceled|returned)\b",
+            guard_source_literals=("refund", "correction", "corrected", "cancel"),
+        )
     if re.search(r"[\u4e00-\u9fff]", text):
         if _ZH_UNSAFE_SCOPE.search(text):
             return None

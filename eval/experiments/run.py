@@ -42,12 +42,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import itertools
 import json
 import os
 import sys
-from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -94,6 +92,7 @@ from eval.harness.api_config import ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODE
 from eval.harness.judge import DATE_MODES, MARKS
 from eval.harness.plan_driver import compile_plan, execute_plan, freeze_run
 from eval.harness.run_record import config_fingerprint
+from eval.harness.scheduling import run_pipeline, worker_counts
 
 EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1
@@ -285,6 +284,7 @@ def run_round(
     aml_pool: Path | None = None,
     execution_fingerprint: dict | None = None,
     judge_workers: int = 0,
+    ingest_workers: int = 0,
 ) -> tuple[list[Sample], list]:
     """跑一轮的**机制部分**：加载 → 投喂 → 检索 → 裁判。返回 `(samples, results)`。
 
@@ -292,10 +292,12 @@ def run_round(
     （[`../../tests/test_experiments.py`](../../tests/test_experiments.py) 就是这么做的），
     而 CLI 参数解析不参与那条路径。
 
-    `judge_workers > 1` 时按 **sample 级并行**跑判分（见 native 分支里那段注释）；
-    Add / Search 仍在主线程串行——那是打我们自己的服务，形态不变。
-    **`0` = 自动：每个对话端点一路**（见下面 native 分支的 D39 一段）。
+    Independent users run through bounded preparation and judgment pools. Each
+    user's Add batches / AML events stay ordered; Search sees that user's complete
+    native history or the original AML checkpoint. Zero means automatic workers.
     """
+    if ingest_workers < 0 or judge_workers < 0:
+        raise ValueError("ingest_workers and judge_workers must be nonnegative")
     if dataset not in DATASETS:
         raise ValueError(f"未知数据集 {dataset!r}——只有 {' / '.join(DATASETS)} 有加载器")
     if input_contract == INPUT_CONTRACT:
@@ -342,6 +344,18 @@ def run_round(
                     p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in policy_files
                 },
                 "pipeline_sha256": hashlib.sha256(pipeline.read_bytes()).hexdigest(),
+                "scheduling": dict(
+                    zip(
+                        ("ingest_workers", "judge_workers"),
+                        worker_counts(
+                            ingest_workers,
+                            judge_workers,
+                            users=len(plans),
+                            endpoints=len(ENDPOINTS),
+                        ),
+                        strict=True,
+                    )
+                ),
                 "declarations": execution_fingerprint or {},
             },
         )
@@ -349,17 +363,23 @@ def run_round(
         client = client or ServiceClient(
             base_url, fallback=ServiceClient(fallback_base_url) if fallback_base_url else None
         )
-        results = []
         try:
-            for index, plan in enumerate(plans, 1):
+            ingest_workers, judge_workers = worker_counts(
+                ingest_workers, judge_workers, users=len(plans), endpoints=len(ENDPOINTS)
+            )
+            print(f"  AML 用户并行 {ingest_workers} 路；判分并行 {judge_workers} 路", flush=True)
+
+            def prepare(index, plan):
                 sample = plan.sample
                 print(
-                    f"  [{index}/{len(plans)}] {sample.user_id}: AML 有序 Add/Search，"
-                    f"{len(sample.questions)} 题",
+                    f"  [{index + 1}/{len(plans)}] {sample.user_id}: AML 有序 Add/Search",
                     flush=True,
                 )
-                user_dir = out_dir / sample.user_id
-                hits = execute_plan(plan, client=client, out_dir=user_dir, top_k=top_k)
+                started = time.monotonic()
+                hits = execute_plan(
+                    plan, client=client, out_dir=out_dir / sample.user_id, top_k=top_k
+                )
+                elapsed = time.monotonic() - started
                 items = build_input_items(
                     sample, hits, date_mode=date_mode, annotate_mark=annotate_mark
                 )
@@ -367,9 +387,39 @@ def run_round(
                     item["input_contract"] = input_contract
                     if "answer_contract" in plan.metadata:
                         item["answer_contract"] = plan.metadata["answer_contract"]
-                results += run_judge(pipeline, items, user_dir, dataset=dataset)
-                print(f"  [{index}/{len(plans)}] {sample.user_id}: {len(items)} 题已判", flush=True)
-            return [p.sample for p in plans], results
+                return items, {
+                    "event_seconds": elapsed,
+                    "ingest_workers": ingest_workers,
+                    "judge_workers": judge_workers,
+                    "endpoint_index": index % len(ENDPOINTS),
+                }
+
+            def judge(index, plan, prepared):
+                items, timings = prepared
+                started = time.monotonic()
+                rows = run_judge(
+                    pipeline,
+                    items,
+                    out_dir / plan.sample.user_id,
+                    dataset=dataset,
+                    endpoint_index=index % len(ENDPOINTS),
+                )
+                timings["judge_seconds"] = time.monotonic() - started
+                _write_timings(out_dir / plan.sample.user_id, timings)
+                print(f"  ✓ {plan.sample.user_id}: {len(items)} 题已判", flush=True)
+                return rows
+
+            by_index = dict(
+                run_pipeline(
+                    plans,
+                    user_id=lambda p: p.sample.user_id,
+                    prepare=prepare,
+                    judge=judge,
+                    ingest_workers=ingest_workers,
+                    judge_workers=judge_workers,
+                )
+            )
+            return [p.sample for p in plans], [r for i in range(len(plans)) for r in by_index[i]]
         finally:
             if owns_client:
                 client.close()
@@ -387,116 +437,81 @@ def run_round(
         add_shape=add_shape,
     )
     try:
-        results: list = []
-        # ── 判分是这条链上唯一慢的一段（远端网关，单题可达 90 秒），而它与我们的服务无关：
-        #    裁判是**子进程**、直连网关、只碰 `<out>/<user>/` 下的文件
-        #    ⇒ **多个 sample 的判分互不依赖**。所以 `judge_workers > 1` 时按 sample 级并行提交；
-        #    **Add / Search 仍在主线程串行**（那是打我们自己的服务，§15 的单进程形态与
-        #    `BEGIN IMMEDIATE` 都不动）。
-        #    ⚠ 2026-10-09 实测：4 路并发 × 110k token 全部 200、无 524。"并发会把 524 从
-        #    '不会发生'变成'随机发生'"那条结论产生于 beam（~109k token）本地必死的时期，
-        #    **已过期**——两个数据集现在都能跑通，见 `eval/reports/ledger.md`。
-        #    ⚠ 在飞队列**有界**：不设上限的话 `items` 会全部堆进内存
-        #    （clbench 单题 ~100KB、beam 单题 ~440KB）。
         pipeline = pipeline_for(bench_dir, dataset)
-        # `0` = 自动：**每个对话端点一路**（D39）。端点表来自 `api_config`（`memory2` +
-        # `memory3`，同一个 `Qwen/Qwen3.5-9B`、两把 key）⇒ 默认并行度跟着端点走，
-        # 少配一个端点就自动退回串行。
-        judge_workers = max(1, judge_workers or len(ENDPOINTS))
-        pool = ThreadPoolExecutor(max_workers=judge_workers) if judge_workers > 1 else None
-        pending: deque[tuple[str, Future[list]]] = deque()
-        # 端点轮转的派发方（D39）：**每个 sample 领一个号**，随 `answer` / `evaluate`
-        # 子进程走 `AML_ENDPOINT_INDEX`。串行与并行都轮转——并行度与端点数是两件事。
-        endpoint_slots = itertools.count()
+        ingest_workers, judge_workers = worker_counts(
+            ingest_workers, judge_workers, users=len(samples), endpoints=len(ENDPOINTS)
+        )
+        print(f"  投喂/检索并行 {ingest_workers} 路；判分并行 {judge_workers} 路", flush=True)
 
-        def next_endpoint() -> int:
-            """本 sample 用哪一号端点：依次领号，**按端点数取模**（序号一定是合法的）。"""
-            return next(endpoint_slots) % len(ENDPOINTS)
-
-        def drain(*, keep: int) -> None:
-            """收掉最早的判分任务，直到在飞的剩 `keep` 个。FIFO ⇒ 结果顺序与 samples 一致。"""
-            while len(pending) > keep:
-                user_id, future = pending.popleft()
-                results.extend(future.result())
-                print(f"  ✓ {user_id}：判完", flush=True)
-
-        if pool is not None:
-            print(f"  判分并行 {judge_workers} 路（Add / Search 仍串行）", flush=True)
-        for index, sample in enumerate(samples, start=1):
-            if not skip_ingest:
-                client.ingest(sample)
-            # ⚠ **下面的 ③④ 两步是最慢的一段，而它们不在本进程里**——裁判是**子进程**，
-            #   直连网关、不碰我们的服务 ⇒ 那段时间里只有**文件**在动
-            #   （`<out>/<user>/answers.jsonl` 与 `labels.jsonl`，逐题 flush）。
-            #   ⇒ 这两行是给"现在到哪一步了"的最低限度交代，**别删**：
-            #   没有它们，一轮 346 题的 run 会有几个小时零输出。
-            n = (
-                len(sample.questions)
-                if max_questions is None
-                else min(max_questions, len(sample.questions))
-            )
-            print(
-                f"  [{index}/{len(samples)}] {sample.user_id}：语料已投喂，开始检索 {n} 题"
-                "（进度看 <out>/<user>/answers.jsonl 与 labels.jsonl 的行数）",
-                flush=True,
-            )
-            # ⚠ `--max-questions` **只裁题目、不裁语料**：Add 那一侧照常把整个 sample
-            #   喂进去（否则检索没有素材，题目会全答不上来——那是**假绿灯/假红灯**）。
+        def prepare(index, sample):
+            started = time.monotonic()
+            batches_count = 0 if skip_ingest else client.ingest(sample)
+            ingested = time.monotonic()
             questions = (
                 sample.questions if max_questions is None else sample.questions[:max_questions]
             )
-            hits_by_qid = {
-                question.qid: client.search(
-                    user_id=sample.user_id, query=question.question, top_k=top_k
-                )
-                for question in questions
+            print(
+                f"  [{index + 1}/{len(samples)}] {sample.user_id}：语料已投喂，"
+                f"开始检索 {len(questions)} 题",
+                flush=True,
+            )
+            hits = {
+                q.qid: client.search(user_id=sample.user_id, query=q.question, top_k=top_k)
+                for q in questions
             }
-            # ⚠ 交给 `build_input_items` 的必须是**裁过的那个 sample**：
-            #   它按 `sample.questions` 迭代（而不是按 `hits_by_qid`），
-            #   传原件会让没检索过的题也进裁判——那些题会以"没有记忆"的形状被评一次。
+            searched = time.monotonic()
             scoped = (
                 sample if questions is sample.questions else replace(sample, questions=questions)
             )
             items = build_input_items(
-                scoped, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
+                scoped, hits, date_mode=date_mode, annotate_mark=annotate_mark
             )
-            if pool is None:
-                results += run_judge(
-                    pipeline,
-                    items,
-                    out_dir / sample.user_id,
-                    dataset=dataset,
-                    endpoint_index=next_endpoint(),
-                )
-                print(
-                    f"  [{index}/{len(samples)}] {sample.user_id}：{len(items)} 题已判", flush=True
-                )
-            else:
-                pending.append(
-                    (
-                        sample.user_id,
-                        pool.submit(
-                            run_judge,
-                            pipeline,
-                            items,
-                            out_dir / sample.user_id,
-                            dataset=dataset,
-                            endpoint_index=next_endpoint(),
-                        ),
-                    )
-                )
-                print(
-                    f"  [{index}/{len(samples)}] {sample.user_id}：{len(items)} 题已提交判分",
-                    flush=True,
-                )
-                drain(keep=judge_workers)
-        drain(keep=0)
-        if pool is not None:
-            pool.shutdown(wait=True)
-        return samples, results
+            return items, {
+                "ingest_seconds": ingested - started,
+                "search_seconds": searched - ingested,
+                "batches": batches_count,
+                "ingest_workers": ingest_workers,
+                "judge_workers": judge_workers,
+                "endpoint_index": index % len(ENDPOINTS),
+            }
+
+        def judge(index, sample, prepared):
+            items, timings = prepared
+            started = time.monotonic()
+            rows = run_judge(
+                pipeline,
+                items,
+                out_dir / sample.user_id,
+                dataset=dataset,
+                endpoint_index=index % len(ENDPOINTS),
+            )
+            timings["judge_seconds"] = time.monotonic() - started
+            _write_timings(out_dir / sample.user_id, timings)
+            print(f"  ✓ {sample.user_id}：{len(items)} 题已判", flush=True)
+            return rows
+
+        by_index = dict(
+            run_pipeline(
+                samples,
+                user_id=lambda s: s.user_id,
+                prepare=prepare,
+                judge=judge,
+                ingest_workers=ingest_workers,
+                judge_workers=judge_workers,
+            )
+        )
+        return samples, [row for index in range(len(samples)) for row in by_index[index]]
     finally:
         if owns_client:
             client.close()
+
+
+def _write_timings(user_dir: Path, timings: dict) -> None:
+    user_dir.mkdir(parents=True, exist_ok=True)
+    path = user_dir / "timings.json"
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(timings, ensure_ascii=False, indent=2) + "\n")
+    temporary.replace(path)
 
 
 def _parse_switches(raw: str | None) -> dict[str, Any]:
@@ -682,15 +697,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="裁判 subprocess 的超时（秒）。**缺省不设**：Full run 要跑 0.5–2 天",
     )
     parser.add_argument(
+        "--ingest-workers",
+        type=int,
+        default=0,
+        help="不同用户投喂/检索并行度；缺省 0 = 自动 4 路。"
+        "每个用户内部保持原批次/事件顺序；1 = 串行",
+    )
+    parser.add_argument(
         "--judge-workers",
         type=int,
         default=0,
-        help="判分的并行度（**sample 级**）。缺省 0 = 自动：**每个对话端点一路**"
-        "（`AML_BASE_URL` / `AML_BASE_URL_2` … 数出来的，见 eval/harness/api_config.py），"
-        "每个 sample 依次领一个端点。写 1 = 强制串行。"
-        "⚠ 并行的只是**判分**——它是子进程、直连网关、不碰我们的服务；"
-        "Add / Search 仍在主线程串行，服务形态不变。"
-        "2026-10-09 实测 4 路 × 110k token 全部 200，无 524",
+        help="作答/判分并行度；缺省 0 = 每个对话端点一路。端点按原 sample 序号轮转；1 = 串行",
     )
     return parser
 
@@ -778,7 +795,23 @@ def _assemble_record(args, *, run_id: str, bench_dir: Path, samples, results, no
         ),
         switches=_parse_switches(args.switches),
         configs_dir=Path(args.configs_dir),
-        metrics=_read_service_metrics(args),
+        metrics=_read_service_metrics(args)
+        | {
+            "evaluation_scheduling": {
+                "ingest_workers": worker_counts(
+                    args.ingest_workers,
+                    args.judge_workers,
+                    users=len(samples),
+                    endpoints=len(ENDPOINTS),
+                )[0],
+                "judge_workers": worker_counts(
+                    args.ingest_workers,
+                    args.judge_workers,
+                    users=len(samples),
+                    endpoints=len(ENDPOINTS),
+                )[1],
+            }
+        },
         notes=args.notes,
     )
 
@@ -966,6 +999,7 @@ def main(argv: list[str] | None = None) -> int:
             aml_time_style=args.aml_time_style,
             aml_pool=args.aml_pool,
             judge_workers=args.judge_workers,
+            ingest_workers=args.ingest_workers,
             execution_fingerprint={
                 "config": config_fingerprint(
                     args.profile, _parse_switches(args.switches), configs_dir=Path(args.configs_dir)

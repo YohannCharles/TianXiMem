@@ -234,6 +234,24 @@ def sources_supported(
 ) -> bool:
     """物理扫描齐全不等于语义齐全；同范围的未知正向/变更声明继续交还原文。"""
     needle = plan.guard_literal
+    if plan.guard_assertion_pattern:
+        # A plan can require all matching user assertions to be explained.
+        # Remove only its selected relations, never unrelated facts' quotations.
+        for source in sources:
+            residue = source.question or ""
+            for fact in facts:
+                if fact.parent_memory_id == source.id and any(
+                    p.matches(fact) for p in plan.patterns
+                ):
+                    residue = residue.replace(fact.source_quote, "")
+            for _, utterance in named_utterances(residue):
+                speaker = SPEAKER.fullmatch(utterance.strip())
+                if speaker and key(speaker["actor"]) not in {"user", "用户"}:
+                    continue
+                body = speaker["body"] if speaker else utterance
+                if re.search(plan.guard_assertion_pattern, body, re.I):
+                    return False
+        return True
     subjects = {key(f.subject) for f in facts if any(p.matches(f) for p in plan.patterns)}
     for source in sources:
         residue = (source.question or "") + "\n" + (source.answer or "")
@@ -409,7 +427,11 @@ def evaluate_evidence(
         selected = _quantities(selected)
         if selected is None:
             return EvidenceDecision(None, "quantity_conflict")
-        if selected and all(fact.get("quantity") is None for fact in selected):
+        if (
+            selected
+            and all(fact.get("quantity") is None for fact in selected)
+            and not any(fact.get("event") for fact in selected)
+        ):
             # 呈现先放明确自述；同等级按主体/关系稳定排列。数量观察保持原文次序。
             selected.sort(
                 key=lambda fact: (

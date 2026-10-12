@@ -2,7 +2,7 @@
 
 > **状态**：`default.yaml` 与 `local.yaml` **已建**，由
 > [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py) 加载。
-> **`runs/` 仅保留新实验入口说明**：旧分支快照已于 2026-10-10 清理；后续计划只重跑 `v1.0`、`v1.2`。
+> **`runs/` 保留新实验入口说明**：旧分支快照已于 2026-10-10 清理；`v1.0` / `v1.1.1` 标签对比与补题已完成，结果见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。
 > `submit.yaml` **已建**（2026-09-28）——**现在只有 `models.embedder` 一项**
 > （`text-embedding-v4`）；**由模型派生的量（token 预算实测量、全部标定阈值）待 Step 5 重标定后往这里补**。
 > **完整配置项清单见 [`../docs/config-reference.md`](../docs/config-reference.md)**（每个配置项、默认值、出处 §）。本文件只说**为什么这么组织**。
@@ -67,7 +67,7 @@ configs/
 已从当前工作树移出；历史记录从清理前提交恢复，原快照字节不改写。
 目录状态、历史恢复与版本对照要求统一见 [`runs/README.md`](runs/README.md)。
 
-后续计划仅重跑 Git 标签 `v1.0`、`v1.2` 的服务，配置从各自标签取得。
+版本对照的服务与配置从用户指定的精确标签取得；已完成本轮使用 `v1.0`、`v1.1.1`。
 新对照仍按 §13 冻结配置、数据及模型指纹；临时快照默认忽略，
 正式比较需要共享的配置经核对后显式提交。
 

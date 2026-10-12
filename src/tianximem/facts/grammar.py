@@ -16,6 +16,7 @@ from tianximem.facts.evidence import (
     relation_key,
     title_key,
 )
+from tianximem.facts.sales import sale_fields
 
 _UNSAFE = re.compile(
     r'["“”>]|‘[^‘’]*’|\b(?:not|never|no|if|would|might|fictional|imagining|said|says|quoted)\b'
@@ -285,6 +286,7 @@ def extract_evidence(
         side: SourceSide = "question",
         date: str | None = None,
         attributes: dict[str, str | int | bool] | None = None,
+        record_fields: dict[str, str] | None = None,
         **attrs: str | int | bool,
     ) -> None:
         source = question if side == "question" else answer
@@ -303,6 +305,7 @@ def extract_evidence(
                     source_date=date,
                     position=f"{len(facts)}:{relation}:{obj}",
                     qualifiers={**(attributes or {}), **attrs},
+                    record_fields=record_fields,
                 )
             )
 
@@ -477,6 +480,24 @@ def extract_evidence(
                 # （全库对拍：净删 11 条假事实、零附带删除。）
                 if interrogative(sentence) or _UNSAFE.search(sentence) or _PLANNED.search(sentence):
                     continue
+                sale = sale_fields(sentence) if side == "question" and actor == "I" else None
+                if sale:
+                    emit(
+                        actor,
+                        "sale",
+                        sale["product"],
+                        sentence,
+                        sentence,
+                        side=side,
+                        record_fields=sale,
+                        attributes={
+                            "sold_quantity": sale["quantity"],
+                            "container": sale["market"],
+                            "event": True,
+                            "observation": True,
+                            **{k: v for k, v in sale.items() if k != "quantity"},
+                        },
+                    )
                 chinese_role = _chinese_role(sentence, actor) if safe_attributes else None
                 if chinese_role:
                     subject, relation, org, statement = chinese_role

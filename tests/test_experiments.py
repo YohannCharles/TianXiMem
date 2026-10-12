@@ -200,6 +200,8 @@ def test_run_round_parallel_judging_matches_serial(bench_dir, tmp_path, monkeypa
         bench_dir=bench_dir,
         out_dir=tmp_path / "serial",
         client=serial_recorder.client(),
+        ingest_workers=1,
+        judge_workers=1,
     )
     _, parallel = runner.run_round(
         dataset="locomo-refined",
@@ -207,6 +209,7 @@ def test_run_round_parallel_judging_matches_serial(bench_dir, tmp_path, monkeypa
         bench_dir=bench_dir,
         out_dir=tmp_path / "parallel",
         client=parallel_recorder.client(),
+        ingest_workers=1,
         judge_workers=3,
     )
 
@@ -249,7 +252,7 @@ def test_judging_rotates_endpoints_and_defaults_to_parallel(
     )
 
     # 依次领号（串行也轮转）：三个 sample 落在 0 / 1 / 0
-    assert seen == [("conv-1", 0), ("conv-2", 1), ("conv-3", 0)]
+    assert sorted(seen) == [("conv-1", 0), ("conv-2", 1), ("conv-3", 0)]
     # `judge_workers` 缺省（0）= 自动 = 端点数 ⇒ 这一轮真开了两路
     assert "判分并行 2 路" in capsys.readouterr().out
 

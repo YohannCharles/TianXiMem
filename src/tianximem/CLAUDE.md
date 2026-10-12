@@ -14,8 +14,10 @@
 
 [`service/`](./service/) · [`pairing/`](./pairing/) · [`facts/`](./facts/) · [`store/`](./store/) ·
 [`embed/`](./embed/) · [`retrieve/`](./retrieve/) · [`rank/`](./rank/) ·
-[`agent/`](./agent/)（v1 不实现）· [`llm/`](./llm/)（未实现）· [`common/`](./common/) ·
+[`agent/`](./agent/) · [`llm/`](./llm/) · [`common/`](./common/) ·
 [`observability/`](./observability/)
+
+模块实现状态以根 [`CLAUDE.md`](../../CLAUDE.md) 的状态表为准。
 
 **每个模块目录下有自己的 `CLAUDE.md`**——写该目录的代码前先读它。
 
@@ -27,8 +29,8 @@
 
 1. **`store/` 是唯一接触「业务真源」（SQLite）与 Qdrant 的目录。** 上层拿到领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`。（本地增量：限定词与 `DiskVectorCache` 那个例外见 [`./store/CLAUDE.md`](./store/CLAUDE.md)。）
 2. **`common/render` 是渲染的唯一实现**（§7.2 / §11.3）：embedding 的输入与返回给 AML 的 `content` 必须是同一份渲染，不一致会让"检索命中的"与"模型读到的"**静默漂移**。`embed/`、`rank/` 与共同事实链都不自己拼字符串——事实片段的 `content` 走 `render_evidence`，打包直接用它。
-   ⚠ **唯一一个例外（I1 的松动）声明在 [`../../docs/architecture.md`](../../docs/architecture.md) §4**：`packaging.annotate_relatives` 在 `content` 上叠一层**纯函数注解**——**只走 `content`**、剥掉注解后逐字相同，所以**不碰索引**；别把它当成"可以再往 content 里随手加东西"的先例。
-3. **`Search` 路径不调用任何生成式 LLM**，除非走了 `agent/`。**`Add` 路径完全不调用 LLM**（§7.2）——embedding 是唯一的 Add 侧成本。共同事实链同样不调 LLM：来源句法抽取与问题计划编译都是确定性解析（`facts/`），执行只筛选/投影来源事实（`retrieve/evidence`），不生成答案。
+   ⚠ **唯一一个例外（I1 的松动）声明在 [`../../docs/architecture.md`](../../docs/architecture.md) §4**：`packaging.annotate_relatives` 在 `content` 上叠一层**纯函数注解**——**只走 `content`**、剥掉注解后逐字相同，所以**不碰索引**；别把它当成"可以再往 content 里随手加东西"的先例。交易单笔金额候选只注解不进入向量索引的结构化事实，边界见同文档「当前共同事实取证结构」。
+3. **`Search` 的 LLM 调用只来自可选的查询路由器与多跳执行器**（D40 / D41，两者默认关闭），使用范围见 [`llm/CLAUDE.md`](./llm/CLAUDE.md)。**`Add` 路径完全不调用 LLM**（§7.2）——embedding 是唯一的 Add 侧成本。共同事实链同样不调 LLM：来源句法抽取与问题计划编译都是确定性解析（`facts/`），执行只筛选/投影来源事实（`retrieve/evidence`），不生成答案。
 
 ---
 

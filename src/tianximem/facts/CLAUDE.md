@@ -17,6 +17,7 @@ evidence.py     共同记录 `EvidenceFact`（主体 / 关系 / 客体 / 原文�
                 来源记录日期）+ 抽取版本 `EVIDENCE_VERSION`；规范化键 `key` / `words_key` /
                 `title_key` / `relation_key`（中英文同义关系归一到同一字段）
 grammar.py      `extract_evidence()`：来源句法 → 独立事实（**确定性正则，不调用 LLM**）
+sales.py        明确已完成交易的来源句法：只抽原文商品、数量、单价或已报告收入，不计算金额
 query.py        `compile_query()`：问题表面形式 → `QueryPlan`（filter / walk / interval /
                 current；名单与计数编译成同一证据计划）
 input.py        `input_complete()`：当前字面输入的**依赖检查**——只判输入齐不齐，不算答案
@@ -24,7 +25,7 @@ conversation.py 具名发言切分（`named_utterances`）与显式句末切分�
                 抽取与 `retrieve/evidence.py` 的来源审查共用
 ```
 
-* `evidence.py` 的一条记录只写原文里能指出出处的部分：数量、容器、时段等进 `qualifiers`；给答案模型读的 `content` 由 [`../common/render.py`](../common/render.py) 的 `render_evidence` 渲染——**渲染不在本目录**。
+* `evidence.py` 的一条记录只写原文里能指出出处的部分：数量、容器、时段等进 `qualifiers`；给答案模型读的 `content` 由 [`../common/render.py`](../common/render.py) 的事实渲染入口生成——**渲染不在本目录**。交易的派生单笔金额只在 Search 打包时注解，不写入事实。
 * `grammar.py` 覆盖**有限的显式句法**（英文为主 + 部分中文，不承诺覆盖全部表达）：角色归属、容器与单项数量、署名 / 邮件元数据、明确月份区间、具名发言内的本人陈述等；引用、否定、计划与虚构的句子不产生正向事实。
 * `query.py` 的计划只绑定共同字段与共同操作（条件筛选、有限关系连接、显式区间比较、当前输入），**不为任何业务类别建专用执行路径**。
 * `input.py` 只回答"当前问题的输入是否已全部给出、是否无须历史"；配套的 `current` 计划返回空结果是**有定义的降级**，不计算也不返回答案。

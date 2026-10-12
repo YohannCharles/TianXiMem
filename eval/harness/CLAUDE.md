@@ -6,10 +6,13 @@
 
 ```text
 driver.py                  喂 Add、调 Search（**走 HTTP**）、收集返回
+scheduling.py              独立用户的投喂/检索与判分双线程池；用户内有序、在飞上下文有界
 plan_driver.py             AML 事件编译、HTTP 分派与逐事件检查点；历史 Search 落盘后才继续 Add
 batching.py                模拟 AML 切批（20 条消息 + 2,000 词的**空白分词近似**）
 add_shape.py               模拟 AML **正文形态**（`<标签>: …` 前缀 + `system` 折叠 + 单条 8,000 字符切分）——线上就是这么发的
 judge.py                   包住 pipeline 的裁判（`run_judge` 跑 `answer`→`evaluate` 两步）
+beam_judge.py              BEAM 批量裁判失败后的逐 rubric 恢复：上游单条模板，要求每条显式有效分数
+model_context.py           显式本地模型上下文前缀适配：保留原 Search 输入，记录实际输入与截断量
 extra_pipeline.py          本地自写的 `official-extra` answer / evaluate（含 MuSiQue）
 corpusqa_pipeline.py       HybridQA / FEVEROUS：Search-only 作答，固定上游函数判分与逐题指标
 personamem_pipeline.py     PersonaMem-v2 适配器——Search 片段替代原始历史，选项与 MCQ 判分复用归档
@@ -171,6 +174,9 @@ CLI 的 `--max-tokens` 仍按请求执行，其他题类的作答与旧答案续
 
 MedMemoryBench 的 LLM 裁判对混用 note/reason 字符串引号做语法修复，仍只接受
 显式布尔裁决；原响应与重新解析的结果分别归档。具体来源与校验同见上述报告。
+
+MemTrapBench 在严格 JSON 解析失败后，修复理由字符串中的未转义引号和非法反斜杠
+转义（如英寸符号、LaTeX）；不补齐截断响应或推断分数，均分与通过阈值保持原规则。
 
 ### 两个不对称，会改变结果
 

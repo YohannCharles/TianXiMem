@@ -9,9 +9,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from tianximem.common.render import day_granularity, render_evidence
+from tianximem.common.render import day_granularity, render_evidence, render_record_evidence
 
-EVIDENCE_VERSION = "memory-facts-v7"
+EVIDENCE_VERSION = "memory-facts-v8"
 Qualifier = str | int | bool
 SourceSide = Literal["question", "answer"]
 
@@ -127,6 +127,7 @@ def make_fact(
     position: str,
     source_date: str | None = None,
     qualifiers: Mapping[str, Qualifier] | None = None,
+    record_fields: Mapping[str, str] | None = None,
     **attributes: Qualifier,
 ) -> EvidenceFact:
     qualifiers = {**(qualifiers or {}), **attributes}
@@ -143,7 +144,14 @@ def make_fact(
         source_quote=source_quote,
         source_side=source_side,
         statement=statement,
-        content=render_evidence(
+        content=render_record_evidence(
+            source_id=parent_memory_id,
+            source_date=date,
+            source_quote=source_quote,
+            fields=record_fields,
+        )
+        if record_fields is not None
+        else render_evidence(
             statement=statement,
             source_date=date,
             source_quote=source_quote,

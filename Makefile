@@ -254,8 +254,9 @@ baseline:  ## 跑一轮**冻结口径**的基线/对照（§13）：DATASET / AR
 # ⚠ 它**拒绝**与手写的 `--limit` / `--spread` 同时给（那两个只在做消融或冒烟时才用）。
 # ⚠ 墙钟差着量级：locomo ≈44 分（**建议当唯一哨兵**）、mquake ≈4 分、
 #   clbench ≈3.5 小时、beam ≈1 小时、lme ≈12–20 小时。见 `eval/reports/ledger.md`。
-# ✅ **可以加 `ARGS='--judge-workers 4'`**（2026-10-09 实测 4 路 × 110k token 无 524）：
-#   并行的是**判分**子进程，Add / Search 仍串行。⚠ 但**别同时跑两条不同的链**（没测过）。
+# ✅ 默认按独立用户并行投喂/检索，判分单独并行；可用
+#   `ARGS='--ingest-workers 4 --judge-workers 4'` 控制两段（单用户批次顺序不变）。
+#   两项均设 1 恢复串行。⚠ 别同时跑两条不同的评测链。
 # ⚠ 本仓噪声底是 **346 题上 ~1pt** ⇒ 几十题的小跑法读不出改动。
 # 用法：make baseline DATASET=locomo-refined
 #       make baseline DATASET=clbench ARGS='--run-id clb-after-rerank --switches {…}'

@@ -328,6 +328,42 @@ def test_memtrap_panel_parsing(raw: str, expect_mean: float | None) -> None:
     assert MEMTRAP_PASS_MEAN == 4.0, "阈值改了要同步测试与文档"
 
 
+@pytest.mark.parametrize(
+    "reason",
+    [
+        'slope (1/8" vs recommended 1/4") and pipe (1-1/2")',
+        'The removal of the "tag a friend" line reduced sharers.',
+        r"The constraint ($B \subset A \implies A \cup B = A$) holds.",
+    ],
+)
+def test_memtrap_repairs_reason_escaping_without_changing_scores(reason):
+    from eval.harness.extra_pipeline import MEMTRAP_DIMENSIONS, _repair_memtrap_string_escapes
+
+    panel = {
+        key: {"justification": reason, "score": value}
+        for key, value in zip(MEMTRAP_DIMENSIONS, [0, 3, 4, 5], strict=True)
+    }
+    raw = json.dumps(panel).replace('\\"', '"').replace("\\\\", "\\")
+    repaired = json.loads(_repair_memtrap_string_escapes(raw))
+    assert repaired == panel
+    mean, _ = judge_memtrapbench_scores(raw)
+    assert mean == 3.0  # A negative verdict stays negative after syntax repair.
+
+
+def test_memtrap_repair_does_not_complete_a_truncated_panel():
+    raw = '{"dimension_1_factual_correctness": {"justification": "pipe 1/8" slope", "score": 5}'
+    assert judge_memtrapbench_scores(raw)[0] is None
+
+
+def test_mmb_single_quoted_note_with_inner_quotes_preserves_false_verdict():
+    from eval.harness.extra_pipeline import judge_mmb_llm_verdict
+
+    raw = """{"node_validations": [{"note": '缺失具体数据：'CRP 7 mg/L'，以及"PASP"数值。'}],
+              "is_correct": false, "reason": "missing patient data"}"""
+    verdict, _ = judge_mmb_llm_verdict(raw)
+    assert verdict is False
+
+
 # ── 接线：pipeline 路由与输入项 ─────────────────────────────────────────────
 
 

@@ -190,7 +190,12 @@ def judge_memtrapbench_scores(raw_response: str) -> tuple[float | None, str]:
     try:
         payload = json.loads(match.group(0))
     except json.JSONDecodeError as exc:
-        return None, f"裁判 JSON 解不开：{exc}"
+        # Invoice inch marks and LaTeX in justifications can be valid prose but
+        # invalid JSON. Repair string escaping only; never infer missing scores.
+        try:
+            payload = json.loads(_repair_memtrap_string_escapes(match.group(0)))
+        except json.JSONDecodeError:
+            return None, f"裁判 JSON 解不开：{exc}"
     scores = []
     for dimension in MEMTRAP_DIMENSIONS:
         block = payload.get(dimension)
@@ -199,6 +204,29 @@ def judge_memtrapbench_scores(raw_response: str) -> tuple[float | None, str]:
     if not scores:
         return None, "JSON 里一个维度的 score 都没有"
     return sum(scores) / len(scores), f"{len(scores)} 个维度"
+
+
+def _repair_memtrap_string_escapes(text: str) -> str:
+    text = _escape_stray_quotes(text)
+    out = []
+    in_string = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            in_string = not in_string
+        if char == "\\" and in_string and index + 1 < len(text):
+            following = text[index + 1]
+            if following not in '"\\/bfnrtu':
+                out.append("\\\\")
+            else:
+                out.append(char)
+            out.append(following)
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 # ── MedMemoryBench（zh）：判分口径**照上游 `metrics/` 实现**，不是我们发明的 ──────────
@@ -425,13 +453,16 @@ def judge_mmb_llm_verdict(raw_response: str) -> tuple[bool | None, str]:
 
 def _repair_mmb_judge_strings(text: str) -> str:
     """Normalize only string syntax; the literal verdict remains authoritative."""
-    pattern = r"""("(?:note|reason)"\s*:\s*)('(?:[^'\\]|\\.)*')(?=\s*[,}])"""
+    pattern = r"""("(?:note|reason)"\s*:\s*)('(?:[^\\]|\\.)*?')(?=\s*[,}])"""
 
     def normalize_note(match: re.Match) -> str:
         try:
             value = ast.literal_eval(match[2])
         except (SyntaxError, ValueError):
-            return match[0]
+            # Judges can use an outer single-quoted note containing unescaped
+            # apostrophes. Only normalize this prose field; the boolean verdict
+            # remains outside it and must still parse as an explicit decision.
+            value = match[2][1:-1]
         return match[1] + json.dumps(value, ensure_ascii=False)
 
     return _escape_stray_quotes(re.sub(pattern, normalize_note, text))

@@ -15,7 +15,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from typing import Final
 
@@ -173,6 +174,21 @@ def render_evidence(
     if not quantitative:
         lines.append(f"Source quotation: {source_quote}")
     return "\n".join(lines)
+
+
+def render_record_evidence(
+    *, source_id: str, source_date: str, source_quote: str, fields: Mapping[str, str]
+) -> str:
+    """Literal observation fields plus the unchanged quotation; no arithmetic."""
+    return json.dumps(
+        {
+            "source_id": source_id,
+            "source_record_date": source_date,
+            "user_quotation": source_quote,
+            **fields,
+        },
+        ensure_ascii=False,
+    )
 
 
 def render_segment(pair_texts: Sequence[str]) -> str:

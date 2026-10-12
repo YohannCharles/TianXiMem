@@ -471,7 +471,7 @@ class BudgetConfig:
 
 @dataclass(frozen=True, slots=True)
 class PackagingConfig:
-    """上下文打包的渲染变体（§11.3）。**两个键，默认值都是 v1 定稿口径。**"""
+    """上下文打包的渲染变体（§11.3）；键语义以 config-reference 为准。"""
 
     #: `false`（**v1 定稿**）⇒ `content` 里没有任何绝对时间戳，时间只走 `event_time` 筛选。
     #: `true`（**D21 起为默认**）⇒ 每对正文前加日粒度日期前缀。
@@ -494,6 +494,8 @@ class PackagingConfig:
     #: 开关本身与它买到的东西见
     #: [`../../../eval/reports/ledger.md`](../../../eval/reports/ledger.md)。
     annotate_relatives: bool = True
+    #: 仅在 Search 打包交易事实时补单笔金额；不改索引或聚合跨记录答案。
+    annotate_unit_totals: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -982,7 +984,11 @@ def _budget(raw: object) -> BudgetConfig:
 
 
 def _packaging(raw: object) -> PackagingConfig:
-    g = _group(raw, where="packaging", allowed={"inject_abs_time", "annotate_relatives"})
+    g = _group(
+        raw,
+        where="packaging",
+        allowed={"inject_abs_time", "annotate_relatives", "annotate_unit_totals"},
+    )
     inject = g.get("inject_abs_time")
     if inject is not None and not isinstance(inject, bool):
         raise ConfigError(
@@ -995,9 +1001,13 @@ def _packaging(raw: object) -> PackagingConfig:
             f"`packaging.annotate_relatives` 必须是布尔值，收到 {annotate!r}——"
             "它是「正文里的相对时间要不要就地注解成绝对日期」那个开关"
         )
+    unit_totals = g.get("annotate_unit_totals", False)
+    if not isinstance(unit_totals, bool):
+        raise ConfigError("`packaging.annotate_unit_totals` 必须是布尔值")
     return PackagingConfig(
         inject_abs_time=True if inject is None else inject,
         annotate_relatives=False if annotate is None else annotate,
+        annotate_unit_totals=unit_totals,
     )
 
 

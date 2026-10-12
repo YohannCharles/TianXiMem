@@ -835,7 +835,7 @@ def test_runner_uses_ordered_plan_cached_hits_and_original_questions(
 ):
     seen = []
 
-    def judge(path, items, out_dir, *, dataset):
+    def judge(path, items, out_dir, *, dataset, endpoint_index=None):
         seen.extend(items)
         return []
 

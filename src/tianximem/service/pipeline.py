@@ -81,6 +81,7 @@ from time import monotonic
 from typing import Protocol, runtime_checkable
 
 from tianximem.agent import AgenticResult
+from tianximem.common.amounts import annotate_unit_total
 from tianximem.common.config import (
     DEFAULT_EXPANSION_SEED_LIMIT,
     DEFAULT_RADIUS,
@@ -351,6 +352,7 @@ class SearchPipeline:
         inject_abs_time: bool = False,
         seed_placement: str = "keep",
         annotate_relatives: bool = False,
+        annotate_unit_totals: bool = False,
         grounded_evidence: bool = False,
         evidence_limit: int = 12,
         evidence_hop_limit: int = 4,
@@ -381,6 +383,7 @@ class SearchPipeline:
         #: 所以开它**不改 embedding 输入**（不用重建索引）。理由与实测见
         #: [`neighbor.py`](../rank/neighbor.py) 的 `_build_segment`。
         self._annotate_relatives = annotate_relatives
+        self._annotate_unit_totals = annotate_unit_totals
         self._grounded_evidence = grounded_evidence
         self._evidence_limit = evidence_limit
         self._evidence_hop_limit = evidence_hop_limit
@@ -481,11 +484,18 @@ class SearchPipeline:
                 return EvidenceDecision(None, "fetch_limit")
             sources, audit = [], []
             if plan.guard_literal:
-                sources = self._store.fetch_evidence_sources(
-                    conn, user_id, plan.guard_literal, limit=self._evidence_limit + 1
+                source_scan_limit = (
+                    fetch_limit if plan.guard_assertion_pattern else self._evidence_limit
                 )
-                if len(sources) > self._evidence_limit:
-                    return EvidenceDecision(None, "source_scan_limit")
+                by_id: dict[str, QaPair] = {}
+                for literal in (plan.guard_literal, *plan.guard_source_literals):
+                    for source in self._store.fetch_evidence_sources(
+                        conn, user_id, literal, limit=source_scan_limit + 1
+                    ):
+                        by_id.setdefault(source.id, source)
+                    if len(by_id) > source_scan_limit:
+                        return EvidenceDecision(None, "source_scan_limit")
+                sources = list(by_id.values())
                 if sources:
                     audit = self._store.fetch_evidence(
                         conn,
@@ -789,12 +799,16 @@ class SearchPipeline:
                 annotate_relatives=self._annotate_relatives,
             )
         else:
+            contents = [
+                annotate_unit_total(f.content) if self._annotate_unit_totals else f.content
+                for f in valid
+            ]
             segments = [
                 ContextSegment(
                     anchor_memory_id=f.id,
                     anchor_event_time=f.event_time,
-                    content=f.content,
-                    token_count=self._counter.count(f.content),
+                    content=content,
+                    token_count=self._counter.count(content),
                     source_memory_ids=(f.parent_memory_id,),
                     user_id=f.user_id,
                     session_id=parents[f.parent_memory_id].session_id,
@@ -804,7 +818,7 @@ class SearchPipeline:
                     best_rank=i,
                     rerank_member_count=1,
                 )
-                for i, f in enumerate(valid)
+                for i, (f, content) in enumerate(zip(valid, contents, strict=True))
             ]
         return package(segments, top_k=top_k, counter=self._counter, max_tokens=self._budget_tokens)
 

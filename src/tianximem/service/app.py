@@ -221,6 +221,7 @@ def build_services(config: AppConfig) -> Services:
             inject_abs_time=config.packaging.inject_abs_time,
             seed_placement=config.neighbor.seed_placement,
             annotate_relatives=config.packaging.annotate_relatives,
+            annotate_unit_totals=config.packaging.annotate_unit_totals,
             grounded_evidence=config.retrieval.grounded_evidence,
             evidence_limit=config.retrieval.evidence_limit,
             evidence_hop_limit=config.retrieval.evidence_hop_limit,
