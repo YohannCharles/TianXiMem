@@ -166,9 +166,15 @@ def samples_from_rows(rows: list[dict]) -> list[Sample]:
 #
 # ## 做法：把 N 道题的段落并成**一个用户**的语料
 #
-# 按 `title` 去重（同一篇维基段落会被多道题共用）⇒ 25 道 4 跳题的 500 个槽位得到 **427 段**，
-# 与 benchmark 里 LoCoMo 的 357 段**同一量级**，可比。
-# 目标题自己的支持段落就在池子里，被其余 24 道题的段落埋着。
+# 按**渲染后的正文**去重（多道题共用同一段 ⇒ 只留一份）⇒ 50 道题的 1000 个槽位得到 **912 段**，
+# 远大于 `top_k`，检索真的有得选。
+# 目标题自己的支持段落就在池子里，被其余 49 道题的段落埋着。
+#
+# ⛔ **不能按 `title` 去重**（2026-10-12 修）：`title` 是维基**文章名**，而一个候选段落是那篇
+# 文章的一个 **chunk** ⇒ 同标题下可以有好几段**不同的正文**，其中可能有某道题的**支持段落**。
+# 按 title 去重把它们当重复丢掉 ⇒ **那几道题在池子里根本无解**，而池子看起来完全正常。
+# 实测：50 道题里**丢掉 16 段支持段落、涉及 14 道题**，16/16 都能找到"同标题的另一些段"。
+# ⇒ 该去重的是**内容相同**的段落。
 #
 # ⚠ **只并入候选段落，不并入答案与分解**：`answer` / `question_decomposition` /
 # `is_supporting` 一律不进 Add 载荷（与 `load_musique` 同一条纪律：§2.1 不许把答案伪装成记忆）。
@@ -282,6 +288,34 @@ BROKEN_GOLD: dict[str, str] = {
 }
 
 
+def _hop_ids(question_id: str) -> frozenset[str]:
+    """id 里那几段 hop 标识（`4hop1__a_b_c_d` → `{a,b,c,d}`）。"""
+    return frozenset(str(question_id).split("__")[1].split("_"))
+
+
+#: ⛔ 金标坏掉的题**连同它的"骨架"一起排除**：
+#:
+#: 缺陷住在**共享的那几跳**里，所以"同尾不同头"的**兄弟题继承同一条坏边**。
+#: 实测（2026-10-12）：只按 id 排除时，贪心**立刻把兄弟题补了进来**——
+#: `4hop1__129682_59747_211319_557671`（`Atlanta` 佐治亚 → 密歇根的县）被判死后，
+#: `4hop1__130276_59747_211319_557671` 顶上来，**同一条坏边、同一个错**；
+#: `4hop1__43565_624859_355213_203322` 与 `4hop1__463635_624859_355213_203322` 同理。
+#: ⇒ 排除的判据是 "**与某道坏题共享 ≥2 跳**"，不是"id 相同"。
+#: ⚠ 这个判据**偏保守**（可能多杀几道好题），但"多杀"比"放坏题进来"安全：
+#: 坏题进来**不会报错**，只会把分数压低、把归因带偏。
+_BROKEN_SKELETONS: tuple[frozenset[str], ...] = tuple(
+    _hop_ids(question_id) for question_id in BROKEN_GOLD
+)
+
+
+def _has_a_broken_skeleton(question_id: str) -> bool:
+    """这道题**自己**在金标坏题名单里，或者它与某道坏题**共享 ≥2 跳**。"""
+    if str(question_id) in BROKEN_GOLD:
+        return True
+    hop_ids = _hop_ids(question_id)
+    return any(len(hop_ids & broken) >= 2 for broken in _BROKEN_SKELETONS)
+
+
 def select_chain_question_ids(rows: list[dict], *, limit: int = 50) -> list[str]:
     """按**确定性规则**挑出链式依赖题（`eval/coq-musique.jsonl` 头部写的生成规则）：
 
@@ -289,7 +323,8 @@ def select_chain_question_ids(rows: list[dict], *, limit: int = 50) -> list[str]
     2. **严格链**（见 `_is_strict_chain`）；
     3. **≥3 跳**，且 hop1..hop(n-1) 的答案都是**实体**；
     4. ⭐ **题面不泄中间实体**（见 `_does_not_leak_the_intermediate_entity`）；
-    5. ⛔ **不在 `BROKEN_GOLD` 里**（金标坏掉的题，形式判据看不见，只能声明）；
+    5. ⛔ **金标坏掉的题及其骨架**一律不要（见 `_has_a_broken_skeleton`）——
+       形式判据看不见它们，只能声明；
     6. 排序 `(-跳数, id)` 后**贪心**：新题与已选题的 hop 集合**共享 <2 个元素**才收
        —— 共享 ≥2 跳 = 同一条骨架换了个入口，收进来就是重复出题。
 
@@ -300,7 +335,7 @@ def select_chain_question_ids(rows: list[dict], *, limit: int = 50) -> list[str]
     for row in rows:
         if not row.get("answerable"):
             continue
-        if str(row["id"]) in BROKEN_GOLD:
+        if _has_a_broken_skeleton(str(row["id"])):
             continue
         hops = row.get("question_decomposition") or []
         if len(hops) < 3 or not _is_strict_chain(hops):
@@ -355,24 +390,30 @@ def load_musique_haystack(bench_dir: str | Path, question_ids: Sequence[str]) ->
     if missing:
         raise ValueError(f"MuSiQue：这些 id 不在可答题里：{missing[:3]}（共 {len(missing)} 个）")
 
-    bodies: dict[str, str] = {}  # title -> 消息正文（首次出现的赢）
+    # ⚠ **按渲染后的正文去重，不是按 `title`**（2026-10-12 修）。
+    #    `title` 是**维基文章名**，而一个候选段落是那篇文章的一个 **chunk**
+    #    ⇒ 同一个 title 下**可以有好几段不同的正文**，其中可能有某道题的**支持段落**。
+    #    按 title 去重会把它们当重复丢掉 ⇒ **那几道题在池子里根本无解**，
+    #    而池子看起来完全正常（段数、覆盖率、判分都不报错）。
+    #    实测（2026-10-12，50 道题）：**16 段支持段落被丢掉、涉及 14 道题**，
+    #    16/16 都能在池子里找到"同标题的另一些段" ⇒ 全是这一条造成的。
+    #    ⇒ 真正该去重的是**内容相同**的段落（多道题共用同一段），按正文比即可。
+    bodies: dict[str, str] = {}  # 渲染后的正文 -> 它自己（内容相同的只留一份）
     for question_id in wanted:
         row = by_id[question_id]
         hops = row.get("question_decomposition") or []
         if not _is_strict_chain(hops):
             raise ValueError(f"MuSiQue {question_id}：不是严格链——清单不该收它")
         for paragraph in row["paragraphs"]:
-            title = str(paragraph["title"])
-            if title in bodies:
-                continue
-            bodies[title] = normalize_content(
-                f"Title: {title}\n"
+            body = normalize_content(
+                f"Title: {paragraph['title']}\n"
                 + normalize_content(
                     paragraph["paragraph_text"], where=f"MuSiQue {question_id} paragraph body"
                 ),
-                where=f"MuSiQue haystack paragraph {title!r}",
+                where=f"MuSiQue haystack paragraph {paragraph['title']!r}",
             )
-    messages = tuple(Message(role="user", content=body) for body in bodies.values())
+            bodies.setdefault(body, body)
+    messages = tuple(Message(role="user", content=body) for body in bodies)
 
     questions = []
     for question_id in wanted:

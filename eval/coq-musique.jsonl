@@ -1,4 +1,4 @@
-# ⭐ **链式依赖多跳题集**（MuSiQue dev）—— 2026-10-12，**50 条**（4 跳 29 / 3 跳 21）
+# ⭐ **链式依赖多跳题集**（MuSiQue dev）—— 2026-10-12，**50 条**（4 跳 24 / 3 跳 26）
 #
 # ⚠ **只存 id 与链结构，不存题面 / 答案 / 段落**（CC BY-NC 4.0 + 仓内口径：数据集原文不进 git）。
 #    题面与金标在跑的时候从 `dataset/musique/` 现取。
@@ -23,41 +23,38 @@
 # 4. ⭐ **题面不泄中间实体**：唯一一条**独立于 `#k` 记法**的判据——把标注拿掉，
 #    读题的人不能直接查到答案。⚠ 判据必须用**词边界**（`NES` 不该被 `geNESis` 命中；
 #    子串版本误杀过 15 条）；
-# 5. ⛔ **不在 `BROKEN_GOLD` 里**：10 条金标坏掉的题，**形式判据看不见**（答案串确实
-#    在支持段落里逐字存在），只有逐题读证据才查得出 ⇒ `eval/datasets/musique.py` 里
-#    **声明**了 id + 理由（A 跨地区消歧 / B 答非所问 / C 金标事实错）。
-#    2026-10-12 由子 agent 逐条读证据查出并复核；
+# 5. ⛔ **金标坏掉的题**（`BROKEN_GOLD`，10 条声明）**连同它们的骨架**一起排除：
+#    缺陷住在**共享的那几跳**里 ⇒ "同尾不同头"的兄弟题**继承同一条坏边**
+#    （实测：只按 id 排除时贪心立刻把兄弟题补了进来，错得一模一样）。
+#    ⇒ 判据是"与该名单里任一题**共享 ≥2 跳**"。形式判据看不见这类题
+#    （答案串确实在支持段落里逐字存在），只有逐题读证据才查得出；
+#    2026-10-12 由子 agent 逐条读出并复核。代价：这一条**偏保守**，会多杀几道好题
+#    （4 跳因此从 29 降到 24——缺陷集中在 4 跳那一侧，而 4 跳候补本来就少）。
 # 6. 排序 `(-跳数, id)` 后**贪心**：新题与已选题的 hop 集合共享 **<2** 个元素才收
 #    （共享 ≥2 跳 = 同一条骨架换了个入口 ⇒ 重复出题）。去重后上限 **137** 条。
 #
 # ⚠ 本清单是**产物**：由上面那条选择器生成（`select_chain_question_ids`，可重放）。
 #    用例钉的是它的**内部一致性**（条数 / 跳数集合 / 骨架不重复 / 不含 BROKEN_GOLD），
 #    **不是**"与选择器逐位相同"——那要读 59 MB 的真数据，不放进单元测试。
-
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__105002_17130_70784_61381", "hops": 4, "hop_ids": ["105002", "17130", "61381", "70784"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__105773_457883_650651_7262", "hops": 4, "hop_ids": ["105773", "457883", "650651", "7262"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__115977_582428_157828_162309", "hops": 4, "hop_ids": ["115977", "157828", "162309", "582428"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__129721_32392_823060_610794", "hops": 4, "hop_ids": ["129721", "32392", "610794", "823060"], "corpus": "self"}
-{"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__130276_59747_211319_557671", "hops": 4, "hop_ids": ["130276", "211319", "557671", "59747"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__130480_53706_795904_580996", "hops": 4, "hop_ids": ["130480", "53706", "580996", "795904"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__151650_5274_458768_33632", "hops": 4, "hop_ids": ["151650", "33632", "458768", "5274"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__152028_141441_458768_33633", "hops": 4, "hop_ids": ["141441", "152028", "33633", "458768"], "corpus": "self"}
-{"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__159467_725495_49925_349426", "hops": 4, "hop_ids": ["159467", "349426", "49925", "725495"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__163763_49925_13759_736921", "hops": 4, "hop_ids": ["13759", "163763", "49925", "736921"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__178366_229349_66759_75165", "hops": 4, "hop_ids": ["178366", "229349", "66759", "75165"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__199362_378185_282674_759393", "hops": 4, "hop_ids": ["199362", "282674", "378185", "759393"], "corpus": "self"}
-{"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__236903_153080_33897_81096", "hops": 4, "hop_ids": ["153080", "236903", "33897", "81096"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__271272_508773_85832_745702", "hops": 4, "hop_ids": ["271272", "508773", "745702", "85832"], "corpus": "self"}
-{"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__342858_131850_159767_81096", "hops": 4, "hop_ids": ["131850", "159767", "342858", "81096"], "corpus": "self"}
+{"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__342858_131850_33897_81096", "hops": 4, "hop_ids": ["131850", "33897", "342858", "81096"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__370129_621192_10659_42311", "hops": 4, "hop_ids": ["10659", "370129", "42311", "621192"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__373866_5186_10659_23296", "hops": 4, "hop_ids": ["10659", "23296", "373866", "5186"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__39871_314549_131976_44528", "hops": 4, "hop_ids": ["131976", "314549", "39871", "44528"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__40316_497223_15840_36002", "hops": 4, "hop_ids": ["15840", "36002", "40316", "497223"], "corpus": "self"}
-{"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__463635_624859_355213_203322", "hops": 4, "hop_ids": ["203322", "355213", "463635", "624859"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__525129_315334_131926_13165", "hops": 4, "hop_ids": ["13165", "131926", "315334", "525129"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__567737_141375_458768_33637", "hops": 4, "hop_ids": ["141375", "33637", "458768", "567737"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__58323_375563_161848_20546", "hops": 4, "hop_ids": ["161848", "20546", "375563", "58323"], "corpus": "self"}
-{"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__726391_153080_33952_34053", "hops": 4, "hop_ids": ["153080", "33952", "34053", "726391"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__749065_698949_157828_239539", "hops": 4, "hop_ids": ["157828", "239539", "698949", "749065"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__860115_798482_131926_87157", "hops": 4, "hop_ids": ["131926", "798482", "860115", "87157"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "4hop1__88342_49853_128008_46748", "hops": 4, "hop_ids": ["128008", "46748", "49853", "88342"], "corpus": "self"}
@@ -66,8 +63,6 @@
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__102087_214799_259594", "hops": 3, "hop_ids": ["102087", "214799", "259594"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__102461_24918_24991", "hops": 3, "hop_ids": ["102461", "24918", "24991"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__103890_10659_67187", "hops": 3, "hop_ids": ["103890", "10659", "67187"], "corpus": "self"}
-{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__105837_160713_77246", "hops": 3, "hop_ids": ["105837", "160713", "77246"], "corpus": "self"}
-{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__106042_64399_53006", "hops": 3, "hop_ids": ["106042", "53006", "64399"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__106845_5188_86687", "hops": 3, "hop_ids": ["106845", "5188", "86687"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__107540_720914_27537", "hops": 3, "hop_ids": ["107540", "27537", "720914"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__108062_720914_41132", "hops": 3, "hop_ids": ["108062", "41132", "720914"], "corpus": "self"}
@@ -75,7 +70,6 @@
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__120881_2053_5289", "hops": 3, "hop_ids": ["120881", "2053", "5289"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__123190_519940_18967", "hops": 3, "hop_ids": ["123190", "18967", "519940"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__128516_30587_83479", "hops": 3, "hop_ids": ["128516", "30587", "83479"], "corpus": "self"}
-{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__129675_39743_24526", "hops": 3, "hop_ids": ["129675", "24526", "39743"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__131820_59747_43101", "hops": 3, "hop_ids": ["131820", "43101", "59747"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__132795_40769_64047", "hops": 3, "hop_ids": ["132795", "40769", "64047"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__135392_87694_124169", "hops": 3, "hop_ids": ["124169", "135392", "87694"], "corpus": "self"}
@@ -84,3 +78,11 @@
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__139787_88110_77129", "hops": 3, "hop_ids": ["139787", "77129", "88110"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__139862_2053_52946", "hops": 3, "hop_ids": ["139862", "2053", "52946"], "corpus": "self"}
 {"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__142044_538202_84283", "hops": 3, "hop_ids": ["142044", "538202", "84283"], "corpus": "self"}
+{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__145194_160545_34751", "hops": 3, "hop_ids": ["145194", "160545", "34751"], "corpus": "self"}
+{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__145427_106426_157788", "hops": 3, "hop_ids": ["106426", "145427", "157788"], "corpus": "self"}
+{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__145924_131905_41948", "hops": 3, "hop_ids": ["131905", "145924", "41948"], "corpus": "self"}
+{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__157177_625046_613900", "hops": 3, "hop_ids": ["157177", "613900", "625046"], "corpus": "self"}
+{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__157807_19788_15107", "hops": 3, "hop_ids": ["15107", "157807", "19788"], "corpus": "self"}
+{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__158848_66089_86107", "hops": 3, "hop_ids": ["158848", "66089", "86107"], "corpus": "self"}
+{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__159728_91191_156667", "hops": 3, "hop_ids": ["156667", "159728", "91191"], "corpus": "self"}
+{"dataset": "musique", "user_id": "musique-haystack", "question_id": "3hop1__159803_89752_75165", "hops": 3, "hop_ids": ["159803", "75165", "89752"], "corpus": "self"}

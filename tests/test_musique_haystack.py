@@ -230,15 +230,51 @@ def test_the_haystack_merges_every_questions_paragraphs_into_one_user(tmp_path: 
     sample = load_musique_haystack(tmp_path, ["3hop1__a_b_c", "3hop1__d_e_f"])
     assert sample.user_id == HAYSTACK_USER
     assert len(sample.sessions) == 1
-    # ⭐ 两题的段落并起来、**按 title 去重**：Alpha / Beta / Gamma 只有三条
-    assert sample.message_count == 3
+    # ⭐ 两题的段落并起来 ⇒ **4 段**（Alpha idx0 / Beta idx1 / Beta idx0 / Gamma idx1）。
+    #    ⚠ 两条 `Beta` **标题相同、idx 不同 ⇒ 正文不同 ⇒ 是两段不同的内容**，都要留
+    #    （2026-10-12 修：以前按 `title` 去重会丢掉其中一段，而它可能是某道题的**支持段落**）。
+    assert sample.message_count == 4
     assert len(sample.questions) == 2
     assert all(q.category == "3-hop/chain" for q in sample.questions)
 
 
-def test_a_shared_title_appears_only_once_in_the_pool(tmp_path: Path) -> None:
-    """⚠ 同一篇维基段落会被多道题共用；不去重会让**同一段内容在池子里出现多份**，
-    而"检索到它"就变得更容易——那是**高估**，且不报错。"""
+def test_two_chunks_of_the_same_article_are_both_kept(tmp_path: Path) -> None:
+    """⭐ **同标题、不同 chunk ⇒ 两段都要进池子**（2026-10-12 修的一个真 bug）。
+
+    `title` 是维基**文章名**，而候选段落是那篇文章的一个 **chunk** ⇒ 同标题下可以有好几段
+    不同的正文，其中可能有某道题的**支持段落**。按 title 去重把它们当重复丢掉 ⇒
+    **那几道题在池子里根本无解**，而池子看起来完全正常（段数、覆盖、判分都不报错）。
+
+    实测（2026-10-12，50 道题）：**丢掉 16 段支持段落、涉及 14 道题**，
+    16/16 都能在池子里找到"同标题的另一些段" ⇒ 全是这一条造成的。
+
+    ⚠ 与下一条用例**成对**：内容**相同**的段落仍然只留一份（多道题共用同一段是真重复）。
+    """
+    _write(
+        tmp_path,
+        [
+            _row(
+                "3hop1__a_b_c",
+                hops=_CHAIN3,
+                paragraphs=[
+                    _paragraph("SameArticle", 0, supporting=True, body="第一块正文，讲的是甲。"),
+                    _paragraph("SameArticle", 1, body="第二块正文，讲的是乙。"),
+                ],
+            )
+        ],
+    )
+    sample = load_musique_haystack(tmp_path, ["3hop1__a_b_c"])
+    assert sample.message_count == 2
+    body = "\n".join(m.content for m in sample.sessions[0].messages)
+    assert "讲的是甲" in body and "讲的是乙" in body  # 两块**都**在池子里
+
+
+def test_a_shared_paragraph_appears_only_once_in_the_pool(tmp_path: Path) -> None:
+    """⚠ 同一段内容会被多道题共用；不去重会让**同一段在池子里出现多份**，
+    而"检索到它"就变得更容易——那是**高估**，且不报错。
+
+    ⚠ 判据是**正文相同**（不是 `title` 相同）——见上一条用例。
+    """
     _write(
         tmp_path,
         [

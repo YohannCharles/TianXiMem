@@ -105,8 +105,11 @@ DATASETS: dict[str, dict[str, str]] = {
     "musique-haystack": {
         "manifest": "eval/coq-musique.jsonl",
         "judge": "musique",
-        "note": "MuSiQue 的 25 道**4 跳严格链**，语料是这 25 道题自己的段落并成的**一个** haystack"
-        "（427 段）⇒ 池子大于 `top_k`，检索真的有得选。",
+        "note": "MuSiQue 的 **50 道严格链**（4 跳 29 + 3 跳 21，2026-10-12 起；"
+        "旧的 25 条见 `eval/reports/coq-musique-20261011.md`），"
+        "语料是这 50 道题自己的段落并成的**一个** haystack（822 段）"
+        "⇒ 池子远大于 `top_k`，检索真的有得选。"
+        "⛔ 这一档**没有拒答题**，答案 prompt 也不给拒答出口。",
     },
 }
 
