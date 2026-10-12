@@ -139,3 +139,12 @@ official-dataset-*
 #   哪天要在仓根放真的 .json，**先删这条规则并说清为什么**，别让新文件被静默忽略。
 /*.json
 
+
+# ── pytest 的临时根（Windows 上 %TEMP% 的 ACL 坏了时的绕法）──────────────────
+# `docs/roadmap.md` Step 0 记着那个绕法：`PYTEST_DEBUG_TEMPROOT=<一个新建目录> uv run pytest`。
+# ⚠ 那个目录**建在哪儿由跑的人决定**——实测有一次建到了**仓库根**
+#   （`.pytest-tmp-corpus-audit/`，里面是 `pytest-of-r0304/pytest-0`），
+#   于是 `git status` 里多出一个未跟踪目录，而它**本来就不该进版本库**（纯临时状态）。
+# ⇒ 规则写成**前缀通配**：这一族名字全挡住，不必每次新目录都来加一条。
+#   （`.pytest-tmp-corpus-audit/` 就是这个通配覆盖到的第一个。）
+.pytest-tmp-*/
