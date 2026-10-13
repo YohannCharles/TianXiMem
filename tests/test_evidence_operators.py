@@ -135,13 +135,13 @@ def test_grounded_diagnostics_distinguish_selection_conflict_and_truncation(stor
     hits = run(store, "Who works for Example Labs?", top_k=1, metrics=metrics)
     assert len(hits) == 1
     observation = observations[-1]
-    assert observation.grounded_status == "selected"
+    assert observation.grounded_status == "incomplete_packaging"
     assert observation.grounded_operator == "filter"
     assert observation.selected_facts == 2
     assert observation.selected_sources == 2
     assert observation.truncated_by_top_k
     assert observation.returned_segments == 1
-    assert observation.rerank_disabled == 0
+    assert observation.rerank_disabled == 1
 
     add(store, "User: My tank has 1 fish.", rid="c")
     add(store, "User: My tank has 2 fish.", rid="d")
@@ -167,6 +167,30 @@ def test_incomplete_derived_index_records_a_distinct_whole_search_fallback(store
     assert len(hits) == 2
     assert observations[-1].grounded_status == "index_incomplete"
     assert observations[-1].selected_facts == 0
+
+
+def test_disappeared_source_cannot_be_reported_as_completed_evidence(store):
+    from tianximem.retrieve.evidence import EvidenceDecision, EvidenceSelection
+
+    facts = extract("Corpus: Atlas — author — Mira")
+    observations = []
+    pipeline = SearchPipeline(
+        store=store,
+        qdrant=SimpleNamespace(exists=lambda: True),
+        retriever=SimpleNamespace(search=lambda **kwargs: []),
+        checker=EvidenceChecker(),
+        counter=O200kCounter(),
+        budget_tokens=117760,
+        grounded_evidence=True,
+        metrics=SimpleNamespace(record=observations.append),
+    )
+    selection = EvidenceSelection(tuple(facts), "source")
+    # Model a source disappearing between selection and final packaging.
+    pipeline._grounded_decision = lambda user, plan: EvidenceDecision(selection, "selected")
+    result = pipeline.run(user_id="u", query="Who is the author of Atlas?", top_k=100)
+    assert result.items == ()
+    assert observations[-1].grounded_status == "incomplete_packaging"
+    assert observations[-1].rerank_disabled == 1
 
 
 @pytest.mark.parametrize("label", ["user", "User", "USER"])
@@ -385,7 +409,8 @@ def test_graph_selects_only_literal_sources_and_retains_contradictory_explicit_r
         rid="conflict",
     )
     hits = run(store, query)
-    assert len(hits) == 3 and any("Other Writer" in h.content for h in hits)
+    # The competing author has no birthplace edge: return the original pool.
+    assert len(hits) == 4 and any("Other Writer" in h.content for h in hits)
     assert all("Q:" in h.content for h in run(store, query, limit=1))
 
 
@@ -410,7 +435,8 @@ def test_punctuation_collisions_never_join_different_entities(tmp_path):
     store = SqliteStore.open(tmp_path / "db")
     add(store, "Corpus: C++ — creator — Alex", "Corpus: C# — creator — Bea")
     hits = run(store, "Who is the creator of C++?")
-    assert len(hits) == 2  # 回退两条原文，而不是用有损规范化误连一个实体。
+    assert len(hits) == 1
+    assert "C++" in hits[0].content and "C#" not in hits[0].content
 
 
 @pytest.mark.parametrize(

@@ -126,67 +126,41 @@ def _resolve(
 def _walk(
     facts: Sequence[EvidenceFact], plan: QueryPlan, hop_limit: int
 ) -> list[EvidenceFact] | None:
-    relations = set(plan.patterns[0].relations)
-    edges = [
-        f for f in facts if relation_key(f.relation) in relations and f.get("start_month") is None
-    ]
-    matched = [f for f in edges if f" {words_key(f.subject)} " in f" {words_key(plan.query)} "]
-    names: dict[str, set[str]] = defaultdict(set)
-    for fact in matched:
-        names[words_key(fact.subject)].add(key(fact.subject))
-    if any(len(variants) > 1 for variants in names.values()):
-        return None
-    roots = sorted({key(f.subject) for f in matched}, key=lambda s: (-len(s), s))
-    roots = [
-        s
-        for s in roots
-        if not any(s != other and f" {words_key(s)} " in f" {words_key(other)} " for other in roots)
-    ]
-    if len(roots) != 1:
-        return None
-    frontier = set(roots)
-    visited: set[str] = set()
-    selected: dict[str, EvidenceFact] = {}
-    covered_relations: set[str] = set()
-    for _ in range(min(hop_limit, len(relations))):
-        frontier -= visited
-        if not frontier:
-            break
-        visited.update(frontier)
-        scoped = [f for f in edges if key(f.subject) in frontier]
-        names.clear()
-        for fact in scoped:
-            names[words_key(fact.subject)].add(key(fact.subject))
-        if any(len(variants) > 1 for variants in names.values()):
+    if plan.walk_relations:
+        if not plan.walk_root or len(plan.walk_relations) > hop_limit:
             return None
-        if plan.require_complete_walk and relations - covered_relations:
-            remaining = relations - covered_relations
+        frontier = {plan.walk_root}
+        selected: dict[str, EvidenceFact] = {}
+        for relation in plan.walk_relations:
+            candidates = [
+                fact
+                for fact in facts
+                if key(fact.subject) in frontier
+                and relation_key(fact.relation) == relation
+                and fact.get("start_month") is None
+            ]
+            if any(not any(key(f.subject) == entity for f in candidates) for entity in frontier):
+                return None
             if any(
-                not any(
-                    key(f.subject) == entity and relation_key(f.relation) in remaining
-                    for f in scoped
+                fact.get("unparsed")
+                and any(
+                    f" {words_key(entity)} " in f" {words_key(fact.source_quote)} "
+                    for entity in frontier
                 )
-                for entity in frontier
+                for fact in facts
             ):
                 return None
-        current = _current(scoped)
-        covered_relations.update(relation_key(f.relation) for f in current)
-        for fact in current:
-            selected.setdefault(fact.parent_memory_id, fact)
-        # 未理解的明确更正只能保留其原文，不能造出新关系边。
-        for fact in facts:
-            if fact.get("unparsed"):
-                for entity in frontier:
-                    if f" {words_key(entity)} " in f" {words_key(fact.source_quote)} ":
-                        if plan.require_complete_walk:
-                            return None
-                        if key(entity) not in key(fact.source_quote):
-                            return None
-                        selected.setdefault(fact.parent_memory_id, fact)
-        frontier = {key(f.object) for f in current}
-    if plan.require_complete_walk and not relations.issubset(covered_relations):
-        return None
-    return list(selected.values())
+            current = _current(candidates)
+            if not current:
+                return None
+            for fact in current:
+                # Keep separate edges even when they share an original QA.
+                selected.setdefault(fact.id, fact)
+            frontier = {key(fact.object) for fact in current}
+        return list(selected.values())
+    # A keyword set does not describe the order or all dependencies of a question.
+    # Legacy plans cannot certify a completed evidence path.
+    return None
 
 
 def _interval(facts: Sequence[EvidenceFact], plan: QueryPlan) -> list[EvidenceFact] | None:
@@ -449,9 +423,14 @@ def evaluate_evidence(
             return EvidenceDecision(None, "unsupported_source")
     if not selected:
         return EvidenceDecision(None, "no_match")
-    if plan.projection == "source":
+    if plan.projection == "source" and plan.operator != "walk":
         selected = list({f.parent_memory_id: f for f in selected}.values())
-    if len(selected) > source_limit:
+    selected_count = (
+        len({f.parent_memory_id for f in selected})
+        if plan.projection == "source"
+        else len(selected)
+    )
+    if selected_count > source_limit:
         return EvidenceDecision(None, "source_limit")
     return EvidenceDecision(EvidenceSelection(tuple(selected), plan.projection), "selected")
 

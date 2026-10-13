@@ -278,14 +278,14 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | Route | 走哪条路 |
 | --- | --- |
-| `COUNT` | 现有**共同取证**（`compile_query` → 取证决策 → 打包）；计划不可编译 / 不齐 / 超限 ⇒ **整体回退 DEFAULT** |
+| `COUNT` | 共同取证未完成后走原混合检索，不再次进入事实分支 |
 | `MULTI_HOP` | 多跳执行器（[`../src/tianximem/agent/`](../src/tianximem/agent/)，§5）。⚠ 执行器**没装**（`agentic.enabled = false`，默认）⇒ 每条都回退 `DEFAULT` 并记 `route_fallback = agentic_unavailable` |
-| `DEFAULT` | 原混合检索链（**不再先试共同取证**——这是路由开着的唯一行为代价） |
+| `DEFAULT` | 共同取证未完成后走原混合检索链 |
 
 | 配置项 | 初值 | 类 | 说明 |
 | --- | --- | --- | --- |
 | `router.enabled` | **`false`** | C | §15 的消融开关。`false` ⇒ **不构造路由器**：这条链上**一次 LLM 调用都不发生**，且共同取证分支照旧**无条件先试**（= 本接缝存在之前的行为，逐字相同） |
-| `router.timeout_seconds` | **10.0** | C | 单次路由调用的超时。⚠ **与 `rerank.timeout_seconds` 方向不同**：路由器在检索**开始之前**，降级路径**有定义**（回 DEFAULT）⇒ **刻意比精排紧**（10s vs 30s） |
+| `router.timeout_seconds` | **10.0** | C | 单次路由调用的超时。⚠ **与 `rerank.timeout_seconds` 方向不同**：路由器在回退检索**开始之前**，降级路径**有定义**（回 DEFAULT）⇒ **刻意比精排紧**（10s vs 30s） |
 | `router.max_output_tokens` | **8** | C | 单次生成的输出上限。**成本护栏**——提示词要求只回一个词，但模型没有义务遵守。⛔ **别设成 1**：`MULTI_HOP` 会被截成 `MULTI` ⇒ 输出非法 ⇒ **全部降级成 DEFAULT 且不报错** |
 | `router.temperature` | **0.0** | C | 生成温度。默认 0 是"这一步要可复现"的声明（§6）。⚠ 网关**可能忽略它**——所以"重复调用看路由是否稳定"必须真跑 |
 | `router.prompt_version` | **`v4`** | **B** | ⛔ **断言不是旋钮**：必须等于 `router.py` 的 `ROUTER_PROMPT_VERSION`，否则**构造期响亮失败**（同 `rerank.envelope`）。它防的是"换了提示词却忘了改版本号"——那种漂移查不出来。⚠ **2026-10-10 起全仓只有一版提示词**（v1/v2/v3 已按要求删除）⇒ **代价是"换提示词值不值"的基线不能再原样重跑**。历史与实测见 [`../eval/reports/router-v4-20261010.md`](../eval/reports/router-v4-20261010.md) |

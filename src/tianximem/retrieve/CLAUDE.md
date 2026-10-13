@@ -10,7 +10,7 @@ dense.py     语义那一路：Embedder 调用（**每查询恰好 1 次**）
 fusion.py    **检索策略与参数所有权**（prefetch_limit / weights / k / top_k）
 checker.py   §8 名次一致性判据
 evidence.py  共同证据执行器：执行 facts/query 的共同计划（筛选/连接/区间/当前输入）+ 来源覆盖审查
-router.py    **三分类查询路由器**（COUNT / MULTI_HOP / DEFAULT）——Search 的最上层编排，**默认关**（D40）
+router.py    **三分类查询路由器**（COUNT / MULTI_HOP / DEFAULT）——共同取证未完成后的策略选择，**默认关**（D40）
 ```
 
 > ### ⚠ `router.py` 是本目录唯一**调用 LLM** 的东西
@@ -115,7 +115,7 @@ router.py    **三分类查询路由器**（COUNT / MULTI_HOP / DEFAULT）——
 | 计划 | 执行 |
 | --- | --- |
 | `filter` 条件筛选 | 按主体/关系/客体与原文限定条件取独立事实；**名单与计数共用同一份计划** |
-| `walk` 有限关系连接 | 只沿各条原文边行走、深度由 `hop_limit` 封顶；不给推导结果造新记忆 |
+| `walk` 有限关系连接 | 按有序步骤沿原文边行走；每个候选分支都必须有下一步，重复关系重复执行，超跳数整体回退；不给推导结果造新记忆 |
 | `interval` 显式区间比较 | 只用原文明确的起止月份；来源日期不冒充事件日期 |
 | `current` 当前输入 | 计划判定输入已完备 ⇒ 空选择，由 `service` 返回合法空结果 |
 

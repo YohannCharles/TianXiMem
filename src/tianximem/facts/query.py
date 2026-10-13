@@ -11,6 +11,7 @@ from typing import Literal
 from tianximem.facts.evidence import EvidenceFact, key, relation_key, title_key
 from tianximem.facts.grammar import MONTH, NAME, month_index
 from tianximem.facts.input import input_complete
+from tianximem.facts.paths import question_path
 from tianximem.facts.sales import SALE_ASSERTION
 
 
@@ -62,6 +63,8 @@ class QueryPlan:
     require_complete_walk: bool = False
     guard_assertion_pattern: str = ""
     guard_source_literals: tuple[str, ...] = ()
+    walk_root: str = ""
+    walk_relations: tuple[str, ...] = ()
 
 
 def period(text: str) -> tuple[str, str] | None:
@@ -89,31 +92,6 @@ def period(text: str) -> tuple[str, str] | None:
         return None
 
 
-# 关系同义词集中在问题语义层，不创建该关系自己的执行路径。
-_QUERY_RELATIONS = (
-    ("author", r"\bauthor\b|\bwrote\b"),
-    ("capital", r"\bcapital\b"),
-    ("country of citizenship", r"\bcitizenship\b|\bcitizen\b|\bnationality\b"),
-    ("creator", r"\bcreator\b|\bcreated\b"),
-    ("place of birth", r"\bbirthplace\b|\bborn\b|\boriginate from\b"),
-    ("spouse", r"\bspouse\b|\bpartner\b|\bmarried\b|\bhusband\b|\bwife\b"),
-    ("sport", r"\bsport\b"),
-    ("country of origin", r"\bcountry of origin\b|\bcountry.*produced\b|\bcountry.*created\b"),
-    ("founded by", r"\bfound(?:ed|er)\b"),
-    ("continent", r"\bcontinent\b"),
-    ("position played on team / speciality", r"\bposition\b|\bspeciality\b"),
-    (
-        "employee",
-        r"\bemployer\b|\bworkplace\b|\bwork(?:s)? (?:for|at)\b|"
-        r"\bwhere\s+(?:do|does)\s+.+?\s+work$",
-    ),
-    ("religion or worldview", r"\breligion\b|\bworldview\b|\bfaith\b"),
-    ("notable work", r"\bknown for\b|\brenowned\b|\bnotable\b|\bachievement\b"),
-    ("director", r"\bdirector\b|\bdirected\b"),
-    ("official language", r"\blanguage\b"),
-    ("head of state", r"\bhead of state\b|\bcurrent (?:head|leader)\b(?!.*government)"),
-    ("head of government", r"\bgovernment\b"),
-)
 _UNSAFE_SCOPE = re.compile(
     (
         r"\b(?:not|except|before|after|during|since|until|last|previous|former|ever|should|"
@@ -464,23 +442,17 @@ def compile_query(query: str) -> QueryPlan | None:
                     (FactPattern((relation_key(parts[1]),), object=key(parts[2])),),
                     guard_literal=key(parts[2]),
                 )
-    relations = tuple(
-        sorted(
-            {
-                relation_key(rel)
-                for rel, pattern in _QUERY_RELATIONS
-                if re.search(pattern, text, re.I)
-            }
-        )
-    )
-    if relations and len(text.split()) <= 64 and not _UNSAFE_SCOPE.search(text):
+    path = question_path(text) if not _UNSAFE_SCOPE.search(text) else None
+    if path and len(text.split()) <= 64:
+        root, steps = path
+        ordered = tuple(relation_key(step) for step in steps)
         return QueryPlan(
             "walk",
-            (FactPattern(relations),),
+            (FactPattern(tuple(sorted(set(ordered)))),),
             "source",
             query=text,
-            require_complete_walk=bool(
-                re.search(r"\bwork(?:s)? at\b|^where\s+(?:do|does)\s+.+?\s+work$", text, re.I)
-            ),
+            require_complete_walk=True,
+            walk_root=key(root),
+            walk_relations=ordered,
         )
     return None
