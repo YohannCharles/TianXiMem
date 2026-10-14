@@ -295,6 +295,7 @@ def test_halumem_judge_keeps_three_way_labels_and_gold_out_of_answer(bench, monk
 def test_http_round_reaches_real_answer_and_judge_functions(bench, tmp_path, monkeypatch, dataset):
     memories: dict[str, list[str]] = {}
     answer_prompts = []
+    judge_prompts = []
     monkeypatch.setattr(extra, "_config", lambda stage: ("http://unused", "test", "test"))
     monkeypatch.setattr(extra, "config", extra._config)
     monkeypatch.setattr(
@@ -309,6 +310,11 @@ def test_http_round_reaches_real_answer_and_judge_functions(bench, tmp_path, mon
         prompt = args[3]
         if prompt.startswith("JUDGE "):
             return '{"evaluation_result": "Correct"}'
+        if prompt.startswith("You grade whether"):
+            # MuSiQue 的**显式模型裁判**——它也是一次真模型调用，
+            # 所以桩要认得它；⛔ 它**不算**答案 prompt，别混进 `answer_prompts`。
+            judge_prompts.append(prompt)
+            return "Same fact, stated differently.\nVerdict: CORRECT"
         answer_prompts.append(prompt)
         if "FUTURE-CHANGE" in prompt:
             return "Tokyo"
@@ -352,7 +358,11 @@ def test_http_round_reaches_real_answer_and_judge_functions(bench, tmp_path, mon
         )
         module.cmd_evaluate(
             argparse.Namespace(
-                input=str(input_path), answers=str(answers), output=str(labels), max_tokens=128
+                input=str(input_path),
+                answers=str(answers),
+                output=str(labels),
+                max_tokens=128,
+                musique_judge="llm",
             )
         )
         generated = {r["id"]: r["generated_answer"] for r in module.read_jsonl(answers)}
@@ -386,9 +396,18 @@ def test_http_round_reaches_real_answer_and_judge_functions(bench, tmp_path, mon
         assert REFUSAL in answer_prompts[0]
         assert "Cannot determine from the memories" not in answer_prompts[0]
         assert results[1].generated_answer == REFUSAL
+        # ⭐ MuSiQue 显式选择**模型裁判**（另一条真调用）——它真的被调到了，
+        #    而且**没有**混进 `answer_prompts`（上面那两条断言才保得住原意）。
+        assert len(judge_prompts) == 1 and "Verdict: CORRECT" in judge_prompts[0]
 
 
 def test_musique_evaluate_subprocess_uses_the_actual_pipeline(bench, tmp_path):
+    """真实 `evaluate` 子进程跑得通、且判出来的是对的。
+
+    ⚠ 这里显式要 **`--musique-judge rule`**：本用例**不接任何模型桩**（`AML_BASE_URL`
+    指向 `http://unused`），规则模式不需要模型桩。模型裁判在子进程里跑得通由
+    `test_actual_pipeline_subprocesses_send_retrieval_to_a_local_model` 覆盖（那里有真桩）。
+    """
     samples = load_musique(bench)
     items = [item for s in samples for item in build_input_items(s, {})]
     input_path, answers, labels = (
@@ -420,6 +439,8 @@ def test_musique_evaluate_subprocess_uses_the_actual_pipeline(bench, tmp_path):
             str(labels),
             "--max-tokens",
             "128",
+            "--musique-judge",
+            "rule",
         ],
         env=env,
         capture_output=True,
@@ -443,7 +464,13 @@ def test_actual_pipeline_subprocesses_send_retrieval_to_a_local_model(
             requests.append(payload)
             prompt = payload["messages"][0]["content"]
             if payload["model"] == "judge-test":
-                content = '{"evaluation_result": "Correct"}'
+                # MuSiQue 显式选择的是**模型裁判**，它要的是 `Verdict:` 行；
+                # HaluMem 那条仍要 JSON。按提示词分派（桩只认自己发过的两种模板）。
+                content = (
+                    "Same fact, stated differently.\nVerdict: CORRECT"
+                    if "Verdict: CORRECT" in prompt
+                    else '{"evaluation_result": "Correct"}'
+                )
             else:
                 content = "Paris" if "RETRIEVED-PARIS" in prompt else REFUSAL
             body = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
@@ -508,7 +535,10 @@ def test_actual_pipeline_subprocesses_send_retrieval_to_a_local_model(
         assert len(judges) == 1
         assert "JUDGE-ONLY-EVIDENCE" in judges[0]["messages"][0]["content"]
     else:
-        assert len(requests) == len(items)  # MuSiQue 的本地评分不调用模型。
+        # ⭐ 默认 MuSiQue 判分走规则：答案阶段调用模型，evaluate 阶段不再调用模型裁判。
+        judges = [r for r in requests if r["model"] == "judge-test"]
+        assert len(answers) == len(items) == 2
+        assert not judges, "默认 rule 模式不得触发 MuSiQue 模型裁判"
         assert results[1].generated_answer == REFUSAL
 
 

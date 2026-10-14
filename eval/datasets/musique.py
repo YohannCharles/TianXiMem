@@ -2,8 +2,9 @@
 
 Full 的可答/不可答变体共用 id，user_id/qid 必须带变体标记。只把 title 与
 paragraph_text 送进 Add；answer、is_supporting 与 question_decomposition 均不注入。
-spread 按跳数和可答性分层。只测本地答案别名精确匹配/拒答，不复现上游支持段落 F1
-或成组 answer-sufficiency 指标。原生文本包装与采集不同；候选段落顺序保留源数据顺序。
+spread 按跳数和可答性分层。判分有**两套口径**（可答题：默认规则判分、`llm` 为模型裁判；
+拒答恒走精确匹配），**都不复现**上游支持段落 F1 或成组 answer-sufficiency 指标。
+原生文本包装与采集不同；候选段落顺序保留源数据顺序。
 """
 
 from __future__ import annotations
@@ -62,8 +63,10 @@ SHAPE_NOTE = (
     f"MuSiQue-Full dev（{ANSWER_CONTRACT}）：每题一个独立 user，"
     "语料只含候选段落 title/paragraph_text。"
     "可答/不可答变体用不同 user_id/qid；spread 按跳数和可答性分层。"
-    "本地评分为答案别名归一化后精确匹配与拒答标记精确匹配，不是上游答案/支持段落 F1"
-    "或成组 sufficiency 指标；候选段落保留源数据顺序，原生包装与采集不同。"
+    "本地评分为**可答两套口径**：默认 `extra_pipeline --musique-judge rule`（答案别名归一化后"
+    "精确匹配，快速复现历史数字），显式 `llm` 才判语义等价；拒答标记恒走精确匹配。"
+    "**都不是**上游答案/支持段落 F1 或成组 sufficiency 指标；"
+    "候选段落保留源数据顺序，原生包装与采集不同。"
 )
 
 

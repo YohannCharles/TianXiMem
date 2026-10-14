@@ -40,7 +40,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from tianximem.agent import CoqAgent
+from tianximem.agent import CoqAgent, PlanAgent
 from tianximem.common.config import (
     ENV_RERANKER_API_KEY,
     ENV_RERANKER_BASE_URL,
@@ -130,7 +130,10 @@ class Services:
         #   会让 `isinstance()` 直接抛 `TypeError`（运行时可检查协议不允许数据成员）。
         #   判具体类型还有一个好处：**接错了执行器时这里什么都不做，而不是去关一个
         #   属于别人的连接池**。
-        if isinstance(agentic, CoqAgent) and isinstance(agentic.llm, OpenAiCompatChat):
+        #   ⚠ **两种模式都要在这里列出来**（`react` = `CoqAgent`、`plan` = `PlanAgent`）：
+        #   漏掉一支的表现是"那一支的 LLM 连接池到进程退出都没关"，
+        #   而**平时完全看不出来**。回归用例见 `tests/test_plan.py`。
+        if isinstance(agentic, (CoqAgent, PlanAgent)) and isinstance(agentic.llm, OpenAiCompatChat):
             agentic.llm.close()
         if self.capture is not None:
             self.capture.close()
@@ -328,9 +331,17 @@ def build_agentic(
     ⚠ **每轮召回深度取请求的 `top_k`**（AML 固定 100），所以这里没有那个参数：
     §3.2 要的顺序是"融合池 → 精排 → 取 N"，而前两步用的正是默认 Search 的既有口径。
     ⛔ 不为多跳另造一套 `prefetch_limit` / `weights`。
+    ⚠ **两种模式都走这一条**（2026-10-13 起 `plan` 也对齐了：它**第一版**是"每轮只召回 20 条"，
+    于是两模式在机制与每轮深度上同时不同、对照归不了因——见 `PlanAgent.search` 的 docstring）。
+    ⛔ 别再把 `plan` 改回 20 条召回：那是**两个自变量**。
 
     ⚠ **它自己不带 `enabled` 判断的副本**：`AgenticConfig.enabled` 在这里读一次，
     之后"装上了就是开"（与 `SearchPipeline._agentic` 的口径一致）。
+
+    ⚠ **`agentic.mode` 在这里读一次、选一种执行器**（`react` / `plan`）：
+    `SearchPipeline` **不认模式**——它只会调交上来的那个执行器，于是"选路"与
+    "执行器是谁"这两件事在**装配期**就分开了（⛔ 不让编排层再判一次，
+    那会让"接错了"表现为"跑的是另一套机制"，而**两边都正常返回**）。
     """
     if not config.agentic.enabled:
         logger.info("agentic.enabled = false ⇒ 不构造多跳执行器，MULTI_HOP 一律降级回 DEFAULT")
@@ -340,10 +351,33 @@ def build_agentic(
         raise ConfigError("agentic.enabled = true 但 LLM 客户端没构造出来（端点缺失？）")
     if config.agentic.force:
         # ⚠ 这条 WARNING 是**实验臂的标签**：日志里没有它，跑完分不出
-        #   "分数变了"是 CoQ 的效果还是路由器被绕过造成的（§12.3 的 E1 就是后者）。
+        #   "分数变了"是执行器的效果还是路由器被绕过造成的（§12.3 的 E1 就是后者）。
         logger.warning(
             "`agentic.force = true`：**绕过路由器**，所有查询按 MULTI_HOP 处理"
             "（§12.3 的 E1）。⛔ 这不是提交口径——它关掉了 COUNT / DEFAULT 的选择能力。"
+        )
+    # ⚠ 模式也进**启动日志**：E1 那一臂跑的是「哪一个执行器」必须能从日志里读出来，
+    #   否则 react/plan 两轮的产物只能靠 `--out` 目录名去猜。
+    logger.info("agentic.mode = %s ⇒ 构造该模式的执行器", config.agentic.mode)
+    if config.agentic.mode == "plan":
+        return PlanAgent(
+            store=store,
+            retriever=retriever,
+            llm=client,
+            counter=counter,
+            reranker=reranker,
+            max_rounds=config.agentic.max_rounds,
+            per_round_top_k=config.agentic.per_round_top_k,
+            max_prompt_tokens=config.agentic.max_prompt_tokens,
+            # ⚠ **不是** `max_output_tokens`：Plan 的两次调用都回带自由文本的 JSON，
+            #   那个 256 是给 CoQ 的定长四字段的（见常量的说明）。
+            max_output_tokens=config.agentic.plan_max_output_tokens,
+            temperature=config.agentic.temperature,
+            round_rerank_enabled=config.agentic.round_rerank_enabled,
+            final_rerank_query_mode=config.agentic.final_rerank_query_mode,
+            inject_abs_time=config.packaging.inject_abs_time,
+            decompose_prompt_version=config.agentic.plan_decompose_prompt_version,
+            step_prompt_version=config.agentic.plan_step_prompt_version,
         )
     return CoqAgent(
         store=store,

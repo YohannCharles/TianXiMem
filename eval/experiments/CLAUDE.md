@@ -109,8 +109,9 @@ make eval DATASET=mquake-remastered ARGS='--limit 1 --max-questions 2'   # offic
 ⇒ **这五家的分数只在仓内前后对比，别与官方分数对齐**。
 ⚠ `medmemorybench` 例外一半：**判分口径是上游发布的**（`metrics/`，见 [`../../docs/benchmark-data.md`](../../docs/benchmark-data.md)），我们照它实现——但**作答侧**仍是我们自己的 prompt。
 
-`halumem` 的 QA 裁判复用上游三分类 prompt；`musique` 的本地评分为答案别名
-归一化后精确匹配及拒答标记匹配。两份的输入范围与未覆盖指标见加载器 docstring。
+`halumem` 的 QA 裁判复用上游三分类 prompt；`musique` 的**可答题默认走规则判分**
+（`extra_pipeline.py` 的 `--musique-judge rule`，快速复现历史数字；显式 `llm` 才走模型语义
+裁判），拒答标记恒走精确匹配。两份的输入范围与未覆盖指标见加载器 docstring。
 HaluMem 的 `limit` 数提问检查点，MuSiQue 数题目；都已登记 `--frozen` 配置。
 
 `hybridqa` / `feverous` 走 [`corpusqa_pipeline.py`](../harness/corpusqa_pipeline.py)，

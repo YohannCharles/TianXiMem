@@ -489,7 +489,10 @@ def test_thresholds_are_not_overridable_from_env(config_dir: Path) -> None:
 
     assert cfg.retrieval.prefetch_limit == 200  # yaml 说了算
     assert cfg.retrieval.rrf.k == RRF_K
-    assert cfg.models.embedder == "Qwen/Qwen3-Embedding-8B"
+    # ⚠ **与 yaml 当前的取值无关**（同 `capture.enabled` 那条的口径）：模型名会随网关换
+    #   （2026-10-13：`-8B` → `-4B`），写死字面值会在换模型那天变成一条**假的**回归。
+    #   这里要证明的是"env 说的不算、yaml 说的算"。
+    assert cfg.models.embedder == _load(config_dir).models.embedder
     assert cfg.capture.enabled is yaml_enabled  # ← env 说的是相反的值，但一点用都没有
 
 

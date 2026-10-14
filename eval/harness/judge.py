@@ -315,6 +315,7 @@ def build_input_items(
     memory_field: str = MEMORY_FIELD,
     date_mode: str = "none",
     annotate_mark: str = "paren",
+    execution_record: dict[str, str] | None = None,
 ) -> list[dict]:
     """构造 pipeline `answer` 步读的 JSONL 项。
 
@@ -324,6 +325,19 @@ def build_input_items(
     `gold_answer` 直接放 `Question.gold` 的原始形态（LoCoMo 是 `list[str]`）——
     归档的 `gold_answer()` 走 `memory_text()`，**列表由它自己用 `\\n` 拼**，
     在这里预先拼会改变那条链路的行为。
+
+    ## `execution_record`（**默认 `None` = 与本参数存在之前逐字相同**）
+
+    `qid → 一段机器生成的执行记录`。给了就在**记忆原文之前**前置它，再一起过平台前缀截断
+    （顺序固定：**前部执行记录、后部真实记忆原文**）。
+
+    ⚠ **它是 Plan 模式专用的答案输入口径**（`agentic.mode=plan` 的 `plan_history`）：
+    那一路会生成**中间跳的答案**，而答案阶段需要看到它们。⛔ React 模式**不传它**，
+    于是响应与答案输入都逐字不变——这也是"不改 React 输出、不破公共 Search 契约"的落点：
+    执行记录**不坐 Search 的响应**，只由本地评测从诊断记录里取出来前置。
+
+    ⚠ **它必须自带"这是模型生成的执行记录"的标记**（渲染在 `tools/coq_eval.py`）：
+    ⛔ 不伪装成记忆、不编造 memory id、不进向量索引。
     """
     if sample.dataset == "clbench":
         return _build_clbench_items(sample, hits_by_qid)
@@ -337,7 +351,20 @@ def build_input_items(
         )
     if sample.dataset in EXTRA_DATASETS or sample.dataset == "halumem":
         return _build_extra_items(
-            sample, hits_by_qid, date_mode=date_mode, annotate_mark=annotate_mark
+            sample,
+            hits_by_qid,
+            date_mode=date_mode,
+            annotate_mark=annotate_mark,
+            execution_record=execution_record,
+        )
+    if execution_record:
+        # ⛔ **响亮失败，不静默忽略**：这几个数据集的项形状是逐份定制的（CL-Bench 是
+        #   嵌套的 `retrieval.selected`、BEAM / PersonaMem 各有自己的键），
+        #   "前置执行记录"在那几种形状上**没有定义**。静默丢掉它会让 Plan 那一臂
+        #   拿着**少一段上下文**的输入去判分，而分数看起来完全正常。
+        raise ValueError(
+            f"`execution_record` 还没有为 {sample.dataset!r} 的输入形状定义——"
+            "请在对应的 `_build_*_items` 里接上，或者不要给它传执行记录。"
         )
 
     items = []
@@ -354,8 +381,11 @@ def build_input_items(
             "speaker_2_memories": "",
         }
         text = render_memories(hits, date_mode=date_mode, annotate_mark=annotate_mark)
+        text = _prepend_execution_record(text, (execution_record or {}).get(question.qid))
         # ★ 平台的答案阶段是"按返回顺序取 117,760 token 前缀"——**harness 要自己模拟**，
         #   因为基线未必守预算（实测 ReFind 有一题返回 89.8 万字符）。详见常量的注释。
+        #   ⚠ 顺序：**先前置执行记录、再截断**——反过来的话执行记录会把已经过预算
+        #   的记忆挤出窗口，而"前部是执行记录"这条口径就没意义了。
         text, cut = truncate_to_platform_prefix(text)
         if cut:
             _warn_truncated(question.qid)
@@ -364,23 +394,38 @@ def build_input_items(
     return items
 
 
+def _prepend_execution_record(text: str, record: str | None) -> str:
+    """把执行记录放到记忆原文**之前**。**两条注入路径共用这一行字。**
+
+    ⚠ 两种"没有"要分开：`record is None`（这一题没有记录，例如 React 那一臂）
+    与 `record == ""`（有记录但渲染出来是空的）——后者仍然前置（那是空块，无害）。
+    """
+    if not record:
+        return text
+    return f"{record}\n\n{text}"
+
+
 def _build_extra_items(
     sample: Sample,
     hits_by_qid: dict[str, list[SearchHit]],
     *,
     date_mode: str,
     annotate_mark: str,
+    execution_record: dict[str, str] | None = None,
 ) -> list[dict]:
     """本地评测的平铺记忆输入项（含复用上游 QA 裁判的 HaluMem）。
 
     **形状是我们定的**（没有对应的官方 AML 输入适配）：
     记忆走一个平铺的 `retrieved_context`，题目与金标原样带上，
     `dataset` 让 `extra_pipeline.py` 知道该用哪套判分。⇒ **分数只在仓内前后对比**。
+
+    `execution_record` 的含义见 `build_input_items`（**默认 `None` = 逐字不变**）。
     """
     items: list[dict] = []
     for question in sample.questions:
         hits = hits_by_qid.get(question.qid, [])
         text = render_memories(hits, date_mode=date_mode, annotate_mark=annotate_mark)
+        text = _prepend_execution_record(text, (execution_record or {}).get(question.qid))
         text, cut = truncate_to_platform_prefix(text)
         if cut:
             _warn_truncated(question.qid)
@@ -527,6 +572,15 @@ def _run(
             env=_subprocess_env(endpoint_index),
             capture_output=True,
             text=True,
+            # ⚠ **父进程必须按 UTF-8 解子进程的管道**（2026-10-13 实测踩过）：
+            #   `text=True` 单独用会走**locale 编码**，Windows 上是 GBK——而 pipeline
+            #   子进程写的是 UTF-8（中文与全角标点），于是 `subprocess` 的读线程抛
+            #   `UnicodeDecodeError`、`stdout`/`stderr` 双双是 `None`，
+            #   真正的失败原因（下面那句 `[-4000:]`）**反被一个 TypeError 顶掉**，
+            #   而且**整轮跑批在判分那一步作废**（Search 的 26 分钟白跑）。
+            #   `errors="replace"` 只影响日志文本，不碰任何数据文件。
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         if completed.returncode == 0:
@@ -538,8 +592,8 @@ def _run(
             return
         last = RuntimeError(
             f"{pipeline.name} {' '.join(argv[:1])} 失败（exit {completed.returncode}）\n"
-            f"--- stdout ---\n{completed.stdout[-4000:]}\n"
-            f"--- stderr ---\n{completed.stderr[-4000:]}"
+            f"--- stdout ---\n{(completed.stdout or '')[-4000:]}\n"
+            f"--- stderr ---\n{(completed.stderr or '')[-4000:]}"
         )
         if attempt < attempts:
             wait = 5 * attempt

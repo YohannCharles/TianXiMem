@@ -122,11 +122,12 @@ def test_actual_answer_request_and_resume_guard(tmp_path, monkeypatch, official_
     )
     source, output = tmp_path / "input.jsonl", tmp_path / "answers.jsonl"
     source.write_text(json.dumps(_item()) + "\n")
-    args = SimpleNamespace(input=str(source), output=str(output))
+    args = SimpleNamespace(input=str(source), output=str(output), max_tokens=2048)
     assert pipeline.cmd_answer(args) == 0
+    assert requests[0]["max_tokens"] == 2048
     sent = str(requests[0]["messages"])
     assert "SEARCH-ONLY-EVIDENCE" in sent and "RAW-HISTORY-MUST-NOT-LEAK" not in sent
-    answer = json.loads(output.read_text())
+    answer = json.loads(output.read_text(encoding="utf-8"))
     assert answer["option_mapping"][answer["correct_letter"]] == "Yoga"
     assert answer["memory_input_version"] == pipeline.MEMORY_INPUT_VERSION
     assert answer["input_fingerprint"]

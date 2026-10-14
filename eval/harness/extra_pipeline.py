@@ -25,6 +25,9 @@ CLI 与归档 pipeline **同形**（harness 的 `run_judge` 就是按这个形�
    官方只给 4 维 0–5 的**均分**、没有过/不过线，所以：
    * 阈值 `MEMTRAP_PASS_MEAN` 是**我们定的**；
    * **四个原始分原样写进 `judge_response`** ⇒ 换阈值**不用重跑裁判**。
+   **MuSiQue 两套并存**（默认走快速规则判分）：
+   `--musique-judge rule`（默认）走原来那套归一化精确匹配，`--musique-judge llm`
+   显式启用模型判"语义是否等价"。
 3. **失败不静默**：判分出错时 `label` 带 `JUDGE_ERROR`、`is_correct=False`，
    原始响应留着——与 CL-Bench"API/JSON 失败一律记 0"同一处置，但**在 label 里说明白**。
 """
@@ -64,9 +67,13 @@ from eval.harness.pipeline_cli import build_pipeline_parser  # noqa: E402
 from eval.jsonl_io import read_jsonl, write_line  # noqa: E402
 
 __all__ = [
+    "DEFAULT_MUSIQUE_JUDGE",
     "MEMTRAP_PASS_MEAN",
+    "MUSIQUE_JUDGE_MODES",
     "build_docpp_judge_prompt",
+    "build_musique_judge_prompt",
     "judge_docpp_verdict",
+    "judge_musique_llm_verdict",
     "judge_tempreason",
     "judge_corporatebench",
     "judge_memtrapbench_scores",
@@ -162,6 +169,99 @@ def judge_musique(
         why = f"命中 {hit!r}" if hit else "别名一个都没出现"
         return hit is not None, f"MuSiQue/{MUSIQUE_LOOSE_CONTRACT}：{why}"
     return answer in aliases, "MuSiQue：参考答案或别名归一化后精确匹配"
+
+
+# ── MuSiQue：可选模型裁判────────────────────────────────────────────────────
+#
+# ⚠ **为什么要有这一档**：`judge_musique` 是**归一化精确匹配**，而 MuSiQue 的 gold
+#   **不是规范答案、是原文里的"答案跨度"**（可能是一整个从句），别名表又常常是空的
+#   （本项目那 50 题里 32 题 `answer_aliases` 为 `[]`）。于是"语义正确但措辞不同"的答案
+#   被系统性判错，实测（2026-10-13，MuSiQue 50 题）：
+#
+#     E0 混合链 严格 15/50 → 官方 token-F1(≥0.5) 22/50
+#     E1-plan   严格 24/50 → 官方 token-F1(≥0.5) 32/50
+#
+#   ⇒ 少报 7–10 道。人复核那 9/10/9 道"原判错、语义正确"的就是这一批
+#   （`22` ← `22 times`；`rises in northern Minnesota and meanders slowly southwards`
+#   ← `southwards`；`for the conclave in rome` ← `Roncalli left Venice for the conclave in Rome.`)。
+#
+#
+# ⚠ **默认仍是历史规则口径**：`rule` 那套原样保留并作为默认，
+#   台账里的既有分数可以逐位复现。需要语义等价判分时显式传 `--musique-judge llm`。
+#
+# ⛔ **不动拒答那一条**：`answerable=false` 的分支仍走规则（"必须只输出拒答标记"是**输出契约**，
+#   不是语义判断），理由见根 `CLAUDE.md` 那条"不要改别处的 refusal 口径"。
+MUSIQUE_JUDGE_LLM = "llm"
+MUSIQUE_JUDGE_RULE = "rule"
+MUSIQUE_JUDGE_MODES: tuple[str, ...] = (MUSIQUE_JUDGE_LLM, MUSIQUE_JUDGE_RULE)
+DEFAULT_MUSIQUE_JUDGE = MUSIQUE_JUDGE_RULE
+
+#: 模型裁判的提示词。**我们写的**（MuSiQue 官方没有发布 AML 判分 pipeline）。
+#: 只给"问题 + 参考答案（+别名） + 模型答案"——**不给检索到的段落**：
+#: 判的是"答得对不对"，不是"检索够不够"（后者由覆盖率那一列回答）。
+MUSIQUE_JUDGE_PROMPT = """\
+You grade whether a model's answer means the same thing as the reference answer.
+
+Question: {question}
+Reference answer: {gold}{aliases}
+
+Model answer: {response}
+
+How to judge:
+1. Judge MEANING, not wording. The reference is taken from the source text and may be a whole
+   span (a clause or a full sentence). A shorter answer that states the same fact is CORRECT,
+   and an answer that wraps the same fact in a sentence or adds correct qualifiers is CORRECT.
+2. Equivalent surface forms are fine: "22" = "22 times"; "May 1990" = "in May 1990";
+   a full name with or without a middle initial.
+3. Do NOT accept an answer that is LESS specific than the reference (a broader category, a
+   superordinate place or person, a different year, a different entity), and do not accept one
+   that contradicts it.
+4. Judge only from the question and the reference. Do not use outside knowledge to decide
+   whether the reference itself is right.
+
+Reply with ONE short line of reasoning, then a final line that is exactly:
+Verdict: CORRECT
+or
+Verdict: WRONG"""
+
+
+def build_musique_judge_prompt(question: str, gold: object, generated: str) -> str:
+    """把金标（answer + 别名）与模型答案填进裁判模板。"""
+    answer = ""
+    aliases: list[str] = []
+    if isinstance(gold, dict):
+        answer = str(gold.get("answer") or "")
+        aliases = [str(a) for a in (gold.get("answer_aliases") or []) if str(a).strip()]
+    block = f"\nAccepted alternative wordings: {' | '.join(aliases)}" if aliases else ""
+    return MUSIQUE_JUDGE_PROMPT.format(
+        question=question,
+        gold=answer or "(none)",
+        aliases=block,
+        response=(generated or "").strip() or "(empty)",
+    )
+
+
+def judge_musique_llm_verdict(raw_response: str) -> tuple[bool | None, str]:
+    """解析模型裁判的 `Verdict: CORRECT|WRONG`。**解不出来回 `None`**（调用方记 `JUDGE_ERROR`）。
+
+    ⚠ **优先认 `Verdict:` 那一行**，认不到才退化成"全文最后一次出现的 CORRECT/WRONG"
+    ——因为推理那一行里可能提到反例（"...would be WRONG if it said 1916"），
+    而那**不是**结论。两处都认不到 ⇒ `None`，**绝不默认成对**。
+    """
+    text = (raw_response or "").strip()
+    if not text:
+        return None, "MuSiQue/llm：裁判响应为空"
+    if text.startswith("JUDGE CALL FAILED"):
+        return None, f"MuSiQue/llm：{text[:200]}"
+    tagged = re.findall(r"Verdict\s*[:：]\s*(CORRECT|WRONG)\b", text, re.IGNORECASE)
+    if tagged:
+        ok = tagged[-1].upper() == "CORRECT"
+        return ok, f"MuSiQue/llm：Verdict={tagged[-1].upper()}｜{text[:400]}"
+    loose = re.findall(r"(?<![A-Z])(CORRECT|WRONG)(?![A-Z])", text.upper())
+    if loose:
+        ok = loose[-1] == "CORRECT"
+        return ok, f"MuSiQue/llm（无 Verdict 行，取末次出现）：{loose[-1]}｜{text[:400]}"
+    return None, "MuSiQue/llm：响应里既没有 Verdict 行、也没有 CORRECT/WRONG"
 
 
 def judge_tempreason(generated: str, gold: object) -> tuple[bool, str]:
@@ -973,6 +1073,7 @@ def _judge_one(
     *,
     judge: tuple[str, str, str],
     max_tokens: int,
+    musique_judge: str = DEFAULT_MUSIQUE_JUDGE,
 ) -> dict:
     """一题的判分——**按数据集四选一**。每一支都写清楚口径的出处。"""
     gold = item.get("gold_answer")
@@ -986,11 +1087,9 @@ def _judge_one(
         ok, why = judge_tempreason(generated, gold)
         return _verdict(qid, ok, why)
     if dataset == "musique":
-        # ⚠ 口径由 item 上的 `answer_contract` 决定（默认严的那条）——**不是**全局开关。
-        ok, why = judge_musique(
-            generated, gold, contract=str(item.get("answer_contract") or MUSIQUE_ANSWER_CONTRACT)
+        return _judge_musique(
+            qid, item, generated, judge=judge, max_tokens=max_tokens, mode=musique_judge
         )
-        return _verdict(qid, ok, why)
     if dataset == "docpp":
         return _judge_docpp(qid, item, generated, judge=judge, max_tokens=max_tokens)
     if dataset == "memtrapbench":
@@ -1022,6 +1121,56 @@ def _judge_one(
         "is_correct": False,
         "label": "JUDGE_ERROR",
         "judge_response": f"未知数据集 {dataset!r}",
+    }
+
+
+def _judge_musique(
+    qid: str,
+    item: dict,
+    generated: str,
+    *,
+    judge: tuple[str, str, str],
+    max_tokens: int,
+    mode: str,
+) -> dict:
+    """MuSiQue 判分：**可答默认走规则匹配 / 可显式切换模型裁判**。
+
+    ⛔ **拒答题永远走规则**——见下。
+
+    ⚠ `mode` 只影响**可答**那一支——`answerable=false` 的题问的是"有没有按契约拒答"，
+    那是一个**输出格式**判据，交给模型判只会引入抖动（且会改动别处的 refusal 口径）。
+    """
+    if mode not in MUSIQUE_JUDGE_MODES:
+        raise ValueError(f"`--musique-judge` 只能是 {MUSIQUE_JUDGE_MODES}，收到 {mode!r}")
+    gold = item.get("gold_answer")
+    contract = str(item.get("answer_contract") or MUSIQUE_ANSWER_CONTRACT)
+    unanswerable = isinstance(gold, dict) and gold.get("answerable") is False
+
+    if mode == MUSIQUE_JUDGE_RULE or unanswerable:
+        ok, why = judge_musique(generated, gold, contract=contract)
+        return _verdict(qid, ok, why)
+
+    if not (generated or "").strip():
+        # 空输出不必花一次裁判调用（与 MedMemoryBench / Doc-PP 同一处置）。
+        return _verdict(qid, False, "MuSiQue/llm：模型输出为空")
+
+    prompt = build_musique_judge_prompt(item["question"], gold, generated)
+    raw = _call_judge(judge, prompt, max_tokens=max_tokens)
+    ok, why = judge_musique_llm_verdict(raw)
+    if ok is None:
+        return {
+            "id": qid,
+            "is_correct": False,
+            "label": "JUDGE_ERROR",
+            "judge_response": f"{why}｜{raw[:2000]}",
+        }
+    # ⚠ 裁判**模型名**写进 `judge_response`：它是这次分数的配置指纹（换模型 = 换口径），
+    #   而 label 的取值域被测试与台账钉着，别往里塞。
+    return {
+        "id": qid,
+        "is_correct": ok,
+        "label": "Musique/llm:" + ("CORRECT" if ok else "WRONG"),
+        "judge_response": f"[{judge[2]}] {why}",
     }
 
 
@@ -1124,6 +1273,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
                 answers.get(qid, ""),
                 judge=judge,
                 max_tokens=args.max_tokens,
+                musique_judge=getattr(args, "musique_judge", DEFAULT_MUSIQUE_JUDGE),
             )
             write_line(handle, row)
     return 0
@@ -1140,12 +1290,25 @@ judge_one = _judge_one
 
 
 def build_parser() -> argparse.ArgumentParser:
+    def add_musique_judge(evaluate: argparse.ArgumentParser) -> None:
+        evaluate.add_argument(
+            "--musique-judge",
+            choices=MUSIQUE_JUDGE_MODES,
+            default=DEFAULT_MUSIQUE_JUDGE,
+            help=(
+                "MuSiQue 可答题的判分方式（拒答题恒走 rule）："
+                f"`{MUSIQUE_JUDGE_RULE}` = 归一化精确匹配（默认，快速且复现历史数字）；"
+                f"`{MUSIQUE_JUDGE_LLM}` = 模型判语义等价。"
+            ),
+        )
+
     return build_pipeline_parser(
         __doc__.splitlines()[0],
         default_max_tokens=512,
         max_tokens_help="answer / 裁判各自的输出上限",
         answer_help="作答（**追加**模式，按 id 跳过已完成的题）",
         evaluate_help="判分（**覆盖**模式）",
+        evaluate_extra=add_musique_judge,
     )
 
 

@@ -226,10 +226,17 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 5. 多跳执行器（`agentic.*`，Chain-of-Query）—— ✅ **已落地**（**默认全关**）
+## 5. 多跳执行器（`agentic.*`）—— ✅ **已落地**（**默认全关**）
 
-实现在 [`../src/tianximem/agent/`](../src/tianximem/agent/)：**原版** CoQ 提示词 +
-每轮"混合召回 → 精排 → Top-N" + 跨轮证据累积 + 最终联合 Query 精排。
+实现在 [`../src/tianximem/agent/`](../src/tianximem/agent/)。**两种模式，一份接口**：
+
+| `agentic.mode` | 执行器 | 提示词 | 怎么推进 |
+| --- | --- | --- | --- |
+| `react`（**默认**） | `coq.py` 的 `CoqAgent` | **原版** CoQ（`coq_prompt.py`，⛔ 冻结） | 每轮重新决定"充分了吗 / 下一跳问什么" |
+| `plan` | `plan.py` 的 `PlanAgent` | `plan_prompts.py`（**两条，独立**） | **先拆一份固定计划**（1~4 步），之后每轮只回答"刚检索完的那一步"，**不重规划** |
+
+⚠ 两套提示词、解析、停止判据**互不共享**（⛔ 不把新提示词塞进冻结的原 CoQ 提示词）。
+共享的只有三个纯工具与"从一段文本里挖出 JSON"那一件与业务无关的事。
 
 > ⚠ **它与 PRD §9 的参数不同，这是刻意的。** §9 给的是 ReFind 形状
 > （4 轮 / 每轮 `top_k=5` / 三个工具），本阶段按方案实现 **3 轮 / 每轮 Top20 / 没有工具**。
@@ -240,22 +247,30 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | 配置项 | 初值 | 类 | 说明 |
 | --- | --- | --- | --- |
-| `agentic.enabled` | `false` | C | 开关。`false` ⇒ 不构造执行器 ⇒ 每条 `MULTI_HOP` 降级回 `DEFAULT` |
-| `agentic.force` | `false` | C | ⚠ **实验开关**：绕过路由器，一律走 `MULTI_HOP`（§12.3 的 E1）。⛔ 不是提交口径 |
-| `agentic.max_rounds` | **3** | C | 检索轮数上限，**含第一轮** |
-| `agentic.per_round_top_k` | **20** | C | 每轮**精排之后**取前 N 条交给 CoQ |
-| `agentic.sufficiency_threshold` | `0.8` | C | "已判定充分"之后还要置信度 ≥ 它才提前停 |
+| `agentic.enabled` | `false` | C | 开关（**执行器在不在**）。`false` ⇒ 不构造执行器 ⇒ 每条 `MULTI_HOP` 降级回 `DEFAULT` |
+| `agentic.mode` | `react` | C | **选哪一种执行器**（`react` / `plan`）。⚠ 它**不是**"走不走这条路"（那归 `router.enabled` / `force`）。⛔ 取值域在加载期挡住：拼错的模式会让执行器静默退回 react，而"跑的是哪套机制"正是所有多跳结论的自变量 |
+| `agentic.force` | `false` | C | ⚠ **实验开关**：绕过路由器，一律走 `MULTI_HOP`（§12.3 的 E1）。⛔ 不是提交口径。⚠ **两种模式都遵循它** |
+| `agentic.max_rounds` | **3** | C | 检索轮数上限，**含第一轮**。⚠ **Plan 也用它**（那是一道预算题）；Plan 的计划最多 4 步 ⇒ 默认 3 时一个 4 步计划只跑 3 步并记 `max_rounds` |
+| `agentic.per_round_top_k` | **20** | C | 每轮**精排之后**取前 N 条交给模型。⚠ 它管的是**取几条**、**不是召回几条**；**两模式在这里相同**（都是"召回请求的 `top_k`(=100) → 精排 → 取前 20"） |
+| `agentic.sufficiency_threshold` | `0.8` | C | "已判定充分"之后还要置信度 ≥ 它才提前停。⚠ **只有 `react` 看它**（Plan 不做充分性判断、没有置信度） |
 | `agentic.max_prompt_tokens` | `6000` | C | 每轮 prompt 的 token 上限。**不是** `budget.max_tokens` |
-| `agentic.max_output_tokens` | `256` | C | 单次生成上限（要回一个四字段的 JSON） |
+| `agentic.max_output_tokens` | `256` | C | 单次生成上限。⚠ **`react` 用它**（回一个四字段的 JSON） |
+| `agentic.plan_max_output_tokens` | `768` | C | **`plan` 模式**单次生成上限。⚠ 不是上面那个的倍数：拆解要回 1~4 步、逐轮要回"答案 ＋ 逐字引句"（v2 起不再回下一查询）；256 会把四步计划从中间截断 ⇒ 计划作废 ⇒ **看起来像模型不行** |
 | `agentic.timeout_seconds` | `30.0` | C | 单次调用超时。⚠ 与 `router.timeout_seconds` 的 10s **不是一回事** |
 | `agentic.temperature` | `0.0` | C | 温度（§6 的可复现性） |
-| `agentic.round_rerank_enabled` | `true` | C | **每轮内部精排**（§12.4 的消融 A/B） |
-| `agentic.final_rerank_query_mode` | `combined` | C | `combined` = 原问题 ＋ 实际执行过的改写（§9.1）；`original` = 只用原问题 |
-| `agentic.prompt_version` | `coq-original` | ⛔ B | **断言**，不是可调项：与代码不符 ⇒ 构造期失败 |
+| `agentic.round_rerank_enabled` | `true` | C | **每轮内部精排**（§12.4 的消融 A/B）。**两模式都看它** |
+| `agentic.final_rerank_query_mode` | `combined` | C | `combined` = 原问题 ＋ 实际执行过的查询（§9.1）；`original` = 只用原问题。**两模式同名同义** |
+| `agentic.prompt_version` | `coq-original` | ⛔ B | **断言**，不是可调项：与代码不符 ⇒ 构造期失败。⚠ **只属于 `react`** |
+| `agentic.plan_decompose_prompt_version` | `plan-decompose-v2` | ⛔ B | Plan **拆解**提示词的版本断言（v2 = 2026-10-13 换的那一版：显式的规划规则 ＋ 三个结构示例） |
+| `agentic.plan_step_prompt_version` | `plan-step-v2` | ⛔ B | Plan **逐轮**提示词的版本断言。**与拆解那条分开**：两条各自演进。⚠ v2（2026-10-13）= 模型**只**回 `status`/`answer`/`evidence`：步骤编号由程序附加、下一查询由程序绑定 |
 
-**每轮召回深度取请求的 `top_k`**（AML 固定 100），**不为多跳另造一套检索参数**（§3.2）。
-顺序是"融合池 → 精排 → 取 N"，不是"先截 N 再精排"——后者只会重排一堆已被提前排除的候选，
-**而结果看起来完全正常**。
+**每轮召回深度**：**两种模式都取请求的 `top_k`**（AML 固定 100），**不为多跳另造一套检索参数**
+（§3.2）——顺序是"融合池 → 精排 → 取前 `per_round_top_k` 条"，不是"先截 N 再精排"，
+后者只会重排一堆已被提前排除的候选，**而结果看起来完全正常**。
+⚠ 2026-10-13 **对齐过一次**：`plan` 第一版是"每轮只召回 20 条"，于是它与 `react` 在
+**推进机制 ＋ 每轮检索深度**上同时不同，50 题对照的 7 道差**归不了因**
+（[`../eval/reports/coq-musique-20261011.md`](../eval/reports/coq-musique-20261011.md) §8.5）。
+⇒ 现在两条路的差别**只剩「推进机制」**。⛔ 别改回去。
 
 **两条开关是独立的**：`router.enabled` **选路**、`agentic.enabled` **执行**。
 只开 `agentic` 而不开 `router` ⇒ 一条请求都走不到那里（除非用 `force`）。

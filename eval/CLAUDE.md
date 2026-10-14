@@ -89,7 +89,7 @@
 | ScriptMem | **只用** `speaker_*_memories`，缺失时**静默渲染成空串，不报错** | **无 LLM 裁判**，选项精确匹配 |
 | CL-Bench | 嵌套的 `retrieval.selected` / `msp_retrieval.selected`，每项含 `created_at` + `text` | 严格全有全无 rubric，**且 API/JSON 失败一律记 0** |
 | PersonaMem v2 | 归档原版读 `chat_history/messages`；本地适配器用逐题 Search 片段替代历史（边界见 [`harness/CLAUDE.md`](./harness/CLAUDE.md)） | 官方 MCQ 选项字母判分 |
-| HaluMem / MuSiQue | 本地定义的 `retrieved_context`；输入和评分范围见 [`datasets/halumem.py`](./datasets/halumem.py) / [`datasets/musique.py`](./datasets/musique.py) | HaluMem 复用上游 QA 三分类；MuSiQue 用本地答案别名精确匹配及拒答评分 |
+| HaluMem / MuSiQue | 本地定义的 `retrieved_context`；输入和评分范围见 [`datasets/halumem.py`](./datasets/halumem.py) / [`datasets/musique.py`](./datasets/musique.py) | HaluMem 复用上游 QA 三分类；**MuSiQue 可答题默认走规则判分**（`extra_pipeline --musique-judge rule`，快速并复现历史数字）；显式传 `llm` 才走模型裁判，拒答恒走精确匹配 |
 | HybridQA / FEVEROUS | 本地定义的 `retrieved_context`；分别从整表及链接段落、claim-only 候选整页构造 Add，范围见对应加载器 | 复用固定版本上游 EM/F1 或标签与完整证据组评分；本地输入范围和验证见 [接入报告](./reports/datasets-20261006.md) |
 | **MQuAKE / MemTrapBench / CorporateBench / MedMemoryBench / TempReason**（`official-extra`） | **我们自定**：平铺的 `retrieved_context`（这五份没有官方 pipeline，见 [`harness/extra_pipeline.py`](./harness/extra_pipeline.py)） | MQuAKE / CorporateBench：纯函数（别名表 / 标量·集合）；MemTrapBench：LLM 四维均分（阈值我们定）；MedMemoryBench：照上游发布的 `metrics/`；TempReason：纯函数（可接受答案串命中，口径我们定） |
 

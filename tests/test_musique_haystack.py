@@ -417,6 +417,173 @@ def test_both_contracts_agree_on_the_abstention_branch() -> None:
         assert judge_musique("something", gold, contract=contract)[0] is False
 
 
+# ── ⑥ MuSiQue 可选模型裁判─────────────────────────────────────────────
+
+
+def test_the_musique_judge_prompt_carries_question_gold_and_aliases() -> None:
+    """提示词要带**问题 + 参考答案 + 别名**，并且**不带**检索段落（判语义，不判检索）。"""
+    from eval.harness.extra_pipeline import build_musique_judge_prompt
+
+    prompt = build_musique_judge_prompt(
+        "When was X established?", _musique_gold("1932", "the year 1932"), "In 1916."
+    )
+    assert "When was X established?" in prompt
+    assert "1932" in prompt and "the year 1932" in prompt
+    assert "In 1916." in prompt
+    assert "Verdict: CORRECT" in prompt  # 输出契约写死在模板里
+
+
+def test_the_musique_verdict_parser_prefers_the_verdict_line() -> None:
+    """⭐ 认 `Verdict:` 那一行；推理里出现的反例**不算结论**。"""
+    from eval.harness.extra_pipeline import judge_musique_llm_verdict
+
+    ok, why = judge_musique_llm_verdict(
+        "The answer gives the same year the reference does.\nVerdict: CORRECT"
+    )
+    assert ok is True and "CORRECT" in why
+    ok, _ = judge_musique_llm_verdict(
+        "This would be WRONG if it said 1916, but it says 1932.\nVerdict: CORRECT"
+    )
+    assert ok is True, "⛔ 推理里的那个 WRONG 不能被当结论"
+    ok, _ = judge_musique_llm_verdict("Broader place than the reference.\nVerdict: WRONG")
+    assert ok is False
+
+
+def test_the_musique_verdict_parser_never_defaults_to_correct() -> None:
+    """解不出来 ⇒ `None`（调用方记 `JUDGE_ERROR`），**绝不默认成对**。"""
+    from eval.harness.extra_pipeline import judge_musique_llm_verdict
+
+    assert judge_musique_llm_verdict("")[0] is None
+    assert judge_musique_llm_verdict("I cannot decide.")[0] is None
+    assert judge_musique_llm_verdict("JUDGE CALL FAILED: ConnectTimeout: …")[0] is None
+    # 没有 `Verdict:` 行时退化成"末次出现"——但仍然要解得出一个明确值
+    assert judge_musique_llm_verdict("reasoning here. CORRECT")[0] is True
+
+
+def test_the_dispatcher_uses_the_model_judge_when_requested(monkeypatch) -> None:
+    """显式请求 `llm` 时，语义正确但措辞不同的答案要能被判对。"""
+    from eval.harness import extra_pipeline as ep
+
+    calls = []
+
+    def fake_call(judge, prompt, *, max_tokens):
+        calls.append(prompt)
+        return "Same fact, stated shorter.\nVerdict: CORRECT"
+
+    monkeypatch.setattr(ep, "_call_judge", fake_call)
+    row = ep._judge_one(
+        "musique",
+        "q1",
+        {"dataset": "musique", "question": "Q?", "gold_answer": _musique_gold("22")},
+        "22 times",
+        judge=("http://judge", "key", "fake-judge-model"),
+        max_tokens=64,
+        musique_judge="llm",
+    )
+    assert row["is_correct"] is True
+    assert row["label"] == "Musique/llm:CORRECT"
+    assert "fake-judge-model" in row["judge_response"]  # 指纹：换了裁判模型要看得见
+    assert len(calls) == 1 and "22" in calls[0]
+
+
+def test_the_dispatcher_uses_rule_by_default(monkeypatch) -> None:
+    """默认沿用快速规则判分，不调用模型裁判。"""
+    from eval.harness import extra_pipeline as ep
+
+    def forbidden(*_args, **_kwargs):  # pragma: no cover
+        raise AssertionError("默认规则模式不得调用模型裁判")
+
+    monkeypatch.setattr(ep, "_call_judge", forbidden)
+    row = ep._judge_one(
+        "musique",
+        "q1",
+        {"dataset": "musique", "question": "Q?", "gold_answer": _musique_gold("22")},
+        "22 times",
+        judge=("http://judge", "key", "m"),
+        max_tokens=64,
+    )
+    assert row["is_correct"] is False
+    assert row["label"] == "WRONG"
+
+
+def test_the_rule_mode_still_reproduces_the_old_numbers(monkeypatch) -> None:
+    """⚠ `--musique-judge rule` 必须**一位不差**地复现历史口径（台账靠它）。"""
+    from eval.harness import extra_pipeline as ep
+
+    def forbidden(*_args, **_kwargs):  # pragma: no cover —— 规则模式不许调裁判
+        raise AssertionError("rule 模式不得调用模型裁判")
+
+    monkeypatch.setattr(ep, "_call_judge", forbidden)
+    row = ep._judge_one(
+        "musique",
+        "q1",
+        {"dataset": "musique", "question": "Q?", "gold_answer": _musique_gold("22")},
+        "22 times",
+        judge=("http://judge", "key", "m"),
+        max_tokens=64,
+        musique_judge="rule",
+    )
+    assert row["is_correct"] is False  # 规则口径：精确匹配 ⇒ 判错（这正是要复现的那个数）
+
+
+def test_the_abstention_branch_never_calls_the_model_judge(monkeypatch) -> None:
+    """⛔ 拒答题恒走规则（输出契约，不是语义判断）。"""
+    from eval.harness import extra_pipeline as ep
+
+    def forbidden(*_args, **_kwargs):  # pragma: no cover
+        raise AssertionError("拒答分支不得调用模型裁判")
+
+    monkeypatch.setattr(ep, "_call_judge", forbidden)
+    gold = {"answer": "", "answer_aliases": [], "answerable": False}
+    row = ep._judge_one(
+        "musique",
+        "q1",
+        {"dataset": "musique", "question": "Q?", "gold_answer": gold},
+        REFUSAL,
+        judge=("http://judge", "key", "m"),
+        max_tokens=64,
+    )
+    assert row["is_correct"] is True and row["label"] == "CORRECT"
+
+
+def test_a_broken_verdict_becomes_a_judge_error_not_a_verdict(monkeypatch) -> None:
+    """裁判解不出来 ⇒ `JUDGE_ERROR` + `is_correct=False`，原始响应留痕（同别的数据集）。"""
+    from eval.harness import extra_pipeline as ep
+
+    monkeypatch.setattr(ep, "_call_judge", lambda *a, **k: "我判不出来")
+    row = ep._judge_one(
+        "musique",
+        "q1",
+        {"dataset": "musique", "question": "Q?", "gold_answer": _musique_gold("22")},
+        "22",
+        judge=("http://judge", "key", "m"),
+        max_tokens=64,
+        musique_judge="llm",
+    )
+    assert row["label"] == "JUDGE_ERROR" and row["is_correct"] is False
+    assert "我判不出来" in row["judge_response"]
+
+
+def test_an_empty_answer_skips_the_judge_call(monkeypatch) -> None:
+    """空输出不必花一次调用（与 MedMemoryBench / Doc-PP 同一处置）。"""
+    from eval.harness import extra_pipeline as ep
+
+    def forbidden(*_args, **_kwargs):  # pragma: no cover
+        raise AssertionError("空输出不该调裁判")
+
+    monkeypatch.setattr(ep, "_call_judge", forbidden)
+    row = ep._judge_one(
+        "musique",
+        "q1",
+        {"dataset": "musique", "question": "Q?", "gold_answer": _musique_gold("22")},
+        "   ",
+        judge=("http://judge", "key", "m"),
+        max_tokens=64,
+        musique_judge="llm",
+    )
+    assert row["is_correct"] is False
+
+
 def test_the_default_contract_is_the_strict_one() -> None:
     """⚠ 默认不许变：`judge_musique` 不带 `contract` 时必须走严口径。"""
     gold = _musique_gold("five")

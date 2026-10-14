@@ -334,6 +334,40 @@ DEFAULT_COQ_MAX_PROMPT_TOKENS: Final[int] = 6000
 #: 名字沿用方案 §10.4 的 `coq-original`（含义：原版，没有本项目自己的改动）。
 DEFAULT_COQ_PROMPT_VERSION: Final[str] = "coq-original"
 
+#: 多跳执行器的**两种模式**（`agentic.mode`）。
+#:
+#: | 值 | 执行器 | 怎么推进 |
+#: | --- | --- | --- |
+#: | `"react"`（**默认**） | `CoqAgent`（原版 CoQ） | 每轮重新决定"充分了吗" |
+#: | `"plan"` | `PlanAgent`（先拆一份固定计划） | 每轮**只**回答"刚检索完的那一步"，**不重规划** |
+#:
+#: ⚠ **默认必须是 `react`**：不填这个键的旧配置要**逐字**跑出与本次改动之前一样的路。
+#: 两者的提示词、解析、停止判据**各自独立**（⛔ 不共享，见 `agent/` 的包说明）。
+DEFAULT_AGENTIC_MODE: Final[str] = "react"
+
+#: `agentic.mode` 的取值域。
+AGENTIC_MODES: Final[tuple[str, ...]] = ("react", "plan")
+
+#: Plan 模式单次生成的输出上限（token，`agentic.plan_max_output_tokens`）。
+#:
+#: ⚠ **它不是 `DEFAULT_COQ_MAX_OUTPUT_TOKENS`（256）**，两者不能合并：
+#: CoQ 回的是**定长四字段**，而 Plan 的两次调用都回**带自由文本的 JSON**——
+#: 拆解回 1～4 步（每步一句子问题），逐轮回一段答案 ＋ 若干条逐字引句 ＋ 一句下一查询。
+#: 256 会把四步计划**从中间截断**，而截断的表现是"JSON 不完整 ⇒ 计划作废 ⇒
+#: 这一题退回混合检索"，**看起来像模型不行**。给 768 是成本护栏：
+#: 够写满这两份结构，而超出的部分一定是模型在附加解释。
+DEFAULT_PLAN_MAX_OUTPUT_TOKENS: Final[int] = 768
+
+#: Plan 拆解提示词的默认版本（`agentic.plan_decompose_prompt_version`）。
+#:
+#: ⚠ 与 `DEFAULT_COQ_PROMPT_VERSION` **同一条纪律**（`common/` 不能 import `agent/`，
+#: 两处各写一个字面量、由构造期兜住）。
+DEFAULT_PLAN_DECOMPOSE_PROMPT_VERSION: Final[str] = "plan-decompose-v2"
+
+#: Plan 逐轮提示词的默认版本（`agentic.plan_step_prompt_version`）。
+#: **与拆解那条分开**：两条提示词各自演进，一个版本号管不住两条。
+DEFAULT_PLAN_STEP_PROMPT_VERSION: Final[str] = "plan-step-v2"
+
 #: `agentic.final_rerank_query_mode` 的取值域。
 #:
 #: * `"combined"` —— 原问题 ＋ **实际执行过的**改写 Query（§9.1 的联合精排，**主方案**）
@@ -396,14 +430,20 @@ class ModelsConfig:
     #: ⚠ **这里是模型名的家**，不是 `.env`：它是 profile 之间**唯一真正该变**的东西，
     #: 而 `local.yaml` / `submit.yaml` 存在的理由就是让"哪些量随模型变"能被看见
     #: （config-reference §9）。
-    embedder: str = "Qwen/Qwen3-Embedding-8B"
+    #: ⚠ 开发期 2026-10-13 起是 **4B**（`memory2.021130.xyz` 上只有它）——与 `default.yaml`
+    #: 及 `embed/qwen3_embedding.py::DEFAULT_MODEL` **三处同值**，由
+    #: `tests/test_config.py::test_model_default_is_the_same_in_both_places` 钉住。
+    embedder: str = "Qwen/Qwen3-Embedding-4B"
 
     #: **期望的向量维度**——它是**断言，不是赋值**：维度仍然来自真实响应（§7.4 的
     #: `dim` 只读属性），这一项只回答"这个部署接受多大的向量"，不符就响亮失败。
     #: ⚠ 它**进缓存坐标系**（`embed/base.py` 的 `EmbeddingCoordinate`）⇒ 换维度自动换一个
     #: 缓存文件，旧缓存不可能被静默命中（2026-10-09 那次"改了维度却命中旧向量"就是这么发生的）。
-    #: ⚠ §2.3 规定的两个模型——`text-embedding-v4`（提交期）与 Qwen3-Embedding-8B（开发期）
+    #: ⚠ §2.3 规定的两个模型——`text-embedding-v4`（提交期）与开发期那个
+    #: （2026-10-13 起是 Qwen3-Embedding-4B，此前的 8B 与它**也**同维）
     #: ——**同为 1024 维**，所以这一个值同时覆盖两个 profile。
+    #: ⛔ 别把这个巧合当成保障：**换模型不改维度时，没有任何一层会拒绝**，
+    #:   只表现为"检索变差"⇒ 换模型必须重建集合、作废缓存（`models.embedder` 进缓存坐标）。
     embed_dim: int = 1024
 
 
@@ -606,6 +646,20 @@ class AgenticConfig:
     #: ⇒ 每条 `MULTI_HOP` 降级回 `DEFAULT` 并记 `route_fallback = agentic_unavailable`。
     enabled: bool = False
 
+    #: **执行器的模式**（[`AGENTIC_MODES`][AGENTIC_MODES] 之一）。默认 `"react"`。
+    #:
+    #: ⚠ 它选的是**执行器**，⛔ **不是"走不走这条路"**——那个仍然归 `router.enabled`
+    #: 与 `force`。三条键的关系：
+    #:
+    #: ```text
+    #: router.enabled / force  ⇒  走不走 MULTI_HOP
+    #: agentic.enabled         ⇒  装不装执行器
+    #: agentic.mode            ⇒  装的是哪一种执行器
+    #: ```
+    #:
+    #: ⚠ **不填它的旧配置逐字跑出原来的行为**（默认就是 `"react"`）。
+    mode: str = DEFAULT_AGENTIC_MODE
+
     #: **实验开关：绕过路由器，把所有查询按 `MULTI_HOP` 处理**（§12.3 的 E1）。
     #:
     #: ⚠ 它存在的**唯一**理由是 E1 那一臂要"独立验证 CoQ 的检索能力"——不绕过路由器，
@@ -615,6 +669,11 @@ class AgenticConfig:
     force: bool = False
 
     #: 检索轮数上限，**含第一轮**（§7.4）。见 `DEFAULT_COQ_MAX_ROUNDS` 里与 PRD §9 的差异说明。
+    #:
+    #: ⚠ **它同时是 Plan 模式的检索次数上限**（两个模式共用这一道预算键，
+    #: 因为"轮数 × 每轮条数"本来就是同一道题）。Plan 的计划本身最多 4 步
+    #: （提示词写死"one to four"），所以默认 3 ⇒ **一个 4 步计划只会跑 3 步**
+    #: 并记 `stop_reason = "max_rounds"`。那不是错误，但它必须能被看见。
     max_rounds: int = DEFAULT_COQ_MAX_ROUNDS
 
     #: 每轮交给 CoQ 的候选数（精排**之后**取前 N 条）。
@@ -626,8 +685,13 @@ class AgenticConfig:
     #: 每轮 prompt 的 token 上限。**与 `budget.max_tokens` 不是同一个量**。
     max_prompt_tokens: int = DEFAULT_COQ_MAX_PROMPT_TOKENS
 
-    #: 单次生成的输出上限（token）。
+    #: 单次生成的输出上限（token）。⚠ **React 模式用这个值**（回一个四字段的 JSON）。
+    #: Plan 模式用 `plan_max_output_tokens`——两者的输出形状不同，见那个常量的说明。
     max_output_tokens: int = DEFAULT_COQ_MAX_OUTPUT_TOKENS
+
+    #: **Plan 模式**单次生成的输出上限（token）。见 `DEFAULT_PLAN_MAX_OUTPUT_TOKENS`。
+    #: ⚠ React 模式**不看它**——两条路的输出结构不一样，合成一个数会让其中一边被卡住。
+    plan_max_output_tokens: int = DEFAULT_PLAN_MAX_OUTPUT_TOKENS
 
     #: 单次调用的超时（秒）。
     timeout_seconds: float = DEFAULT_COQ_TIMEOUT_S
@@ -651,7 +715,14 @@ class AgenticConfig:
     #: ⚠ **它是一条断言，不是说明**：与代码里的常量不符 ⇒ **构造期响亮失败**。
     #: 同 `router.prompt_version`：删掉了历史版本之后，"改提示词忘了改版本号"的表现是
     #: **两份 run record 声称同一份提示词**，而那种漂移查不出来。
+    #: ⚠ **它只属于 `react` 模式**（原版 CoQ 是冻结的那一份）。
     prompt_version: str = DEFAULT_COQ_PROMPT_VERSION
+
+    #: Plan 模式的**拆解**提示词版本（`agent/plan_prompts.py` 的常量）。同一条断言纪律。
+    plan_decompose_prompt_version: str = DEFAULT_PLAN_DECOMPOSE_PROMPT_VERSION
+
+    #: Plan 模式的**逐轮**提示词版本。**与拆解那条分开**——两条各自演进。
+    plan_step_prompt_version: str = DEFAULT_PLAN_STEP_PROMPT_VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -908,8 +979,12 @@ def _storage(raw: object) -> StorageConfig:
 def _models(raw: object) -> ModelsConfig:
     g = _group(raw, where="models", allowed={"embedder", "embed_dim"})
     return ModelsConfig(
+        # ⚠ 这里必须**再写一遍字面值**：`ModelsConfig` 是 `slots=True` 的 dataclass，
+        #   `ModelsConfig.embedder` 拿到的是 slot 描述符、**不是默认值**（踩过）。
+        #   两处的同值由 `tests/test_config.py::test_model_default_is_the_same_in_both_places`
+        #   钉住。
         embedder=_str(
-            g.get("embedder"), where="models.embedder", default="Qwen/Qwen3-Embedding-8B"
+            g.get("embedder"), where="models.embedder", default="Qwen/Qwen3-Embedding-4B"
         ),
         embed_dim=_int(g.get("embed_dim"), where="models.embed_dim", default=1024),
     )
@@ -1088,37 +1163,47 @@ def _agentic(raw: object) -> AgenticConfig:
         where="agentic",
         allowed={
             "enabled",
+            "mode",
             "force",
             "max_rounds",
             "per_round_top_k",
             "sufficiency_threshold",
             "max_prompt_tokens",
             "max_output_tokens",
+            "plan_max_output_tokens",
             "timeout_seconds",
             "temperature",
             "round_rerank_enabled",
             "final_rerank_query_mode",
             "prompt_version",
+            "plan_decompose_prompt_version",
+            "plan_step_prompt_version",
         },
     )
     for name in ("enabled", "force", "round_rerank_enabled"):
         value = g.get(name)
         if value is not None and not isinstance(value, bool):
             raise ConfigError(f"`agentic.{name}` 必须是布尔值，收到 {value!r}")
-    mode = _str(
+    mode = _str(g.get("mode"), where="agentic.mode", default=DEFAULT_AGENTIC_MODE)
+    if mode not in AGENTIC_MODES:
+        # 取值域在**这里**就挡住：一个拼错的模式会让执行器**静默退回 react**，
+        # 而"跑的是哪套机制"正是所有多跳结论的自变量——那种静默会直接污染结论。
+        raise ConfigError(f"`agentic.mode` 必须是 {AGENTIC_MODES} 之一，收到 {mode!r}")
+    rerank_query_mode = _str(
         g.get("final_rerank_query_mode"),
         where="agentic.final_rerank_query_mode",
         default="combined",
     )
-    if mode not in FINAL_RERANK_QUERY_MODES:
+    if rerank_query_mode not in FINAL_RERANK_QUERY_MODES:
         # 取值域在**这里**就挡住：一个拼错的模式会让"联合精排"静默退化成"只用原问题"，
         # 而两者的分数差正好是本阶段要测的东西（§9.1）——**那种静默会直接污染结论**。
         raise ConfigError(
             f"`agentic.final_rerank_query_mode` 必须是 {FINAL_RERANK_QUERY_MODES} 之一，"
-            f"收到 {mode!r}"
+            f"收到 {rerank_query_mode!r}"
         )
     return AgenticConfig(
         enabled=bool(g.get("enabled") or False),
+        mode=mode,
         force=bool(g.get("force") or False),
         max_rounds=_int(
             g.get("max_rounds"), where="agentic.max_rounds", default=DEFAULT_COQ_MAX_ROUNDS
@@ -1143,6 +1228,11 @@ def _agentic(raw: object) -> AgenticConfig:
             where="agentic.max_output_tokens",
             default=DEFAULT_COQ_MAX_OUTPUT_TOKENS,
         ),
+        plan_max_output_tokens=_int(
+            g.get("plan_max_output_tokens"),
+            where="agentic.plan_max_output_tokens",
+            default=DEFAULT_PLAN_MAX_OUTPUT_TOKENS,
+        ),
         timeout_seconds=_float(
             g.get("timeout_seconds"),
             where="agentic.timeout_seconds",
@@ -1150,11 +1240,21 @@ def _agentic(raw: object) -> AgenticConfig:
         ),
         temperature=_float(g.get("temperature"), where="agentic.temperature", default=0.0),
         round_rerank_enabled=bool(g.get("round_rerank_enabled", True)),
-        final_rerank_query_mode=mode,
+        final_rerank_query_mode=rerank_query_mode,
         prompt_version=_str(
             g.get("prompt_version"),
             where="agentic.prompt_version",
             default=DEFAULT_COQ_PROMPT_VERSION,
+        ),
+        plan_decompose_prompt_version=_str(
+            g.get("plan_decompose_prompt_version"),
+            where="agentic.plan_decompose_prompt_version",
+            default=DEFAULT_PLAN_DECOMPOSE_PROMPT_VERSION,
+        ),
+        plan_step_prompt_version=_str(
+            g.get("plan_step_prompt_version"),
+            where="agentic.plan_step_prompt_version",
+            default=DEFAULT_PLAN_STEP_PROMPT_VERSION,
         ),
     )
 
@@ -1340,6 +1440,10 @@ def _validate_agentic(cfg: AppConfig) -> None:
             f"`agentic.max_rounds` 必须 ≥ 1（**含第一轮**）：{cfg.agentic.max_rounds}\n"
             "  0 会让多跳一轮都不跑却仍然返回**空候选**——那不是降级，是「假装跑过了」。"
         )
+    if cfg.agentic.mode not in AGENTIC_MODES:
+        # `_agentic()` 已经挡过（它更早、消息更具体）；这里再挡一次是**纵深**：
+        # 手写一个 `AgenticConfig(...)` 绕过加载器时，本函数是唯一的守卫。
+        raise ConfigError(f"`agentic.mode` 必须是 {AGENTIC_MODES} 之一：{cfg.agentic.mode!r}")
     if cfg.agentic.per_round_top_k < 1:
         raise ConfigError(f"`agentic.per_round_top_k` 必须 ≥ 1：{cfg.agentic.per_round_top_k}")
     if not 0.0 <= cfg.agentic.sufficiency_threshold <= 1.0:
@@ -1348,7 +1452,7 @@ def _validate_agentic(cfg: AppConfig) -> None:
             f"{cfg.agentic.sufficiency_threshold}\n"
             "  ⚠ 它只在**已经判定充分**之后起作用（见 `DEFAULT_COQ_SUFFICIENCY_THRESHOLD`）。"
         )
-    for name in ("max_prompt_tokens", "max_output_tokens"):
+    for name in ("max_prompt_tokens", "max_output_tokens", "plan_max_output_tokens"):
         if getattr(cfg.agentic, name) <= 0:
             raise ConfigError(f"`agentic.{name}` 必须为正：{getattr(cfg.agentic, name)}")
     if cfg.agentic.timeout_seconds <= 0:
@@ -1356,6 +1460,16 @@ def _validate_agentic(cfg: AppConfig) -> None:
     if cfg.agentic.temperature < 0:
         raise ConfigError(f"`agentic.temperature` 不得为负：{cfg.agentic.temperature}")
     _require(cfg.agentic.prompt_version, where="agentic.prompt_version", source="configs/*.yaml")
+    _require(
+        cfg.agentic.plan_decompose_prompt_version,
+        where="agentic.plan_decompose_prompt_version",
+        source="configs/*.yaml",
+    )
+    _require(
+        cfg.agentic.plan_step_prompt_version,
+        where="agentic.plan_step_prompt_version",
+        source="configs/*.yaml",
+    )
 
 
 def assert_single_process() -> None:

@@ -121,6 +121,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
 
     from eval.harness.api_config import ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL
 
+    max_tokens = getattr(args, "max_tokens", 1024)
     output = _Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     items = read_jsonl(Path(args.input))
@@ -153,7 +154,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
                             "model": ANSWER_MODEL,
                             "messages": messages,
                             "temperature": 0,
-                            "max_tokens": 512,
+                            "max_tokens": max_tokens,
                         },
                     )
                     response.raise_for_status()
@@ -212,8 +213,8 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     return build_pipeline_parser(
         __doc__.splitlines()[0],
-        default_max_tokens=512,
-        max_tokens_help="**收下但不用**——形状对齐用",
+        default_max_tokens=1024,
+        max_tokens_help="官方 MCQ 答案的输出上限；必须给推理和最终选项字母留出空间",
     )
 
 

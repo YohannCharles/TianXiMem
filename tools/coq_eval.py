@@ -118,21 +118,163 @@ DATASETS: dict[str, dict[str, str]] = {
 DEFAULT_DATASET = "locomo-refined"
 
 
-def _degraded_arms(report: dict, chosen) -> list[tuple[str, int, dict]]:
+def _degraded_arms(report: dict, chosen, mode: str = "react") -> list[tuple[str, int, dict]]:
     """哪些臂的多跳循环**被降级过** → `[(标签, 降级题数, 停止原因分布), ...]`。
 
     ⛔ **存在的理由**（2026-10-12 实测）：`gpt-4o-mini` 那轮 50 题里 **45 题第一轮就
     `llm_unavailable`**，多跳循环被优雅降级（D12：绝不 500）⇒ 那 45 题返回的其实是
     **普通混合检索**的结果。而**汇总表照样给了一个看起来正常的准确率**——
     "降级后的 E1"于是会被读成"E1"。⇒ 判据摆在这里，打印与告警共用它。
+
+    ⚠ **判据是 `fallback_reason`，不是某一个停止原因**（2026-10-12 收紧）：
+    `fallback_reason is not None` 的**定义**就是"这一题的多跳没跑成、回退走了混合检索"
+    ——那正是这一列要说的事。原来的写法（只数 `llm_unavailable`）漏掉了
+    `llm_error` / `retrieval_error` / Plan 的 `plan_invalid`：它们**同样是没跑成**。
+    ⚠ Plan 模式尤其要看它：拆解失败 ⇒ `plan_invalid` ⇒ 那一题其实是混合检索的结果。
     """
     out: list[tuple[str, int, dict]] = []
     for arm in chosen:
-        entry = report.get(arm.key, {})
+        arm_key, arm_label = _arm_identity(arm, mode)
+        entry = report.get(arm_key, {})
         count = entry.get("agentic_degraded", 0)
         if count:
-            out.append((arm.label, count, entry.get("agentic_stop_reasons", {})))
+            out.append((arm_label, count, entry.get("agentic_stop_reasons", {})))
     return out
+
+
+def _plan_calls(calls: list[dict]) -> list[dict]:
+    """真的跑过 Plan、且知道题号的那些请求。**答案输入的判据都以它为分母。**"""
+    return [c for c in calls if c.get("mode") == "plan" and c.get("qid")]
+
+
+def _recovery_calls(calls: list[dict]) -> list[dict]:
+    """⭐ 进了 `unresolved` 恢复分支的那些请求（见 `PlanRecovery`）。
+
+    ⚠ 判据是 `entered`——**"触发但预算耗尽"也算**：那种题的最终答题输入同样
+    **不**带执行记录（用户口径：中间步骤失败，不代表原题答不出来）。
+    """
+    return [c for c in _plan_calls(calls) if (c.get("recovery") or {}).get("entered")]
+
+
+def _plan_record_texts(calls: list[dict]) -> dict[str, str]:
+    """`qid → 前置到答案输入的那一段`。
+
+    ⭐ **恢复分支的题不前置**（2026-10-13）：那些题的最终答案是**拿原题**回答的，
+    带上"某一步 unresolved"的执行记录只会把失败过程塞进上下文。
+    ⛔ 记录**没有丢**——它照旧完整躺在 `<臂>-rounds.json` 里。
+    """
+    return {
+        call["qid"]: _execution_record_text(call)
+        for call in _plan_calls(calls)
+        if not (call.get("recovery") or {}).get("entered")
+    }
+
+
+def _require_plan_records(calls: list[dict], qids: set[str]) -> dict[str, str]:
+    """Plan 那一臂的执行记录：**每一道"该带记录"的题都要有**，缺一条就响亮失败。
+
+    ⚠ **分母要把恢复分支的题排除**（2026-10-13 修）：那些题的答题输入按设计
+    **只带原题 ＋ 精排后的真实记忆**（见 `_plan_record_texts`）——把它们算进分母，
+    "恢复生效"就会被读成"记录丢了"。实测在 LoCoMo 那 25 题上就有 9 题进了恢复分支，
+    于是这条守卫报了一条**假的** `16/25`，而真正该拦的（`--reuse-hits` 那种"一条记录
+    都没有"）反而被淹没在噪声里。
+    """
+    record_text = _plan_record_texts(calls)
+    recovery_qids = {call["qid"] for call in _recovery_calls(calls) if call.get("qid")}
+    expected = set(qids) - recovery_qids
+    if set(record_text) != expected:
+        missing = sorted(expected - set(record_text))
+        raise SystemExit(
+            f"✗ Plan 那一臂只拿到 {len(record_text)}/{len(expected)} 题的执行记录"
+            f"（缺 {missing[:5]}）。\n"
+            "  ⚠ 恢复分支（`recovery.entered`）的题**不在分母里**，缺的不是它们。\n"
+            "  原因通常是 `--reuse-hits`（没重跑 Search ⇒ 没有 plan_history）。\n"
+            "  ⇒ 去掉 `--reuse-hits`，或用一个会真的跑 Search 的 `--out`。"
+        )
+    return record_text
+
+
+def _plan_summary(calls: list[dict]) -> dict:
+    """Plan 那一臂的过程汇总（方案的第六节要求报告的那几项）。
+
+    ⚠ **它是从 `plan_history` 里数出来的**（不是从 `metrics` 快照）：
+    这里要的是"计划几步 / 真的跑了几步 / 哪一步停的"，而那些只有逐条记录有。
+    """
+    planned = Counter()
+    executed = Counter()
+    stop_reasons = Counter()
+    repaired = 0
+    quotes_unverified = 0
+    recall_total = 0
+    recalled_rounds = 0
+    answered_steps = 0
+    total_steps = 0
+    recovery_statuses = Counter()
+    fallback_recalled = 0
+    fallback_added = 0
+    fallback_ms = 0.0
+    rerank_modes = Counter()
+    with_record = 0
+    without_record = 0
+    for call in calls:
+        if call.get("mode") != "plan":
+            continue
+        rec = call.get("recovery") or {}
+        recovery_statuses[rec.get("status", "not_triggered")] += 1
+        fallback_recalled += rec.get("recalled", 0)
+        fallback_added += rec.get("added_unique", 0)
+        fallback_ms += rec.get("latency_ms", 0.0)
+        rerank_modes[rec.get("rerank_query_mode", "joint")] += 1
+        if call.get("answer_input_has_record", True):
+            with_record += 1
+        else:
+            without_record += 1
+        planned[call["plan_steps"]] += 1
+        executed[call["steps_executed"]] += 1
+        repaired += call.get("dependencies_repaired", 0)
+        stop_reasons[call["stop_reason"]] += 1
+        for step in call["plan_history"]:
+            total_steps += 1
+            if step["status"] == "answered":
+                answered_steps += 1
+            quotes_unverified += step["quotes_unverified"]
+            if step["documents"]:
+                recall_total += step["recalled"]
+                recalled_rounds += 1
+    return {
+        "plan_steps": dict(sorted(planned.items())),
+        "steps_executed": dict(sorted(executed.items())),
+        "stop_reasons": dict(stop_reasons),
+        "dependencies_repaired": repaired,
+        #: ⭐ 恢复分支（`unresolved`）的四态分布：`not_triggered` / `success` /
+        #: `error` / `skipped_budget_exhausted`。**"触发但预算耗尽"与"真的跑了兜底"
+        #: 就在这里分开**（前者 `skipped_budget_exhausted`、后者 `success`）。
+        "recovery_statuses": dict(recovery_statuses),
+        "fallback_recalled": fallback_recalled,
+        "fallback_added_unique": fallback_added,
+        "fallback_latency_ms": round(fallback_ms, 1),
+        "rerank_query_modes": dict(rerank_modes),
+        "answer_input_without_record": without_record,
+        "answer_input_with_record": with_record,
+        "quotes_unverified": quotes_unverified,
+        "answered_steps": answered_steps,
+        "total_step_records": total_steps,
+        "mean_recalled_per_round": (
+            round(recall_total / recalled_rounds, 3) if recalled_rounds else None
+        ),
+    }
+
+
+def _arm_identity(arm: Arm, mode: str) -> tuple[str, str]:
+    """`(报告键, 标签)`。
+
+    ⚠ `react` **不带后缀**：那是默认模式，加了会让本次改动之前的所有
+    `report.json` 键对不上。⚠ `plan` 必须带——两模式的产物要在**同一个 run 目录**里
+    并存（`report[arm_key] = entry` 会互相覆盖，而**汇总表照样打印**）。
+    """
+    if mode == "react":
+        return arm.key, arm.label
+    return f"{arm.key}-{mode}", f"{arm.label} · {mode}"
 
 
 def _load_manifest(path: Path) -> dict[str, list[str]]:
@@ -250,6 +392,7 @@ def _arm_config(
     rerank: bool,
     per_round_top_k: int | None = None,
     max_rounds: int | None = None,
+    mode: str | None = None,
 ) -> AppConfig:
     """把一条臂压进配置。**只动那四个开关**——其余一切（语料 / 索引 / 预算 / 判分）逐字相同。
 
@@ -288,6 +431,8 @@ def _arm_config(
             #   于是"这一臂到底用了哪个 per_round_top_k"永远能从传进来的参数看出来。
             **({} if per_round_top_k is None else {"per_round_top_k": per_round_top_k}),
             **({} if max_rounds is None else {"max_rounds": max_rounds}),
+            # ⚠ 同上：`--mode` 不传就不覆盖 ⇒ **旧配置（不填 mode）逐字跑 React**。
+            **({} if mode is None else {"mode": mode}),
         ),
         capture=replace(base.capture, enabled=False),
         metrics_path=str(metrics_path),
@@ -407,7 +552,14 @@ def _reuse_hits(out_dir: Path, arm_key: str) -> dict[str, list] | None:
     }
 
 
-def _search_all(samples, client: ServiceClient) -> dict[str, list]:
+def _search_all(samples, client: ServiceClient, recorder: _RecordingAgent | None = None):
+    """逐题 Search。`recorder` 给了就在每次调用后**把 qid 贴到那条记录上**。
+
+    ⚠ **qid 必须由这里贴**（而不是让 recorder 自己猜）：recorder 包在执行器上，
+    它看到的是 Query 文本，而"这条记录属于哪道题"只有遍历题单的人知道。
+    按顺序 zip 是**错的**（`--reuse-hits`、跳题、失败重试都会错位），
+    贴在一次调用的返回值上才是稳的。
+    """
     hits: dict[str, list] = {}
     started = time.monotonic()
     for sample in samples:
@@ -415,6 +567,8 @@ def _search_all(samples, client: ServiceClient) -> dict[str, list]:
             hits[question.qid] = client.search(
                 user_id=sample.user_id, query=question.question, top_k=TOP_K
             )
+            if recorder is not None and recorder.calls:
+                recorder.calls[-1].setdefault("qid", question.qid)
     print(
         f"    SEARCH {len(hits)} 题，{time.monotonic() - started:.0f}s",
         flush=True,
@@ -435,49 +589,153 @@ class _RecordingAgent:
     ⇒ 这是**导出**问题，不是记录问题——为一个诊断需求去改编排层的接口不划算，
     而"改测试去摸私有件"在本仓也是常态（`tests/test_router.py` 就换过 `_metrics`）。
     ⚠ 它对结果**完全透明**：原样转发、原样返回。
+
+    ⚠ **两种模式的记录形状不同**（`react` 是 `rounds`、`plan` 是 `plan_history`）：
+    它们描述的是两套不同的推进机制，硬塞进同一个键会让读的人以为字段含义相同。
+    判据是**结果对象上有没有 `plan_history`**（`PlanResult` 有、`AgenticResult` 没有），
+    ⛔ 不是"当前配置里写的是哪个模式"——那样两个事实就分不开了（记录来自**实际跑过的**那一次）。
     """
 
-    def __init__(self, inner: object) -> None:
+    def __init__(self, inner: object, mode: str = "react") -> None:
         self._inner = inner
+        #: 配置里声明的模式。**只用于对照**：真正的形状由返回的对象决定。
+        self.mode = mode
         self.calls: list[dict] = []
 
     def search(self, *, user_id: str, query: str, top_k: int):
         result = self._inner.search(user_id=user_id, query=query, top_k=top_k)  # type: ignore[attr-defined]
-        self.calls.append(
-            {
-                "user_id": user_id,
-                "query": query,
-                # ⚠ `query` 是**数据集原文** ⇒ 这份产物同样**不进 Git**
-                #   （`.gitignore` 已覆盖 `eval/reports/runs/*`）。
-                "stop_reason": result.stats.stop_reason,
-                "fallback_reason": result.stats.fallback_reason,
-                "rerank_query": result.rerank_query,
-                "rounds": [
-                    {
-                        "index": record.index,
-                        "query": record.query,
-                        "recalled": record.recalled_candidates,
-                        "documents": list(record.document_ids),
-                        "candidates": list(record.candidate_ids),
-                        "selected": list(record.selected_ids),
-                        "dropped": record.dropped_documents,
-                        "rerank_status": record.rerank_status,
-                        "is_sufficient": record.is_sufficient,
-                        "confidence": record.confidence_score,
-                        "new_query": record.new_query,
-                        "extraction": record.extraction,
-                        "stop_reason": record.stop_reason,
-                        "retrieval_ms": record.retrieval_latency_ms,
-                        "rerank_ms": record.rerank_latency_ms,
-                        "llm_ms": record.llm_latency_ms,
-                        "input_tokens": record.input_tokens,
-                        "output_tokens": record.output_tokens,
-                    }
-                    for record in result.stats.rounds
-                ],
+        record: dict = {
+            "user_id": user_id,
+            "query": query,
+            # ⚠ `query` 是**数据集原文** ⇒ 这份产物同样**不进 Git**
+            #   （`.gitignore` 已覆盖 `eval/reports/runs/*`）。
+            "stop_reason": result.stats.stop_reason,
+            "fallback_reason": result.stats.fallback_reason,
+            "rerank_query": result.rerank_query,
+        }
+        plan_history = getattr(result, "plan_history", None)
+        if plan_history is None:
+            record["mode"] = "react"
+            record["rounds"] = [
+                {
+                    "index": record_.index,
+                    "query": record_.query,
+                    "recalled": record_.recalled_candidates,
+                    "documents": list(record_.document_ids),
+                    "candidates": list(record_.candidate_ids),
+                    "selected": list(record_.selected_ids),
+                    "dropped": record_.dropped_documents,
+                    "rerank_status": record_.rerank_status,
+                    "is_sufficient": record_.is_sufficient,
+                    "confidence": record_.confidence_score,
+                    "new_query": record_.new_query,
+                    "extraction": record_.extraction,
+                    "stop_reason": record_.stop_reason,
+                    "retrieval_ms": record_.retrieval_latency_ms,
+                    "rerank_ms": record_.rerank_latency_ms,
+                    "llm_ms": record_.llm_latency_ms,
+                    "input_tokens": record_.input_tokens,
+                    "output_tokens": record_.output_tokens,
+                }
+                for record_ in result.stats.rounds
+            ]
+        else:
+            record["mode"] = "plan"
+            record["plan"] = [
+                {"id": step.id, "query": step.query, "depends_on": list(step.depends_on)}
+                for step in result.plan
+            ]
+            record["plan_steps"] = result.stats.plan_steps
+            record["steps_executed"] = result.stats.steps_executed
+            record["decompose_llm_calls"] = result.stats.decompose_llm_calls
+            record["step_llm_calls"] = result.stats.step_llm_calls
+            record["dependencies_repaired"] = result.stats.dependencies_repaired
+            # ⭐ 恢复分支（`unresolved`）的诊断（2026-10-13）。
+            # ⚠ **这一段曾经被一次"锚点已失效"的替换静默漏掉**，于是汇总里的
+            #   `recovery_statuses` 全是默认值 `not_triggered`——**看起来像"一次都没触发"**。
+            #   ⇒ 用例 `test_the_recorder_really_writes_the_recovery_fields` 钉住它。
+            record["recovery"] = {
+                "entered": result.recovery.entered,
+                "status": result.recovery.status,
+                "executed_rounds": result.recovery.executed_rounds,
+                "remaining_top_k": result.recovery.remaining_top_k,
+                "recalled": result.recovery.recalled,
+                "added_unique": result.recovery.added_unique,
+                "latency_ms": result.recovery.latency_ms,
+                "rerank_query_mode": result.recovery.rerank_query_mode,
             }
-        )
+            # ⚠ "最终答题输入折不折执行记录"是**评测层**的决定（服务不碰答案输入）
+            #   ⇒ 这里把它算出来记上，免得读报告的人要拿两条规则去推。
+            record["answer_input_has_record"] = not result.recovery.entered
+            # ⚠ `history_text` 是**控制模型那一轮实际收到的历史**（方案第六节要求能重建它）
+            #   ⇒ 与 `query` 一样含数据集原文，只落 `runs/`（gitignored）。
+            record["plan_history"] = [
+                {
+                    "index": step.index,
+                    "step_id": step.step_id,
+                    "template": step.template,
+                    "executed_query": step.executed_query,
+                    "recalled": step.recalled_candidates,
+                    "documents": list(step.document_ids),
+                    "candidates": list(step.candidate_ids),
+                    "evidence": list(step.evidence_ids),
+                    "quotes": list(step.evidence_quotes),
+                    "quotes_unverified": step.quotes_unverified,
+                    "status": step.status,
+                    "answer": step.answer,
+                    "canonical_next_query": step.canonical_next_query,
+                    "history": step.history_text,
+                    "dropped": step.dropped_documents,
+                    "rerank_status": step.rerank_status,
+                    "extraction": step.extraction,
+                    "stop_reason": step.stop_reason,
+                    "retrieval_ms": step.retrieval_latency_ms,
+                    "rerank_ms": step.rerank_latency_ms,
+                    "llm_ms": step.llm_latency_ms,
+                    "input_tokens": step.input_tokens,
+                    "output_tokens": step.output_tokens,
+                }
+                for step in plan_history
+            ]
+        self.calls.append(record)
         return result
+
+
+#: 前置到答案输入的那一段的抬头。⛔ **它必须说清"这是模型生成的执行记录"**：
+#: 不伪装成记忆、不编造 memory id。见 [`../eval/harness/judge.py`](../eval/harness/judge.py)
+#: 的 `execution_record` 参数。
+PLAN_RECORD_HEADER: str = (
+    "The block below is a MACHINE-GENERATED execution record of an intermediate\n"
+    "retrieval plan produced by a model. It is NOT a memory record and it is NOT\n"
+    "evidence; its identifiers are step identifiers, not memory identifiers.\n"
+    "Use it only as context about what has already been established."
+)
+
+
+def _execution_record_text(call: dict) -> str:
+    """`plan_history` → **答案输入前置的那一段**（方案第七节）。
+
+    形状固定：抬头（标明是模型生成的执行记录）＋ 完整计划 ＋ 实际执行过的问答。
+
+    ⛔ **不在这里放记忆原文**：后部才是真实记忆（`judge.build_input_items` 负责拼起来）。
+    ⛔ **不编造 memory id**：那一段的来源只用 `plan_history` 里记着的稳定 ID，
+    而它们本来就来自候选池。
+    """
+    lines = [PLAN_RECORD_HEADER, "", f"Original question: {call['query']}", "", "Fixed plan:"]
+    lines += [f"{step['id']}: {step['query']}" for step in call.get("plan", [])]
+    lines.append("")
+    lines.append("Executed steps:")
+    for step in call.get("plan_history", []):
+        lines.append(f"{step['step_id']} question: {step['executed_query']}")
+        answer = step["answer"]
+        lines.append(f"{step['step_id']} answer: {answer if answer else '(none)'}")
+        sources = ", ".join(step["evidence"]) or "(none)"
+        lines.append(f"{step['step_id']} sources: {sources}")
+        if step["status"] != "answered":
+            # ⚠ 停在哪一步、为什么停，必须一起进答案输入：否则模型会把"没有下文"
+            #   读成"计划只有这么多"，而那与"这一步没解出来"是两件事。
+            lines.append(f"{step['step_id']} status: {step['status']} ({step['stop_reason']})")
+    return "\n".join(lines)
 
 
 def _gold_evidence_texts(bench_dir: Path) -> dict[str, tuple[str, ...]]:
@@ -595,6 +853,12 @@ def main(argv: list[str] | None = None) -> int:
         help="覆盖 `agentic.max_rounds`（检索轮数上限，含第一轮）；不传就用配置里的值",
     )
     parser.add_argument(
+        "--mode",
+        choices=("react", "plan"),
+        default=None,
+        help="覆盖 `agentic.mode`（选哪个多跳执行器）；不传就用配置里的值（react）",
+    )
+    parser.add_argument(
         "--per-round-top-k",
         type=int,
         default=None,
@@ -667,6 +931,15 @@ def main(argv: list[str] | None = None) -> int:
             f"（`agentic.max_rounds` = {base.agentic.max_rounds}）",
             flush=True,
         )
+    # ⚠ 与上面两个**同一条口径**：不传就用配置里的值（`react`），
+    #   并把**实际生效的那个模式**写进记录与报告标题。⛔ 不把"两模式的结果变化"
+    #   归因给计划机制之前，先要能证明跑的是哪一套。
+    mode = args.mode if args.mode is not None else base.agentic.mode
+    if args.mode is not None:
+        print(
+            f"⚠ `--mode {mode}` 覆盖了配置（`agentic.mode` = {base.agentic.mode}）",
+            flush=True,
+        )
 
     # ⚠ **续跑要合并，不能覆盖**：`--arms e1,a` 这类部分重跑若从头写 `report.json`，
     #   上一次跑出来的 E0 / E2 会**静默消失**——而汇总表会照常打印，只是少两行。
@@ -677,22 +950,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"（续跑：已有 {sorted(report)} 的结果，本次只覆盖 {args.arms}）", flush=True)
 
     for position, arm in enumerate(chosen):
-        print(f"\n══ {arm.label} ══", flush=True)
+        arm_key, arm_label = _arm_identity(arm, mode)
+        print(f"\n══ {arm_label} ══", flush=True)
         config = _arm_config(
             base,
             arm,
             collection=collection,
             sqlite_path=sqlite_path,
-            metrics_path=out_dir / f"{arm.key}-metrics.json",
+            metrics_path=out_dir / f"{arm_key}-metrics.json",
             rerank=not args.no_rerank,
             per_round_top_k=per_round_top_k,
             max_rounds=max_rounds,
+            mode=mode,
         )
         services = build_services(config)
         # ⚠ 逐轮落盘（§11）：包一层，**只在真的接上了执行器时**包。
         recorder = None
         if services.search.agentic is not None:
-            recorder = _RecordingAgent(services.search.agentic)
+            recorder = _RecordingAgent(services.search.agentic, mode=mode)
             services.search._agentic = recorder  # noqa: SLF001 — 见 `_RecordingAgent`
         app = create_app(services)
         with _served(app) as base_url:
@@ -707,23 +982,27 @@ def main(argv: list[str] | None = None) -> int:
                     print("    （记忆已在：不重复 ADD）", flush=True)
                 if position == 0:
                     _require_source_rows(samples, sqlite_path, add_shape=client.add_shape)
-                hits = _reuse_hits(out_dir, arm.key) if args.reuse_hits else None
+                hits = _reuse_hits(out_dir, arm_key) if args.reuse_hits else None
                 if hits is None:
-                    hits = _search_all(samples, client)
+                    hits = _search_all(samples, client, recorder)
                 # ⚠ **必须连正文一起存**（2026-10-12 修）：以前只存 `{id, created_at}`，
                 #   于是"答案步挂了想续跑"只能**重跑 Search**（17 分钟）——
                 #   因为答案步要用正文拼 `retrieved_context`，而从 SQLite 反推正文
                 #   是"看起来一样、其实不是同一份输入"（本项目最忌讳的那类）。
-                _write_hits(out_dir / f"{arm.key}-hits.json", hits)
+                _write_hits(out_dir / f"{arm_key}-hits.json", hits)
                 entry: dict = {
-                    "label": arm.label,
+                    "label": arm_label,
                     "switches": {
                         "router.enabled": arm.router,
                         "agentic.enabled": arm.agentic,
                         "agentic.force": arm.force,
+                        # ⚠ **模式必须记**：它是这一轮的自变量，不记的话"换模式之后分数变了"
+                        #   会被读成模型抖动（本仓在这类事上栽过多次）。
+                        "agentic.mode": mode,
                         "agentic.round_rerank_enabled": arm.round_rerank,
-                        # ⚠ **每轮交给 CoQ 的条数必须记**：它是这一轮真跑的参数，
-                        #   不记的话"改了它之后分数变了"会被当成模型抖动（本仓栽过）。
+                        # ⚠ **每轮交给模型的条数必须记**：它是这一轮真跑的参数。
+                        #   ⚠ 它管的是**精排后取几条**，不是召回几条——**两模式在这里相同**
+                        #   （都是"召回请求的 `top_k` → 精排 → 取前 N"）。
                         "agentic.per_round_top_k": per_round_top_k,
                         # ⚠ 同上：轮数上限也是"这一轮真跑的参数"，不记就没法归因。
                         "agentic.max_rounds": max_rounds,
@@ -735,10 +1014,11 @@ def main(argv: list[str] | None = None) -> int:
                     "profile": base.profile,
                     "rerank_enabled": not args.no_rerank,
                 }
+                execution_record: dict[str, str] = {}
                 if recorder is not None:
                     # §11 的逐轮过程。⚠ **它含数据集原文**（Query 与候选 id）
                     #   ⇒ 与 `runs/` 一样**不进 Git**。
-                    (out_dir / f"{arm.key}-rounds.json").write_text(
+                    (out_dir / f"{arm_key}-rounds.json").write_text(
                         json.dumps(recorder.calls, ensure_ascii=False, indent=1), encoding="utf-8"
                     )
                     entry["recorded_requests"] = len(recorder.calls)
@@ -750,15 +1030,33 @@ def main(argv: list[str] | None = None) -> int:
                     #    ⇒ 只写在 `rounds.json` 里等于没有告警：降级后的 E1 会被当成 E1。
                     stops = Counter(record["stop_reason"] for record in recorder.calls)
                     entry["agentic_stop_reasons"] = dict(stops)
-                    entry["agentic_degraded"] = stops.get("llm_unavailable", 0)
+                    # ⚠ 判据是 `fallback_reason`（= 这一题真的走了混合检索），
+                    #   不是某一个停止原因：`llm_error` / `retrieval_error` /
+                    #   Plan 的 `plan_invalid` **同样**是"多跳没跑成"。
+                    entry["agentic_degraded"] = sum(
+                        1 for record in recorder.calls if record["fallback_reason"]
+                    )
+                    if mode == "plan":
+                        # ⛔ **响亮失败**：Plan 那一臂的答案输入**必须**带上执行记录，
+                        #   否则判的是"少一段上下文"的另一种配置，而分数看起来正常。
+                        #   ⚠ 分母排除恢复分支的题——见 `_require_plan_records`。
+                        execution_record = _require_plan_records(recorder.calls, set(hits))
+                        entry["plan"] = _plan_summary(recorder.calls)
+                        print(
+                            "    Plan 过程：" + json.dumps(entry["plan"], ensure_ascii=False),
+                            flush=True,
+                        )
                 if not args.skip_judge:
                     items = []
                     for sample in samples:
-                        items += build_input_items(sample, hits)
+                        # ⚠ **只有 Plan 那一臂前置执行记录**：React 的 `execution_record`
+                        #   是空 dict ⇒ `build_input_items` 走的是与本参数存在之前
+                        #   **逐字相同**的那条路（它连截断点都没变）。
+                        items += build_input_items(sample, hits, execution_record=execution_record)
                     results = run_judge(
                         pipeline,
                         items,
-                        out_dir / arm.key,
+                        out_dir / arm_key,
                         dataset=DATASETS[dataset]["judge"],
                     )
                     correct = sum(1 for r in results if r.is_correct)
@@ -769,7 +1067,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"    判分：{correct}/{len(results)} = {entry['accuracy']}", flush=True)
             finally:
                 client.close()
-            report[arm.key] = entry
+            report[arm_key] = entry
             (out_dir / "report.json").write_text(
                 json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8"
             )
@@ -779,15 +1077,16 @@ def main(argv: list[str] | None = None) -> int:
         f"{'臂':<30} {'答对':>6} {'题数':>5} {'准确率':>8} {'证据≥1':>7} {'证据全':>7} {'降级':>5}"
     )
     print(header)
-    degraded_arms = _degraded_arms(report, chosen)
+    degraded_arms = _degraded_arms(report, chosen, mode)
     for arm in chosen:
-        entry = report.get(arm.key, {})
+        arm_key, arm_label = _arm_identity(arm, mode)
+        entry = report.get(arm_key, {})
         coverage = entry.get("coverage", {})
+        # ⚠ **降级那一列只在这里取**：`_degraded_arms()` 已经按同一判据列过一遍
+        #   （⛔ 再 append 一次会让同一臂**打印两遍**——实测踩过，见下面的注释）。
         degraded = entry.get("agentic_degraded", 0)
-        if degraded:
-            degraded_arms.append((arm.label, degraded, entry.get("agentic_stop_reasons", {})))
         print(
-            f"{arm.label:<28} {entry.get('correct', '-'):>6} {entry.get('judged', '-'):>5} "
+            f"{arm_label:<28} {entry.get('correct', '-'):>6} {entry.get('judged', '-'):>5} "
             f"{entry.get('accuracy', '-'):>8} "
             f"{coverage.get('any_hit', '-'):>7} {coverage.get('full_hit', '-'):>7} "
             f"{degraded or '-':>5}"
@@ -798,9 +1097,11 @@ def main(argv: list[str] | None = None) -> int:
         for label, count, stops in degraded_arms:
             print(f"    {label}：{count} 题（停止原因 {stops}）")
         print(
-            "  降级 = LLM 调用失败 ⇒ 那几题走的是**普通混合检索**（D12 的'绝不 500'把它兜住了）。\n"
+            "  降级 = 这一题的多跳**没跑成**、回退走了**普通混合检索**"
+            "（D12 的'绝不 500'把它兜住了）。\n"
             "  ⇒ 这些数**只能用来看'服务没崩'，不能用来回答'多跳有没有用'**。\n"
-            "  ⚠ 常见原因：端点额度/限流（实测 OpenRouter 免费档 402）。"
+            "  ⚠ 常见原因：端点额度/限流（实测 OpenRouter 免费档 402）、"
+            "Plan 的拆解输出非法（`plan_invalid`）。"
         )
     print(f"\n产物：{out_dir}（report.json / <臂>-hits.json / <臂>/ 逐题答案与判分）")
     print(f"⚠ {DATASETS[dataset]['note']}")

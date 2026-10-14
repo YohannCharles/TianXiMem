@@ -553,7 +553,15 @@ def test_endpoint_without_a_key_fails_loudly_at_import():
         "AML_API_KEY_2": "",
     }
     done = subprocess.run(
-        [sys.executable, "-c", "import api_config"], env=env, capture_output=True, text=True
+        [sys.executable, "-c", "import api_config"],
+        env=env,
+        capture_output=True,
+        text=True,
+        # ⚠ **同样的 locale 陷阱**：孩子把那句中文错误写到 stderr，父进程按 GBK 解它
+        #   ⇒ `stderr` 变成 `None`，而断言看起来像"没有那条信息"（2026-10-13 修；
+        #   与 `judge._run` 里那处是同一个 bug 的两份）。
+        encoding="utf-8",
+        errors="replace",
     )
 
     assert done.returncode != 0
@@ -941,6 +949,50 @@ def test_run_gives_up_after_the_attempt_budget(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="exit 2"):
         judge._run(tmp_path / "p.py", ["evaluate"], timeout=None)
     assert calls["n"] == 3
+
+
+def test_run_decodes_the_subprocess_as_utf8(monkeypatch, tmp_path):
+    """⭐ 父进程**必须**按 UTF-8 解子进程的管道（2026-10-13 实测踩过）。
+
+    ⚠ 只写 `text=True` ⇒ 走 locale 编码（Windows 上是 GBK），而 pipeline 子进程写的是
+    UTF-8（中文与全角标点）⇒ 读线程抛 `UnicodeDecodeError`、`stdout`/`stderr` **双双为
+    `None`**，真正的失败原因被一个 `TypeError` 顶掉，**整轮跑批在判分那一步作废**
+    （Search 那 26 分钟白跑）。⇒ 把编码钉在调用上。
+    """
+    from eval.harness import judge
+
+    seen: dict[str, object] = {}
+
+    class _Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return _Completed()
+
+    monkeypatch.setattr(judge.subprocess, "run", fake_run)
+    judge._run(tmp_path / "p.py", ["answer"], timeout=None)
+
+    assert seen["encoding"] == "utf-8"
+    assert seen["errors"] == "replace"  # 解码退化只许影响**日志文本**
+
+
+def test_a_failed_subprocess_without_captured_output_still_reports(monkeypatch, tmp_path):
+    """⚠ `stdout`/`stderr` 为 `None`（解码炸掉时就是这样）**也得把原因带出去**。"""
+    from eval.harness import judge
+
+    class _Completed:
+        returncode = 1
+        stdout = None
+        stderr = None
+
+    monkeypatch.setattr(judge.subprocess, "run", lambda cmd, **kwargs: _Completed())
+    monkeypatch.setattr(judge.time, "sleep", lambda _s: None)
+
+    with pytest.raises(RuntimeError, match="exit 1"):
+        judge._run(tmp_path / "p.py", ["evaluate"], timeout=None, attempts=1)
 
 
 def test_sanitize_jsonl_tmp_path(tmp_path):

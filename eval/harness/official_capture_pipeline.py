@@ -17,7 +17,7 @@ mquake / corporatebench / medmemorybench / memtrapbench），每题该用哪套 
 | `scriptmem` | `pipeline_scriptmem.py` 的 answer prompt | `predicted_letters` + `score_item` |
 | `beam` | `pipeline_beam.py#render_answer_prompt` | 同文件的 rubric 批量裁判（三点制均分） |
 | `clbench` | `clb_pipeline.py#build_answer_prompt` | 同文件 rubric 裁判（全有全无 + 比例分） |
-| `personamem-v2` | 通用 answer prompt | **归一化文本匹配**（见下） |
+| `personamem-v2` | `pipeline_v2_personamem.py#official_generative_messages` | **归一化文本匹配**（见下） |
 | 上表之外的 6 个 | `extra_pipeline.py#render_answer_prompt` | `extra_pipeline.py#judge_one` |
 
 **prompt 与判分逻辑一行都不重写**：归档那几份用 `sys.path` + `import` 直接调
@@ -72,8 +72,9 @@ _EXTRA_FAMILIES = frozenset(
     }
 )
 
-#: **判分在本文件里、但答案 prompt 仍走通用那条**的家族（它们没有归档的 AML pipeline）。
-_SIMPLE_JUDGE_FAMILIES = frozenset({"personamem-v2", "halumem", "feverous"})
+#: **判分在本文件里**的采集家族；PersonaMem 的答案 prompt 另走官方 generative，
+#: HaluMem / FEVEROUS 没有官方 answer pipeline，仍由 `_answer_prompt` 的本地分派处理。
+_LOCAL_JUDGE_FAMILIES = frozenset({"personamem-v2", "halumem", "feverous"})
 
 #: FEVEROUS 的三分类词表。**不能用别名包含判**——`SUPPORTS` 会命中任何含 "supports"
 #: 的句子（而 `NOT ENOUGH INFO` 里也含 `SUPPORT` 的反义表述），必然假阳性。
@@ -296,8 +297,32 @@ def _answer_prompt(item: dict) -> str:
             f"# Retrieved document content\n{item.get('retrieved_context') or '(no memories)'}\n\n"
             "Now answer the user question above, using only the retrieved document content."
         )
-    # `personamem-v2` 与六个 `official-extra` 家族都走我们自写那套通用 prompt
-    # （`extra_pipeline.render_answer_prompt` 对未知 dataset 就落回 `ANSWER_PROMPT`）。
+    if family == "personamem-v2":
+        # 官方采集中的 PersonaMem 行是开放题，只有独立 PersonaMem-v2 题库才有
+        # `correct_answer` / `incorrect_answers`，所以这里必须走官方 generative
+        # prompt，而不是把平铺采集项误送到官方 MCQ 适配器。
+        module = _archived(family)
+        messages = module.official_generative_messages(
+            {
+                **item,
+                "chat_history": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Retrieved memories (in retrieval order):\n"
+                            + (item.get("retrieved_context") or "(no memories)")
+                        ),
+                    }
+                ],
+            }
+        )
+        # `extra_pipeline.chat` 的历史接口接收单个字符串；保留官方消息正文和顺序，
+        # 并显式保留角色边界，避免重新编写官方 prompt 文案。
+        return "\n\n".join(
+            f"{message.get('role', 'user').title()}: {message.get('content', '')}"
+            for message in messages
+        )
+    # 其余没有官方 answer prompt 的家族走我们自写的专用/通用提示词。
     return _extra().render_answer_prompt(item)
 
 
@@ -374,7 +399,7 @@ def _judge(item: dict, generated: str, *, max_tokens: int) -> dict:
     family = item.get("dataset")
     qid = str(item["id"])
     extra = _extra()
-    if family in _EXTRA_FAMILIES or family in _SIMPLE_JUDGE_FAMILIES:
+    if family in _EXTRA_FAMILIES or family in _LOCAL_JUDGE_FAMILIES:
         if family == "personamem-v2":
             return _narrow_judge(item, generated, max_tokens=max_tokens)
         if family == "halumem":
