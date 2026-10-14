@@ -137,6 +137,8 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 直接 `render_memories`；其余适配器都截）——**待补**。
 这属于本地答案输入口径的显式改动，不能认定 AML 线上也是同一输入方式。
 旧完整历史答案与成绩不能直接复用；适配器校验输入版本和指纹，重跑使用新 run-id。
+`--max-tokens` 控制实际答案输出预算；答案记录保存预算与 `finish_reason`，
+续跑发现预算、答案模型或端点变化时拒绝复用旧答案。没有预算记录的旧答案也须换 run-id。
 验证与复现见 [`../reports/personamem-20261009.md`](../reports/personamem-20261009.md)。
 
 ### HybridQA / FEVEROUS 的本地文本检索适配
