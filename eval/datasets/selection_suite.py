@@ -28,7 +28,6 @@ LOADERS = {
     "beam": ("beam", "load_beam"),
     "clbench": ("clbench", "load_clbench"),
     "corporatebench": ("corporatebench", "load_corporatebench"),
-    "feverous": ("feverous", "load_feverous"),
     "halumem": ("halumem", "load_halumem"),
     "hybridqa": ("hybridqa", "load_hybridqa"),
     "locomo-refined": ("locomo", "load_locomo"),
@@ -39,7 +38,11 @@ LOADERS = {
     "musique": ("musique", "load_musique"),
     "personamem-v2": ("personamem", "load_personamem"),
 }
-TARGETED = {"longmemeval-s", "hybridqa", "feverous", "medmemorybench"}
+#: 只给这些数据集传 `question_ids`（按题筛语料而非整份加载）。
+#: ⚠ **feverous 已于 2026-10-14 移出本套件**：它的 25 题要带 56G 语料（占全套 98%）。
+#: loader（`eval/datasets/feverous.py`）与 `recipes.py` 的配方**都保留**——
+#: `run.py --dataset feverous` 那条独立评测路径不受影响，这里只是不再选它。
+TARGETED = {"longmemeval-s", "hybridqa", "medmemorybench"}
 
 
 def write_json(path: Path, value: object) -> None:
@@ -141,8 +144,6 @@ def official_native_id(row: dict, extra: dict, public: dict, root: Path) -> str 
         return f"musique-{loc.get('id') or gold['id']}-{variant}"
     if d == "hybridqa" and (loc.get("question_id") or gold.get("question_id")):
         return f"hybridqa-{loc.get('question_id') or gold['question_id']}"
-    if d == "feverous" and (loc.get("id") is not None or gold.get("id") is not None):
-        return f"feverous-{loc.get('id', gold.get('id'))}"
     if d == "clbench":
         return gold.get("task_id")
     if d == "halumem" and loc.get("uuid"):
