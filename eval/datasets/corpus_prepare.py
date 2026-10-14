@@ -24,8 +24,19 @@ def extract_zip_member(archive: Path, destination: Path, entry: dict) -> None:
 
 
 def prepare_hybridqa_corpus(root: Path, entry: dict, *, check_only: bool = False) -> None:
-    """从固定 tar 包选择 dev 引用的完整 table/request 对，逐文件原子发布。"""
-    from .hybridqa import ARCHIVE, CORPUS_RECEIPT, DATA_DIR, required_corpus_files
+    """从固定 tar 包选择 dev 引用的完整 table/request 对，逐文件原子发布。
+
+    ⚠ 落盘名走 [`hybridqa.corpus_relpath`](./hybridqa.py)：上游表名含 `:`（NTFS
+    保留字符），必须编码后才能作为普通文件存在、并让 `os.replace` 原子发布成功。
+    `receipt` 的键仍是**原始归档成员名**（与 `archive_sha256` 同源），不受编码影响。
+    """
+    from .hybridqa import (
+        ARCHIVE,
+        CORPUS_RECEIPT,
+        DATA_DIR,
+        corpus_relpath,
+        required_corpus_files,
+    )
 
     wanted = required_corpus_files(root)
     archive = root / DATA_DIR / ARCHIVE
@@ -56,7 +67,7 @@ def prepare_hybridqa_corpus(root: Path, entry: dict, *, check_only: bool = False
                     content = handle.read()
                 digest = hashlib.sha256(content).hexdigest()
                 hashes[name] = digest
-                target = root / DATA_DIR / name
+                target = root / DATA_DIR / corpus_relpath(name)
                 if target.is_file():
                     if sha256_file(target) != digest:
                         raise ValueError(
@@ -66,7 +77,7 @@ def prepare_hybridqa_corpus(root: Path, entry: dict, *, check_only: bool = False
                     raise ValueError(f"Missing {target}; run make fetch-data DATASET=hybridqa")
                 else:
                     assert staged_root is not None
-                    staged = staged_root / name
+                    staged = staged_root / corpus_relpath(name)
                     staged.parent.mkdir(parents=True, exist_ok=True)
                     staged.write_bytes(content)
                     pending.append(name)
@@ -88,9 +99,9 @@ def prepare_hybridqa_corpus(root: Path, entry: dict, *, check_only: bool = False
             assert staged_root is not None
             # 整份计划先校验再发布，已有的损坏文件不覆盖。
             for name in pending:
-                destination = root / DATA_DIR / name
+                destination = root / DATA_DIR / corpus_relpath(name)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                (staged_root / name).replace(destination)
+                (staged_root / corpus_relpath(name)).replace(destination)
             staged_receipt = staged_root / CORPUS_RECEIPT
             staged_receipt.write_text(
                 json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8"

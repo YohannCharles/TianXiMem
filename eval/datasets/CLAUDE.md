@@ -246,7 +246,10 @@ raw `clbench.jsonl` 的顶层键只有 `messages` / `rubrics` / `metadata`，而
 
 `manifest.py` 只记录来源、版本与哈希，`layout.py` 只负责本地目录映射，
 `prepare.py` 负责暂存下载、校验、已声明补丁与原子发布。
-HybridQA 的固定语料包提取出逐表文件并记录成员哈希；FEVEROUS 从官方 ZIP 提取
+HybridQA 的固定语料包提取出逐表文件并记录成员哈希——⚠ 上游表名是维基标题、含 `:`
+（NTFS 保留字符，直接落盘会写成隐藏数据流且原子发布失败），落盘名经
+`hybridqa.corpus_filename` 把 `<>:"/\|?*`、控制字符与 `%` 编码成 `%XX`（`receipt`
+的键仍是原始成员名）⇒ 同一份语料在 Windows 与 Linux 上同名、可互换；FEVEROUS 从官方 ZIP 提取
 原始 SQLite，再构建可重建的 title/intro FTS5 缓存。候选生成范围只在
 [`feverous.py`](./feverous.py) 声明，数据规模和验证见 [接入报告](../reports/datasets-20261006.md)。
 评测 CLI 在执行前显式调用 `ensure_dataset`；loader 和模块 import 不联网。
