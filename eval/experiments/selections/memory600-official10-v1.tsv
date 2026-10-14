@@ -1,4 +1,5 @@
 # dataset	native_qid
+# 2026-10-14 按用户决定排除 feverous：唯一 25 题要带 56G 语料（占全套 98%），为 2.1% 的题量不值得。loader 与 recipes 保留，本套件不再选它。
 # audit	halumem	halumem-2f1f897e-d67f-dbc5-6a7b-b7634a9e294f-s008-q001	abstention_boundary	needs_review
 # audit	halumem	halumem-bde53a03-5db5-ec95-ed7a-37b16b358336-s010-q001	abstention_boundary	needs_review
 # audit	hybridqa	hybridqa-001a9923f31d6a91	multi_hop_strength	needs_review
@@ -238,31 +239,6 @@ corporatebench	topic_qa-84
 corporatebench	topic_qa-88
 corporatebench	topic_qa-94
 corporatebench	topic_qa-99
-feverous	feverous-1022
-feverous	feverous-13574
-feverous	feverous-13577
-feverous	feverous-15471
-feverous	feverous-15513
-feverous	feverous-15519
-feverous	feverous-1603
-feverous	feverous-1807
-feverous	feverous-1861
-feverous	feverous-1972
-feverous	feverous-21371
-feverous	feverous-25625
-feverous	feverous-25847
-feverous	feverous-3675
-feverous	feverous-3788
-feverous	feverous-38089
-feverous	feverous-38722
-feverous	feverous-4391
-feverous	feverous-4658
-feverous	feverous-4862
-feverous	feverous-5348
-feverous	feverous-6572
-feverous	feverous-7837
-feverous	feverous-7890
-feverous	feverous-8520
 halumem	halumem-1b846c59-456e-9550-dffd-4d23f1eca81f-s003-q001
 halumem	halumem-1b846c59-456e-9550-dffd-4d23f1eca81f-s025-q001
 halumem	halumem-2e36c193-a605-8cc7-70ff-80b2336d4980-s002-q002
