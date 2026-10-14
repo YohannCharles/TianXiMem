@@ -75,7 +75,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from time import monotonic
 from typing import Protocol, runtime_checkable
@@ -320,8 +320,8 @@ class SearchPipeline:
     ## 顺序（每一步都有理由，不要调换）
 
     ```text
-    ⓿ 查询路由（**仅在 `router.enabled` 时**） 分类 → COUNT / MULTI_HOP / DEFAULT
-    ⓿′ 共同取证分支（`grounded_evidence`）   关着：**无条件先试**；开着：**仅 COUNT 走**
+    ⓿ 共同取证分支：完整证据直接返回；实验 force 模式除外
+    ⓿′ 取证失败后查询路由（仅在 router.enabled 时）→ 多跳或混合检索
     ② memory_id 稳定去重 + 重编号             必须在 rerank **之前**：重复项会被排两次、占两个名额
     ③ Evidence Checker（v1 恒"充足"）          每轮判定都记账（D13）
     ④ rerank（**恰好一次**）                   `RemoteReranker`；不可用 ⇒ 降级回 RRF 顺序（D12）
@@ -345,17 +345,11 @@ class SearchPipeline:
     * **`top_k` 必须在扩窗/合并之后生效**：它约束的是**段数**。在扩窗之前按
       raw memory 数截断，会把本该形成段的邻居砍掉，最后返回的段数**少于该有的**。
 
-    ## 路由带来的第三处（**这一处会改行为——所以它默认关着**）
+    ## 取证与路由
 
-    * **路由开着时，`DEFAULT` 类问题不再先试共同取证。** 共同取证是一条
-      **确定性**的短路（编译问题 → 取值 → 打包），而路由是**模型判断**
-      ⇒ 这是一次"用确定性换分类能力"的取舍，不是白拿的。
-    * ⚠ **它的代价必须被测出来**：`compile_query` 支持 `walk` / `interval` /
-      `current` 这些**非计数**问法，而它们在三分类里大多会落到 `DEFAULT` 或
-      `MULTI_HOP` ⇒ **那些问题会失去专门的取证能力**。回归数据见
-      `eval/reports/` 的路由报告——**不许用"改旧断言"把它盖过去**。
-    * ⇒ 这正是 `router.enabled` **默认 `false`** 的理由：一个未经代理评测标定的
-      行为改动，不该默认生效在提交口径上。
+    共同事实完整时直接返回，不调用路由器；未完成时才分类并交给多跳或混合链。
+    router 与 agentic 仍默认关闭。agentic.force 保留显式绕过事实的实验语义。
+
     """
 
     def __init__(
@@ -640,13 +634,9 @@ class SearchPipeline:
             trace.grounded_status = "blank_query"
             return PackagedResponse(items=())
 
-        # ⓿ 查询路由（**在一切检索之前**）。`None` = 没开路由器 ⇒ 下面的分支
-        #    与"本接缝存在之前"逐字相同（§13 的开关纯度）。
-        route = self._route(query, trace)
-
-        # ⓿′ 共同取证分支。**它刻意早于 Qdrant 存在性检查**（事实住在 SQLite）。
-        #    ⚠ 开关打开时**只有 `COUNT` 走这里**；没开时**一律走这里**（`route is None`）。
-        if self._grounded_evidence and route in (None, Route.COUNT):
+        # Deterministic evidence precedes routing. The explicit force-agent
+        # experiment retains its deliberate bypass of all direct evidence.
+        if self._grounded_evidence and not self._agentic_force:
             trace.grounded_status = "no_plan"
             plan = compile_query(query)
             if plan is not None:
@@ -658,10 +648,18 @@ class SearchPipeline:
                 trace.grounded_status = decision.reason
                 selected = decision.selection
                 if selected is not None:
+                    packaged = self._package_evidence(selected, top_k=top_k)
                     trace.grounded_projection = selected.projection
                     trace.selected_facts = len(selected.facts)
                     trace.selected_sources = len({f.parent_memory_id for f in selected.facts})
-                    return self._package_evidence(selected, top_k=top_k)
+                    if not (
+                        packaged.truncated_by_top_k
+                        or packaged.truncated_by_budget
+                        or packaged.dropped_missing
+                    ):
+                        return packaged
+                    trace.grounded_status = "incomplete_packaging"
+        route = self._route(query, trace)
         if not self._qdrant.exists():
             return PackagedResponse(items=())
 
@@ -846,7 +844,10 @@ class SearchPipeline:
                 )
                 for i, (f, content) in enumerate(zip(valid, contents, strict=True))
             ]
-        return package(segments, top_k=top_k, counter=self._counter, max_tokens=self._budget_tokens)
+        packaged = package(
+            segments, top_k=top_k, counter=self._counter, max_tokens=self._budget_tokens
+        )
+        return replace(packaged, dropped_missing=packaged.dropped_missing + len(facts) - len(valid))
 
     def _record_rerank(self, trace: _SearchTrace | None, field: str) -> None:
         setattr(self, field, getattr(self, field) + 1)

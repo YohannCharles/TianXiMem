@@ -128,6 +128,12 @@ benchmark_data/
 official-add-bodies-*.jsonl
 official-dataset-*
 
+# 解压的冻结评测包保留在本地；共享题号清单与加载代码分别住在 eval/ 下。
+/memory600-*/
+
+# 共享评测只提交精简题号 TSV；完整清单 JSON 在本地生成。
+/eval/experiments/selections/*.json
+
 # ── 仓根不放 .json 临时产物（2026-10-12）────────────────────────────────
 # 一次事故：子 agent 的探针脚本用了相对路径，把 16 个 **scratch json**（内容是 id 列表）
 # 落进了仓根；而当时那条 `git add -A` 把它们**一起提交了**（已用 filter-branch 从历史里剔掉）。

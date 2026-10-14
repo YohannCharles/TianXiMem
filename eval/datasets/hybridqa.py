@@ -107,7 +107,11 @@ def _corpus(root: Path, table_id: str, receipt: dict) -> tuple[Message, ...]:
 
 
 def load_hybridqa(
-    bench_dir: str | Path, *, limit: int | None = None, spread: bool = False
+    bench_dir: str | Path,
+    *,
+    limit: int | None = None,
+    spread: bool = False,
+    question_ids: set[str] | None = None,
 ) -> list[Sample]:
     root = Path(bench_dir)
     rows = json.loads((root / DATA_DIR / QUESTIONS).read_text(encoding="utf-8"))
@@ -118,6 +122,8 @@ def load_hybridqa(
     if set(ids) != set(reference["reference"]):
         raise ValueError("HybridQA: dev/reference question IDs differ")
     categories = {qid: kind for kind in ("table", "passage") for qid in reference[kind]}
+    if question_ids is not None:
+        rows = [r for r in rows if f"hybridqa-{r['question_id']}" in question_ids]
     if limit is not None:
         if limit < 0:
             raise ValueError("HybridQA: limit must be nonnegative")

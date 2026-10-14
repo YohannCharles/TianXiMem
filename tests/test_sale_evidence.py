@@ -141,7 +141,8 @@ def test_incomplete_backfill_and_small_top_k_preserve_contract(tmp_path):
     assert len(first.items) == 3 and all(h.content.startswith("Q:") for h in first.items)
     final = service(store, annotate=True).run(user_id="u", query=QUERY, top_k=1)
     assert len(final.items) == 1
-    assert json.loads(final.items[0].content)["record_kind"] == "reported sale"
+    # A partial sale collection cannot certify the full evidence plan.
+    assert final.items[0].content.startswith("Q:")
 
 
 def test_temporal_and_profit_scopes_do_not_use_bare_sales_plan():
@@ -174,10 +175,13 @@ def test_annotation_is_counted_in_final_token_budget(tmp_path):
     content = service(store).run(user_id="u", query=QUERY, top_k=1).items[0].content
     budget = O200kCounter().count(content)
     assert len(service(store, budget=budget).run(user_id="u", query=QUERY, top_k=1).items) == 1
-    assert (
-        service(store, annotate=True, budget=budget).run(user_id="u", query=QUERY, top_k=1).items
-        == ()
-    )
+    full = service(store, annotate=True).run(user_id="u", query=QUERY, top_k=1)
+    assert O200kCounter().count(full.items[0].content) > budget
+    limited = service(store, annotate=True, budget=budget).run(user_id="u", query=QUERY, top_k=1)
+    # Annotation exceeding the budget triggers whole-path fallback; smaller
+    # original evidence may still fit without pretending the fact plan finished.
+    assert limited.items and limited.items[0].content.startswith("Q:")
+    assert O200kCounter().count(limited.items[0].content) <= budget
 
 
 def test_decimal_annotation_does_not_silently_round_explicit_unit_price():

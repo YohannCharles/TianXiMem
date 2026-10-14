@@ -7,6 +7,7 @@
 ```text
 run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告；native / aml-v1 输入契约 ✅
 replay_official.py **官方采集重放** runner：按 timeline 交错、`--per-family N` 保族覆盖 ✅
+selection_suite.py 共享 ID 题单：Memory600 与官方抽样去重，只走已实现的原生加载器/pipeline；见 docs/fixed-selection-suite.md
 recipes.py        **冻结的抽样口径**：按输入契约区分原生与 AML 配方的唯一声明处 ✅
 arms.py           两臂脚手架的**唯一实现**：冻结快照 / 核对 / 驱动 / 比较  ✅
 a0_recency.py         A0 sanity：不检索、按时间倒序返回最近 N 对      ⬜ 未开始（判据：若逼近全系统，§4 核心判断要重写）
@@ -16,7 +17,19 @@ a3_rerank.py          A3 Rerank 开/关                            ✅（首组�
 a4_agent.py           A4a 门控 / A4b always-on                    ⛔ **不在 v1**（**D26**；arm 定义留在 [`../../docs/experiments.md`](../../docs/experiments.md)）
 ```
 
-> ## ⚠ 跑任何一个数据集，都用 **`--frozen`**
+## 运行共享固定题单
+
+多人协作的固定清单入口是 `python -m eval.experiments.selection_suite`；
+运行方式、来源范围及可直接交给 AI 的提示词见
+[`docs/fixed-selection-suite.md`](../../docs/fixed-selection-suite.md)。
+
+- 用户要求跑共享题单时，读取 `selections/memory600-official10-v1.tsv`，先 `verify` 再 `run`。
+- Git 只保留数据集、原生题号和必要审计注释；详细 JSON 与输入指纹在本地生成，不提交。
+- `prepare` 用于重新选题；正常执行直接复用仓库中的固定清单，不重抽、不补题、不改金标。
+- 本入口只走现有原生加载器与 pipeline；缺题或续跑输入变化时先排查数据版本，不临时换来源。
+- 下面的 `--frozen`、`--limit`、`--spread` 与并发参数属于 `run.py`，不要传给 `selection_suite`。
+
+> ## ⚠ 用 `run.py` 跑单数据集时，都用 **`--frozen`**
 >
 > ```bash
 > uv run python eval/experiments/run.py --dataset clbench --frozen --base-url ...

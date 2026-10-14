@@ -38,6 +38,7 @@
 | 任何阈值 / 权重 / 开关 | [`docs/config-reference.md`](docs/config-reference.md)（**开关的唯一声明处**）+ [`configs/CLAUDE.md`](configs/CLAUDE.md)（**每个键住在 `.env` 还是 yaml**）。**全包只有 [`common/config.py`](src/tianximem/common/config.py) 读环境变量**——有静态测试钉住 |
 | 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（逐条 `Dn` + 待决事项——**编号别在这里列范围，它会过期**） |
 | 跑对照实验 | [`docs/experiments.md`](docs/experiments.md)（协议）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（怎么跑） |
+| **运行共享固定题单 / `selection_suite`** | [`docs/fixed-selection-suite.md`](docs/fixed-selection-suite.md)（固定清单、运行、续跑与 AI 提示词）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（入口选择） |
 | 数据集加载 / harness | [`docs/benchmark-data.md`](docs/benchmark-data.md) + [`eval/datasets/CLAUDE.md`](eval/datasets/CLAUDE.md) |
 | 读参考实现（InvMem 候选 / ReFind / MemMachine——**代码在哪、什么别学**） | [`docs/reference-implementations.md`](docs/reference-implementations.md) |
 | **准备 / 校验 `dataset/`**（按需下载、旧目录迁移） | [`dataset/CLAUDE.md`](dataset/CLAUDE.md) + [`docs/benchmark-data.md`](docs/benchmark-data.md) 的准备流程、出处链与本地修订；清单 / 映射 / 准备逻辑在 `eval/datasets/{manifest,layout,prepare}.py`。`make fetch-data DATASET=<名称>` / `make data-check DATASET=<名称>`（D35） |

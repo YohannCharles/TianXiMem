@@ -386,6 +386,9 @@ def test_http_round_reaches_real_answer_and_judge_functions(bench, tmp_path, mon
             bench_dir=bench,
             out_dir=tmp_path / "out",
             client=client,
+            # This test compares prompt order; independent-user scheduling has separate tests.
+            ingest_workers=1,
+            judge_workers=1,
         )
     assert len(samples) == 2 and len(results) == 2
     assert all(r.is_correct for r in results)

@@ -449,6 +449,7 @@ def test_router_never_imports_the_database_layer() -> None:
 _LIST_QUERY = "Who are the coaches at North Athletics?"
 #: 会被三分类判成计数/名单的那一类（提示词的 EXAMPLES 里就有 `Which meetings …`）。
 _COUNT_QUERY = "How many coaches are there at North Athletics?"
+_FAILED_PATH_QUERY = "What is the country of citizenship of the author of Atlas?"
 
 #: 种子原文——**与 `test_grounded_evidence.py` 同一个形状**（一句能被确定性抽取的自述）。
 SEED_STATEMENT = "Rosa Quinn: I am a coach at North Athletics."
@@ -525,23 +526,16 @@ def test_router_off_keeps_the_original_path_and_makes_no_llm_call(tmp_path) -> N
     assert "Statement: Rosa Quinn" in result.items[0].content
 
 
-def test_router_default_skips_the_grounded_branch(tmp_path) -> None:
-    """`DEFAULT` ⇒ 原混合检索链，**不再先试共同取证**。
-
-    观测量不是"结果为空"（那可能是别的原因），而是
-    **`grounded_evidence.outcomes` 里没有 `no_plan` / `no_match` 这些取证结局**——
-    分支根本没进过。⚠ 这正是路由开着的**唯一行为代价**。
-    """
+def test_complete_facts_precede_routing_and_make_no_llm_call(tmp_path) -> None:
     store = SqliteStore.open(tmp_path / "t.db")
     _seed(store)
-    router, _ = _router("DEFAULT")
-    service = _pipeline(store, router=router)
-    snapshot = _snapshot(service, tmp_path, user_id="u", query=_LIST_QUERY, top_k=100)
-    assert snapshot["router"]["routes"] == {"DEFAULT": 1}
-    assert snapshot["router"]["statuses"] == {"success": 1}
-    # 取证分支**没进过** ⇒ 一个取证结局都没记（`grounded_status` 停在初始的 `disabled`）
-    assert snapshot["grounded_evidence"]["outcomes"] == {"disabled": 1}
-    assert snapshot["grounded_evidence"]["operators"] == {}
+    for reply in ("DEFAULT", "COUNT", "MULTI_HOP"):
+        router, client = _router(reply)
+        service = _pipeline(store, router=router)
+        snapshot = _snapshot(service, tmp_path, user_id="u", query=_LIST_QUERY, top_k=100)
+        assert client.calls == []
+        assert snapshot["router"]["routes"] == {"disabled": 1}
+        assert snapshot["grounded_evidence"]["outcomes"] == {"selected": 1}
 
 
 def test_router_count_keeps_the_grounded_branch(tmp_path) -> None:
@@ -555,7 +549,7 @@ def test_router_count_keeps_the_grounded_branch(tmp_path) -> None:
         i.content for i in plain.run(user_id="u", query=_COUNT_QUERY, top_k=100).items
     ]
     snapshot = _snapshot(routed, tmp_path, user_id="u", query=_COUNT_QUERY, top_k=100)
-    assert snapshot["router"]["routes"] == {"COUNT": 1}
+    assert snapshot["router"]["routes"] == {"disabled": 1}
     assert snapshot["grounded_evidence"]["operators"] == {"filter": 1}
 
 
@@ -587,12 +581,12 @@ def test_multi_hop_without_an_executor_degrades_loudly_to_default(tmp_path) -> N
     _seed(store)
     router, _ = _router("MULTI_HOP")
     service = _pipeline(store, router=router)
-    snapshot = _snapshot(service, tmp_path, user_id="u", query=_LIST_QUERY, top_k=100)
+    snapshot = _snapshot(service, tmp_path, user_id="u", query=_FAILED_PATH_QUERY, top_k=100)
     assert snapshot["router"]["routes"] == {"MULTI_HOP": 1}
     assert snapshot["router"]["statuses"] == {"success": 1}
     assert snapshot["router"]["fallbacks"] == {"agentic_unavailable": 1}
-    # 降级走的是 DEFAULT 那条路：共同取证**没进过**
-    assert snapshot["grounded_evidence"]["outcomes"] == {"disabled": 1}
+    # 共同事实路径不完整，随后路由并降级。
+    assert snapshot["grounded_evidence"]["outcomes"] == {"unsupported_walk": 1}
 
 
 def test_multi_hop_with_an_executor_feeds_the_shared_tail(tmp_path) -> None:
@@ -616,10 +610,10 @@ def test_multi_hop_with_an_executor_feeds_the_shared_tail(tmp_path) -> None:
 
     router, _ = _router("MULTI_HOP")
     service = _pipeline(store, router=router, agentic=FakeAgentic())
-    snapshot = _snapshot(service, tmp_path, user_id="u", query=_LIST_QUERY, top_k=100)
-    assert seen == [{"user_id": "u", "query": _LIST_QUERY, "top_k": 100}]
+    snapshot = _snapshot(service, tmp_path, user_id="u", query=_FAILED_PATH_QUERY, top_k=100)
+    assert seen == [{"user_id": "u", "query": _FAILED_PATH_QUERY, "top_k": 100}]
     assert snapshot["router"]["fallbacks"] == {}  # 执行器在 ⇒ 不是降级
-    result = service.run(user_id="u", query=_LIST_QUERY, top_k=100)
+    result = service.run(user_id="u", query=_FAILED_PATH_QUERY, top_k=100)
     assert result.items and result.items[0].id == ids[0]
 
 
@@ -629,10 +623,10 @@ def test_degraded_routing_still_returns_a_valid_200_shaped_response(tmp_path) ->
     _seed(store)
     router, _ = _router(LlmUnavailable("端点挂了"))
     service = _pipeline(store, router=router)
-    snapshot = _snapshot(service, tmp_path, user_id="u", query=_LIST_QUERY, top_k=100)
+    snapshot = _snapshot(service, tmp_path, user_id="u", query=_FAILED_PATH_QUERY, top_k=100)
     assert snapshot["router"]["statuses"] == {"degraded": 1}
     assert snapshot["router"]["routes"] == {"DEFAULT": 1}
-    result = service.run(user_id="u", query=_LIST_QUERY, top_k=100)
+    result = service.run(user_id="u", query=_FAILED_PATH_QUERY, top_k=100)
     # 响应形状逐字不变（§2.1 那四个字段，一个不多一个不少）
     for item in result.items:
         assert set(item.__dataclass_fields__) == {"id", "content", "created_at", "score"}
@@ -673,7 +667,7 @@ def test_route_latency_is_averaged_over_routed_requests_only(tmp_path) -> None:
     _seed(store)
     router, _ = _router("DEFAULT")
     service = _pipeline(store, router=router)
-    snapshot = _snapshot(service, tmp_path, user_id="u", query=_LIST_QUERY, top_k=100)
+    snapshot = _snapshot(service, tmp_path, user_id="u", query=_FAILED_PATH_QUERY, top_k=100)
     assert snapshot["router"]["latency_ms"]["count"] == 1
     assert snapshot["router"]["latency_ms"]["mean"] is not None
 

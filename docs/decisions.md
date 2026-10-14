@@ -1637,6 +1637,13 @@ add/search 原文）本地的复放，**不套 `run.py` 的通用路径**，而�
 
 ## D40 · Search 最上层加**三分类查询路由器**（COUNT / MULTI_HOP / DEFAULT），**默认关闭**（2026-10-10）
 
+> **2026-10-13 顺序修订（用户授权）**：共同事实先行，完整取证与打包成功时不调用路由器；未完成后才分类。
+> MULTI_HOP 交已有多跳执行器，COUNT/DEFAULT 交混合检索，避免再次进入失败的事实分支。
+> 默认开关、分类协议和 Add 零 LLM 约束保持；agentic.force 的实验旁路保持。
+> walk 改为有序依赖，每分支缺边或打包截断整体转交。下面的“最先分类/仅 COUNT 试事实”是原决策历史。
+> 当前流程的唯一结构说明见 [架构](architecture.md)，
+> 新验证见 [事实分支报告](../eval/reports/runs/version-native-expand200-20261012/facts-only/report.md)。
+
 **决策**：在 `Search` 的最上层加一层基于 LLM 的查询路由器，把 Query 分成**三个互斥类别**，
 各自导向一条**已有**的执行路径：
 

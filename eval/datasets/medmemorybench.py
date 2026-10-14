@@ -133,7 +133,11 @@ def _sessions(turns: list[dict], persona: int, *, up_to: int) -> tuple[Session, 
 
 
 def load_medmemorybench(
-    bench_dir: str | Path, *, limit: int | None = None, spread: bool = False
+    bench_dir: str | Path,
+    *,
+    limit: int | None = None,
+    spread: bool = False,
+    question_ids: set[str] | None = None,
 ) -> list[Sample]:
     """加载 MedMemoryBench（zh）——**一个 `Sample` = 一个（persona, 检查点）**。
 
@@ -156,6 +160,8 @@ def load_medmemorybench(
     by_checkpoint: dict[tuple[int, int], list[Question]] = {}
     for row in _rows(queries_path):
         persona = int(row["persona_id"])
+        if question_ids is not None and f"mmb-{persona}-{row['query_id']}" not in question_ids:
+            continue
         checkpoint = int(row["session_id"])
         metadata = _json(row.get("metadata"), {})
         by_checkpoint.setdefault((persona, checkpoint), []).append(

@@ -202,7 +202,45 @@ HybridQA / FEVEROUS 的语料下载、输入范围与评分见
 需要全档时显式用 `DATASET=all`。旧的按档下载仍可通过
 `uv run --env-file .env python -m eval.datasets.prepare --fetch --tier required` 使用。
 
-**部署到服务器**（只跑检索服务 + Qdrant，不需要 GPU）：
+### 共享固定题单评测（多人协作）
+
+需要团队用同一批题比较版本时，使用
+[`selection_suite`](eval/experiments/selection_suite.py) 和共享
+[题号清单](eval/experiments/selections/memory600-official10-v1.tsv)。
+清单由 Memory600 与官方采集抽样合并去重，只使用现有原生加载器和 pipeline，
+未支持的题目已记录为跳过项。执行采用原生语料及评分契约；题量、来源和验证结果见
+[固定题单报告](eval/reports/datasets-20261006.md#共享固定题单memory600--官方采集分层抽样)。
+
+运行需要公开数据集、已有 `.env` 模型配置和正在运行的 Add/Search 服务。
+协作者直接使用固定题单；原官方采集和 Memory600 压缩包只在重建题单或核验出处时需要。
+
+```bash
+# 先准备题单所需数据，缺哪份就用 make fetch-data DATASET=<名称>
+uv run --env-file .env python -m eval.experiments.selection_suite verify
+
+# 服务已启动后执行；下列 run-id、服务 Git SHA、地址和 profile 按实际环境填写
+uv run --env-file .env python -m eval.experiments.selection_suite run \
+  --run-id shared-v1 \
+  --service-revision <服务实际Git-SHA> \
+  --base-url http://127.0.0.1:8000 \
+  --configs-dir configs --profile local --offline
+
+uv run python -m eval.experiments.selection_suite summarize \
+  --run-dir eval/reports/runs/shared-v1
+```
+
+`verify` 为离线校验；`run` 会投喂语料、检索并调用配置的答案/裁判模型。
+同条件中断后可用原命令续跑，模型、配置或服务存储变化时使用新的 run-id。
+结果位于 `eval/reports/runs/<run-id>/summary.md`；Git 只保存两列题号和必要审计注释，
+详细 JSON、输入指纹及逐题运行产物在本地生成并忽略提交。
+
+完整操作说明、版本比较和**可复制的 AI 运行提示词**见
+[共享固定题单说明](docs/fixed-selection-suite.md#交给-ai-运行的简要提示词)。
+这里使用 `selection_suite`，单数据集的 `run.py --frozen` 是另一个入口（PRD §13）。
+
+### 部署到服务器
+
+只跑检索服务 + Qdrant，不需要 GPU：
 
 ```bash
 cp deploy/.env.example deploy/.env   # 填 AML_EMB_*（reranker 可选）

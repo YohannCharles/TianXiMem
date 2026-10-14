@@ -119,23 +119,21 @@ query → BM25 ┐
                                               ≤ top_k（精确计数，**数的是段**）
 ```
 
-#### 开了路由器时，上面那条链的前面多一层（**D40**，默认关）
+#### 共同事实先行，未完成后路由（D40，路由默认关）
 
 ```text
 Search(query, top_k)
-   → 【QueryRouter】一次 LLM 调用 → COUNT / MULTI_HOP / DEFAULT（**严格三选一**）
-        │
-        ├ COUNT     → 现有共同取证（compile_query → 取证决策 → 打包）
-        │              无法编译 / 不齐 / 超限 ⇒ **整体回退 DEFAULT**
-        ├ MULTI_HOP → 多跳执行器（`AgenticSearch`）——实现在 [`../src/tianximem/agent/`](../src/tianximem/agent/)（**D41**）
-        │              ⚠ 执行器**没装**（`agentic.enabled = false`，默认）⇒ 回退 DEFAULT，
-        │                并记 `route_fallback = agentic_unavailable`
-        │              ⚠ 装上了但一条证据都没拿到就失败 ⇒ 回退 DEFAULT，
-        │                并记 `route_fallback = retrieval_error`（**不是同一个原因**）
-        └ DEFAULT   → 原混合检索链（**不再先试共同取证**）
-                          ↑
-              这三条最终**汇入同一个尾巴**：去重 → 精排（恰好一次）→ 扩窗 → 合并 → 打包
+   → 共同事实计划 → 有序依赖查询 → 来源/约束审查 → 双预算打包
+       ├ 完整 ⇒ 返回独立证据，不调用 QueryRouter
+       └ 未完成 ⇒ QueryRouter（开启时）
+                    ├ MULTI_HOP → AgenticSearch → 共用精排/打包尾部
+                    │              执行器未配置或执行失败 ⇒ 混合检索
+                    └ COUNT / DEFAULT / 路由关闭 → 原混合检索链
 ```
+
+`walk` 保留有序步骤和重复关系；每条候选分支缺边、存在未解释声明或超限时整体转交。
+打包截断或缺来源时也不算取证完成。`agentic.force` 仍保留直接走多跳的实验语义。
+来源索引已扫描不代表语义完整，有序路径完整也不保证最终模型正确作答。
 
 #### 多跳那条路内部（**D41**，`agentic.enabled` 另开）
 

@@ -121,7 +121,9 @@ def cmd_answer(args: argparse.Namespace) -> int:
 
     from eval.harness.api_config import ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL
 
-    max_tokens = getattr(args, "max_tokens", 1024)
+    max_tokens = getattr(args, "max_tokens", 512)
+    if max_tokens < 1:
+        raise ValueError("--max-tokens 必须为正整数")
     output = _Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     items = read_jsonl(Path(args.input))
@@ -131,9 +133,13 @@ def cmd_answer(args: argparse.Namespace) -> int:
     done = set()
     for row in read_jsonl(output):
         ident = str(row.get("id"))
-        if row.get("memory_input_version") != MEMORY_INPUT_VERSION or row.get(
-            "input_fingerprint"
-        ) != fingerprints.get(ident):
+        if (
+            row.get("memory_input_version") != MEMORY_INPUT_VERSION
+            or row.get("input_fingerprint") != fingerprints.get(ident)
+            or row.get("max_output_tokens") != max_tokens
+            or row.get("model") != ANSWER_MODEL
+            or row.get("answer_base") != ANSWER_API_BASE
+        ):
             raise ValueError("PersonaMem-v2 已有答案口径或输入不一致；请使用新 run-id 重跑")
         done.add(ident)
 
@@ -158,7 +164,8 @@ def cmd_answer(args: argparse.Namespace) -> int:
                         },
                     )
                     response.raise_for_status()
-                    generated = response.json()["choices"][0]["message"]["content"]
+                    choice = response.json()["choices"][0]
+                    generated = choice["message"]["content"]
                     write_line(
                         handle,
                         {
@@ -172,6 +179,9 @@ def cmd_answer(args: argparse.Namespace) -> int:
                             "memory_input_version": MEMORY_INPUT_VERSION,
                             "input_fingerprint": fingerprints[ident],
                             "model": ANSWER_MODEL,
+                            "answer_base": ANSWER_API_BASE,
+                            "max_output_tokens": max_tokens,
+                            "finish_reason": choice.get("finish_reason"),
                         },
                     )
 
@@ -213,8 +223,8 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     return build_pipeline_parser(
         __doc__.splitlines()[0],
-        default_max_tokens=1024,
-        max_tokens_help="官方 MCQ 答案的输出上限；必须给推理和最终选项字母留出空间",
+        default_max_tokens=512,
+        max_tokens_help="答案输出预算；evaluate 仍由官方 MCQ 纯函数判分",
     )
 
 

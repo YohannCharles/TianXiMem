@@ -114,7 +114,12 @@ def test_actual_answer_request_and_resume_guard(tmp_path, monkeypatch, official_
 
     def handler(request):
         requests.append(json.loads(request.content))
-        return httpx.Response(200, json={"choices": [{"message": {"content": "Final Answer: B"}}]})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "Final Answer: B"}, "finish_reason": "stop"}]
+            },
+        )
 
     client = httpx.AsyncClient
     monkeypatch.setattr(
@@ -122,16 +127,28 @@ def test_actual_answer_request_and_resume_guard(tmp_path, monkeypatch, official_
     )
     source, output = tmp_path / "input.jsonl", tmp_path / "answers.jsonl"
     source.write_text(json.dumps(_item()) + "\n")
-    args = SimpleNamespace(input=str(source), output=str(output), max_tokens=2048)
+    args = SimpleNamespace(input=str(source), output=str(output), max_tokens=4096)
     assert pipeline.cmd_answer(args) == 0
-    assert requests[0]["max_tokens"] == 2048
     sent = str(requests[0]["messages"])
     assert "SEARCH-ONLY-EVIDENCE" in sent and "RAW-HISTORY-MUST-NOT-LEAK" not in sent
     answer = json.loads(output.read_text(encoding="utf-8"))
     assert answer["option_mapping"][answer["correct_letter"]] == "Yoga"
     assert answer["memory_input_version"] == pipeline.MEMORY_INPUT_VERSION
     assert answer["input_fingerprint"]
+    assert requests[0]["max_tokens"] == answer["max_output_tokens"] == 4096
+    assert answer["finish_reason"] == "stop"
     assert pipeline.cmd_answer(args) == 0
+    assert len(requests) == 1
+    with pytest.raises(ValueError, match="新 run-id"):
+        pipeline.cmd_answer(SimpleNamespace(**{**vars(args), "max_tokens": 512}))
+    with monkeypatch.context() as changed:
+        changed.setattr(api_config, "ANSWER_MODEL", "other-model")
+        with pytest.raises(ValueError, match="新 run-id"):
+            pipeline.cmd_answer(args)
+    with monkeypatch.context() as changed:
+        changed.setattr(api_config, "ANSWER_API_BASE", "https://other.invalid/v1")
+        with pytest.raises(ValueError, match="新 run-id"):
+            pipeline.cmd_answer(args)
     assert len(requests) == 1
     source.write_text(json.dumps(_item("CHANGED-SEARCH")) + "\n")
     with pytest.raises(ValueError, match="新 run-id"):
@@ -144,4 +161,4 @@ def test_old_full_history_answers_are_not_reused(tmp_path):
     source.write_text(json.dumps(_item()) + "\n")
     output.write_text(json.dumps({"id": "q1", "generated_answer": "B"}) + "\n")
     with pytest.raises(ValueError, match="新 run-id"):
-        pipeline.cmd_answer(SimpleNamespace(input=str(source), output=str(output)))
+        pipeline.cmd_answer(SimpleNamespace(input=str(source), output=str(output), max_tokens=512))
