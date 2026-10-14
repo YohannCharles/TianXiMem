@@ -321,10 +321,16 @@ def source_sha256() -> str:
 
 
 def load_feverous(
-    bench_dir: str | Path, *, limit: int | None = None, spread: bool = False
+    bench_dir: str | Path,
+    *,
+    limit: int | None = None,
+    spread: bool = False,
+    question_ids: set[str] | None = None,
 ) -> list[Sample]:
     root = Path(bench_dir)
     rows = read_annotations(root)
+    if question_ids is not None:
+        rows = [r for r in rows if f"feverous-{r['id']}" in question_ids]
     if limit is not None:
         if limit < 0:
             raise ValueError("FEVEROUS: limit must be nonnegative")

@@ -166,7 +166,11 @@ def _messages(
 
 
 def load_longmemeval(
-    bench_dir: str | Path, *, limit: int | None = None, spread: bool = False
+    bench_dir: str | Path,
+    *,
+    limit: int | None = None,
+    spread: bool = False,
+    question_ids: set[str] | None = None,
 ) -> list[Sample]:
     """加载 LongMemEval-S。
 
@@ -182,6 +186,8 @@ def load_longmemeval(
 
     source = archive_file(bench_dir, LME_JSON)
     entries = json.loads(source.read_text(encoding="utf-8"))
+    if question_ids is not None:
+        entries = [e for e in entries if str(e["question_id"]) in question_ids]
     if limit is not None:
         entries = (
             stratified_sample(entries, limit, key=lambda e: str(e["question_type"]))
