@@ -272,7 +272,7 @@ DEFAULT_ROUTER_MAX_OUTPUT_TOKENS: Final[int] = 8
 #: 所以不一致的表现是"服务起不来"，**不是**"悄悄用了另一版"。
 #: ⚠ 本常量存在的理由只有一个：**别让同一个值在 `RouterConfig` 的默认值与
 #: `_router()` 的缺省里各写一遍**（2026-10-10 就真的漂过一次：dataclass 是 v3、缺省还是 v1）。
-DEFAULT_ROUTER_PROMPT_VERSION: Final[str] = "v4"
+DEFAULT_ROUTER_PROMPT_VERSION: Final[str] = "v5"
 
 #: 多跳执行器的**检索轮数上限**（`agentic.max_rounds`）。**含第一轮**。
 #:
@@ -338,10 +338,14 @@ DEFAULT_COQ_PROMPT_VERSION: Final[str] = "coq-original"
 #:
 #: | 值 | 执行器 | 怎么推进 |
 #: | --- | --- | --- |
-#: | `"react"`（**默认**） | `CoqAgent`（原版 CoQ） | 每轮重新决定"充分了吗" |
-#: | `"plan"` | `PlanAgent`（先拆一份固定计划） | 每轮**只**回答"刚检索完的那一步"，**不重规划** |
+#: | `"plan"`（**`default.yaml` 的默认**） | `PlanAgent`（先拆一份固定计划） | 每轮**只**回答"刚检索完的那一步"，**不重规划** |
+#: | `"react"`（**内置缺省**） | `CoqAgent`（原版 CoQ） | 每轮重新决定"充分了吗" |
 #:
-#: ⚠ **默认必须是 `react`**：不填这个键的旧配置要**逐字**跑出与本次改动之前一样的路。
+#: ⚠ **内置缺省必须是 `react`**：`AgenticConfig()` 直接构造（不经过任何 yaml）的场景——
+#: 测试、`tools/` 里的臂快照——要按"不填这个键"处理，那**不是**提交口径。
+#: ⇒ 两者分工与 `retrieval.grounded_evidence` 相同：**内置缺省保守、`default.yaml` 是提交口径**。
+#: ⛔ **不要为了让"默认是 plan"看起来一致就把这个常量也翻掉**：那会一次性改掉所有
+#: 不带 `mode` 的调用方，而它们是**刻意**要保住旧行为的。
 #: 两者的提示词、解析、停止判据**各自独立**（⛔ 不共享，见 `agent/` 的包说明）。
 DEFAULT_AGENTIC_MODE: Final[str] = "react"
 
@@ -584,10 +588,14 @@ class CaptureConfig:
 
 @dataclass(frozen=True, slots=True)
 class RouterConfig:
-    """三分类查询路由器（`retrieve/router.py`）。**Search 的最上层查询编排。**
+    """二分类查询路由器（`retrieve/router.py`）。**共同取证失败之后的策略选择。**
 
-    ⚠ **默认 `false`，而且这是刻意的**：打开它会**改变 Search 的路径选择**
-    （`DEFAULT` 类问题不再先试共同取证，见 `pipeline._search`），
+    ⚠ **它不是 Search 的第一站**（2026-10-14 起）：共同事实取证（确定性、不调 LLM）
+    无条件先试，只有它没给出完整证据时才轮到本模块。路由开着时，
+    `DEFAULT` 类问题**不再先试共同取证**是这条接缝原先的代价——⚠ **该代价已随
+    取证前移而消失**：今天两条分支都在取证失败之后。
+
+    ⚠ **默认 `false`，而且这是刻意的**：打开它仍然**改变 Search 的路径选择**，
     而 `configs/default.yaml` 是**提交口径**——一个未经代理评测标定的行为改动
     **不该默认生效**。要跑对照就用 profile 覆盖（`TIANXIMEM_PROFILE`）或臂快照。
 
@@ -604,8 +612,9 @@ class RouterConfig:
     #: §15 的消融开关之一。`false` ⇒ **不构造路由器**，这条链上**一次 LLM 调用都不发生**，
     #: 且共同取证分支照旧无条件先试（= 本开关存在之前的行为）。
     #:
-    #: ⚠ 它与 `rerank.enabled` 同属"✅ 真能关"那一档，**但两者的缺省语义不同**：
-    #: 精排缺省开（D8 把排序定为主线），路由缺省关（未经标定）。
+    #: ⚠ **本内置缺省是 `false`，而 `default.yaml` 写的是 `true`**——与
+    #: `grounded_evidence` 同一条口径：缺这个键的快照就按"不构造路由器"跑，
+    #: 基线（`configs/default.yaml`）则把它打开（2026-10-14 起）。
     enabled: bool = False
     #: 单次路由调用的超时（秒）。见模块顶部 `DEFAULT_ROUTER_TIMEOUT_S` 的说明
     #: （它与 reranker 的超时**方向不同**，别照抄那一条）。
@@ -633,7 +642,7 @@ class AgenticConfig:
 
     | | 作用 |
     | --- | --- |
-    | `router.enabled` | **选路**（三个枚举值之一）。开它 ⇒ `DEFAULT` 类问题不再先试共同取证 |
+    | `router.enabled` | **选路**（两个枚举值之一）。开它 ⇒ 按模型判的走 `MULTI_HOP` 或 `DEFAULT` |
     | `agentic.enabled` | **执行器在不在**。开它 ⇒ `MULTI_HOP` 真的跑多轮检索，而不是降级 |
 
     今天**只有两个都开着**，多跳那条路才会真的跑起来；只开 `agentic` 而不开 `router`
@@ -646,7 +655,10 @@ class AgenticConfig:
     #: ⇒ 每条 `MULTI_HOP` 降级回 `DEFAULT` 并记 `route_fallback = agentic_unavailable`。
     enabled: bool = False
 
-    #: **执行器的模式**（[`AGENTIC_MODES`][AGENTIC_MODES] 之一）。默认 `"react"`。
+    #: **执行器的模式**（[`AGENTIC_MODES`][AGENTIC_MODES] 之一）。
+    #: **内置缺省 `"react"`**（[`DEFAULT_AGENTIC_MODE`][DEFAULT_AGENTIC_MODE] 有完整理由）；
+    #: ⭐ **`configs/default.yaml` 是提交口径，那里写的是 `plan`**（2026-10-14 起）。
+    #: ⇒ 从 yaml 加载出来的配置是 `plan`，直接构造 `AgenticConfig()` 的是 `react`。
     #:
     #: ⚠ 它选的是**执行器**，⛔ **不是"走不走这条路"**——那个仍然归 `router.enabled`
     #: 与 `force`。三条键的关系：
@@ -656,15 +668,13 @@ class AgenticConfig:
     #: agentic.enabled         ⇒  装不装执行器
     #: agentic.mode            ⇒  装的是哪一种执行器
     #: ```
-    #:
-    #: ⚠ **不填它的旧配置逐字跑出原来的行为**（默认就是 `"react"`）。
     mode: str = DEFAULT_AGENTIC_MODE
 
     #: **实验开关：绕过路由器，把所有查询按 `MULTI_HOP` 处理**（§12.3 的 E1）。
     #:
     #: ⚠ 它存在的**唯一**理由是 E1 那一臂要"独立验证 CoQ 的检索能力"——不绕过路由器，
     #: 测出来的就是"路由器 × 多跳"的合成效果，两者分不开（§12.3 明说了这件事）。
-    #: ⛔ **它不是给提交口径用的**：打开它等于关掉 `COUNT` / `DEFAULT` 两条路的选择能力。
+    #: ⛔ **它不是给提交口径用的**：打开它等于关掉 `MULTI_HOP` / `DEFAULT` 两条路的选择能力。
     #: 关闭它（默认）时这条链与本开关存在之前**逐字相同**。
     force: bool = False
 

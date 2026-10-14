@@ -26,7 +26,7 @@ uv run python tools/export_router_kit.py --manifest eval/router-samples.jsonl   
 `expected_route` 是**人读着提示词的定义逐条判的**，⛔ **不是数据集自带的类目**。
 数据集那套（LoCoMo 的 `category`、LongMemEval 的 `question_type`）描述的是**答案类型**，
 不是**检索依赖结构**——本仓实测：LoCoMo 标成 `category=1`（multi-hop）的题里，
-按路由判据**大多数其实是 `DEFAULT` / `COUNT`**。
+按路由判据**大多数其实是 `DEFAULT`**。
 ⇒ 拿数据集类目当路由真值会得到一份**看不出来的假分数**。
 
 ⚠ 标注是**盲标**（标的人没看路由器答什么），且标注模型与路由器**不同源**——
@@ -90,19 +90,19 @@ def render_readme(rows: list[dict]) -> str:
         "| `question_type` | 数量 |\n| --- | ---: |\n"
         + "\n".join(f"| {name} | {count} |" for name, count in kinds.most_common())
     )
-    return f"""# 查询路由的三分类测试集 — {len(rows)} 题
+    return f"""# 查询路由的二分类测试集 — {len(rows)} 题
 
 **用途**：测你自己的"用户查询该走哪条检索路"的分类器。**输入只有问题那一句**
-（路由不吃上下文——见下），输出三选一。
+（路由不吃上下文——见下），输出二选一。
 
-## 三个类别（判据逐条）
+## 两个类别（判据逐条）
 
 * **`MULTI_HOP`** —— 要先**解出一个未在题面点名的中间实体 / 锚点**，后面的检索才表述得出来
   （例：`after the roadtrip`、`the friend who wrote Deborah ...`）；
-* **`COUNT`** —— 计数、穷举（`list all`）、或**从被多次更新的历史里取当前状态**
-  （例：`how many bikes do I currently own`）；
-* **`DEFAULT`** —— 其余，**含多实体比较与普通时间 / 数值问题**；
-* **优先级 `MULTI_HOP` > `COUNT` > `DEFAULT`**：带依赖的计数题记 `MULTI_HOP`。
+* **`DEFAULT`** —— 其余，**含多实体比较与普通时间 / 数值问题**。
+
+⚠ **没有 `COUNT`**（2026-10-14 起）：计数 / 名单类问法改由**共同取证**（先于路由器运行、
+确定性）处理，不经过路由器 ⇒ 本套件里**已剔除** `COUNT` 标注的行。
 
 ⚠ 这套判据**抄的是原始提示词自己的定义**，不是数据集类目。判据的完整原文见
 本仓 `src/tianximem/retrieve/router.py` 的 `ROUTER_PROMPT`（**逐字冻结**）。
@@ -135,7 +135,7 @@ def render_readme(rows: list[dict]) -> str:
 * `expected_route` 是**人读着上面那套判据逐条判的**，⛔ **不是数据集自带的类目**。
   数据集那套（LoCoMo 的 `category`、LongMemEval 的 `question_type`）描述的是**答案类型**，
   不是**检索依赖结构**——实测里 LoCoMo 标成 `category=1`（multi-hop）的题，
-  按本判据**大多数其实是 `DEFAULT` / `COUNT`**。
+  按本判据**大多数其实是 `DEFAULT`**。
 * 标注是**盲标**（标的人没看路由器会答什么），标注模型与路由器**不同源**
   ⇒ 真值不是"路由器的自我复述"。
 * 每条都带 `label_note`（一句话判据）——**可以逐条反驳它**，欢迎。有争议的标了 `boundary`。
@@ -168,10 +168,16 @@ def main(argv: list[str] | None = None) -> int:
 
     rows = []
     problems: list[str] = []
+    legacy = 0
     for line in args.manifest.read_text(encoding="utf-8").split("\n"):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         row = json.loads(line)
+        # ⚠ 遗留的 `COUNT` 行**不导出**（2026-10-14）：路由收成二分类，这类问法归
+        #   共同取证、到不了路由器 ⇒ 留在套件里会让"正确率"分母无意义。
+        if row["expected_route"] == "COUNT":
+            legacy += 1
+            continue
         key = (row["dataset"], row["question_id"])
         if key not in questions:
             problems.append(f"{key}：题库里没有这道题")
@@ -203,6 +209,8 @@ def main(argv: list[str] | None = None) -> int:
     from collections import Counter
 
     print(f"✅ 校验通过：{len(rows)} 题（题面 + 金标都解出来了，无重复）")
+    if legacy:
+        print(f"   ⚠ 已剔除 {legacy} 条遗留 `COUNT` 行（路由二分类后到不了路由器）")
     print(f"   真值分布：{dict(Counter(r['expected_route'] for r in rows))}")
     print(f"   boundary：{sum(1 for r in rows if r['boundary'])}")
     print(f"   目录：{out_dir}")

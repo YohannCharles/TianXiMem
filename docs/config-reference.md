@@ -138,7 +138,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | **T1** | 正文**不带**日期前缀（消融臂） | —— | **名次 / 段数 / `created_at` / `score` 全不变**（只有 `content` 多一段 `[YYYY-MM-DD] `） | §11.3 / **D21** | ✅ `packaging.inject_abs_time`（**默认 `true`**） |
 | **相对时间注解** | 正文里的相对表达**照原样**留着（`last Tues`） | —— | **名次 / 段数 / `id` / `created_at` / `score` / token 口径全不变**（只有 `content` 多出括号注）；**embedding 输入也不变**（它只走 `content` 这一条路） | D21 的延伸（原文保留、日期是**额外锚点**） | ✅ `packaging.annotate_relatives`（**默认 `true`**——`configs/default.yaml` 里写死；⚠ **加载器对"键缺失"取 `false`**，与 `inject_abs_time` 的缺失约定**相反**，所以 D22 之前冻结的快照仍按"无注解"跑） |
 | `agent` | 一律不走 Agentic Search | `checker`（门控时） | **打包顺序不变**（只是候选少了 agent 补的那部分） | §9 | ✅ `agentic.enabled`（**默认 false**）——执行器已落地（[`../src/tianximem/agent/`](../src/tianximem/agent/)，见 §5）。⚠ **它是"执行器在不在"，不是"选不选这条路"**：选路由 `router.enabled` 管 |
-| `router` | 不做分类：共同取证分支**无条件先试**（= 本接缝之前的行为） | —— | **原混合链的候选 / 段 / 打包 / 响应形状逐字不变**；DEFAULT 类问题**照旧**享有共同取证短路 | §5.7 | ✅ `router.enabled`（**默认 false**） |
+| `router` | 不做分类：共同取证分支**无条件先试**（= 本接缝之前的行为） | —— | **原混合链的候选 / 段 / 打包 / 响应形状逐字不变**；DEFAULT 类问题**照旧**享有共同取证短路 | §5.7 | ✅ `router.enabled`（**默认 true**） |
 
 > **「关掉时不得改变什么」那一列就是 §13 的纯度规则**：**开关必须只影响它命名的那一件事。** 否则对照不成立——**而结果看起来完全正常，只是结论错了**。
 > ⚠ 它是**逐行**的：留 `——` 的行**不是在说"没有要求"**，是**还没有能被关的键**（接线列标 ⛔ 的那几行）。
@@ -232,8 +232,13 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 | `agentic.mode` | 执行器 | 提示词 | 怎么推进 |
 | --- | --- | --- | --- |
-| `react`（**默认**） | `coq.py` 的 `CoqAgent` | **原版** CoQ（`coq_prompt.py`，⛔ 冻结） | 每轮重新决定"充分了吗 / 下一跳问什么" |
-| `plan` | `plan.py` 的 `PlanAgent` | `plan_prompts.py`（**两条，独立**） | **先拆一份固定计划**（1~4 步），之后每轮只回答"刚检索完的那一步"，**不重规划** |
+| `react`（**代码内置缺省**） | `coq.py` 的 `CoqAgent` | **原版** CoQ（`coq_prompt.py`，⛔ 冻结） | 每轮重新决定"充分了吗 / 下一跳问什么" |
+| `plan`（**`default.yaml` 即提交口径**） | `plan.py` 的 `PlanAgent` | `plan_prompts.py`（**两条，独立**） | **先拆一份固定计划**（1~4 步），之后每轮只回答"刚检索完的那一步"，**不重规划** |
+
+⚠ **两者故意不同**（2026-10-14 起）：`configs/default.yaml` 写的是 `plan`，而代码内置缺省
+仍是 `react`（[`DEFAULT_AGENTIC_MODE`](../src/tianximem/common/config.py)）——后者是给
+**不填这个键的旧配置**留的"逐字不变"出口。同 `retrieval.grounded_evidence` 的分工
+（内置缺省 `false` / `default.yaml` 写 `true`）。
 
 ⚠ 两套提示词、解析、停止判据**互不共享**（⛔ 不把新提示词塞进冻结的原 CoQ 提示词）。
 共享的只有三个纯工具与"从一段文本里挖出 JSON"那一件与业务无关的事。
@@ -248,7 +253,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | 配置项 | 初值 | 类 | 说明 |
 | --- | --- | --- | --- |
 | `agentic.enabled` | `false` | C | 开关（**执行器在不在**）。`false` ⇒ 不构造执行器 ⇒ 每条 `MULTI_HOP` 降级回 `DEFAULT` |
-| `agentic.mode` | `react` | C | **选哪一种执行器**（`react` / `plan`）。⚠ 它**不是**"走不走这条路"（那归 `router.enabled` / `force`）。⛔ 取值域在加载期挡住：拼错的模式会让执行器静默退回 react，而"跑的是哪套机制"正是所有多跳结论的自变量 |
+| `agentic.mode` | `plan`（提交口径）/ `react`（内置缺省） | C | **选哪一种执行器**（`react` / `plan`）。⚠ 它**不是**"走不走这条路"（那归 `router.enabled` / `force`）。⚠ **两份配置故意不同**：`default.yaml` 写 `plan`，代码常量 `DEFAULT_AGENTIC_MODE` 仍是 `react`（不填这个键的旧配置逐字不变）。⛔ 取值域在加载期挡住：拼错的模式会让执行器静默退回 react，而"跑的是哪套机制"正是所有多跳结论的自变量 |
 | `agentic.force` | `false` | C | ⚠ **实验开关**：绕过路由器，一律走 `MULTI_HOP`（§12.3 的 E1）。⛔ 不是提交口径。⚠ **两种模式都遵循它** |
 | `agentic.max_rounds` | **3** | C | 检索轮数上限，**含第一轮**。⚠ **Plan 也用它**（那是一道预算题）；Plan 的计划最多 4 步 ⇒ 默认 3 时一个 4 步计划只跑 3 步并记 `max_rounds` |
 | `agentic.per_round_top_k` | **20** | C | 每轮**精排之后**取前 N 条交给模型。⚠ 它管的是**取几条**、**不是召回几条**；**两模式在这里相同**（都是"召回请求的 `top_k`(=100) → 精排 → 取前 20"） |
@@ -286,34 +291,41 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 5.7 查询路由器（三分类：COUNT / MULTI_HOP / DEFAULT）—— ✅ **已落地**（**默认关**）
+## 5.7 查询路由器（二分类：MULTI_HOP / DEFAULT）—— ✅ **已落地**（**默认开**）
 
-**Search 的最上层查询编排。** 实现在 [`../src/tianximem/retrieve/router.py`](../src/tianximem/retrieve/router.py)，
-提示词与解析契约在那个文件的 docstring 里。三条分支：
+**共同取证没给出完整证据之后的策略选择**（⛔ **不是 Search 的第一站**，2026-10-14 起：
+共同事实取证是确定性的、无条件先试，见 §5.x 的共同取证一节）。
+实现在 [`../src/tianximem/retrieve/router.py`](../src/tianximem/retrieve/router.py)，
+提示词与解析契约在那个文件的 docstring 里。两条分支：
 
 | Route | 走哪条路 |
 | --- | --- |
-| `COUNT` | 共同取证未完成后走原混合检索，不再次进入事实分支 |
 | `MULTI_HOP` | 多跳执行器（[`../src/tianximem/agent/`](../src/tianximem/agent/)，§5）。⚠ 执行器**没装**（`agentic.enabled = false`，默认）⇒ 每条都回退 `DEFAULT` 并记 `route_fallback = agentic_unavailable` |
-| `DEFAULT` | 共同取证未完成后走原混合检索链 |
+| `DEFAULT` | 原混合检索链（BM25 + Dense + RRF + 精排 + 打包） |
+
+⚠ **`COUNT` 已于 2026-10-14 删除**（v5 提示词起是二分类）：它不再是合法输出，而
+`parse_route` 是**遍历枚举做整串匹配**的 ⇒ 模型若吐 `COUNT`，**自动按非法输出降级到
+`DEFAULT`**，不报错。计数 / 名单类问题改由**共同取证**处理（它先于本模块运行）。
 
 | 配置项 | 初值 | 类 | 说明 |
 | --- | --- | --- | --- |
-| `router.enabled` | **`false`** | C | §15 的消融开关。`false` ⇒ **不构造路由器**：这条链上**一次 LLM 调用都不发生**，且共同取证分支照旧**无条件先试**（= 本接缝存在之前的行为，逐字相同） |
+| `router.enabled` | **`true`** | C | §15 的消融开关。`false` ⇒ **不构造路由器**：这条链上**一次 LLM 调用都不发生**，且共同取证分支照旧**无条件先试**（= 本接缝存在之前的行为，逐字相同）。⚠ **`default.yaml` 默认 `true`**（2026-10-14 起，主流程按模型分类选路）；**本内置缺省仍是 `false`**——缺这个键的快照按"不构造路由器"跑，同 [`grounded_evidence`](./config-reference.md) 的口径 |
 | `router.timeout_seconds` | **10.0** | C | 单次路由调用的超时。⚠ **与 `rerank.timeout_seconds` 方向不同**：路由器在回退检索**开始之前**，降级路径**有定义**（回 DEFAULT）⇒ **刻意比精排紧**（10s vs 30s） |
 | `router.max_output_tokens` | **8** | C | 单次生成的输出上限。**成本护栏**——提示词要求只回一个词，但模型没有义务遵守。⛔ **别设成 1**：`MULTI_HOP` 会被截成 `MULTI` ⇒ 输出非法 ⇒ **全部降级成 DEFAULT 且不报错** |
 | `router.temperature` | **0.0** | C | 生成温度。默认 0 是"这一步要可复现"的声明（§6）。⚠ 网关**可能忽略它**——所以"重复调用看路由是否稳定"必须真跑 |
-| `router.prompt_version` | **`v4`** | **B** | ⛔ **断言不是旋钮**：必须等于 `router.py` 的 `ROUTER_PROMPT_VERSION`，否则**构造期响亮失败**（同 `rerank.envelope`）。它防的是"换了提示词却忘了改版本号"——那种漂移查不出来。⚠ **2026-10-10 起全仓只有一版提示词**（v1/v2/v3 已按要求删除）⇒ **代价是"换提示词值不值"的基线不能再原样重跑**。历史与实测见 [`../eval/reports/router-v4-20261010.md`](../eval/reports/router-v4-20261010.md) |
+| `router.prompt_version` | **`v5`** | **B** | ⛔ **断言不是旋钮**：必须等于 `router.py` 的 `ROUTER_PROMPT_VERSION`，否则**构造期响亮失败**（同 `rerank.envelope`）。它防的是"换了提示词却忘了改版本号"——那种漂移查不出来。⚠ **2026-10-14 起为二分类**（`MULTI_HOP` / `DEFAULT`，`COUNT` 已去掉；v1/v2/v3 早先已按要求删除）⇒ **代价是"换提示词值不值"的基线不能再原样重跑**。历史与实测见 [`../eval/reports/router-v4-20261010.md`](../eval/reports/router-v4-20261010.md) |
 | `agentic.enabled` | `false` | C | 多跳执行器开关。`false` ⇒ **不构造执行器** ⇒ 每条 `MULTI_HOP` 都降级回 `DEFAULT`（记 `agentic_unavailable`）。⚠ **它管"执行器在不在"，"走不走这条路"归上面那个 `router.enabled`**；两个都开多跳才真的会跑。键与口径见 **§5** |
 
 **端点 / 密钥 / 模型名不在这里**：`router.*` **只有开关与阈值**，端点走 `.env` 的
 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（见 §9）——**不另开一套 model 键**，
 理由与 §4.4"不得引入第二套独立的模型配置或环境变量加载机制"是同一条。
 
-> ### ⚠ 为什么默认关，以及为什么缺端点**拒绝启动**（而 reranker 缺端点只是 WARNING）
+> ### ⚠ 为什么默认**开**（2026-10-14 起），以及为什么缺端点**拒绝启动**（而 reranker 缺端点只是 WARNING）
 >
-> **默认关**：打开它会改路径选择（`DEFAULT` 类问题失去共同取证那条短路），
-> 而这是一个**未经代理评测标定**的行为改动 ⇒ 不该默认生效在提交口径上。
+> **默认开**：主流程按模型分类选路（`MULTI_HOP` 类问题走多跳执行器，而非原混合链）。
+> 要跑"关掉"的对照就用 profile 覆盖或臂快照（`configs/runs/`）。
+> ⚠ **共同取证不再是关掉路由才能保住的东西**（2026-10-14 起）：取证**无条件先试**、
+> 在两种取值下都跑 ⇒ 开关的纯度比之前更干净。
 >
 > **缺端点拒绝启动**（`validate()` 里的 `_validate_router`）：两者的失败后果**不对称**。
 > 精排缺端点 ⇒ 名次退回 RRF，**检索仍然完整**，降级有定义，而 `rerank_disabled` 会如实记着。
@@ -324,11 +336,11 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 > ### ⚠ 它为什么安全地接受不可信输入
 >
 > Query 是**不可信输入**，提示词注入**在原理上防不住**。所以本模块**不靠提示词设防**，
-> 靠**输出域极小 + 三条路都安全**：输出只可能在三个枚举值里（**严格整串匹配**，
+> 靠**输出域极小 + 两条路都安全**：输出只可能在两个枚举值里（**严格整串匹配**，
 > 见 `parse_route`；`NOT MULTI_HOP` 会被读成**非法**而不是 `MULTI_HOP`），
-> 而三条路**本身都是既有的、测过的**路径。注入最多只能让它**选错分支**——
-> 后果是检索质量，不是越权 / 崩溃 / 数据泄漏。`COUNT` 也**拿不到特权**：
-> 它仍要过确定性编译与覆盖审查。
+> 而两条路**本身都是既有的、测过的**路径。注入最多只能让它**选错分支**——
+> 后果是检索质量，不是越权 / 崩溃 / 数据泄漏。最坏的那个出口是 `DEFAULT`
+> （**没有一条捷径**）：它就是原混合检索链，与"关掉路由器"逐字相同。
 
 > ### ⚠ 不设置信度阈值（有意）
 >

@@ -7,8 +7,13 @@
 
 | 模式 | 文件 | 怎么推进 |
 | --- | --- | --- |
-| **`react`（默认）** | `coq_prompt.py` · `parse.py` · `coq.py` | 每轮重新决定"充分了吗 / 下一跳问什么"（原版 Chain-of-Query） |
-| `plan` | `plan_prompts.py` · `plan_parse.py` · `plan.py` | **先拆一份固定计划**（1~4 步，含 `{{sN}}` 占位），之后每轮只回答"刚检索完的那一步"，**不重规划** |
+| `react`（**代码内置缺省**） | `coq_prompt.py` · `parse.py` · `coq.py` | 每轮重新决定"充分了吗 / 下一跳问什么"（原版 Chain-of-Query） |
+| `plan`（**`default.yaml` 即提交口径**） | `plan_prompts.py` · `plan_parse.py` · `plan.py` | **先拆一份固定计划**（1~4 步，含 `{{sN}}` 占位），之后每轮只回答"刚检索完的那一步"，**不重规划** |
+
+⚠ **两者故意不同**（2026-10-14 起）：`configs/default.yaml` 写的是 `plan`，代码常量
+`DEFAULT_AGENTIC_MODE` 仍是 `react`——后者是给**不填这个键的旧配置**留的"逐字不变"出口。
+⛔ 不要为了让两者看起来一致就把常量也翻掉。口径见
+[`../../docs/config-reference.md`](../../docs/config-reference.md) **§5**。
 
 ⚠ **两套提示词、两套解析、两张停止原因表**——**互不引用、互不改写**：
 `coq_prompt.py` 的原版提示词是**冻结**的，⛔ 绝不把 Plan 的提示词塞进去（或反过来）。

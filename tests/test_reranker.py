@@ -576,6 +576,9 @@ def _app_config(tmp_path, *, reranker: bool, rerank_env: dict | None = None):  #
     env = {
         "AML_EMB_BASE_URL": "http://unused/v1",
         "AML_EMB_API_KEY": "k",
+        "AML_BASE_URL": "http://llm/v1",
+        "AML_API_KEY": "k",
+        "AML_MODEL": "some-model",
         "TIANXIMEM_SQLITE_PATH": str(tmp_path / "tianxi.db"),
         "TIANXIMEM_QDRANT_URL": "http://unused",
         "TIANXIMEM_EMBED_CACHE_DIR": str(tmp_path / "cache"),

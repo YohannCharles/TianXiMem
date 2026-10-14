@@ -1810,6 +1810,42 @@ v3 曾引入第 4 个输出值 `NONE`（"输入为空 / 无效 / 无法归类时
 这一类。提示词里 `"X's spouse's company"` 那个例子把模型带向了"凡属有皆依赖"。
 三批样本里都复现。
 
+### 2026-10-14 补三：路由器收成**二分类**（删 `COUNT`），共同取证**正式**先行
+
+**① `COUNT` 取消，路由变成二选一（`MULTI_HOP` / `DEFAULT`，v5 提示词）**
+
+计数 / 名单类问题**改由共同取证直接处理**（先于本模块、确定性，且名单与计数共用同一份计划，
+见 [`../src/tianximem/retrieve/CLAUDE.md`](../src/tianximem/retrieve/CLAUDE.md)）——
+它们**到不了路由器**，所以"路由判成 `COUNT`"这一档既多余又不可测。
+
+⛔ **没有为它另写降级分支**：`parse_route` 是**遍历 `Route` 枚举做整串匹配**的
+（[`../src/tianximem/retrieve/router.py`](../src/tianximem/retrieve/router.py)）⇒ 模型万一仍吐 `COUNT`，
+**自动按"非法输出"降级到 `DEFAULT`**，与既有路径逐字相同。提示词里 `COUNT` 整段判据、
+`AVAILABLE ROUTES` 那一行与三条例子一并删除（v4 → v5）。
+
+**② 共同取证**不再需要"被 `COUNT` 选中才试"——`retrieval.grounded_evidence` 打开时
+**无条件先试**：完整取证与打包成功即返回、不调路由器；不适用 / 不齐 / 超限才轮到这里分类。
+这是 2026-10-13「顺序修订」的收口（那条修订已记在本条顶部的 blockquote 里）。
+
+**③ 由此，D40 的那条"结构性代价"随之解除**：`walk` / `interval` / `current` 三类确定性计划
+**不再会因为"被判成 `DEFAULT`"而丢掉那条短路**（短路现在无条件先行）⇒
+下面 2026-10-10 补二里"**不打开路由器的第二个独立理由**（①）"**不再成立**。
+剩下的理由只有一条：路由行为**仍未在代理评测上标定**。⚠ **2026-10-14 用户决定把主流程默认打开**（见 ⑤）⇒ 那条"未标定"由"默认关着"改成"默认开着，但仍是待清风险"。
+
+**⑤ 默认**开**（同日，2026-10-14）**：`configs/default.yaml` 的 `router.enabled` 由 `false` 改为 `true`——主流程按模型分类选路。⚠ 代价：**开着的路由器要求 `.env` 里的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` 齐备**，否则 `validate()` 的 `_validate_router` **拒绝启动**。要跑"关掉"的对照用 profile 覆盖或臂快照（`configs/runs/`）。代码内置缺省 `RouterConfig.enabled` 仍 `false`（缺这个键的快照逐字不变，同 `grounded_evidence` 的口径）。
+
+**④ 提交口径的 `agentic.mode`**：`configs/default.yaml` 写 **`plan`**（提交 profile 的一部分）；
+代码内置缺省 `DEFAULT_AGENTIC_MODE` **仍是 `react`**——⚠ 这个"配置 ≠ 代码缺省"的落差是**刻意的**
+（同 `retrieval.grounded_evidence` 的先例，理由见 [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py)），
+⛔ 不要为了让两者看起来一致就把常量也翻掉。
+
+**落地点**：[`../src/tianximem/retrieve/router.py`](../src/tianximem/retrieve/router.py)（枚举 / 提示词 / 解析）·
+[`../src/tianximem/service/pipeline.py`](../src/tianximem/service/pipeline.py) 的 `_search`（顺序）·
+[`./config-reference.md`](./config-reference.md) **§5.7** · [`./architecture.md`](./architecture.md) 的 Search 一节 ·
+[`../tests/test_router.py`](../tests/test_router.py) · [`../tools/router_eval.py`](../tools/router_eval.py) 与
+[`../tools/export_router_kit.py`](../tools/export_router_kit.py)（**遗留 `COUNT` 标注行按"到不了路由器"剔除**，
+不改成别的类 —— 那是人标的真值，改标签会伪造一份看不出来的假分数）。
+
 ---
 
 ## D41 · `MULTI_HOP` 执行器：**一轮一问的 Chain-of-Query**，默认关（2026-10-10）

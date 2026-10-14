@@ -69,7 +69,7 @@ from tianximem.service.app import build_services, create_app  # noqa: E402
 #:
 #: **E0**：默认原始路径，不带 Router、不带 Agentic。
 #:
-#: **E2**：完整 Router + Plan Agentic；`force=False` 保留 Router 的三分类，
+#: **E2**：完整 Router + Plan Agentic；`force=False` 保留 Router 的二分类，
 #: `MULTI_HOP` 才进入 Plan，其余路由继续走原有路径。
 ARMS = {
     "e0": ("E0 默认原始路径（不带 Router / Agentic）", False, False, False, "react"),

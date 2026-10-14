@@ -856,7 +856,7 @@ def main(argv: list[str] | None = None) -> int:
         "--mode",
         choices=("react", "plan"),
         default=None,
-        help="覆盖 `agentic.mode`（选哪个多跳执行器）；不传就用配置里的值（react）",
+        help="覆盖 `agentic.mode`（选哪个多跳执行器）；不传就用配置里的值（`default.yaml` 是 `plan`）",
     )
     parser.add_argument(
         "--per-round-top-k",
@@ -931,7 +931,8 @@ def main(argv: list[str] | None = None) -> int:
             f"（`agentic.max_rounds` = {base.agentic.max_rounds}）",
             flush=True,
         )
-    # ⚠ 与上面两个**同一条口径**：不传就用配置里的值（`react`），
+    # ⚠ 与上面两个**同一条口径**：不传就用配置里的值（`default.yaml` 是 `plan`；
+    #   代码内置缺省仍是 `react`，见 `DEFAULT_AGENTIC_MODE`），
     #   并把**实际生效的那个模式**写进记录与报告标题。⛔ 不把"两模式的结果变化"
     #   归因给计划机制之前，先要能证明跑的是哪一套。
     mode = args.mode if args.mode is not None else base.agentic.mode

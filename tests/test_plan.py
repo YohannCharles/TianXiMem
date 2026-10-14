@@ -1025,15 +1025,34 @@ def test_construction_refuses_impossible_limits(kwargs: dict, match: str) -> Non
         _agent(llm=FakeLlm(""), **kwargs)
 
 
-# ── ⑬ 装配与配置：默认仍是 React（§13）──────────────────────────────────
+# ── ⑬ 装配与配置：内置缺省 React / 提交口径 Plan（§13）────────────────────
 
 
-def test_the_shipped_default_still_selects_react() -> None:
-    """⭐ 旧配置（不填 `mode`）⇒ **逐字**走原来的执行器。"""
+def test_the_built_in_fallback_still_selects_react() -> None:
+    """⭐ 旧配置（不填 `mode`）⇒ **逐字**走原来的执行器。
+
+    ⚠ **这是代码内置缺省，不是提交口径**：`agentic.mode` 缺席时（直接构造
+    `AgenticConfig()`、或吃一份老 yaml）必须落到 `react`，与加这个键之前逐字相同。
+    提交口径写的是 `plan`，见下一条——两条**故意不同**，同 `retrieval.grounded_evidence`。
+    """
     from tianximem.common.config import AgenticConfig
 
     assert AgenticConfig().mode == "react"
     assert AgenticConfig().plan_max_output_tokens == 768
+
+
+def test_the_shipped_profile_selects_the_plan_executor() -> None:
+    """⭐ 仓库里那份 `default.yaml`（提交口径）选 `plan`（2026-10-14 起）。
+
+    ⚠ 与上一条相反是**有意的**：删除这一行会让"跑的是哪套机制"与文档所述不符，
+    而两者都能跑、都不报错——只会静默地回到 React。
+    """
+    from pathlib import Path
+
+    text = (
+        Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+    ).read_text(encoding="utf-8")
+    assert "  mode: plan" in text
 
 
 def test_the_config_selects_the_plan_executor_end_to_end(tmp_path) -> None:
@@ -1090,8 +1109,8 @@ def test_a_typo_in_the_mode_is_refused_at_load_time(tmp_path) -> None:
     for name in ("default.yaml", "local.yaml", "submit.yaml"):
         text = (real / name).read_text(encoding="utf-8")
         if name == "default.yaml":
-            assert "  mode: react" in text
-            text = text.replace("  mode: react", "  mode: plna")
+            assert "  mode: plan" in text
+            text = text.replace("  mode: plan", "  mode: plna")
         (out / name).write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError, match="agentic.mode"):
         load_config({"AML_EMB_BASE_URL": "http://x", "AML_EMB_API_KEY": "k"}, config_dir=out)

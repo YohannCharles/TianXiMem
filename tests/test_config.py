@@ -37,10 +37,15 @@ from tianximem.common.config import (
     load_config,
 )
 
-#: 一份"最小可启动"的环境（只给**必需**的那两项，其余走内置默认值）。
+#: 一份"最小可启动"的环境（只给**必需**的那几项，其余走内置默认值）。
+#: ⚠ `default.yaml` 的 `router.enabled: true` ⇒ 路由器**开着**，而开着的路由器
+#:   要求对话端点 ⇒ 这三项也是"最小可启动"的一部分（`_validate_router`）。
 _MIN_ENV: dict[str, str] = {
     ENV_EMBED_BASE_URL: "http://unused/v1",
     ENV_EMBED_API_KEY: "k",
+    "AML_BASE_URL": "http://unused/v1",
+    "AML_API_KEY": "k",
+    "AML_MODEL": "unused-model",
 }
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "tianximem"
@@ -742,7 +747,11 @@ def test_dotenv_is_read_on_the_production_path(config_dir: Path, tmp_path: Path)
     """
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "AML_EMB_BASE_URL=https://gw.example/v1\nAML_EMB_API_KEY=sk-from-dotenv\n",
+        "AML_EMB_BASE_URL=https://gw.example/v1\n"
+        "AML_EMB_API_KEY=sk-from-dotenv\n"
+        "AML_BASE_URL=https://llm.example/v1\n"
+        "AML_API_KEY=sk-llm\n"
+        "AML_MODEL=unused-model\n",
         encoding="utf-8",
     )
 
@@ -761,6 +770,9 @@ def test_dotenv_parses_our_own_file_format(config_dir: Path, tmp_path: Path) -> 
         "   \n"
         "AML_EMB_BASE_URL=https://gw/v1\n"
         "export AML_EMB_API_KEY=sk-exported\n"
+        "AML_BASE_URL=https://llm/v1\n"
+        "AML_API_KEY=sk-llm\n"
+        "AML_MODEL=unused-model\n"
         'TIANXIMEM_SQLITE_PATH="var/quoted.db"\n'
         "TIANXIMEM_QDRANT_URL=http://localhost:6333   # 这一行是行内注释\n"
         "TIANXIMEM_EMBED_CACHE_DIR=/tmp/cache#不是注释（# 前没有空白）\n",
@@ -783,7 +795,11 @@ def test_real_env_vars_beat_dotenv(config_dir: Path, tmp_path: Path, monkeypatch
     """
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "AML_EMB_BASE_URL=https://from-dotenv/v1\nAML_EMB_API_KEY=sk-dotenv\n",
+        "AML_EMB_BASE_URL=https://from-dotenv/v1\n"
+        "AML_EMB_API_KEY=sk-dotenv\n"
+        "AML_BASE_URL=https://llm-from-dotenv/v1\n"
+        "AML_API_KEY=sk-llm\n"
+        "AML_MODEL=unused-model\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("AML_EMB_API_KEY", "sk-from-shell")
@@ -830,7 +846,14 @@ def test_env_file_location_is_overridable(config_dir: Path, tmp_path: Path, monk
     在 dict 里放 `TIANXIMEM_ENV_FILE` 是没有意义的（它管的是"去哪读环境"）。
     """
     other = tmp_path / "custom.env"
-    other.write_text("AML_EMB_BASE_URL=https://custom/v1\nAML_EMB_API_KEY=k\n", encoding="utf-8")
+    other.write_text(
+        "AML_EMB_BASE_URL=https://custom/v1\n"
+        "AML_EMB_API_KEY=k\n"
+        "AML_BASE_URL=https://custom-llm/v1\n"
+        "AML_API_KEY=k\n"
+        "AML_MODEL=unused-model\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.setenv(ENV_FILE, str(other))
     monkeypatch.delenv("AML_EMB_BASE_URL", raising=False)

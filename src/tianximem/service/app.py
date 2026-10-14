@@ -282,11 +282,11 @@ def build_llm(config: AppConfig, *, timeout: float | None = None) -> LlmClient |
 
 
 def build_query_router(config: AppConfig) -> QueryRouter | None:
-    """按配置构造查询路由器。**`router.enabled = false` ⇒ `None`**（默认就是它）。
+    """按配置构造查询路由器。**`router.enabled = false` ⇒ `None`**。
 
-    与 `build_reranker` **同一套口径**（"该没有的时候就是 `None`"），但**缺省方向相反**：
-    精排缺省开（D8 把排序定为主线），路由缺省关（未经代理评测标定，
-    见 `RouterConfig` 的说明）。
+    与 `build_reranker` **同一套口径**（"该没有的时候就是 `None`"）。⚠ **`default.yaml`
+    里 `router.enabled` 默认 `true`**（2026-10-14 起，主流程按模型分类选路），而
+    `RouterConfig` 的**内置**缺省仍是 `false`——同 `grounded_evidence` 的口径。
 
     ⚠ **构造不打网络**：探活会把启动变成一次远程依赖，而路由器**已有一条实现且已测的
     降级路径**（回 `DEFAULT` = 原混合检索）。同 `build_reranker`。
@@ -354,7 +354,7 @@ def build_agentic(
         #   "分数变了"是执行器的效果还是路由器被绕过造成的（§12.3 的 E1 就是后者）。
         logger.warning(
             "`agentic.force = true`：**绕过路由器**，所有查询按 MULTI_HOP 处理"
-            "（§12.3 的 E1）。⛔ 这不是提交口径——它关掉了 COUNT / DEFAULT 的选择能力。"
+            "（§12.3 的 E1）。⛔ 这不是提交口径——它关掉了 MULTI_HOP / DEFAULT 的选择能力。"
         )
     # ⚠ 模式也进**启动日志**：E1 那一臂跑的是「哪一个执行器」必须能从日志里读出来，
     #   否则 react/plan 两轮的产物只能靠 `--out` 目录名去猜。
