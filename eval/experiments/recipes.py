@@ -126,7 +126,9 @@ FROZEN_RECIPES: Final[dict[str, Recipe]] = {
         axis="**题数**（每题自带候选段落，可答/不可答变体独立）",
         note=(
             "Full dev 按跳数及可答性分层；可答/不可答两种变体均保留。"
-            "只测本地答案别名归一化后精确匹配与拒答，不是上游 F1/sufficiency 指标。"
+            "可答题默认走**规则判分**（`--musique-judge rule`，快速复现历史数字），"
+            "显式 `llm` 才走模型语义裁判；拒答恒走精确匹配。"
+            "两种都不等于上游 F1/sufficiency 指标。"
         ),
     ),
     "locomo-refined": Recipe(

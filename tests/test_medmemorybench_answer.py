@@ -132,7 +132,7 @@ def test_clinical_evaluate_uses_recorded_answer_budget_not_the_judge_budget(
     ep.cmd_answer(args)
     seen = []
 
-    def fake_judge(dataset, qid, original, generated, *, judge, max_tokens):
+    def fake_judge(dataset, qid, original, generated, *, judge, max_tokens, musique_judge=None):
         seen.append((original, generated, max_tokens))
         return {"id": qid, "is_correct": True, "label": "CORRECT", "judge_response": "ok"}
 

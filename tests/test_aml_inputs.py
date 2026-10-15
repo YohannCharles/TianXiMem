@@ -163,13 +163,21 @@ def test_damaged_history_fails_before_http(tmp_path: Path, damage: str):
     assert log == []
 
 
-def test_run_manifest_guards_options_gold_and_deleted_user_directory(tmp_path: Path):
+def test_run_manifest_warns_on_code_drift_but_guards_data_and_checkpoints(tmp_path: Path):
+    """B（2026-10-14）：**代码/配置漂移**（`execution`）只警告 + 记进 `execution-drift.jsonl`
+    后**继续**（改判分/配置不必重跑十几小时）；**题单/数据/wire 漂移**（`data_fingerprint`）
+    与**缺 checkpoint** 仍**响亮拒绝**（那才是真不兼容）。"""
     plan = compile_plan(_timeline(), namespace="manifest")
     options = {"top_k": 100, "model": "offline"}
     freeze_run(tmp_path, [plan], execution=options)
     freeze_run(tmp_path, [plan], execution=options)
-    with pytest.raises(PlanStateError, match="changed"):
-        freeze_run(tmp_path, [plan], execution=options | {"model": "another"})
+    # ① execution 漂移 ⇒ **不 raise**；写 drift 记录；manifest 更新成新的（下次不再误报）。
+    freeze_run(tmp_path, [plan], execution=options | {"model": "another"})
+    drift = json.loads(
+        (tmp_path / "execution-drift.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert drift["drifted_keys"] == ["execution"]
+    # ② data_fingerprint 漂移（gold 变了）⇒ 仍拒绝。
     changed = replace(
         plan,
         sample=replace(
@@ -179,6 +187,7 @@ def test_run_manifest_guards_options_gold_and_deleted_user_directory(tmp_path: P
     )
     with pytest.raises(PlanStateError, match="changed"):
         freeze_run(tmp_path, [changed], execution=options)
+    # ③ 缺 checkpoint ⇒ 仍拒绝。
     shutil.rmtree(tmp_path / plan.sample.user_id)
     with pytest.raises(PlanStateError, match="missing"):
         freeze_run(tmp_path, [plan], execution=options)

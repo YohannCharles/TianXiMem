@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 
 
 def build_pipeline_parser(
@@ -25,8 +26,16 @@ def build_pipeline_parser(
     max_tokens_help: str,
     answer_help: str | None = None,
     evaluate_help: str | None = None,
+    evaluate_extra: Callable[[argparse.ArgumentParser], None] | None = None,
 ) -> argparse.ArgumentParser:
-    """`answer` / `evaluate` 两个子命令，**都**带 `--max-tokens`。"""
+    """`answer` / `evaluate` 两个子命令，**都**带 `--max-tokens`。
+
+    `evaluate_extra` 是给**单个 pipeline** 加自己那条 `evaluate` 专属参数的钩子
+    （第一个用户：`extra_pipeline` 的 `--musique-judge`）。
+    ⚠ **只能挂 `evaluate`、不能挂 `common`**：形状是契约（见模块 docstring），
+    而 `run_judge` 传 argv 时对两个子命令用的是同一份拼法——往 `answer` 上也加一个
+    只对判分有意义的开关，会让同一个开关在两条路上含义不同。
+    """
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--max-tokens", type=int, default=default_max_tokens, help=max_tokens_help)
 
@@ -41,5 +50,7 @@ def build_pipeline_parser(
     evaluate.add_argument("--input", required=True)
     evaluate.add_argument("--answers", required=True)
     evaluate.add_argument("--output", required=True)
+    if evaluate_extra is not None:
+        evaluate_extra(evaluate)
 
     return parser

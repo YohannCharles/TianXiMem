@@ -177,7 +177,7 @@ def test_compact_ids_snapshot_blocks_changed_resume(sample, monkeypatch, tmp_pat
     )
     monkeypatch.setattr(runner, "load_native", lambda root, wanted: [changed])
     other = runner.build_plans(selection.parse_ids(text), tmp_path, None, None, "run")
-    with pytest.raises(ValueError, match="input/execution changed"):
+    with pytest.raises(ValueError, match="题单/数据/wire 指纹 changed"):
         freeze_run(tmp_path / "run", [p for p, _ in other], execution={"top_k": 100})
 
 

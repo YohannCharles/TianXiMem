@@ -60,11 +60,20 @@
 > 而 v1 不做 agentic（D13）⇒ 当时那条核心 claim **不得引用 A4 的分数**，arm 定义先留着。
 >
 > ✅ **2026-10-10 起前提条件满足**（**D41**）：多跳执行器在
-> [`../src/tianximem/agent/`](../src/tianximem/agent/)，`agentic.enabled` 可独立关，
-> 而 E1 那一臂要的"绕过路由器"由 `agentic.force` 提供。
-> ⚠ **但三臂还没跑**（E0 = 原混合链 / E1 = 强制多跳 / E2 = 路由器 ＋ 多跳）——
-> 在拿到真实数字之前，**D13 那条"不得引用 A4 分数"的限制照旧成立**（因为没有分数可引）。
-> 实验口径见 [`../eval/CLAUDE.md`](../eval/CLAUDE.md) 与 `tools/coq_eval.py`。
+[`../src/tianximem/agent/`](../src/tianximem/agent/)，`agentic.enabled` 可独立关，
+而 E1 那一臂要的"绕过路由器"由 `agentic.force` 提供。
+> ✅ **三臂已经跑过了**（E0 = 原混合链 / E1 = 强制多跳 / E2 = 路由器 ＋ 多跳）：
+> LoCoMo 25 题与 MuSiQue 4 跳链各一轮，**多跳都是 0 收益**——
+> 数字与口径见 [`ledger.md`](../eval/reports/ledger.md) 的「多跳执行器（Chain-of-Query）」
+> 与「链式依赖多跳检索 · MuSiQue」两节（⚠ 两轮都只跑一遍，且题池不同，**不能互相外推**）。
+> ⚠ 因此 D13 那条"不得引用 A4 分数"的限制**已经可以按那两节的实际数字来谈**，
+> 但**仍不许拿它当"agentic 没用"的定论**：瓶颈已定位到两个具体环节（改写提不出第二跳、
+> 充分性信号无分辨力），不是"多跳"这个想法本身。
+> ⚠ **2026-10-12 起 A4 多了一个自变量**：`agentic.mode` = `react`（默认）／`plan`
+> （先拆一份固定计划再逐跳执行）。两模式在 MuSiQue 50 题上的对照见
+> [`coq-musique-20261011.md`](../eval/reports/coq-musique-20261011.md) **§8**——
+> ⛔ 那里"机制"与"每轮召回深度 20 vs 100"**没有被分开测**，读的时候别把差全归给机制。
+> 实验口径见 [`../eval/CLAUDE.md`](../eval/CLAUDE.md) 与 `tools/coq_eval.py`（`--mode`）。
 > ⚠ D13 说过 Checker 的空实现能"免费拿到反事实分布"来提前回答 A4——那份分布现在**恒为 `None`**
 > （判据要的两路排名，调用方不传，见 [`roadmap.md`](./roadmap.md) 的"Checker 的两路分离查询"）。
 

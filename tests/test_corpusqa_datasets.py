@@ -203,7 +203,70 @@ def test_hybridqa_corruption_is_preserved_and_check_does_not_repair(hybrid_root:
     assert path.is_file()
 
 
-def test_feverous_candidates_do_not_use_gold_and_render_all_element_types(fever_root: Path) -> None:
+def test_hybridqa_colon_table_id_lands_on_a_portable_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """表名里的 `:` 是 NTFS 保留字符 ⇒ 语料必须编码后落盘，且加载器能读回。"""
+    assert hybridqa.corpus_filename("ISO_3166-2:FR_2") == "ISO_3166-2%3AFR_2"
+    assert (
+        hybridqa.corpus_relpath("tables_tok/ISO_3166-2:FR_2.json")
+        == "tables_tok/ISO_3166-2%3AFR_2.json"
+    )
+    root = tmp_path / "colon"
+    _json(
+        root / "hybridqa/dev.json",
+        [
+            {
+                "question_id": "a",
+                "table_id": "ISO_3166-2:FR_2",
+                "question": "Which region?",
+                "answer-text": "FR",
+            }
+        ],
+    )
+    _json(
+        root / "hybridqa/dev_reference.json",
+        {"reference": {"a": "FR"}, "table": ["a"], "passage": []},
+    )
+    docs = {
+        "tables_tok/ISO_3166-2:FR_2.json": {
+            "title": "FR",
+            "header": [["Region", []]],
+            "data": [[["FR", []]]],
+            "intro": "R",
+        },
+        "request_tok/ISO_3166-2:FR_2.json": {"/wiki/FR": "FR is a region."},
+    }
+    archive = root / "hybridqa" / hybridqa.ARCHIVE
+    prefix = next(
+        e["archive_root"] for e in manifest.MANIFEST if e["name"] == "hybridqa/" + hybridqa.ARCHIVE
+    )
+    with tarfile.open(archive, "w:gz") as bundle:
+        for name, obj in docs.items():
+            raw = json.dumps(obj).encode()
+            info = tarfile.TarInfo(prefix + "/" + name)
+            info.size = len(raw)
+            bundle.addfile(info, io.BytesIO(raw))
+    entry = _replace_entry(
+        monkeypatch,
+        "hybridqa/" + hybridqa.ARCHIVE,
+        sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+    )
+    corpus_prepare.prepare_hybridqa_corpus(root, entry)
+    # 落盘名已编码；带 `:` 的原始名没有被（在 NTFS 上也无法被）创建。
+    assert (root / "hybridqa/tables_tok/ISO_3166-2%3AFR_2.json").is_file()
+    assert not (root / "hybridqa/tables_tok/ISO_3166-2:FR_2.json").exists()
+    # 加载器把编码名解回原 table_id，语料内容完整。
+    sample = hybridqa.load_hybridqa(root)[0]
+    text = "\n".join(m.content for m in sample.sessions[0].messages)
+    assert "FR is a region." in text
+    # 离线 check 幂等：同一份语料再校验一次不报错。
+    corpus_prepare.prepare_hybridqa_corpus(root, entry, check_only=True)
+
+
+def test_feverous_candidates_do_not_use_gold_and_render_all_element_types(
+    fever_root: Path,
+) -> None:
     samples = feverous.load_feverous(fever_root)
     before = samples[0].sessions
     content = "\n".join(m.content for s in before for m in s.messages)

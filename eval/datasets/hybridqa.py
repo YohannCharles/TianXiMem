@@ -41,6 +41,41 @@ def safe_table_id(value: object) -> str:
     return value
 
 
+#: Windows/NTFS 不能作为文件名的字符（`:` 是盘符/数据流分隔符，其余同保留集）。
+_UNSAFE_FILENAME_CHARS = '<>:"/\\|?*'
+
+
+def corpus_filename(table_id: str) -> str:
+    """`table_id` → 落盘文件名（`tables_tok/<这段>.json` 里的那段）。
+
+    上游表名是维基标题，含 `:`（如 `ISO_3166-2:FR_2`）。`:` 在 NTFS 上是保留字符：
+    直接落盘会写成隐藏数据流，且原子发布（`os.replace`）会失败。这里把**文件名里
+    非法/有歧义的字符**（`<>:"/\\|?*`、控制字符，以及 `%` 自身）编码成 `%XX`
+    （UTF-8 字节，大写十六进制）；其余字符（含中文）原样保留，于是同一份语料在
+    Windows 与 Linux 上同名、可互换、可拷贝。
+
+    ⚠ `table_id` 本身不变——分组键与内容哈希仍用原值；编码只作用于磁盘路径。
+    `%` 也编码，保证映射可逆、无歧义（不可能与原始名撞车）。
+    同 [`memory500.portable_hybrid`](./memory500.py) 一套动机（那边直接哈希 tid）。
+    """
+    return "".join(
+        "".join(f"%{byte:02X}" for byte in char.encode("utf-8"))
+        if char == "%" or char in _UNSAFE_FILENAME_CHARS or ord(char) < 0x20
+        else char
+        for char in table_id
+    )
+
+
+def corpus_relpath(name: str) -> str:
+    """归档成员相对名 `folder/<table_id>.json` → 落盘相对名（只编码文件名那段）。
+
+    扩展名 `.json` 全由安全字符组成，编码后原样保留。
+    """
+    folder, sep, filename = name.partition("/")
+    encoded = corpus_filename(filename)
+    return f"{folder}/{encoded}" if sep else encoded
+
+
 def required_corpus_files(root: Path) -> set[str]:
     rows = json.loads((root / DATA_DIR / QUESTIONS).read_text(encoding="utf-8"))
     return {
@@ -68,7 +103,7 @@ def read_corpus(root: Path, table_id: str, receipt: dict) -> tuple[dict, dict]:
     docs = []
     for folder in ("tables_tok", "request_tok"):
         name = f"{folder}/{table_id}.json"
-        raw = (root / DATA_DIR / name).read_bytes()
+        raw = (root / DATA_DIR / corpus_relpath(name)).read_bytes()
         if hashlib.sha256(raw).hexdigest() != receipt["files"].get(name):
             raise ValueError(f"HybridQA: corpus sha256 mismatch: {name}")
         docs.append(json.loads(raw))

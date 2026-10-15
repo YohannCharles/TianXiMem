@@ -371,6 +371,29 @@ def test_dispatcher_answer_prompt_falls_back_for_unknown_family() -> None:
     assert "ctx" in prompt and "Where does she live?" in prompt
 
 
+def test_personamem_capture_uses_official_generative_prompt() -> None:
+    """采集里的 PersonaMem 是开放题，必须复用官方 generative 消息构造。"""
+    from eval.harness import extra_pipeline as extra
+    from eval.harness.official_capture_pipeline import _answer_prompt
+
+    prompt = _answer_prompt(
+        {
+            "dataset": "personamem-v2",
+            "question": "What should I choose?",
+            "retrieved_context": "CAPTURED-MEMORY-MARKER",
+        }
+    )
+
+    assert "CAPTURED-MEMORY-MARKER" in prompt
+    assert "What should I choose?" in prompt
+    assert "Please recall my related preferences from our conversation history" in prompt
+    assert "RAW-HISTORY" not in prompt
+    assert "Cannot determine from the memories" not in prompt
+    assert prompt != extra.ANSWER_PROMPT.format(
+        memories="CAPTURED-MEMORY-MARKER", question="What should I choose?"
+    )
+
+
 def test_feverous_verdict_is_not_alias_containment() -> None:
     """FEVEROUS 三分类：**顺序敏感**——`does not support` 不能被读成 `SUPPORTS`。
 

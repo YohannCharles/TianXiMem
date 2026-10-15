@@ -131,7 +131,7 @@ def test_actual_answer_request_and_resume_guard(tmp_path, monkeypatch, official_
     assert pipeline.cmd_answer(args) == 0
     sent = str(requests[0]["messages"])
     assert "SEARCH-ONLY-EVIDENCE" in sent and "RAW-HISTORY-MUST-NOT-LEAK" not in sent
-    answer = json.loads(output.read_text())
+    answer = json.loads(output.read_text(encoding="utf-8"))
     assert answer["option_mapping"][answer["correct_letter"]] == "Yoga"
     assert answer["memory_input_version"] == pipeline.MEMORY_INPUT_VERSION
     assert answer["input_fingerprint"]

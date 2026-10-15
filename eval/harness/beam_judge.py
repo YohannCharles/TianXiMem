@@ -33,7 +33,7 @@ def parse_score(raw: str) -> dict:
 
 
 def single_rubric_template(pipeline: Path) -> str:
-    for node in ast.parse(pipeline.read_text()).body:
+    for node in ast.parse(pipeline.read_text(encoding="utf-8")).body:
         if isinstance(node, ast.Assign) and any(
             getattr(target, "id", "") == "UNIFIED_LLM_JUDGE_BASE_PROMPT" for target in node.targets
         ):
@@ -62,7 +62,7 @@ def judge_independently(
         ).hexdigest()
         completed = out_dir / f"{index}-completed.json"
         if completed.exists():
-            saved = json.loads(completed.read_text())
+            saved = json.loads(completed.read_text(encoding="utf-8"))
             if saved["input_sha256"] != fingerprint:
                 raise ValueError("Saved rubric judgment has different input")
             scores.append(parse_score(saved["response"]))
@@ -96,7 +96,8 @@ def judge_independently(
                         },
                         ensure_ascii=False,
                         indent=2,
-                    )
+                    ),
+                    encoding="utf-8",
                 )
                 response.raise_for_status()
                 raw = data["choices"][0]["message"]["content"]
@@ -106,7 +107,8 @@ def judge_independently(
                     json.dumps(
                         {"input_sha256": fingerprint, "response": raw, "endpoint_index": selected},
                         ensure_ascii=False,
-                    )
+                    ),
+                    encoding="utf-8",
                 )
                 temp.replace(completed)
                 scores.append(score)

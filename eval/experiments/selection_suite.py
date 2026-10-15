@@ -6,8 +6,10 @@ import argparse
 import json
 import sys
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
+from threading import Lock
 
 from eval.datasets.aml.plan import AddEvent, InputPlan, SearchEvent, digest
 from eval.datasets.registry import benchmark_dir, capture_dir
@@ -49,7 +51,12 @@ def evaluation_fingerprint(args) -> dict:
         "max_tokens": args.max_tokens,
         "top_k": 100,
         "memory_date": args.memory_date,
-        "scheduling": "serial isolated users; ordered checkpoints",
+        "workers": getattr(args, "workers", 1),
+        "scheduling": (
+            f"{getattr(args, 'workers', 1)}-way cross-user; each user ordered checkpoints"
+            if getattr(args, "workers", 1) > 1
+            else "serial isolated users; ordered checkpoints"
+        ),
         "code_sha256": {str(p.relative_to(root)): sha256(p) for p in sorted(code)},
         "upstream_sha256": {
             str(p.relative_to(args.data_root)): sha256(p)
@@ -308,8 +315,10 @@ def run(args, manifest: dict, jobs) -> int:
         "evaluation": evaluation_fingerprint(args),
         "suite_code_sha256": digest(
             [
-                Path(__file__).read_text(),
-                Path(__file__).parents[1].joinpath("datasets/selection_suite.py").read_text(),
+                Path(__file__).read_text(encoding="utf-8"),
+                Path(__file__).parents[1]
+                .joinpath("datasets/selection_suite.py")
+                .read_text(encoding="utf-8"),
             ]
         ),
         "config_fingerprint": config_fingerprint(args.profile, configs_dir=args.configs_dir),
@@ -326,25 +335,79 @@ def run(args, manifest: dict, jobs) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((args.configs_dir / name).read_bytes())
     client = ServiceClient(args.base_url)
-    try:
-        for index, (plan, entries) in enumerate(jobs, 1):
-            directory = output / plan.sample.user_id
-            print(f"[{index}/{len(jobs)}] {plan.sample.dataset}: {len(entries)} tasks", flush=True)
-            hits = execute_plan(plan, client=client, out_dir=directory)
-            items = build_input_items(plan.sample, hits, date_mode=args.memory_date)
-            pipeline = pipeline_for(args.data_root, plan.sample.dataset)
+    workers = max(1, getattr(args, "workers", 1))
+    failure_lock = Lock()  # 多线程写 `judge-failures.jsonl` 的串行点
+
+    def _run_user(job) -> str:
+        """跑一个用户：Add/Search（`execute_plan`）→ answer/judge（`run_judge`）。
+
+        ⚠ **用户内部严格串行**（有序检查点的事实来源）；并发只在**用户之间**（下面线程池）。
+        ⚠ **判分失败不中止整轮**（如网关 524）：记下**题号**、跳过；那题不写 `task-results.json`
+        = 留在"未完成"里，**下次续跑自动重做**。⛔ 一条网关错误绝不该拖死整轮。
+        """
+        plan, entries = job
+        directory = output / plan.sample.user_id
+        label = f"{plan.sample.dataset}/{plan.sample.user_id}"
+        # ⚠ 已完成的用户直接跳过（续跑不重判）——`task-results.json` 就是"这个用户做完了"。
+        if (directory / "task-results.json").is_file():
+            return f"{label} (done)"
+        hits = execute_plan(plan, client=client, out_dir=directory, add_workers=workers)
+        items = build_input_items(plan.sample, hits, date_mode=args.memory_date)
+        pipeline = pipeline_for(args.data_root, plan.sample.dataset)
+        try:
             results = run_judge(
                 pipeline, items, directory, dataset=plan.sample.dataset, max_tokens=args.max_tokens
             )
             ids = {q.qid: row["id"] for q, row in zip(plan.sample.questions, entries, strict=True)}
             if {r.qid for r in results} != set(ids) or len(results) != len(ids):
                 raise ValueError("judge output does not cover fixed questions uniquely")
-            write_json(
-                directory / "task-results.json",
-                [{"id": ids[r.qid], "result": asdict(r)} for r in results],
-            )
-            summary = summarize(output)["groups"]["overall"]
-            print(f"completed {summary['completed']}/{summary['expected']}", flush=True)
+        except Exception as exc:  # noqa: BLE001 —— 判分失败（如 524）**不该杀掉整轮**
+            qids = [q.qid for q in plan.sample.questions]
+            with failure_lock:
+                with (output / "judge-failures.jsonl").open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        json.dumps(
+                            {
+                                "dataset": plan.sample.dataset,
+                                "user_id": plan.sample.user_id,
+                                "qids": qids,
+                                "error": f"{type(exc).__name__}: {exc}"[:400],
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+            print(f"  ⚠ 判分失败，已记题号（{len(qids)} 题）→ 跳过、后面再补：{label}", flush=True)
+            return f"{label} (JUDGE-FAILED)"
+        write_json(
+            directory / "task-results.json",
+            [{"id": ids[r.qid], "result": asdict(r)} for r in results],
+        )
+        return label
+
+    try:
+        if workers == 1:
+            for index, job in enumerate(jobs, 1):
+                print(
+                    f"[{index}/{len(jobs)}] {job[0].sample.dataset}: {len(job[1])} tasks",
+                    flush=True,
+                )
+                _run_user(job)
+                summary = summarize(output)["groups"]["overall"]
+                print(f"completed {summary['completed']}/{summary['expected']}", flush=True)
+        else:
+            # ⚠ **跨用户并发**（`--workers`）：不同用户互相独立（各自一个输出目录、各自
+            #   有序检查点）⇒ 只让 LLM/网关的等待互相重叠。⚠ **用户内部仍串行**。
+            #   任一用户抛异常 ⇒ `pool.map` 在迭代处原样抛出（不吞），已完成用户留在检查点里。
+            print(f"跨用户并发 {workers} 路（每个用户内部仍串行）", flush=True)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for done, name in enumerate(pool.map(_run_user, jobs), 1):
+                    summary = summarize(output)["groups"]["overall"]
+                    print(
+                        f"completed {summary['completed']}/{summary['expected']}  "
+                        f"（{done}/{len(jobs)} 用户）[{name}]",
+                        flush=True,
+                    )
     finally:
         client.close()
         summarize(output)
@@ -395,6 +458,9 @@ def main(argv=None) -> int:
             p.add_argument("--memory-date", choices=DATE_MODES, default="none")
             p.add_argument("--offline", action="store_true")
             p.add_argument("--annotate-mark", default="paren", choices=("paren",))
+            p.add_argument(
+                "--workers", type=int, default=4, help="跨用户并发度（每个用户内部仍串行）"
+            )
     sub.add_parser("summarize").add_argument("--run-dir", type=Path, required=True)
     comparison = sub.add_parser("compare")
     comparison.add_argument("--left", type=Path, required=True)

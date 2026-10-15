@@ -398,3 +398,323 @@ def test_the_single_hop_manifest_is_a_non_multi_hop_control() -> None:
         assert set(row) == {"dataset", "user_id", "question_id", "category", "expects_evidence"}
         # ⛔ 原文一个字都不许进清单
         assert "question" not in row and "answer" not in row
+
+
+# ── Plan 模式在本工具里的接线（2026-10-12）────────────────────────────────
+
+
+def test_react_mode_keeps_the_historical_arm_keys() -> None:
+    """⭐ **默认模式不带后缀**：`react` 的产物键与本次改动之前**逐字相同**。
+
+    ⛔ 加了后缀会让所有已归档的 `report.json` 键对不上（`e1` → `e1-react`），
+    而那种破坏**不会报错**——只是以后回看老产物时找不到对应的臂。
+    """
+    from tools.coq_eval import _arm_identity
+
+    e1 = _arms()["e1"]
+    assert _arm_identity(e1, "react") == ("e1", e1.label)
+    key, label = _arm_identity(e1, "plan")
+    assert key == "e1-plan"
+    assert label.endswith("plan")
+
+
+def test_the_plan_arm_only_ever_gets_its_execution_record() -> None:
+    """⭐ **只有真跑过 Plan 的那些请求**才有执行记录可前置。
+
+    ⛔ React 的调用记录**没有** `mode: plan` ⇒ 它拿到的字典是空的 ⇒
+    `build_input_items` 走的是与本参数存在之前**逐字相同**的那条路。
+    """
+    from tools.coq_eval import _plan_record_texts
+
+    calls = [
+        {"qid": "q1", "mode": "react", "stop_reason": "sufficient", "rounds": []},
+        {
+            "qid": "q2",
+            "mode": "plan",
+            "query": "orig?",
+            "plan": [{"id": "s1", "query": "a", "depends_on": []}],
+            "plan_history": [
+                {
+                    "step_id": "s1",
+                    "executed_query": "a",
+                    "answer": "A",
+                    "evidence": ["m1"],
+                    "status": "answered",
+                    "stop_reason": "plan_complete",
+                }
+            ],
+        },
+    ]
+    texts = _plan_record_texts(calls)
+    assert set(texts) == {"q2"}
+    text = texts["q2"]
+    # ⛔ **必须自称是模型生成的执行记录**——不许伪装成记忆
+    assert "MACHINE-GENERATED execution record" in text
+    assert "NOT a memory record" in text
+    # 计划与实际执行的问答都在
+    assert "s1: a" in text
+    assert "s1 question: a" in text
+    assert "s1 answer: A" in text
+    assert "s1 sources: m1" in text
+    # ⛔ 不编造 memory id：出现的 id 只可能是记录里本来就有的那些
+    assert "m9" not in text
+
+
+def test_a_stalled_plan_step_says_so_in_the_record() -> None:
+    """没解出来的那一步要在记录里**明说状态**：否则模型会把"没有下文"读成"计划就这么多"。"""
+    from tools.coq_eval import _execution_record_text
+
+    text = _execution_record_text(
+        {
+            "query": "orig?",
+            "plan": [{"id": "s1", "query": "a", "depends_on": []}],
+            "plan_history": [
+                {
+                    "step_id": "s1",
+                    "executed_query": "a",
+                    "answer": None,
+                    "evidence": [],
+                    "status": "unresolved",
+                    "stop_reason": "dependency_unresolved",
+                }
+            ],
+        }
+    )
+    assert "s1 answer: (none)" in text
+    assert "s1 status: unresolved (dependency_unresolved)" in text
+    assert "s1 sources: (none)" in text
+
+
+def test_the_plan_summary_counts_what_the_report_must_say() -> None:
+    """报告要的那几项**从 `plan_history` 里数出来**：计划几步 / 跑了几步 / 停在哪。"""
+    from tools.coq_eval import _plan_summary
+
+    calls = [
+        {
+            "qid": "q1",
+            "mode": "plan",
+            "plan_steps": 3,
+            "steps_executed": 2,
+            "dependencies_repaired": 2,
+            "stop_reason": "dependency_unresolved",
+            "plan_history": [
+                {
+                    "status": "answered",
+                    "quotes_unverified": 0,
+                    "documents": ["m1"],
+                    "recalled": 20,
+                },
+                {
+                    "status": "unresolved",
+                    "quotes_unverified": 2,
+                    "documents": ["m2"],
+                    "recalled": 20,
+                },
+            ],
+        }
+    ]
+    summary = _plan_summary(calls)
+    assert summary["plan_steps"] == {3: 1}
+    assert summary["steps_executed"] == {2: 1}
+    assert summary["stop_reasons"] == {"dependency_unresolved": 1}
+    assert summary["dependencies_repaired"] == 2
+    assert summary["quotes_unverified"] == 2
+    assert summary["answered_steps"] == 1
+    assert summary["total_step_records"] == 2
+    assert summary["mean_recalled_per_round"] == 20.0
+
+
+def test_the_mode_is_recorded_in_the_run_switches(tmp_path) -> None:
+    """⚠ 模式进 run record：它是这一轮的自变量，不记就没法归因。"""
+    from tools.coq_eval import _arm_config
+
+    from tianximem.common.config import AgenticConfig
+
+    base = _config(tmp_path)
+    assert base.agentic.mode == "react"  # 内置缺省
+    plan = _arm_config(
+        base,
+        _arms()["e1"],
+        collection="c",
+        sqlite_path=tmp_path / "t.db",
+        metrics_path=tmp_path / "m.json",
+        rerank=True,
+        mode="plan",
+    )
+    assert plan.agentic.mode == "plan"
+    # ⛔ 不传 `mode` ⇒ **不覆盖**（旧配置逐字跑 React）
+    keep = _arm_config(
+        base,
+        _arms()["e1"],
+        collection="c",
+        sqlite_path=tmp_path / "t.db",
+        metrics_path=tmp_path / "m.json",
+        rerank=True,
+    )
+    assert keep.agentic.mode == AgenticConfig().mode == "react"
+
+
+# ── 恢复分支的答案输入（2026-10-13）────────────────────────────────────
+
+
+def _plan_call(qid: str, *, entered: bool, status: str = "success") -> dict:
+    """一条**最小可判**的 plan 调用记录（只放判据真正读到的字段）。"""
+    return {
+        "qid": qid,
+        "mode": "plan",
+        "query": "orig?",
+        "plan": [{"id": "s1", "query": "a", "depends_on": []}],
+        "plan_history": [
+            {
+                "step_id": "s1",
+                "executed_query": "a",
+                "answer": None if entered else "A",
+                "evidence": [],
+                "status": "unresolved" if entered else "answered",
+                "stop_reason": "dependency_unresolved" if entered else "plan_complete",
+                "quotes_unverified": 0,
+                "documents": ["m1"],
+                "recalled": 20,
+            }
+        ],
+        "plan_steps": 1,
+        "steps_executed": 1,
+        "stop_reason": "dependency_unresolved" if entered else "plan_complete",
+        "dependencies_repaired": 0,
+        "recovery": {
+            "entered": entered,
+            # ⚠ 与真 recorder 一致：没进恢复分支时 `status` 就是 `not_triggered`。
+            "status": status if entered else "not_triggered",
+            "rerank_query_mode": "original" if entered else "joint",
+        },
+        "answer_input_has_record": not entered,
+    }
+
+
+def test_the_records_guard_excludes_recovery_questions_from_its_denominator() -> None:
+    """⭐ 执行记录守卫的分母**不含恢复分支的题**（2026-10-13 踩过一次）。
+
+    ⚠ 实测：LoCoMo 那 25 题里有 9 题 `unresolved` ⇒ 守卫报 `16/25` 并**中止整轮**
+    （判分都没跑）。那是一条**假的**回归——那 9 题的答题输入**按设计**就不带执行记录。
+    """
+    from tools.coq_eval import _require_plan_records
+
+    calls = [_plan_call("q1", entered=False), _plan_call("q2", entered=True)]
+    assert set(_require_plan_records(calls, {"q1", "q2"})) == {"q1"}
+
+
+def test_the_records_guard_still_fires_when_a_record_is_really_missing() -> None:
+    """⚠ 但"真的缺"（`--reuse-hits` 那种，一条记录都没有）**仍要响亮失败**。"""
+    from tools.coq_eval import _require_plan_records
+
+    calls = [_plan_call("q1", entered=False)]
+    with pytest.raises(SystemExit, match="执行记录"):
+        _require_plan_records(calls, {"q1", "q2"})
+
+
+def test_a_recovery_question_gets_no_execution_record_in_its_answer_input() -> None:
+    """⭐ 进了恢复分支的题：**最终答题输入不折执行记录**（原题 ＋ 精排后的原文）。
+
+    ⚠ 记录**没有丢**：它照旧完整躺在 `<臂>-rounds.json` 里（`_execution_record_text`
+    只是不再被**前置**到答案输入）。
+    """
+    from tools.coq_eval import _plan_record_texts, _recovery_calls
+
+    calls = [_plan_call("q1", entered=False), _plan_call("q2", entered=True)]
+    assert set(_plan_record_texts(calls)) == {"q1"}
+    assert [c["qid"] for c in _recovery_calls(calls)] == ["q2"]
+
+
+def test_the_budget_exhausted_case_also_skips_the_record() -> None:
+    """⚠ 判据是 `entered`，⛔ 不是 `status == "success"`：
+
+    "触发但预算耗尽"（没真检索）的题**同样**不带执行记录——中间步骤失败，
+    不代表原题答不出来（用户口径）。
+    """
+    from tools.coq_eval import _plan_record_texts, _recovery_calls
+
+    calls = [_plan_call("q1", entered=True, status="skipped_budget_exhausted")]
+    assert _plan_record_texts(calls) == {}
+    assert len(_recovery_calls(calls)) == 1
+
+
+def test_the_plan_summary_separates_the_four_recovery_states() -> None:
+    """⭐ **"触发但预算耗尽"与"真的跑了兜底"在汇总里分得开**。"""
+    from tools.coq_eval import _plan_summary
+
+    calls = [
+        _plan_call("q1", entered=False),
+        _plan_call("q2", entered=True, status="success"),
+        _plan_call("q3", entered=True, status="skipped_budget_exhausted"),
+    ]
+    summary = _plan_summary(calls)
+    assert summary["recovery_statuses"] == {
+        "not_triggered": 1,
+        "success": 1,
+        "skipped_budget_exhausted": 1,
+    }
+    assert summary["rerank_query_modes"] == {"joint": 1, "original": 2}
+    assert summary["answer_input_without_record"] == 2
+    assert summary["answer_input_with_record"] == 1
+
+
+def test_the_recorder_really_writes_the_recovery_fields() -> None:
+    """⭐ **recorder 必须真的把 `recovery` 写进逐题记录**（2026-10-13 踩过）。
+
+    ⚠ 那处替换的**锚点当时已经不存在**（上一轮删过一行），脚本于是**静默什么都没做**，
+    而下游的汇总对缺失字段**有默认值** ⇒ 报告里打印出 `recovery_statuses: {not_triggered: 50}`
+    ——**看起来像"一次都没触发"**。⇒ 这条用例把"字段在不在"变成断言。
+    """
+    from dataclasses import replace
+
+    from tools.coq_eval import _RecordingAgent
+
+    from tianximem.agent import PlanRecovery, PlanResult, PlanStats
+
+    inner_result = replace(
+        PlanResult(
+            candidates=(),
+            rerank_query="q?",
+            stats=PlanStats(
+                rounds=(),
+                stop_reason="dependency_unresolved",
+                fallback_reason=None,
+                candidate_count=0,
+                unique_candidate_count=0,
+                selected_evidence_count=0,
+                joint_query_count=1,
+                llm_calls=1,
+                rerank_calls=0,
+                latency_ms=1.0,
+            ),
+            plan=(),
+            plan_history=(),
+        ),
+        recovery=PlanRecovery(
+            entered=True,
+            status="success",
+            executed_rounds=1,
+            remaining_top_k=60,
+            recalled=60,
+            added_unique=40,
+            latency_ms=12.5,
+            rerank_query_mode="original",
+        ),
+    )
+
+    class _Inner:
+        def search(self, *, user_id: str, query: str, top_k: int):
+            return inner_result
+
+    recorder = _RecordingAgent(_Inner(), mode="plan")
+    recorder.search(user_id="u", query="q?", top_k=100)
+    record = recorder.calls[-1]
+    assert record["recovery"]["entered"] is True
+    assert record["recovery"]["status"] == "success"
+    assert record["recovery"]["remaining_top_k"] == 60
+    assert record["recovery"]["added_unique"] == 40
+    assert record["recovery"]["rerank_query_mode"] == "original"
+    # ⭐ 进去了恢复分支 ⇒ 答案输入**不折**执行记录。
+    assert record["answer_input_has_record"] is False
+    # ⚠ 缺字段时的默认值会**伪装**成"没触发"——所以这一条必须是硬断言。
+    assert "recovery" in record

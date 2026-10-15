@@ -1,0 +1,246 @@
+# 第四批样本（E4，2026-10-12）：**200 题留出集**，供 `tools/router_eval.py` 跑逐类 P/R/F1。
+#
+# ## 与前三批零重叠（已断言）
+# 本文件里的 `(dataset, question_id)` 与 `router-samples.jsonl`(46) ·
+# `router-samples-e2.jsonl`(37) · `router-samples-e3.jsonl`(47) · `router-probes.jsonl`(9)
+# **一对都不重复**（写入后用脚本核对过）。
+#
+# ## ⛔ 不存问题原文
+# 与前三批同一口径：那是数据集内容，没理由进 git。问题由 `tools/router_eval.py` 经
+# `benchmark_dir()` 现读（D16）。路径经 `TIANXIMEM_BENCHMARK_DIR`，**不硬编码**。
+#
+# ## 真值口径（两处，缺一不可）
+#   * `tools/router_eval.py` 顶部「真值从哪来」一节；
+#   * `src/tianximem/retrieve/router.py` 的 `ROUTER_PROMPT`（v4）**提示词原文**。
+# `expected_route` 是**人读着提示词逐条判的**，**没有用数据集自带的 `category` /
+# `question_type`**——那两样描述的是**答案类型**，不是检索依赖结构。
+#
+# ### 三类的判据（与提示词逐条对应）
+# * `MULTI_HOP` —— 要**先解出一个未点名的中间实体 / 锚点**，后面的检索才表述得出来。
+#   本批只认三种形状：(a) 相对从句 / 属有关系链（`the book that inspired him …`）；
+#   (b) `after / before <某件事>` 且那件事**必须先被检索定位**（`after it got out`）；
+#   (c) 可数的集合**由某件未点名的事定义**（`how many properties did I view before
+#   making an offer …`）。**相对时间是查询条件、不是依赖锚点**（`before August 3, 2023`
+#   已在问句里给死）⇒ 归 `DEFAULT`。
+# * `COUNT` —— 计数、穷举（`list all` / 复数的完整集合）、或**从被多次更新的历史里取
+#   当前状态**（`how many bikes do I currently own`）。**两个具名事件之间的区间聚合**
+#   （`how many days passed between A and B`）也算 `COUNT`——它没有"必须先解出 X"，
+#   只是把两端各自取到再相减。⚠ 这是本批**最模糊的一族**，逐条标了 `boundary`。
+#   **反向边界照旧**：`date` / `year` / `age` / 度量这类**直接数值属性**不算 `COUNT`
+#   （`What year did …` / `How long …` ⇒ `DEFAULT`）。
+# * `DEFAULT` —— 其余，含**多实体比较**、**独立事实的先后比较**（`Which happened first,
+#   A or B`，A / B 都已点名）、普通时间与数值问题。
+# * **优先级 `MULTI_HOP` > `COUNT` > `DEFAULT`**（提示词原文）：依赖 + 计数同时成立时记
+#   `MULTI_HOP`。
+#
+# ## `boundary` 的意思
+# 我判得**真的有争议**的题才设 `true`——`router_eval.py` 会把它们**单列一节，
+# 不混进主矩阵的结论**。主要落在两族：(1) 区间聚合到底是 `COUNT` 还是 `MULTI_HOP`；
+# (2) 带 `currently` / `most recent` / `previous` 的**单值**属性查询算不算「从更新历史里
+# 取当前状态」。⚠ **不要为了让它好看而把 boundary 关掉**——它的存在正是为了让这两族
+# 的结论不被当成硬结论。
+#
+# ## 分布（写入后按实际统计填，见交付消息）
+# 问题类型 7 类、`expected_route` 3 类。**类型均衡 ≠ 类别均衡**：
+# `DEFAULT` 在本判据下天然占多数（这正是提示词那三类分布的真实形状），
+# `MULTI_HOP` 是**最稀缺**的一类。
+{"dataset": "locomo-refined", "question_id": "conv-30#q0067", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「在社交活动上收到建议」那件事——先取它，才表述得出「之后的计划」。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0096", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「一起徒步」那件事——先取它，再取 Nate 之后打趣要做的创作活动。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0118", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「有人读完她的博客后写信」——先定位那封信 / 那篇博客，再取 Joanna 的感受。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0125", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「把书分享给写作小组」——先取它，再取之后 Joanna 怎么庆祝。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0144", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「被制作公司拒稿」——先取它，再取之后 Joanna 做了什么。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0013", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "锚点是「从芝加哥回来」——先取它，再取之后与队友碰面的时间。⚠ boundary：这类 `after the X` 题里，锚点常与答案同处一条记录，届时它退化成一次直取。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0120", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「脚踝伤恢复」——先取它，再取之后 John 试的恢复训练。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0131", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「能无痛慢跑」那件事——先取它，再取之后 John 的感受。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0136", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「那些喜马拉雅徒步的故事」——先取它，再取之后 Tim 做了什么。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0141", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "相对从句依赖：先解出「他在意大利买到的那本书」是哪本（未点名的中间实体），再取它如何激励他下厨。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-47#q0073", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「帮狗收容所筹款」那件事——先取它，再取之后那笔余款的去向。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-47#q0087", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「多伦多之行」——先取它，再取之后 James 打算去的地方。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-47#q0097", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「拿到 Samantha 的电话号码」——先取它，再取之后 James 的计划。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-48#q0119", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「蛇跑出来」那件事——先取它，再取之后 Jolene 找到它时的感受。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-48#q0134", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「线上会议得到正面反馈」——先取它，再取之后 Jolene 的感受。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0059", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "反向依赖：锚点是「认识 Maria」——先取它，才取得到「之前」Jean 经历过什么。⚠ boundary：也可能整段经历就在同一条记录里。", "question_type": "多跳"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0065", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "「那位他视频通话的人」是未点名的中间实体——先解出他是谁，才取得到分享的内容。⚠ boundary：`the person he <动词>` 这一形状在提示词的信号词表里没有被点名。", "question_type": "多跳"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_7fce9456", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "可数的集合**由「下 offer」那件事定义**——先解出下 offer 的时间点，才数得出「之前」看了几套；不先解它连数什么都不知道。", "question_type": "多跳"}
+{"dataset": "longmemeval-s", "question_id": "0977f2af", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「买 Air Fryer」那次——先解出它，才定得出「之前」入手的是哪件小家电。", "question_type": "多跳"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_2655b836", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「新车第一次保养」——先取它，再取之后出现的第一个毛病。", "question_type": "多跳"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_0a05b494", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "两个比较对象**都没点名**（「卖果酱的女士」/「澳洲来的游客」）——必须先各自解出身份，才比得出先后。★ 与提示词例 5（`the CEO of A / the founder of B`）同形。", "question_type": "多跳"}
+{"dataset": "longmemeval-s", "question_id": "9bbe84a2", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "锚点是「我更新目标」那次——先取它，才取得到「之前的」目标。⚠ boundary：与「从更新历史里取当前状态」的 COUNT 条正面相撞。", "question_type": "多跳"}
+{"dataset": "longmemeval-s", "question_id": "89941a94", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「买 gravel bike」——先取它，才定得出「在那之前」我是否还有别的车。依赖 + 集合成员同时成立，按优先级记 MULTI_HOP。", "question_type": "多跳"}
+{"dataset": "longmemeval-s", "question_id": "50635ada", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "锚点是「当前的会员等级」——先取它，才定位得到「上一级」。⚠ boundary：也可能整段更新史在同一条记录里。", "question_type": "多跳"}
+{"dataset": "longmemeval-s", "question_id": "e66b632c", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "同上：锚点是「当前最好成绩」——先取它，才定位得到「上一次的」成绩。⚠ boundary：同 50635ada。", "question_type": "多跳"}
+{"dataset": "longmemeval-s", "question_id": "370a8ff4", "expected_route": "MULTI_HOP", "boundary": true, "label_note": "锚点是「我第 10 次户外慢跑」——「第 10 次」本身要靠枚举慢跑记录才解得出，是个未点名的中间量。⚠ boundary：也可读成一次区间聚合（COUNT）。", "question_type": "多跳"}
+{"dataset": "longmemeval-s", "question_id": "118b2229", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条度量（通勤要多久）——提示词的反向边界明说 ordinary measurements 不算 COUNT。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "58bf7951", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（在社区剧场看了哪出戏），一次直取。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "1e043500", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（自建歌单的名字）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "6f9b354f", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性（墙漆颜色）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "58ef2f1c", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条时间（哪一天去动物收容所募款晚宴做志愿者）——普通日期问题。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "f8c5f88b", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（新网球拍在哪买的）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "7527f7e2", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条度量（手袋花了多少钱）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "3b6f954b", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（交换项目去哪所学校）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "726462e0", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（新品牌首购拿到的折扣）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "94f70d80", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条度量（装 IKEA 书架花了多久）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "66f24dbb", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（给妹妹买的生日礼物）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "ad7109d1", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性（新宽带的速度）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "c8c3f81d", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性（最爱跑鞋的品牌）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "8ebdbe50", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（上个月完成的认证）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "75499fd8", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性（狗的品种）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "0862e8bf", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性（猫的名字）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "853b0a1d", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条年龄（奶奶给我银项链时我多大）——提示词把 ages 划进 DEFAULT。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "a06e4cfe", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条偏好值（马提尼的琴酒-味美思配比）——一个具体数值，不是集合。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "37d43f65", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性（笔记本内存升到多少）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "b86304ba", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条度量（那幅日落画按买价算值多少）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "d52b4f67", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（表亲婚礼在哪办）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "25e5aa4f", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（计算机本科在哪读的）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "caf9ead2", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条度量（搬到新公寓花了多久）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "60d45044", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条偏好（最爱吃哪种米）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "3f1e9474", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（和谁聊过命运）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "577d4d32", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条属性（几点停止查工作邮件），普通时间问题。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "ec81a493", "expected_route": "DEFAULT", "boundary": false, "label_note": "★ 反边界的正面例子：问句带 `How many`，但那是**关于外部世界的独立数值事实**（首专全球发行量），不是我的记忆集合 ⇒ 提示词明说不算 COUNT。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "15745da0", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条度量（收集老相机多久了）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "e01b8e2f", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（全家一周游去了哪）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "bc8a6e93", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（给侄女的生日派对烤了什么）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "ccb36322", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（最近在用的音乐流媒体服务叫什么）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "001be529", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条度量（等庇护申请结果等了多久）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "4fd1909e", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（Imagine Dragons 演唱会在哪听的）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "4c36ccef", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（罗马那家意式餐厅的名字）——回忆上一次对话里给过的一个名字，一次直取。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "7e00a6cb", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（红灯区附近那家青旅的名字）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "e8a79c70", "expected_route": "DEFAULT", "boundary": true, "label_note": "法式煎蛋要几个蛋——问句是 `how many`（COUNT 信号），但答案是**一条菜谱里的固定数值**，不是我的记忆集合。⚠ boundary：正反边界正面相撞。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "65240037", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（茶树油要用载体油稀释到什么比例）——`before applying` 只是背景，不是依赖锚点。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "561fabcd", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（我们最后给那个僵尸起了什么名）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "71a3fd6b", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（施派尔旅游局的电话）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "1903aded", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（那份清单里的第 7 个职位）——清单已在同一次回答里给出，序数是定位不是依赖。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "8752c811", "expected_route": "DEFAULT", "boundary": false, "label_note": "同上：单条事实（100 个 prompt 参数里的第 27 个）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "e982271f", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（波特兰独立音乐场地清单里的最后一个）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "1b9b7252", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（提供免费引导式冥想练习的网站名）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "d596882b", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（纽约那家多家分店的素食餐厅名）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "8464fc84", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（梵蒂冈附近那家熟食店的名字）。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "3e321797", "expected_route": "DEFAULT", "boundary": false, "label_note": "单条事实（番茄汁加柠檬汁要敷多久）——单条度量。", "question_type": "事实召回"}
+{"dataset": "longmemeval-s", "question_id": "8a2466db", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：要资源推荐。不含计数、不含依赖 ⇒ 提示词的不确定出口 DEFAULT。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "06878be2", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：要摄影设备的配件建议。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "75832dbd", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：要近期出版 / 会议推荐。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "0edc2aef", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：迈阿密之旅要酒店建议。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "35a27287", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：要周末文化活动推荐。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "32260d93", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：今晚看什么剧 / 电影。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "195a1a1b", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：晚上能做什么活动。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "afdc33df", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：厨房保持整洁的建议。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "caf03d32", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：慢炖锅出成率的建议。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "54026fce", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：与同事保持联系的建议。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "06f04340", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：用自家种的食材周末做什么菜。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "6b7dfb22", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：画画卡住了想找灵感。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "1a1907b4", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：聚会调什么鸡尾酒。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "09d032c9", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：手机续航的建议。", "question_type": "偏好"}
+{"dataset": "longmemeval-s", "question_id": "38146c39", "expected_route": "DEFAULT", "boundary": false, "label_note": "偏好类：巧克力曲奇还能加什么。", "question_type": "偏好"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0019", "expected_route": "DEFAULT", "boundary": false, "label_note": "假设式推断（她书架上会不会有 Dr. Seuss）——既不计数、也无依赖链。", "question_type": "其他"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0011", "expected_route": "DEFAULT", "boundary": false, "label_note": "同上：是非式人物画像推断。", "question_type": "其他"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0020", "expected_route": "DEFAULT", "boundary": false, "label_note": "推断他会去哪些州——主语与时间都在问句里给定，靠发散推理而非依赖检索。", "question_type": "其他"}
+{"dataset": "locomo-refined", "question_id": "conv-49#q0050", "expected_route": "DEFAULT", "boundary": false, "label_note": "住得离海近还是离山近——二选一推断。", "question_type": "其他"}
+{"dataset": "locomo-refined", "question_id": "conv-42#q0066", "expected_route": "DEFAULT", "boundary": false, "label_note": "给一段时期打个整体判断（要不要算个好月份）——两个具名主体并列，无依赖链。", "question_type": "其他"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_59149c77", "expected_route": "COUNT", "boundary": true, "label_note": "两个具名事件之间的天数聚合 ⇒ COUNT。⚠ boundary：与「依赖 + 计数 ⇒ MULTI_HOP」正面相撞，这是本批最大的一族争议。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_f49edff3", "expected_route": "COUNT", "boundary": false, "label_note": "把三件事**全部取齐**再排序——取不齐就排不出序 ⇒ 穷举 ⇒ COUNT。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "b46e15ed", "expected_route": "COUNT", "boundary": false, "label_note": "「连续两天的两场慈善活动」到现在过了几个月——先取齐那两场再算聚合。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_fa19884c", "expected_route": "COUNT", "boundary": true, "label_note": "两个具名事件之间的天数聚合 ⇒ COUNT。⚠ boundary：同 gpt4_59149c77 那一族。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_1d4ab0c9", "expected_route": "COUNT", "boundary": true, "label_note": "同上：开始浇香草园与首次采收之间的天数。⚠ boundary：区间聚合 vs 依赖。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_18c2b244", "expected_route": "COUNT", "boundary": false, "label_note": "三件事排序（进会员 / 用优惠券 / 兑换返现）——要收齐整个集合再排。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_a1b77f9c", "expected_route": "COUNT", "boundary": false, "label_note": "三本书 / 有声书所花周数的合计 ⇒ 跨记录聚合。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_7a0daae1", "expected_route": "COUNT", "boundary": true, "label_note": "买球拍与收到球拍之间的周数 ⇒ 区间聚合。⚠ boundary：同 59149c77 那一族。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_7abb270c", "expected_route": "COUNT", "boundary": false, "label_note": "六家博物馆从早到晚排序——先收齐六条记录，再排。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_1e4a8aeb", "expected_route": "COUNT", "boundary": true, "label_note": "园艺工作坊与移栽番茄苗之间隔了几天 ⇒ 区间聚合。⚠ boundary：同 59149c77 那一族。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_45189cb4", "expected_route": "COUNT", "boundary": false, "label_note": "一月里看过的体育赛事排序 ⇒ 穷举 + 排序。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_e061b84f", "expected_route": "COUNT", "boundary": false, "label_note": "上个月参加的三场体育赛事从早到晚排序 ⇒ 穷举。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_d6585ce8", "expected_route": "COUNT", "boundary": false, "label_note": "过去两个月的音乐会 / 音乐活动从最早开始排序 ⇒ 穷举。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_4ef30696", "expected_route": "COUNT", "boundary": true, "label_note": "读完 The Nightingale 与开始读 Hitchhiker's 之间的天数 ⇒ 区间聚合。⚠ boundary：同 59149c77 那一族。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_8e165409", "expected_route": "COUNT", "boundary": true, "label_note": "给吊兰换盆与送邻居扦插之间隔了几天 ⇒ 区间聚合。⚠ boundary：同上。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_21adecb5", "expected_route": "COUNT", "boundary": true, "label_note": "本科毕业与硕士论文提交之间隔了几个月 ⇒ 区间聚合。⚠ boundary：同上。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "b9cfe692", "expected_route": "COUNT", "boundary": false, "label_note": "两本书读完所花时间**合计** ⇒ 跨记录聚合。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "2a1811e2", "expected_route": "COUNT", "boundary": true, "label_note": "洒红节与圣玛丽教堂周日弥撒之间的天数 ⇒ 区间聚合。⚠ boundary：同上。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_9a159967", "expected_route": "COUNT", "boundary": false, "label_note": "三四月里**坐得最多**的航空公司——要在整个集合上做聚合比较，不是取一条事实。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_ec93e27f", "expected_route": "DEFAULT", "boundary": true, "label_note": "最近一次坐的是巴士还是火车——两个**已点名**的选项比先后 ⇒ 提示词把直接比较划进 DEFAULT。⚠ boundary：`most recently` 也像「取最新状态」。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_98f46fc6", "expected_route": "DEFAULT", "boundary": false, "label_note": "先参加的是慈善晚会还是烘焙义卖——两个已点名事件的直接比较。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_af6db32f", "expected_route": "DEFAULT", "boundary": true, "label_note": "看超级碗是多少天前——**单个事件**的度量（提示词明说 measurement 不算 COUNT）。⚠ boundary：问句是 `how many days`。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_7de946e7", "expected_route": "DEFAULT", "boundary": false, "label_note": "先处理的是持续咳嗽还是皮肤疣切除——两个已点名事件的先后比较。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_88806d6e", "expected_route": "DEFAULT", "boundary": false, "label_note": "先见到的是 Mark 和 Sarah 还是 Tom——人物都已点名 ⇒ 直接比较。⚠ 与 gpt4_0a05b494（未点名）是本批刻意的对照对。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_70e84552", "expected_route": "DEFAULT", "boundary": false, "label_note": "先做完的是修围栏还是修山羊蹄——两个已点名任务的先后比较。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_2d58bcd6", "expected_route": "DEFAULT", "boundary": false, "label_note": "先读完的是 The Hate U Give 还是 The Nightingale——两个已点名的书名。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_65aabe59", "expected_route": "DEFAULT", "boundary": false, "label_note": "先装好的是智能恒温器还是网状网络——两个已点名的设备。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_2c50253f", "expected_route": "DEFAULT", "boundary": false, "label_note": "周二和周四几点起床——普通时间属性（两个具名日期，但没有依赖）。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_93f6379c", "expected_route": "DEFAULT", "boundary": false, "label_note": "先加入的是哪个小组——两个已点名群体的先后比较。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_468eb063", "expected_route": "DEFAULT", "boundary": true, "label_note": "认识 Emma 是多少天前——单个事件的度量。⚠ boundary：同 gpt4_af6db32f。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "af082822", "expected_route": "DEFAULT", "boundary": true, "label_note": "去 Nordstrom 亲友特卖是多少周前——单个事件的度量。⚠ boundary：同上。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "5e1b23de", "expected_route": "DEFAULT", "boundary": true, "label_note": "参加摄影工作坊是几个月前——单个事件的度量。⚠ boundary：同上。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_8279ba02", "expected_route": "DEFAULT", "boundary": true, "label_note": "买烟熏炉是多少天前——单个事件的度量。⚠ boundary：同上。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "71017277", "expected_route": "DEFAULT", "boundary": false, "label_note": "上周六收到的那件首饰是谁给的——相对时间只是查询条件，答案是一条已点明事件的属性。", "question_type": "时序"}
+{"dataset": "longmemeval-s", "question_id": "6d550036", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 跨会话收齐（带过或正在带的项目）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_59c863d7", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（做过或买过的模型套件）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "b5ef892d", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 时间范围（今年在美国露营的天数）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "e831120c", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（看完 MCU 与星战主线所花的周数）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "3a704032", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（上个月入手了几株植物）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_d84a3211", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 跨记录求和（年初至今自行车相关花费）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "aae3761f", "expected_route": "COUNT", "boundary": false, "label_note": "三次公路旅行驾驶时长的合计 ⇒ 跨记录聚合。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_f2262a51", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（看过几个不同的医生）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "c4a1ceb8", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（鸡尾酒里用过几种柑橘）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "6cb6f249", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（总共几天没碰社交媒体）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "46a3abf7", "expected_route": "COUNT", "boundary": false, "label_note": "当前状态计数（现在有几个鱼缸）——提示词 COUNT 第 3 条的正面例子。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_2f8be40d", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 时间范围（今年参加了几场婚礼）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "2e6d26dc", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（近几个月亲友家生了几个宝宝）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_15e38248", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（买 / 组装 / 卖 / 修了几件家具）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "80ec1f4f", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 时间框（二月去了几家博物馆 / 画廊）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "d682f1a2", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（最近用过几种外卖平台）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "7024f17c", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（上周慢跑与瑜伽的合计小时数）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "2ce6a0f2", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（上个月参加了几场艺术类活动）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "00ca467f", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 时间框（三月去看了几次医生）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_31ff4165", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（一天里用几件健康类设备）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "eeda8a6d", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（两个鱼缸里的鱼合计几条）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "2788b940", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 频率（典型一周上几节健身课）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "9d25d4e0", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（近两个月入手了几件首饰）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "129d1232", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 跨记录求和（所有慈善活动一共募得多少钱）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "60472f9c", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（除学位论文外同时在做的项目数）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_194be4b3", "expected_route": "COUNT", "boundary": false, "label_note": "当前状态计数（现在拥有几件乐器）——COUNT 第 3 条。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "a9f6b44c", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（三月送修或计划送修了几辆自行车）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "d851d5ba", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 跨记录求和（为慈善一共募得多少钱）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "5a7937c8", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 时间框（十二月参加宗教活动的天数）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "gpt4_ab202e7f", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（换掉或修好了几件厨房用品）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "10d9b85a", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 时间框（四月参加研讨会 / 讲座 / 会议的天数）。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "1a8a66a6", "expected_route": "COUNT", "boundary": false, "label_note": "当前状态计数（现在订了几份杂志）——COUNT 第 3 条。", "question_type": "计数"}
+{"dataset": "locomo-refined", "question_id": "conv-26#q0046", "expected_route": "COUNT", "boundary": false, "label_note": "复数完整集合（Melanie 看过哪些音乐人 / 乐队）⇒ 穷举。", "question_type": "计数"}
+{"dataset": "locomo-refined", "question_id": "conv-41#q0020", "expected_route": "COUNT", "boundary": false, "label_note": "复数完整集合（Maria 去过哪些欧洲国家）⇒ 穷举。", "question_type": "计数"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0004", "expected_route": "COUNT", "boundary": true, "label_note": "复数完整集合（John 收到过哪些代言）。⚠ boundary：`Which X has …` 是名单式问法，也可能只指一条。", "question_type": "计数"}
+{"dataset": "locomo-refined", "question_id": "conv-43#q0042", "expected_route": "COUNT", "boundary": false, "label_note": "复数完整集合（2023 年达成过哪些生涯最高纪录）⇒ 穷举。", "question_type": "计数"}
+{"dataset": "locomo-refined", "question_id": "conv-47#q0124", "expected_route": "COUNT", "boundary": false, "label_note": "某个已点名锦标赛上**玩过哪些游戏**的完整清单 ⇒ 集合成员。", "question_type": "计数"}
+{"dataset": "locomo-refined", "question_id": "conv-49#q0003", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（Evan 拥有过几辆 Prius）。", "question_type": "计数"}
+{"dataset": "locomo-refined", "question_id": "conv-50#q0049", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（Calvin 有几辆法拉利）。", "question_type": "计数"}
+{"dataset": "locomo-refined", "question_id": "conv-48#q0017", "expected_route": "COUNT", "boundary": false, "label_note": "频率 / 次数（Jolene 去过法国几次）⇒ 跨历史的完整记录。", "question_type": "计数"}
+{"dataset": "longmemeval-s", "question_id": "6aeb4375", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（在城里试过几家韩餐）——名单随更新增长。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "031748ae", "expected_route": "COUNT", "boundary": true, "label_note": "同日问初始与当前两个计数（刚上任时带几个工程师 / 现在带几个）⇒ 要定位更新历史里的两个状态。⚠ boundary：`when I just started` 也像依赖锚点。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "4d6b87c8", "expected_route": "COUNT", "boundary": false, "label_note": "当前状态计数（待看清单上现在有几部）——COUNT 第 3 条。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "f9e8c073", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（参加了多少次丧亲互助小组）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "2698e78f", "expected_route": "COUNT", "boundary": false, "label_note": "`How often` ——提示词 COUNT 的信号词之一。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "b6019101", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 时间框（近三个月看了几部 MCU 电影）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "a1eacc2a", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（重新规律写作以来写了几篇短篇）⇒ 跨历史完整记录。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "618f13b2", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（新买的黑色 Converse 穿过几次）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "72e3ee87", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（Crash Course 科学系列看完几集）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "01493427", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（重新开始收集以来新增几张明信片）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "6a27ffc2", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（Corey Schafer 的 Python 系列看完几集）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "45dc21b6", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（Emma 的菜谱试过几道）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "4b24c848", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（至今在 H&M 买了几件上装）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "8fb83627", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（读完了几期《国家地理》）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "69fee5aa", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（收藏里有几枚 1920 年前的美国硬币）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "1cea1afa", "expected_route": "COUNT", "boundary": true, "label_note": "当前状态基数（现在有多少 Instagram 粉丝）——数字随历史变化。⚠ boundary：也可读成单值属性。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "0ddfec37", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数 + 时间框（收藏头三个月收了几颗签名棒球）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "603deb26", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（Emma 教我做 Negroni 以来在家试过几次）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "5c40ec5b", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（和德国来的 Alex 见过几次）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "26bdc477", "expected_route": "COUNT", "boundary": false, "label_note": "显式计数（带着 Canon EOS 80D 出行过几次）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "6a1eabeb", "expected_route": "DEFAULT", "boundary": false, "label_note": "单值（慈善 5K 的个人最好成绩）——是一个数，不是集合基数 ⇒ DEFAULT。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "852ce960", "expected_route": "DEFAULT", "boundary": false, "label_note": "单值（Wells Fargo 房贷的预批额度）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "5a4f22c0", "expected_route": "DEFAULT", "boundary": true, "label_note": "单值（Rachel 现在在哪家公司）——`currently` 提示可能有过更新。⚠ boundary：正是「单值属性 vs 取当前状态」这条线的争议题。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "2133c1b5", "expected_route": "DEFAULT", "boundary": false, "label_note": "单值时长（在原宿这套公寓住了多久）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "08e075c7", "expected_route": "DEFAULT", "boundary": false, "label_note": "单值时长（Fitbit Charge 3 用了多久）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "41698283", "expected_route": "DEFAULT", "boundary": true, "label_note": "单值（最近买的相机镜头是哪款）。⚠ boundary：`most recent` 与 e2 的 `my most recent family trip`→COUNT 成对，故意留着测这条线。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "6071bd76", "expected_route": "DEFAULT", "boundary": false, "label_note": "二选一（法压壶的粉水比是水变多还是变少）——没有集合可数。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "c4ea545c", "expected_route": "DEFAULT", "boundary": false, "label_note": "与过去比频率（现在是否比以前更常去健身房）——普通比较。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "3ba21379", "expected_route": "DEFAULT", "boundary": false, "label_note": "单值（现在在做哪款车型模型）。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "18bc8abd", "expected_route": "DEFAULT", "boundary": true, "label_note": "单值（现在迷上哪个牌子的烧烤酱）。⚠ boundary：`currently` 的取最新状态之争。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "e493bb7c", "expected_route": "DEFAULT", "boundary": false, "label_note": "单值（那幅画现在挂在哪儿）——空间属性，不是集合。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "0e4e4c46", "expected_route": "DEFAULT", "boundary": true, "label_note": "单值（Ticket to Ride 现在的最高分）。⚠ boundary：与 1cea1afa 成对，测「当前状态」这条线对**分数 vs 基数**会不会分得开。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "07741c44", "expected_route": "DEFAULT", "boundary": true, "label_note": "单值（最初把旧球鞋放哪儿）——与 07741c45「现在放哪儿」成对。⚠ boundary：`initially` 是取历史状态。", "question_type": "知识更新"}
+{"dataset": "longmemeval-s", "question_id": "22d2cb42", "expected_route": "DEFAULT", "boundary": false, "label_note": "单值（吉他送去哪里保养）。", "question_type": "知识更新"}

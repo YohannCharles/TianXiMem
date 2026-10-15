@@ -57,11 +57,13 @@ class SearchObservation:
     selected_sources: int = 0
 
     route: str = "not_recorded"
-    """这一次**实际走的**策略：`disabled` / `COUNT` / `MULTI_HOP` / `DEFAULT`。
+    """这一次**实际走的**策略：`disabled` / `MULTI_HOP` / `DEFAULT`。
 
     ⚠ `disabled` 说明**路由器没开**——它与 `DEFAULT` **不是一回事**：
     后者是"路由器开着、分类结果是默认路"，前者是"根本没有分类这一步"。
     两者在响应上完全一样（都是原混合检索链），**只有这里能分开**。
+    ⚠ 取值域**只有这三个**：2026-10-14 起路由是二分类，`COUNT` 不再是合法输出
+    （模型万一吐它 ⇒ 走 `degraded`，落 `DEFAULT`）。
     """
 
     route_status: str = "not_recorded"

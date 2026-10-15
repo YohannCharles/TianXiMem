@@ -30,22 +30,24 @@ openai_chat.py OpenAI 兼容的 `/chat/completions` 客户端     ✅
 | 路径 | 是否调用 LLM |
 | --- | --- |
 | **`Add` 路径** | **完全不调用**（§7.2）——embedding 是唯一的 Add 侧成本 |
-| **`Search` 路径** | **两个调用点，各自独立开关**：[`../retrieve/router.py`](../retrieve/router.py) 的查询路由器（`router.enabled`）与 [`../agent/coq.py`](../agent/coq.py) 的多跳执行器（`agentic.enabled`，**每轮一次**）——**两个都默认 `false`** |
+| **`Search` 路径** | **两个调用点，各自独立开关**：[`../retrieve/router.py`](../retrieve/router.py) 的查询路由器（`router.enabled`）与 [`../agent/coq.py`](../agent/coq.py) 的多跳执行器（`agentic.enabled`，**每轮一次**）——两者 **2026-10-14 起都默认 `true`**（`default.yaml`：`router.enabled` 与 `agentic.enabled`） |
 
 > ### ⚠ 2026-10-10 修正（两次）：原写"v1 里 `agent/` 是 LLM 的唯一消费者、Search 路径实际不调用 LLM"
 >
-> **第一次修正**（查询路由器，**D40**）：三分类路由器是 LLM 的**第一个真实消费者**。
+> **第一次修正**（查询路由器，**D40**）：查询路由器是 LLM 的**第一个真实消费者**
+> （当时是三分类，**2026-10-14 起收成二分类** `MULTI_HOP` / `DEFAULT`）。
 > **第二次修正**（多跳执行器，**D41**）：`agent/` 现在**真的存在**了，而且它的消费者身份
-> 与路由器**不同**——路由器一次请求调**一次**，多跳**每一轮调一次**（默认最多 3 轮）。
+> 与路由器**不同**——路由器一次请求调**一次**，多跳**每一轮调一次**（`max_rounds`，默认 4）。
 > ⇒ ⛔ **不要再把"最多一次 LLM 调用"当作 Search 路径的成本上界**。
 > 当前上界是"`router.enabled` 的 1 次 ＋ `agentic.enabled` 的 `max_rounds` 次"，
-> 而两者**默认都是关的**（此时确实是一层都不发生）。
+> 而 `router.enabled` 与 `agentic.enabled` **都默认开**（2026-10-14 起）——路由那 1 次会发生，
+> 多跳那几轮在路由判到 `MULTI_HOP` 时也会发生。
 >
 > 接缝本身**没变、也不许变**：**协议只有一条 `complete()`**，所以 Step 5 换模型依旧是
 > "换一个实现"而不是"改一批调用方"。
 >
 > ⚠ **成本属性**：Search 路径从一个 LLM 调用都不发生，变成**至多两次机会**——
-> 所以两者都必须**默认关着**（见 `configs/default.yaml`），并且**每次调用都要能在 §14 里
+> 而两者**都默认开着**（`configs/default.yaml`，2026-10-14 起）——每次调用都要能在 §14 里
 > 被数出来**（路由器 `SearchObservation.route_latency_ms`；多跳
 > `agentic_llm_calls` / `agentic_latency_ms`）。
 > ⛔ **Add 路径的零 LLM 属性一字未动**：`facts/` 仍然不调用任何模型（见下）。

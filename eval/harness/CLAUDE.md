@@ -14,6 +14,10 @@ judge.py                   包住 pipeline 的裁判（`run_judge` 跑 `answer`�
 beam_judge.py              BEAM 批量裁判失败后的逐 rubric 恢复：上游单条模板，要求每条显式有效分数
 model_context.py           显式本地模型上下文前缀适配：保留原 Search 输入，记录实际输入与截断量
 extra_pipeline.py          本地自写的 `official-extra` answer / evaluate（含 MuSiQue）
+                           ⚠ 判分方式按数据集分岔：MQuAKE/CorporateBench/TempReason 是纯函数、
+                           **MuSiQue 可答题默认规则判分**（`evaluate --musique-judge rule`，
+                           快速并复现历史数字；显式 `llm` 才走模型裁判；拒答恒走精确匹配）、
+                           MemTrapBench/Doc-PP/MedMemoryBench 走 LLM
 corpusqa_pipeline.py       HybridQA / FEVEROUS：Search-only 作答，固定上游函数判分与逐题指标
 personamem_pipeline.py     PersonaMem-v2 适配器——Search 片段替代原始历史，选项与 MCQ 判分复用归档
 scriptmem_pipeline.py      ScriptMem 适配器——**到不了裁判**（加载层与 pipeline 表里都没有它），保留作参考

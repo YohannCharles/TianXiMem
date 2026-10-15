@@ -80,7 +80,7 @@ from functools import partial
 from time import monotonic
 from typing import Protocol, runtime_checkable
 
-from tianximem.agent import AgenticResult
+from tianximem.agent import AgenticResult, PlanResult
 from tianximem.common.amounts import annotate_unit_total
 from tianximem.common.config import (
     DEFAULT_EXPANSION_SEED_LIMIT,
@@ -121,12 +121,22 @@ __all__ = ["AddOutcome", "AddPipeline", "AgenticSearch", "SearchPipeline"]
 
 @runtime_checkable
 class AgenticSearch(Protocol):
-    """多跳执行器的**接口约定**（§3.3）——实现是 [`../agent/`](../agent/)（2026-10-10）。
+    """多跳执行器的**接口约定**（§3.3）——两个实现都在 [`../agent/`](../agent/)。
+
+    | `agentic.mode` | 实现 | 怎么推进 |
+    | --- | --- | --- |
+    | `react`（默认） | `CoqAgent` | 每轮重新决定"充分了吗 / 下一跳问什么" |
+    | `plan` | `PlanAgent` | 先拆一份固定计划，再逐题落地，**不重规划** |
+
+    ⚠ **本层不认识模式**：装配期（`service/app.py` 的 `build_agentic`）已经选定一个
+    执行器注入进来，这里只调它——于是"选路"与"执行器是谁"是两件事，
+    ⛔ 不让编排层再判一次模式（那会让"接错了"表现为"跑的是另一套机制"，
+    而**两边都正常返回**）。
 
     它是 `MULTI_HOP` 那条路的**唯一入口**，形状刻意定成"**再跑一遍底层检索**"：
 
     ```text
-    agentic.search(user_id=..., query=..., top_k=...) → AgenticResult
+    agentic.search(user_id=..., query=..., top_k=...) → AgenticResult | PlanResult
               ↓  与混合检索那条路**汇入同一个尾巴**
         去重 → 精排（恰好一次，用它给的 rerank_query）→ 扩窗 → 段合并 → 双预算打包
     ```
@@ -135,23 +145,34 @@ class AgenticSearch(Protocol):
 
     1. **它返回候选，不返回答案**（§2.1 的红线）。多跳只是"多取几轮证据"，
        产出物仍然是**按名次排列的证据**——`Candidate` 这个类型本身就说明了这一点。
+       ⚠ Plan 模式**确实会生成中间跳的答案**（用来填占位），但那**不是**这条约定的
+       反例：它不进响应、不进索引、不落库，只以**执行记录**的身份被交出去
+       （`PlanResult.plan_history`）。
     2. **它自己去重之前可以有重复**：合并多轮结果会产生同一个 `memory_id` 多次命中，
        而"去重恰好发生一次、且发生在精排之前"是**调用方（本文件）**的责任
        （顺序错了不报错：重复项会被排两次、占两个名额）。
     3. **最终精排不归它做**：那一步**恰好一次**，由本文件对**合并后的那一份列表**做
        （§7.2 的"每查询恰好一次"同款纪律）。⚠ 但它**可以说该用什么 Query 去排**——
-       那就是 `AgenticResult.rerank_query`（多跳的联合精排，§9.1）。
+       那就是 `rerank_query`（多跳的联合精排，§9.1）。
        ⛔ 让执行器自己排最后那一次会造出**两次最终精排**，而 §9.4 专门点了这个坑。
        ⚠ 它**内部**每轮还会精排一次（为了把交给 LLM 的证据筛干净）——
        那是另一件事，产出物不进响应。
-    4. **它不抛异常**：失败一律变成 `AgenticResult.fallback_reason`。
+    4. **它不抛异常**：失败一律变成 `fallback_reason`。
        `fallback_reason is not None` ⇒ **回到混合检索**（§10.1 第 6 条）。
+
+    ⚠ **两种结果的公共面**就是上面这四个字段（`candidates` / `rerank_query` /
+    `stats` / `fallback_reason`），`_record_agentic` 只读它们 ⇒ **"两条路怎么记账"
+    只有一处实现**。`PlanResult` 另外带 `plan_history`（诊断用，不进响应）。
 
     ⚠ **`top_k` 是"每轮取多少"的口径提示，不是最终名额**：最终 `len(data) <= top_k`
     由打包那一步收口（段级计数，§2.2）。执行器不必也不该自己截断到 `top_k`。
+    ⚠ **两个实现在这个参数上的行为相同**（2026-10-13 起）：每轮按请求的 `top_k` 召回，
+    精排之后再取 `per_round_top_k` 条。⇒ 两条路的差别**只剩推进机制**——
+    这正是"多跳模式值不值"这个对照要的单变量（第一版 `plan` 只召回 20 条，
+    两个自变量缠在一起，见 `PlanAgent.search` 的 docstring）。
     """
 
-    def search(self, *, user_id: str, query: str, top_k: int) -> AgenticResult: ...
+    def search(self, *, user_id: str, query: str, top_k: int) -> AgenticResult | PlanResult: ...
 
 
 @dataclass(slots=True)
@@ -327,7 +348,7 @@ class SearchPipeline:
     ## 取证与路由
 
     共同事实完整时直接返回，不调用路由器；未完成时才分类并交给多跳或混合链。
-    router 与 agentic 仍默认关闭。agentic.force 保留显式绕过事实的实验语义。
+    路由器默认开启（`default.yaml`，2026-10-14 起），agentic 仍默认关闭。agentic.force 保留显式绕过事实的实验语义。
 
     """
 
@@ -670,11 +691,16 @@ class SearchPipeline:
             candidates, query=query, top_k=top_k, trace=trace, rerank_query=rerank_query
         )
 
-    def _record_agentic(self, trace: _SearchTrace, outcome: AgenticResult) -> None:
+    def _record_agentic(self, trace: _SearchTrace, outcome: AgenticResult | PlanResult) -> None:
         """把执行器的汇总记进 `trace`（§14）。
 
         ⚠ **执行器不写 `trace`**：它是被调用的那一层，"怎么记账"属于编排层，
         与 `rerank` 的分工一样（计数住在 `SearchPipeline`，见 `docs/architecture.md`）。
+
+        ⚠ **两种模式共用这一处**：`PlanStats` 的前九个字段与 `AgenticStats` 同名同义
+        （那是刻意的，不是巧合）⇒ 模式换了、记账的代码**一行都不用改**。
+        模式专属的量（拆解调用数、计划步数、`depends_on` 被规范化的步数）**不进 `trace`**：
+        它们要看得更细，走 `plan_history`（诊断记录），⛔ 不为它们扩 §14 的出口。
         """
         stats = outcome.stats
         trace.agentic_status = "success" if outcome.fallback_reason is None else "degraded"
@@ -692,7 +718,7 @@ class SearchPipeline:
 
         ⚠ **绝不抛异常**：`QueryRouter.route()` 的所有失败形态都已经变成
         `Route.DEFAULT` + `status="degraded"`（§4.3：路由的失败不能让一次正常 Search 变 500）。
-        本方法只做两件事：**把三分类映射成"走哪条分支"**，以及**记下为什么**。
+        本方法只做两件事：**把二分类映射成"走哪条分支"**，以及**记下为什么**。
 
         ⚠ `MULTI_HOP` 在**没有执行器**时**在这里就把降级原因记下来**——而不是等到分支里。
         理由：那条路会一直往下走到混合检索，如果不在这里留痕，

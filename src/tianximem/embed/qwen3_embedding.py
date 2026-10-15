@@ -1,7 +1,8 @@
-"""Qwen3-Embedding-8B —— **开发期替代模型**（§12.1 R1，团队主动接受的偏离）。
+"""Qwen3-Embedding-4B —— **开发期替代模型**（§12.1 R1，团队主动接受的偏离）。
 
 **不进提交链路**（§2.3 规定 embedding 只能用 `text-embedding-v4`）。它存在只是为控 API 成本，
-Step 5 之后停止使用。
+Step 5 之后停止使用。⚠ 2026-10-13 起是 **4B**，不是 8B——开发期网关（`memory2.021130.xyz`）
+只部署了这一个；两者**同为 1024 维**，所以换它**不会**被维度自检拦下，只会表现为"检索变差"。
 
 ⚠ **本实现只产出 Dense 向量。** 不产出 sparse、不产出 ColBERT——词法那一路走 Qdrant 原生
 `qdrant/bm25`（§7.1），而 `text-embedding-v4` 也不提供该能力 ⇒ 任何依赖它的代码都是**死重**
@@ -29,16 +30,20 @@ __all__ = ["DEFAULT_MODEL", "Qwen3EmbeddingEmbedder"]
 #:
 #: ⚠ 这个 id 是**服务端的事**，随网关而变：2026-09-28 迁到 vLLM 直服时是
 #: `qwen3-embedding-8b`，2026-10-09 回到自研封装（`memory.021130.xyz`）后是
-#: **`Qwen/Qwen3-Embedding-8B`**（该网关实测**忽略** `model` 字段，两个名字都通——
-#: 写端点声称的那个，声明与 `/v1/models` 才对得上）。
-DEFAULT_MODEL: str = "Qwen/Qwen3-Embedding-8B"
+#: **`Qwen/Qwen3-Embedding-8B`**，2026-10-13 起 embedding 迁到 `memory2.021130.xyz`、
+#: 模型换成 **`Qwen/Qwen3-Embedding-4B`**。
+#: ⚠ **两个网关对 `model` 的态度不同**：主网关（LLM/reranker）忽略它，填错不报错；
+#: `memory2` **会校验**，而且**大小写敏感**（`...-4b` → 404 `The model ... does not exist.`）
+#: ⇒ 写端点 `/v1/models` 声称的那个 id，逐字照抄。
+DEFAULT_MODEL: str = "Qwen/Qwen3-Embedding-4B"
 
 
 class Qwen3EmbeddingEmbedder(OpenAICompatEmbedder):
-    """远程 Qwen3-Embedding-8B（自建主网关 `memory.021130.xyz`，OpenAI 兼容 `/embeddings`）。
+    """远程 Qwen3-Embedding-4B（自建网关 `memory2.021130.xyz`，OpenAI 兼容 `/embeddings`）。
 
     ⚠ 它与 LLM 那一路**不同 host、不同 key**（`.env` 里 `AML_EMB_*` 与 `AML_*`
-    是两套值，别混用）；同网关的 reranker 用**第三个**变量名（`TIANXIMEM_RERANKER_*`）。
+    是两套值，别混用）；**reranker 在主网关**（`memory.021130.xyz`），用**第三个**变量名
+    （`TIANXIMEM_RERANKER_*`）——2026-10-13 起 embedding 与 reranker **不同 host**。
     """
 
     def __init__(

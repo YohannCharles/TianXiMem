@@ -81,10 +81,10 @@ PROMPT_REFS: dict[str, dict[str, str]] = {
         "note": "选项字母精确匹配：single_choice 集合相等 / ordering 序列相等",
     },
     "personamem-v2": {
-        "answer": "dataset/.upstream/aml/pipeline_v2_personamem.py#official_mcq_messages",
-        "judge": "dataset/.upstream/aml/pipeline_v2_personamem.py#evaluate_mcq",
-        "observed": "（无尾指令——选项在 query 里）",
-        "note": "MCQ 字母/文本精确匹配；**不读检索字段**",
+        "answer": "dataset/.upstream/aml/pipeline_v2_personamem.py#official_generative_messages",
+        "judge": "eval/harness/official_capture_pipeline.py#_narrow_judge（采集开放题）",
+        "observed": "（采集题为开放题；官方追加 recall personalization 后缀）",
+        "note": "采集重放按开放题走官方 generative prompt；独立题库 MCQ 仍走官方 MCQ 适配器",
     },
     "beam": {
         "answer": "dataset/.upstream/aml/pipeline_beam.py#OPEN_ENDED_ANSWER_TEMPLATE",

@@ -121,7 +121,8 @@ def cmd_answer(args: argparse.Namespace) -> int:
 
     from eval.harness.api_config import ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL
 
-    if args.max_tokens < 1:
+    max_tokens = getattr(args, "max_tokens", 512)
+    if max_tokens < 1:
         raise ValueError("--max-tokens 必须为正整数")
     output = _Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -135,7 +136,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
         if (
             row.get("memory_input_version") != MEMORY_INPUT_VERSION
             or row.get("input_fingerprint") != fingerprints.get(ident)
-            or row.get("max_output_tokens") != args.max_tokens
+            or row.get("max_output_tokens") != max_tokens
             or row.get("model") != ANSWER_MODEL
             or row.get("answer_base") != ANSWER_API_BASE
         ):
@@ -159,7 +160,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
                             "model": ANSWER_MODEL,
                             "messages": messages,
                             "temperature": 0,
-                            "max_tokens": args.max_tokens,
+                            "max_tokens": max_tokens,
                         },
                     )
                     response.raise_for_status()
@@ -179,7 +180,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
                             "input_fingerprint": fingerprints[ident],
                             "model": ANSWER_MODEL,
                             "answer_base": ANSWER_API_BASE,
-                            "max_output_tokens": args.max_tokens,
+                            "max_output_tokens": max_tokens,
                             "finish_reason": choice.get("finish_reason"),
                         },
                     )

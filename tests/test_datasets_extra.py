@@ -422,6 +422,27 @@ def test_extra_pipeline_cli_takes_max_tokens_after_the_subcommand() -> None:
     assert parser.parse_args(["answer", "--input", "i", "--output", "o"]).max_tokens == 512
 
 
+def test_musique_judge_flag_lives_on_evaluate_only() -> None:
+    """`--musique-judge` **只挂在 `evaluate` 上**，默认快速 `rule`。
+
+    ⚠ 形状是契约：`run_judge` 给两个子命令传的是**同一份拼法**，往 `answer` 上也加一个
+    只对判分有意义的开关，会让同一个开关在两条路上含义不同。
+    """
+    import pytest
+    from eval.harness.extra_pipeline import DEFAULT_MUSIQUE_JUDGE, build_parser
+
+    parser = build_parser()
+    base = ["--input", "i.jsonl", "--output", "o.jsonl"]
+    args = parser.parse_args(["evaluate", *base, "--answers", "a.jsonl"])
+    assert args.musique_judge == DEFAULT_MUSIQUE_JUDGE == "rule"
+    args = parser.parse_args(["evaluate", *base, "--answers", "a.jsonl", "--musique-judge", "rule"])
+    assert args.musique_judge == "rule"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["evaluate", *base, "--answers", "a.jsonl", "--musique-judge", "nope"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["answer", *base, "--musique-judge", "rule"])
+
+
 # ── MedMemoryBench（zh）：检查点前缀 + 上游那套判分 ──────────────────────────
 def _write_medmemorybench(root: Path) -> None:
     import pyarrow.parquet as pq

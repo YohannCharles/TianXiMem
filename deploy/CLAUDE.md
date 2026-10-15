@@ -58,7 +58,16 @@ TIANXIMEM_BIND=0.0.0.0                             # 要让别的机器访问就
 TIANXIMEM_PORT=28088                               # 对外端口
 AML_EMB_BASE_URL=http://host.docker.internal:9002/v1
 AML_EMB_API_KEY=<网关的 key；网关不校验也要填个非空的>
+AML_BASE_URL=http://host.docker.internal:9002/v1   # 对话端点（查询路由器**默认开**，缺它拒绝启动）
+AML_API_KEY=<网关的 key>
+AML_MODEL=Qwen/Qwen3.5-9B                          # 服务端 id，大小写敏感
 ```
+
+> ⚠ **后三行是 2026-10-14 起新增的必备项**：`configs/default.yaml` 的 `router.enabled` 现在**默认 `true`**
+> ⇒ 缺对话端点时 `validate()` **拒绝启动**（不是降级；理由见 [`../docs/config-reference.md`](../docs/config-reference.md) §5.7）。
+> 若本机网关**不**提供 `/chat/completions`，把 `AML_BASE_URL` 指向真正的对话端点
+> （外部那对见 [`../.env.example`](../.env.example) 的 `memory2` / `memory3`）。
+> 想**不**用路由器（跑对照 / 网关没有对话能力）：在 §0.5 挂载的配置目录里把 `router.enabled` 设回 `false`。
 
 > ⛔ **别写 `http://127.0.0.1:9002/v1`**——容器里的 `127.0.0.1` 是**容器自己**，
 > 实测报 `Connection refused`，看起来像"网关挂了"。**同机的正确写法是
@@ -87,6 +96,7 @@ curl -s http://10.193.135.28:28088/health                      # 期望 {"status
 | `Bind for 0.0.0.0:6333 failed: port is already allocated` | 老版本 compose 起的 Qdrant 容器还占着 0.0.0.0 | 先 `docker rm -f tianxi-qdrant`，或用 `TIANXIMEM_QDRANT_PORT` 换端口 |
 | Add 报 4xx 且信息里有模型名 | `configs/default.yaml` 的 `models.embedder`（现在是 `Qwen/Qwen3-Embedding-8B`）与本机网关服务的不一致 | ⚠ 有的部署（vLLM 直服那一档）**会校验** `model`：必须与 `/v1/models` 列出的 id 逐字相同，否则 404；现役主网关**忽略**它（不报错）。**照 `/v1/models` 声称的值填**，两边都对（改 config 后重建镜像，或挂配置目录，见 §0.5） |
 | 服务起不来、日志说缺 `embed.base_url` | `deploy/.env` 没建或键名写错 | 见上面 ① |
+| 服务起不来、日志说缺 `AML_BASE_URL`（或点名 `router.enabled`） | `router.enabled` **默认开**，但 `.env` 没填对话端点 | 补 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（见上面 ①）；或把 `router.enabled` 关回 `false`（§0.5） |
 
 > ⚠ **compose 文件不能挪出 `deploy/`**：它的 `build.context` 是 `..`，**相对 compose 文件所在目录**。
 > 拷到别处会报 `lstat .../var/deploy: no such file or directory`。要换位置就连 `Dockerfile` 与

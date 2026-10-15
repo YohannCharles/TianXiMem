@@ -1,4 +1,4 @@
-"""三分类查询路由器（`retrieve/router.py` + `llm/`）——**不发真请求**。
+"""二分类查询路由器（`retrieve/router.py` + `llm/`）——**不发真请求**。
 
 ## 这个文件挡的四类错
 
@@ -117,12 +117,11 @@ class FakeLlm:
     "text,expected",
     [
         ("MULTI_HOP", Route.MULTI_HOP),
-        ("COUNT", Route.COUNT),
         ("DEFAULT", Route.DEFAULT),
-        ("  COUNT\n", Route.COUNT),  # 首尾空白与换行是排版，不是非法输出
+        ("  DEFAULT\n", Route.DEFAULT),  # 首尾空白与换行是排版，不是非法输出
         ("\n\tDEFAULT\r\n", Route.DEFAULT),
         ("multi_hop", Route.MULTI_HOP),  # 大小写归一
-        ("Count", Route.COUNT),
+        ("Default", Route.DEFAULT),
     ],
 )
 def test_legal_outputs_are_accepted(text: str, expected: Route) -> None:
@@ -179,8 +178,8 @@ def _reply(content: object, **extra: object) -> httpx.Response:
 
 
 def test_chat_returns_the_message_content() -> None:
-    chat = _chat(lambda request: _reply("  COUNT  "))
-    assert chat.complete("p") == "COUNT"  # 端点回的空白在这里就剥掉了
+    chat = _chat(lambda request: _reply("  MULTI_HOP  "))
+    assert chat.complete("p") == "MULTI_HOP"  # 端点回的空白在这里就剥掉了
     assert chat.calls == 1
     assert chat.last_latency_ms is not None
 
@@ -253,12 +252,12 @@ def _router(reply, **kwargs) -> tuple[QueryRouter, FakeLlm]:
 
 
 def test_successful_routing_records_the_raw_output_and_latency() -> None:
-    router, _ = _router("COUNT")
-    decision = router.route("How many meetings did I attend?")
-    assert decision.route is Route.COUNT
+    router, _ = _router("MULTI_HOP")
+    decision = router.route("Find the spouse of Marie Curie, then name his field.")
+    assert decision.route is Route.MULTI_HOP
     assert decision.status == "success"
     assert decision.reason is None
-    assert decision.raw == "COUNT"
+    assert decision.raw == "MULTI_HOP"
     assert decision.latency_ms >= 0.0
 
 
@@ -298,16 +297,16 @@ def test_query_is_injected_without_format_interpretation() -> None:
     """⛔ **Query 用 `replace` 注入，不用 `format`**：`format` 会把 Query 里的 `{}`
     当成格式串（那是用户可控的输入）。带花括号的 Query 必须**原样**到达模型。
     """
-    query = 'What about {"route": "COUNT"} and {0} and {name}?'
+    query = 'What about {"route": "DEFAULT"} and {0} and {name}?'
     router, client = _router("DEFAULT")
     router.route(query)
     sent = client.calls[0]
     assert query in sent
     assert sent.count("{query}") == 0  # 占位符**全部**被替换掉了
-    # ⚠ **v3 的查询位置变了**：v1/v2 把它放在**最后一行**（`USER QUERY:` 之后），
-    #   v3 放在中间的 `INPUT / Query:` 处，**后面还跟着 OUTPUT FORMAT 与 10 个例子**。
-    #   ⇒ 这里不再断言"以 query 结尾"，改为断言"按模板逐处注入"——
-    #   而"查询被夹在例子中间"这件事本身要记进报告（它会分散模型对真查询的注意力）。
+    # ⚠ **提示词里查询的位置不在末尾**：它落在中间的 `INPUT / Query:` 处，
+    #   **后面还跟着 OUTPUT FORMAT 与 7 个例子**（v5）。⇒ 这里**不断言"以 query 结尾"**，
+    #   改为断言"按模板逐处注入"——而"查询被夹在例子中间"这件事本身要记进报告
+    #   （它会分散模型对真查询的注意力）。
     assert sent == ROUTER_PROMPT.replace("{query}", query)
     assert sent.index(query) < sent.index("CLASSIFICATION EXAMPLES")
 
@@ -319,7 +318,6 @@ def test_prompt_is_the_frozen_template_and_the_query_lands_after_the_user_line()
     assert sent == ROUTER_PROMPT.replace("{query}", "Who was my manager at Atlas?")
     # 分类规则那几段**逐字**在（改了提示词就必须同时改 `ROUTER_PROMPT_VERSION`）
     assert 'Explicit dependency signals: "then", "after", "using that"' in sent
-    assert '- Signals: "how many", "how often", "which ones", "who are the", "list all"' in sent
     assert "Do not output explanations, confidence scores, JSON, or any additional text." in sent
     # ⛔ v4 起**提示词里没有 NONE**（空/无效输入归入口，不归路由器）
     assert "NONE" not in ROUTER_PROMPT
@@ -332,14 +330,13 @@ def test_the_prompt_is_the_single_frozen_one() -> None:
     **"换提示词值不值"的基线从此不能再原样重跑**——要重跑得先从报告里把那一版抄回来。
     ⇒ 所以这条用例钉住"当前是哪一版"，好让下一次改动**至少知道自己在改哪一版**。
     """
-    assert ROUTER_PROMPT_VERSION == "v4"
+    assert ROUTER_PROMPT_VERSION == "v5"
     assert ROUTER_PROMPT is not None and ROUTER_PROMPT.strip()
-    # 三条判据都在（换了提示词就得同时改版本号，见 `QueryRouter.__init__`）
+    # 两条判据都在（换了提示词就得同时改版本号，见 `QueryRouter.__init__`）
     assert "The key test" not in ROUTER_PROMPT  # ← 那是旧版的措辞，不该再出现
     assert 'Explicit dependency signals: "then", "after", "using that"' in ROUTER_PROMPT
-    signals = '- Signals: "how many", "how often", "which ones", "who are the", "list all"'
-    assert signals in ROUTER_PROMPT
-    assert "Do not classify ordinary dates, ages, measurements" in ROUTER_PROMPT
+    # ⛔ v5 起是二分类：COUNT 整段判据已删，提示词里不该再出现它
+    assert "COUNT" not in ROUTER_PROMPT
     # ⛔ 没有 NONE（空 / 无效输入归入口，不归路由器）
     assert "NONE" not in ROUTER_PROMPT
     assert "Validate input" not in ROUTER_PROMPT
@@ -360,7 +357,7 @@ def test_stray_none_output_degrades_and_is_not_a_fourth_route() -> None:
 
     router, _ = _router("NONE")
     decision = router.route("   ")
-    assert decision.route is Route.DEFAULT, "拒答落在 DEFAULT（三条路里最安全的那个）"
+    assert decision.route is Route.DEFAULT, "拒答落在 DEFAULT（两条路里最安全的那个）"
     assert decision.status == "degraded"
     assert decision.reason == "model_none"
     assert decision.raw == "NONE"  # 原样留着，好与"非法输出"区分开
@@ -403,7 +400,7 @@ def test_blank_query_short_circuits_before_the_router(tmp_path) -> None:
     """
     store = SqliteStore.open(tmp_path / "t.db")
     _seed(store)
-    client = FakeLlm("COUNT")
+    client = FakeLlm("MULTI_HOP")
     service = _pipeline(store, router=QueryRouter(client))
     for blank in ("", "   ", chr(9), chr(10)):
         result = service.run(user_id="u", query=blank, top_k=100)
@@ -447,7 +444,8 @@ def test_router_never_imports_the_database_layer() -> None:
 
 #: 一个**必然编译出共同取证计划**的问题（`filter` 算子，见 `facts/query.py` 的名单句法）。
 _LIST_QUERY = "Who are the coaches at North Athletics?"
-#: 会被三分类判成计数/名单的那一类（提示词的 EXAMPLES 里就有 `Which meetings …`）。
+#: 计数问法——**名单与计数共用同一份共同取证计划**（`retrieve/CLAUDE.md`），
+#: 所以它和 `_LIST_QUERY` 一样先被共同取证接走，**轮不到路由器**。
 _COUNT_QUERY = "How many coaches are there at North Athletics?"
 _FAILED_PATH_QUERY = "What is the country of citizenship of the author of Atlas?"
 
@@ -529,7 +527,7 @@ def test_router_off_keeps_the_original_path_and_makes_no_llm_call(tmp_path) -> N
 def test_complete_facts_precede_routing_and_make_no_llm_call(tmp_path) -> None:
     store = SqliteStore.open(tmp_path / "t.db")
     _seed(store)
-    for reply in ("DEFAULT", "COUNT", "MULTI_HOP"):
+    for reply in ("DEFAULT", "MULTI_HOP"):
         router, client = _router(reply)
         service = _pipeline(store, router=router)
         snapshot = _snapshot(service, tmp_path, user_id="u", query=_LIST_QUERY, top_k=100)
@@ -538,11 +536,15 @@ def test_complete_facts_precede_routing_and_make_no_llm_call(tmp_path) -> None:
         assert snapshot["grounded_evidence"]["outcomes"] == {"selected": 1}
 
 
-def test_router_count_keeps_the_grounded_branch(tmp_path) -> None:
-    """`COUNT` ⇒ **与关掉路由器时逐字相同**的共同取证（确定性编译，没有捷径）。"""
+def test_grounded_facts_answer_a_count_question_without_consulting_the_router(tmp_path) -> None:
+    """计数问法 ⇒ **与关掉路由器时逐字相同**的共同取证（名单与计数共用同一份计划）。
+
+    ⚠ `COUNT` 已不是路由取值（2026-10-14），这条测的是**接缝的顺序**：
+    共同取证先于路由器，接走了就没有"哪条路"的问题。
+    """
     store = SqliteStore.open(tmp_path / "t.db")
     _seed(store)
-    router, _ = _router("COUNT")
+    router, _ = _router("MULTI_HOP")
     routed = _pipeline(store, router=router)
     plain = _pipeline(store, router=None)
     assert [i.content for i in routed.run(user_id="u", query=_COUNT_QUERY, top_k=100).items] == [
@@ -553,18 +555,20 @@ def test_router_count_keeps_the_grounded_branch(tmp_path) -> None:
     assert snapshot["grounded_evidence"]["operators"] == {"filter": 1}
 
 
-def test_count_route_with_an_uncompilable_query_falls_back_to_the_hybrid_chain(tmp_path) -> None:
-    """⚠ **`COUNT` 是查询意图，不代表一定能编译出计划**（§3.2 的注意事项）：
-    编译不出来就照原样回退混合检索，**不返回半份集合、也不报错**。
+def test_an_uncompilable_query_falls_back_to_the_hybrid_chain(tmp_path) -> None:
+    """⚠ **计数 / 名单意图不代表一定能编译出计划**（§3.2 的注意事项）：
+    编译不出来（`no_plan`）就照原样回退混合检索，**不返回半份集合、也不报错**。
+
+    回退之后路由器才登场（`DEFAULT` ⇒ 混合链）。
     """
     store = SqliteStore.open(tmp_path / "t.db")
     _seed(store)
-    router, _ = _router("COUNT")
+    router, _ = _router("DEFAULT")
     service = _pipeline(store, router=router)
     snapshot = _snapshot(
         service, tmp_path, user_id="u", query="Tell me about the weather lately", top_k=100
     )
-    assert snapshot["router"]["routes"] == {"COUNT": 1}
+    assert snapshot["router"]["routes"] == {"DEFAULT": 1}
     assert snapshot["grounded_evidence"]["outcomes"] == {"no_plan": 1}
     # 回退之后走的是混合链 —— 它的候选来自检索桩，与取证结局是两回事
     assert snapshot["packaging"]["returned_segments"] >= 0
@@ -790,10 +794,14 @@ _LLM_ENV = {
     "AML_MODEL": "some-model",
 }
 
-#: `default.yaml` 里把路由器打开的那一处锚点（见该文件 `router:` 段）。
+#: `default.yaml` 里路由开关那一行的锚点（见该文件 `router:` 段）。**默认是 `true`**。
 #: ⚠ **替换前先断言锚点在**：`str.replace` 找不到时**什么都不做**，
 #: 于是"配置没被改动"会表现成一个莫名其妙的断言失败（而不是"锚点漂了"）。
-_ENABLE_ANCHOR = "  enabled: false\n  # C —— 单次路由调用的超时"
+_ENABLE_ANCHOR = "  enabled: true\n  # C —— 单次路由调用的超时"
+#: `default.yaml` 里**多跳执行器**开关那一行的锚点（见该文件 `agentic:` 段）。
+#: **2026-10-14 起也是默认 `true`** —— 缺端点校验对它是**同一条口径**（见
+#: `test_router_enabled_without_an_endpoint_refuses_to_start` 的第 ② 步）。
+_AGENTIC_ENABLE_ANCHOR = "  enabled: true\n  # C —— ⭐ **执行器选哪一种**"
 
 
 def _config_dir(tmp_path, **replacements: str):
@@ -826,12 +834,19 @@ def test_router_enabled_without_an_endpoint_refuses_to_start(tmp_path, missing: 
     跑出来的分数会被读成"路由没有帮助"——**归因完全错**。
     """
     env = {**_LLM_ENV, missing: ""}
-    # ① 默认 profile（`router.enabled` 是 false）⇒ **缺端点本身不报错**：缺省不是错误
-    load_config(env, config_dir=_config_dir(tmp_path / "off"))
-    # ② 显式打开路由器 ⇒ 这回必须响亮失败
-    on = _config_dir(tmp_path / "on", **{_ENABLE_ANCHOR: _ENABLE_ANCHOR.replace("false", "true")})
+    # ① 默认 profile（`router.enabled` 是 true）⇒ 缺端点**响亮失败**
     with pytest.raises(ConfigError, match="router.enabled"):
-        load_config(env, config_dir=on)
+        load_config(env, config_dir=_config_dir(tmp_path / "on"))
+    # ② 显式关掉**两个**开关 ⇒ 缺端点本身不报错：缺省不是错误
+    #   （2026-10-14 起多跳执行器也默认开、同样要端点 ⇒ 只关路由器不够）
+    off = _config_dir(
+        tmp_path / "off",
+        **{
+            _ENABLE_ANCHOR: _ENABLE_ANCHOR.replace("true", "false"),
+            _AGENTIC_ENABLE_ANCHOR: _AGENTIC_ENABLE_ANCHOR.replace("true", "false"),
+        },
+    )
+    load_config(env, config_dir=off)
 
 
 def test_router_thresholds_are_validated_at_load_time(tmp_path) -> None:
@@ -839,10 +854,7 @@ def test_router_thresholds_are_validated_at_load_time(tmp_path) -> None:
     ⇒ 输出非法 ⇒ 全部降级成 `DEFAULT`，**而且不报错**。"""
     directory = _config_dir(
         tmp_path,
-        **{
-            _ENABLE_ANCHOR: _ENABLE_ANCHOR.replace("false", "true"),
-            "  max_output_tokens: 8": "  max_output_tokens: 0",
-        },
+        **{"  max_output_tokens: 8": "  max_output_tokens: 0"},
     )
     with pytest.raises(ConfigError, match="max_output_tokens"):
         load_config(_LLM_ENV, config_dir=directory)
@@ -851,7 +863,9 @@ def test_router_thresholds_are_validated_at_load_time(tmp_path) -> None:
 def test_router_section_is_the_only_switch_and_a_typo_fails_loudly(tmp_path) -> None:
     """拼错的键必须**响亮失败**（`_group` 的口径）：`router.enabeld` 被静默忽略
     等于"以为开了路由，其实一直是关的"。"""
-    directory = _config_dir(tmp_path, **{"  enabled: false\n  # C": "  enabeld: false\n  # C"})
+    directory = _config_dir(
+        tmp_path, **{_ENABLE_ANCHOR: "  enabeld: true\n  # C —— 单次路由调用的超时"}
+    )
     with pytest.raises(ConfigError, match="router"):
         load_config(
             {"AML_EMB_BASE_URL": "http://unused/v1", "AML_EMB_API_KEY": "k"}, config_dir=directory
