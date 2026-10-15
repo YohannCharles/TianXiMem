@@ -16,7 +16,8 @@
 evidence.py     共同记录 `EvidenceFact`（主体 / 关系 / 客体 / 原文限定条件 / 来源侧与逐字引句 /
                 来源记录日期）+ 抽取版本 `EVIDENCE_VERSION`；规范化键 `key` / `words_key` /
                 `title_key` / `relation_key`（中英文同义关系归一到同一字段）
-grammar.py      `extract_evidence()`：来源句法 → 独立事实（**确定性正则，不调用 LLM**）
+grammar.py      `extract_evidence()`：来源句法 → 独立事实；旧规则为主，启用时用本地 spaCy
+                实体/关系候选补充泛化句式，仍经过否定/引用/计划/来源校验（不调用 LLM）
 sales.py        明确已完成交易的来源句法：只抽原文商品、数量、单价或已报告收入，不计算金额
 query.py        `compile_query()`：问题表面形式 → `QueryPlan`（filter / walk / interval /
                 current；名单与计数编译成同一证据计划）
@@ -48,7 +49,8 @@ conversation.py 具名发言切分（`named_utterances`）与显式句末切分�
 ## 边界：本目录不做什么
 
 * **不生成答案**（§2.1 红线），也**不做名单 / 计数 / 汇总、不预先求和**——名单与计数问法只编译成同一证据计划，最终名单与数字由 AML 侧的答案模型生成。
-* **不调用 LLM**：抽取与编译都是确定性的；Add 路径本来就不调用任何 LLM（§7.2）。
+* **不调用 LLM**：抽取与编译都是确定性的；Add 路径本来就不调用任何 LLM（§7.2）。可选的
+  spaCy sidecar 是本地模型候选器，不改变 `EvidenceFact` 的来源校验、版本覆盖或查询边界。
 * **不拥有表、开关与专用检索路径**：不建业务专用表、不定义配置键、不按业务类别设 Search 分支。
 * **不碰存储与执行**：除 `evidence.py` 引 `common/render` 外只依赖标准库与自身；不 import `store/` / `retrieve/` / `service/`，不写 SQL、不查 Qdrant。
 * **不做扩窗**：共同取证的原文投影与事实投影都不扩邻域；段合并与打包归 [`../rank/`](../rank/)。

@@ -11,7 +11,7 @@ from typing import Literal
 
 from tianximem.common.render import day_granularity, render_evidence, render_record_evidence
 
-EVIDENCE_VERSION = "memory-facts-v8"
+EVIDENCE_VERSION = "memory-facts-v9-entities"
 Qualifier = str | int | bool
 SourceSide = Literal["question", "answer"]
 

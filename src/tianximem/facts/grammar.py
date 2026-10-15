@@ -5,9 +5,11 @@ from __future__ import annotations
 import calendar
 import re
 from email.utils import parseaddr
+from typing import cast
 
 from tianximem.facts.assertions import interrogative
 from tianximem.facts.conversation import NAME, SPEAKER, named_utterances, sentences
+from tianximem.facts.entities import EntityExtractor, ExtractionCandidates, load_spacy_extractor
 from tianximem.facts.evidence import (
     EvidenceFact,
     SourceSide,
@@ -134,6 +136,88 @@ _ZH_ITEM = re.compile(
     r"(?P<amount>\d+|[零〇一二两三四五六七八九十百千万]+)\s*"
     r"(?P<unit>[个本支把件台张只条瓶枚块根顶])\s*(?P<object>[^,，、;；。！？\n]+)"
 )
+
+_MODEL_EXTRACTOR_UNSET = object()
+_MODEL_EXTRACTOR: EntityExtractor | None | object = _MODEL_EXTRACTOR_UNSET
+
+
+def _default_entity_extractor() -> EntityExtractor | None:
+    """Load the optional English NER sidecar once; rules remain the fallback."""
+    global _MODEL_EXTRACTOR
+    if _MODEL_EXTRACTOR is _MODEL_EXTRACTOR_UNSET:
+        try:
+            _MODEL_EXTRACTOR = load_spacy_extractor("en_core_web_sm")
+        except (ImportError, RuntimeError, OSError):
+            _MODEL_EXTRACTOR = None
+    if _MODEL_EXTRACTOR is _MODEL_EXTRACTOR_UNSET:
+        return None
+    return cast(EntityExtractor | None, _MODEL_EXTRACTOR)
+
+
+def _model_fact_candidates(
+    *,
+    source: str,
+    extractor: EntityExtractor,
+) -> tuple[tuple[str, str, str, str], ...]:
+    """Return only conservative model relation candidates with exact quotes."""
+    candidates: list[tuple[str, str, str, str]] = []
+    result: ExtractionCandidates = extractor.extract(source)
+    for relation in result.relations:
+        if relation.source not in {"surface", "structured-rule"}:
+            continue
+        if relation.object is None or not relation.sentence.strip():
+            continue
+        sentence = relation.sentence.strip()
+        if (
+            interrogative(sentence)
+            or _UNSAFE.search(sentence)
+            or _PLANNED.search(sentence)
+            or sentence not in source
+        ):
+            continue
+        subject = relation.subject.text.strip()
+        object_ = relation.object.text.strip()
+        # ``Corpus:`` is a dataset marker, not part of the knowledge entity.
+        corpus_subject = re.match(
+            r"(?is)^Corpus:\s*(.+?)\s+(?:is|was|were|has|have)\s+", sentence
+        )
+        if corpus_subject:
+            subject = corpus_subject[1].strip()
+        else:
+            subject = re.sub(r"^Corpus:\s*", "", subject, flags=re.I)
+        if key(subject) in {"let", "the", "a", "an", "this", "that"}:
+            continue
+        candidates.append(
+            (
+                subject,
+                relation_key(relation.relation),
+                object_,
+                sentence,
+            )
+        )
+    return tuple(candidates)
+
+
+def _model_sources(side: SourceSide, source: str | None) -> tuple[str, ...]:
+    """Keep the sidecar inside the same speaker boundary as rule extraction.
+
+    Answer blocks without a named speaker are generated assistant content and
+    must not become durable facts. Explicit non-assistant speakers remain
+    eligible, matching the existing deterministic extraction path.
+    """
+    if not source:
+        return ()
+    if side == "question":
+        return (source,)
+    fragments: list[str] = []
+    for _, utterance in named_utterances(source):
+        speaker = SPEAKER.fullmatch(utterance.strip())
+        if not speaker:
+            continue
+        if key(speaker["actor"]) in {"assistant", "system", "助手", "系统"}:
+            continue
+        fragments.append(speaker["body"])
+    return tuple(fragments)
 
 
 def chinese_quantity(text: str) -> int | None:
@@ -273,6 +357,7 @@ def extract_evidence(
     question: str | None,
     answer: str | None,
     event_time: int | None,
+    entity_extractor: EntityExtractor | None = None,
 ) -> tuple[EvidenceFact, ...]:
     facts: list[EvidenceFact] = []
 
@@ -748,4 +833,73 @@ def extract_evidence(
                             side=side,
                             match_object=key(re.sub(r"^(?:a|an|the)\s+", "", obj, flags=re.I)),
                         )
-    return tuple(facts)
+    if entity_extractor is not None:
+        relation_surface = {
+            "employee": "employee of",
+            "student": "student at",
+            "volunteer": "volunteer at",
+            "lives in": "lives in",
+            "spouse": "spouse",
+            "creator": "creator",
+            "place of birth": "place of birth",
+            "team": "team",
+        }
+        for side, source in sources:
+            for model_source in _model_sources(side, source):
+                for subject, relation, object_, quote in _model_fact_candidates(
+                    source=model_source, extractor=entity_extractor
+                ):
+                    surface_relation = relation_surface.get(relation, relation)
+                    relation_conflict = any(
+                        key(fact.subject) == key(subject)
+                        and relation_key(fact.relation) == relation_key(surface_relation)
+                        and key(fact.object) != key(object_)
+                        and fact.source_side == side
+                        and fact.source_quote == quote
+                        and not fact.get("model_entity")
+                        for fact in facts
+                    )
+                    if relation_conflict:
+                        continue
+                    duplicate = any(
+                        key(fact.subject) == key(subject)
+                        and relation_key(fact.relation) == relation_key(surface_relation)
+                        and key(fact.object) == key(object_)
+                        and fact.source_side == side
+                        and (
+                            fact.source_quote == quote
+                            or fact.source_quote in model_source
+                            and quote in model_source
+                            and (
+                                fact.source_quote in quote
+                                or quote in fact.source_quote
+                            )
+                        )
+                        for fact in facts
+                    )
+                    if duplicate:
+                        continue
+                    emit(
+                        subject,
+                        surface_relation,
+                        object_,
+                        quote,
+                        f"{subject} is {surface_relation} {object_}.",
+                        side=side,
+                        model_entity=True,
+                    )
+    unique: list[EvidenceFact] = []
+    seen: set[tuple[str, str, str, str, SourceSide]] = set()
+    for fact in facts:
+        marker = (
+            key(fact.subject),
+            relation_key(fact.relation),
+            key(fact.object),
+            fact.source_quote,
+            fact.source_side,
+        )
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique.append(fact)
+    return tuple(unique)

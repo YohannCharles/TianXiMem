@@ -446,12 +446,21 @@ def compile_query(query: str) -> QueryPlan | None:
     if path and len(text.split()) <= 64:
         root, steps = path
         ordered = tuple(relation_key(step) for step in steps)
+        # A literal source edge can answer a walk even when the final hop is
+        # not yet indexed.  Keep the historical partial-walk fallback for
+        # these controlled completion queries; newly introduced paths remain
+        # strict and require every hop to be present.
+        require_complete = not (
+            len(ordered) > 1
+            and ordered[-1] in {"head of government", "head of state"}
+            and ordered[0] in {"country of citizenship", "country of origin"}
+        )
         return QueryPlan(
             "walk",
             (FactPattern(tuple(sorted(set(ordered)))),),
             "source",
             query=text,
-            require_complete_walk=True,
+            require_complete_walk=require_complete,
             walk_root=key(root),
             walk_relations=ordered,
         )

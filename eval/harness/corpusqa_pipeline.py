@@ -376,7 +376,8 @@ def main() -> int:
         child = sub.add_parser(command)
         child.add_argument("--input", required=True)
         child.add_argument("--output", required=True)
-        child.add_argument("--max-tokens", type=int, default=1024)
+        # AML Answer 阶段的官方输出预算：8,192 tokens。
+        child.add_argument("--max-tokens", type=int, default=8192)
         if command == "evaluate":
             child.add_argument("--answers", required=True)
     args = parser.parse_args()

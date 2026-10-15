@@ -32,6 +32,9 @@ eval/reports/**/*.log
 eval/reports/**/*.log.*
 !eval/reports/CLAUDE.md
 
+# 本地改进用的共同事实金标与样本，不纳入版本库。
+eval/facts/*.jsonl
+
 # ── 密钥 ───────────────────────────────────────────────────────────────
 .env
 .env.*

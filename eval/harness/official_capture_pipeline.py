@@ -656,7 +656,8 @@ def build_parser() -> argparse.ArgumentParser:
     """CLI 形状与归档那几份一致：`--max-tokens` 挂在**两个子命令上**（见 `pipeline_cli`）。"""
     return build_pipeline_parser(
         __doc__.splitlines()[0],
-        default_max_tokens=1024,
+        # AML Answer 阶段的官方输出预算：8,192 tokens。
+        default_max_tokens=8192,
         max_tokens_help="answer / 裁判各自的输出上限",
     )
 

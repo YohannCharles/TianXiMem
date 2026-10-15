@@ -103,7 +103,12 @@ def read_corpus(root: Path, table_id: str, receipt: dict) -> tuple[dict, dict]:
     docs = []
     for folder in ("tables_tok", "request_tok"):
         name = f"{folder}/{table_id}.json"
-        raw = (root / DATA_DIR / corpus_relpath(name)).read_bytes()
+        # New archives encode NTFS-reserved characters.  Linux archives made
+        # before that rule may still contain the literal legacy filename.
+        encoded = root / DATA_DIR / corpus_relpath(name)
+        legacy = root / DATA_DIR / name
+        path = encoded if encoded.is_file() else legacy
+        raw = path.read_bytes()
         if hashlib.sha256(raw).hexdigest() != receipt["files"].get(name):
             raise ValueError(f"HybridQA: corpus sha256 mismatch: {name}")
         docs.append(json.loads(raw))

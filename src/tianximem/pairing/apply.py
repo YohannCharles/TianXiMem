@@ -47,7 +47,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from tianximem.facts.evidence import EVIDENCE_VERSION
-from tianximem.facts.grammar import extract_evidence
+from tianximem.facts.grammar import _default_entity_extractor, extract_evidence
 from tianximem.store.sqlite_store import STATUS_COMPLETE, QaPair, SqliteStore, make_pair_id
 
 from .pairing import MemoryBlock, Message, compose_memory_blocks, link_blocks
@@ -150,6 +150,7 @@ def index_pair_facts(store: SqliteStore, conn: sqlite3.Connection, pair: QaPair)
             question=pair.question,
             answer=pair.answer,
             event_time=pair.event_time,
+            entity_extractor=_default_entity_extractor(),
         ),
     )
     store.mark_fact_index_coverage(conn, pair, version=EVIDENCE_VERSION)

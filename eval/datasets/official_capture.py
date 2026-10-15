@@ -31,8 +31,8 @@
 
 ## 只加载**可评分**的题
 
-`official-eval-kit.jsonl` 的 10,144 行里只有 6,146 行有金标或官方判分
-（`judge_kind != "none"`）。没标签的题**跑了也没有分数**，而解答+裁判要花真金白银的
+`official-eval-kit.jsonl` 中只有带金标的题可以评分（覆盖统计见采集目录 README §9）。
+没标签的题**跑了也没有分数**，而解答+裁判要花真金白银的
 网关时间 ⇒ 缺省只加载可评分的那批。**要全量复放**（例如量检索副作用）传
 `--all-questions`（见 [`replay_official.py`](../../eval/experiments/replay_official.py)）。
 """
@@ -146,6 +146,7 @@ def replay_plan(
     only_users: list[str] | None = None,
     scorable_only: bool = True,
     max_questions: int | None = None,
+    only_seqs: set[int] | None = None,
 ) -> list[UserPlan]:
     """按 timeline 排出一批 user 的重放计划。
 
@@ -156,8 +157,13 @@ def replay_plan(
     root = Path(dataset_dir) if dataset_dir is not None else capture_dir()
     kit = read_jsonl(root / KIT_FILE)
     qa_by_seq = {
-        int(row["seq"]): row for row in kit if not scorable_only or row["judge_kind"] != "none"
+        int(row["seq"]): row
+        for row in kit
+        if (not scorable_only or row["judge_kind"] != "none")
+        and (only_seqs is None or int(row["seq"]) in only_seqs)
     }
+    if only_seqs is not None and set(qa_by_seq) != only_seqs:
+        raise ValueError("采集题目清单包含不存在或不可评分的 seq")
 
     timeline = read_jsonl(root / TIMELINE_FILE)
     wanted = set(only_users) if only_users else {row["user_id"] for row in qa_by_seq.values()}
@@ -196,6 +202,12 @@ def replay_plan(
     plans: list[UserPlan] = []
     for user, events in per_user.items():
         events.sort(key=lambda e: (e.ts, e.kind != "add"))
+        if only_seqs is not None:
+            # 固定题目清单：保留最后一道所选题之前的原始 Add，不再投后续无用语料。
+            last_search = max(
+                (i for i, event in enumerate(events) if event.kind == "search"), default=-1
+            )
+            events = events[: last_search + 1]
         if max_questions is not None:
             keep = max_questions
             trimmed: list[ReplayEvent] = []

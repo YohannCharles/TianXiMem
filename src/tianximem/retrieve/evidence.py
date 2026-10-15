@@ -140,6 +140,8 @@ def _walk(
                 and fact.get("start_month") is None
             ]
             if any(not any(key(f.subject) == entity for f in candidates) for entity in frontier):
+                if not plan.require_complete_walk and selected:
+                    return list(selected.values())
                 return None
             if any(
                 fact.get("unparsed")
@@ -152,6 +154,8 @@ def _walk(
                 return None
             current = _current(candidates)
             if not current:
+                if not plan.require_complete_walk and selected:
+                    return list(selected.values())
                 return None
             for fact in current:
                 # Keep separate edges even when they share an original QA.

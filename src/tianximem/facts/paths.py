@@ -124,7 +124,10 @@ def question_path(text: str) -> tuple[str, tuple[str, ...]] | None:
         ),
         ("place of birth", r"Where was (.+?) born"),
         ("place of birth", r"(?:In which|In what|What) city was (.+?) born"),
-        ("notable work", r"What (?:notable achievement is|is) (.+?) (?:known for|renowned for)"),
+        (
+            "notable work",
+            r"What (?:notable achievement is|notable work is|is) (.+?) (?:known for|renowned for)",
+        ),
         (None, r"Where is (.+)"),
         (None, r"(?:In what|What) city (?:can you find|houses) (.+)"),
         (None, r"What is the (?:location|name) of (.+)"),
