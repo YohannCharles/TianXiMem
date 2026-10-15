@@ -798,6 +798,10 @@ _LLM_ENV = {
 #: ⚠ **替换前先断言锚点在**：`str.replace` 找不到时**什么都不做**，
 #: 于是"配置没被改动"会表现成一个莫名其妙的断言失败（而不是"锚点漂了"）。
 _ENABLE_ANCHOR = "  enabled: true\n  # C —— 单次路由调用的超时"
+#: `default.yaml` 里**多跳执行器**开关那一行的锚点（见该文件 `agentic:` 段）。
+#: **2026-10-14 起也是默认 `true`** —— 缺端点校验对它是**同一条口径**（见
+#: `test_router_enabled_without_an_endpoint_refuses_to_start` 的第 ② 步）。
+_AGENTIC_ENABLE_ANCHOR = "  enabled: true\n  # C —— ⭐ **执行器选哪一种**"
 
 
 def _config_dir(tmp_path, **replacements: str):
@@ -833,8 +837,15 @@ def test_router_enabled_without_an_endpoint_refuses_to_start(tmp_path, missing: 
     # ① 默认 profile（`router.enabled` 是 true）⇒ 缺端点**响亮失败**
     with pytest.raises(ConfigError, match="router.enabled"):
         load_config(env, config_dir=_config_dir(tmp_path / "on"))
-    # ② 显式关掉路由器 ⇒ 缺端点本身不报错：缺省不是错误
-    off = _config_dir(tmp_path / "off", **{_ENABLE_ANCHOR: _ENABLE_ANCHOR.replace("true", "false")})
+    # ② 显式关掉**两个**开关 ⇒ 缺端点本身不报错：缺省不是错误
+    #   （2026-10-14 起多跳执行器也默认开、同样要端点 ⇒ 只关路由器不够）
+    off = _config_dir(
+        tmp_path / "off",
+        **{
+            _ENABLE_ANCHOR: _ENABLE_ANCHOR.replace("true", "false"),
+            _AGENTIC_ENABLE_ANCHOR: _AGENTIC_ENABLE_ANCHOR.replace("true", "false"),
+        },
+    )
     load_config(env, config_dir=off)
 
 

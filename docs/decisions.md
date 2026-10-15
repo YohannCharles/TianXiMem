@@ -1850,6 +1850,14 @@ v3 曾引入第 4 个输出值 `NONE`（"输入为空 / 无效 / 无法归类时
 
 ## D41 · `MULTI_HOP` 执行器：**一轮一问的 Chain-of-Query**，默认关（2026-10-10）
 
+> ⚠ **2026-10-14 起默认开**：`configs/default.yaml` 的 `agentic.enabled` 由 `false` 改为 `true`
+> （与 **D40 ⑤** 同日、同一次"主流程默认化"）。路由判到 `MULTI_HOP` 现在**真的会跑多跳执行器**，
+> 不再一律降级。⚠ 代价：开着的执行器要求 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`
+> 齐备（否则 `_validate_agentic` **拒绝启动**）；且每条 `MULTI_HOP` 多花 **1 次拆解 ＋ `max_rounds`
+> 次步骤 LLM**（`plan` 模式）。**代码内置缺省 `AgenticConfig.enabled` 仍 `false`**——缺这个键的快照
+> 逐字不变，同 `grounded_evidence` 的口径。要跑"关掉多跳"的对照，用 profile 覆盖或臂快照（`configs/runs/`）。
+> ⚠ 本条下面的"默认关"是 2026-10-10 当时的措辞，**已被这一行覆盖**。
+
 **决策**：把 D40 留的那个空接缝填上——`MULTI_HOP` 不再一律降级，而是走
 [`../src/tianximem/agent/`](../src/tianximem/agent/) 的多跳执行器。它**不是** PRD §9 的
 通用 Agent，**只有一件事**：
@@ -1902,8 +1910,8 @@ v3 曾引入第 4 个输出值 `NONE`（"输入为空 / 无效 / 无法归类时
 
 §9 给的是 ReFind 形状：**最多 4 轮、每轮 `top_k = 5`、三个工具**
 （`search_chatrecord` / `take_note` / `finish_search`）。本阶段按方案实现的是
-**3 轮 / 每轮 Top-20 / 没有工具**。⛔ **不要拿 §9 的 4 去"校正" `max_rounds`**——
-那会同时改掉轮数与每轮候选数两个量，而 §10 明说它们是同一道预算题。
+**`max_rounds`(=4) 轮 / 每轮 Top-20 / 没有工具**。⛔ **不要拿 §9 的每轮 `top_k=5`
+去"校正" `per_round_top_k`**——轮数与每轮候选数是同一道预算题（§10）。
 
 ⚠ §9 里**照旧成立**的只有一条：**"4 是检索轮数的上限，不是 LLM 调用次数的上限"**
 ⇒ §14 看的是**平均轮数与平均调用数**，不是拿这个数去卡。
