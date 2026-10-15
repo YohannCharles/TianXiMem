@@ -47,7 +47,7 @@ def config_fingerprint(
 
     ## 开关的家在 `configs/<profile>.yaml`（③-d）
 
-    本模块**不解析**那些 yaml——解析会与 `common/config.py` 抢同一份知识，
+    本模块**不解析**那些 yaml——解析会与 `common/config/` 抢同一份知识，
     而 harness 的边界是"打 HTTP、**不 import `src/`**"。⇒ 这里只**逐字节哈希**
     `configs/default.yaml` + `configs/<profile>.yaml`（后者覆盖前者，见 `configs/CLAUDE.md`）。
     **"改了配置但没人注意到"这件事，靠哈希就够发现了。**

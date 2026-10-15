@@ -5,8 +5,18 @@
 ## 要写什么
 
 ```text
-run.py            通用 runner：给定配置 → 跑一轮 → 落一份报告；native / aml-v1 输入契约 ✅
+run.py            CLI ＋ **薄 façade**（2026-10-15 拆分）：参数解析、前置检查、退出码；
+                  入口路径与 CLI 未动；**再导出** runner.py / record.py 的名字 ✅
+runner.py         一轮评测的**机制层**：加载 → 投喂 → 检索 → 裁判（`run_round`）＋
+                  `judge_preconditions` / `missing_pipeline` 两个"跑之前就该失败" ✅
+record.py         run record 的组装与打印：截断警示（`truncation_note`）、模型/消融开关声明、
+                  §14 指标与精排降级提示（`_read_service_metrics` / `_warn_about_rerank`）✅
+                  ⚠ 补丁要打**真实现所在的那个模块**：`run.py` 只再导出名字，
+                  `monkeypatch.setattr(run, "X", …)` 打不到搬到 `runner.py` / `record.py`
+                  的实现——补丁要么写在真实现模块上，要么**静默失效**（同 `harness/judge.py` 的
+                  façade 口径，见 [`../harness/CLAUDE.md`](../harness/CLAUDE.md)）
 replay_official.py **官方采集重放** runner：按 timeline 交错、`--per-family N` 保族覆盖 ✅
+official_dataset.py 采集按数据集分类、固定 seq 评测与两版汇总；见 docs/capture-evaluation-pipeline.md
 selection_suite.py 共享 ID 题单：Memory600 与官方抽样去重，只走已实现的原生加载器/pipeline；见 docs/fixed-selection-suite.md
 recipes.py        **冻结的抽样口径**：按输入契约区分原生与 AML 配方的唯一声明处 ✅
 arms.py           两臂脚手架的**唯一实现**：冻结快照 / 核对 / 驱动 / 比较  ✅

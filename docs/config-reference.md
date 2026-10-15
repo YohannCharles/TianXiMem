@@ -76,7 +76,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ## 1.2 每个键**住在哪**：`.env` 还是 `configs/*.yaml`
 
-> 加载器是 [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py)——**全包唯一读环境变量的地方**（③-d）。
+> 加载器是 [`../src/tianximem/common/config/`](../src/tianximem/common/config/)——**全包唯一读环境变量的地方**（③-d）。
 
 | 层 | 拥有哪些键 | 例子 |
 | --- | --- | --- |
@@ -226,7 +226,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 
 ---
 
-## 5. 多跳执行器（`agentic.*`）—— ✅ **已落地**（**默认全关**）
+## 5. 多跳执行器（`agentic.*`）—— ✅ **已落地**（**`default.yaml` 默认开**，2026-10-14 起）
 
 实现在 [`../src/tianximem/agent/`](../src/tianximem/agent/)。**两种模式，一份接口**：
 
@@ -236,7 +236,7 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 | `plan`（**`default.yaml` 即提交口径**） | `plan.py` 的 `PlanAgent` | `plan_prompts.py`（**两条，独立**） | **先拆一份固定计划**（1~4 步），之后每轮只回答"刚检索完的那一步"，**不重规划** |
 
 ⚠ **两者故意不同**（2026-10-14 起）：`configs/default.yaml` 写的是 `plan`，而代码内置缺省
-仍是 `react`（[`DEFAULT_AGENTIC_MODE`](../src/tianximem/common/config.py)）——后者是给
+仍是 `react`（[`DEFAULT_AGENTIC_MODE`](../src/tianximem/common/config/constants.py)）——后者是给
 **不填这个键的旧配置**留的"逐字不变"出口。同 `retrieval.grounded_evidence` 的分工
 （内置缺省 `false` / `default.yaml` 写 `true`）。
 
@@ -366,7 +366,7 @@ v1 的 Search 路径实际不调用 LLM"。**查询路由器是第一个消费�
 > 来自团队转述 + 参考实现的示例，**没有一手出处**，而现实是 **Add 全挂**。
 
 完整论证见 [`decisions.md`](./decisions.md) 的 **D28**；
-`common/config.py` 也留了一条同义的守卫注释。
+`common/config/constants.py` 也留了一条同义的守卫注释。
 
 ---
 

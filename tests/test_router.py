@@ -742,7 +742,7 @@ def test_agentic_is_not_built_when_disabled(tmp_path) -> None:
 def test_agentic_is_built_with_the_executor_timeout_not_the_router_one(tmp_path) -> None:
     """开 `agentic.enabled` ⇒ 真的接上执行器，而且**用 `agentic.timeout_seconds`**。
 
-    ⚠ 两个消费者的超时**刻意不同**（路由器 10s / 多跳 30s，理由见 `config.py` 的常量），
+    ⚠ 两个消费者的超时**刻意不同**（路由器 10s / 多跳 30s，理由见 `common/config/constants.py` 的常量），
     而 `OpenAiCompatChat` 的超时是构造期固定的 ⇒ 它们必须**各持一个客户端**。
     把两个超时合成一个"全局 LLM 超时"在代码上更省事，但那会把两个依据完全不同的量绑死，
     而这里正是唯一能发现那件事的地方。

@@ -372,10 +372,10 @@ def _wire(
     """`wired` / `wired_dated` / `wired_annotated` 的**同一份**装配代码。**不要复制第二份。**
 
     `radius=None` ⇒ **不传**，让 `SearchPipeline` 吃它自己的默认值
-    （= `common/config.py` 的产品默认，两处一致由 `test_config.py` 钉住）。
+    （= `common/config/` 的产品默认，两处一致由 `test_config.py` 钉住）。
     """
     config = AppConfig(
-        # 不传 env ⇒ 不碰真实环境；只给必需的那几项，其余走 config.py 的内置默认值
+        # 不传 env ⇒ 不碰真实环境；只给必需的那几项，其余走 common/config/ 的内置默认值
         storage=StorageConfig(
             sqlite=SqliteConfig(path=str(tmp_path / "tianxi.db")),
             # 假 Qdrant 不看 url，但 config 会校验它非空

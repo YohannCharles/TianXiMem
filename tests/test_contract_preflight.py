@@ -98,7 +98,7 @@ def test_preflight_module_is_pure_at_import(preflight) -> None:
 def test_env_names_match_the_single_declaration(
     preflight, preflight_attr: str, config_attr: str
 ) -> None:
-    """环境变量名的**单一声明**在 `common/config.py`；preflight 里那份必须与它逐字相同。
+    """环境变量名的**单一声明**在 `common/config/constants.py`；preflight 里那份必须与它逐字相同。
 
     `eval/` 不能 import `src/`（上一条），所以这里**必须**有一处重复。
     重复本身不危险——**漂移才危险**，而这条用例就是那道保险

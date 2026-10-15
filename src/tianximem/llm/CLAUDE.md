@@ -68,7 +68,7 @@ openai_chat.py OpenAI 兼容的 `/chat/completions` 客户端     ✅
 
 端点在 `.env`（`AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`），阈值在
 `configs/*.yaml` 的 `router.*`——**两层分工不重叠**（见 [`../../../configs/CLAUDE.md`](../../../configs/CLAUDE.md)）。
-⚠ **本目录不读配置、不读环境变量**（全包只有 [`../common/config.py`](../common/config.py) 能读），
+⚠ **本目录不读配置、不读环境变量**（全包只有 [`../common/config/`](../common/config/) 能读），
 它只接收构造方传进来的 `base_url` / `api_key` / `model`。
 
 > ⚠ **本目录是"顺手微调一下"的两处高发地之一**（另一处是 reranker）。**数据不得用于训练，「微调」不是暂不实现、是不允许**——理由与出处提醒见根 `CLAUDE.md`。

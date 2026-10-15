@@ -30,7 +30,7 @@ LongMemEval 都没传**——若网关默认开着，thinking 会混进 `generat
 本脚本**不打印任何 key**，只打印"已填/未填"。`--env-file` 由调用方传入
 （`make check` 用 `uv run --env-file .env`），**别在这里自己解析 `.env`**——
 那会变成第二个配置加载点（`.env` 现在由
-[`common/config.py`](../src/tianximem/common/config.py) 读）。
+[`common/config/`](../src/tianximem/common/config/) 读）。
 **本工具刻意不依赖配置层**：配置层自己坏了的时候，这条诊断仍要能跑。
 """
 

@@ -68,6 +68,7 @@ src = ["src", "eval", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
 
 # ⚠ 必须排除 Markdown：`ruff format` 会**重排 .md 里 fenced 的 Python 代码块**，
 #   而本仓的文档大量依赖"逐字引用"——例如 eval/harness/CLAUDE.md 里那段

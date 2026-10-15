@@ -10,6 +10,11 @@ import httpx
 import pytest
 from eval.datasets import Message, Question, Sample, Session
 from eval.experiments import run as runner
+
+#: run_round 与它调用的协作者住在 runner.py（2026-10-16 拆的）。
+#: ⚠ 补丁必须打在「调用点解析的那个模块」上：打在 runner（= run.py）上的是名字快照，
+#: 而真调用发生在 runner.py 里 ⇒ 补丁静默失效（表现是真去加载数据、真发请求，不是报错）。
+from eval.experiments import runner as runner_impl
 from eval.harness import ServiceClient
 from eval.harness.judge import JudgeResult
 from eval.harness.scheduling import run_pipeline, worker_counts
@@ -34,11 +39,11 @@ def test_parallel_users_preserve_batches_search_barrier_and_result_order(tmp_pat
         )
         for i in range(2)
     ]
-    monkeypatch.setattr(runner, "_load", lambda *a, **kw: samples)
-    monkeypatch.setattr(runner, "pipeline_for", lambda *a: tmp_path / "pipeline.py")
-    monkeypatch.setattr(runner, "ENDPOINTS", (("e0", "k0"), ("e1", "k1")))
+    monkeypatch.setattr(runner_impl, "_load", lambda *a, **kw: samples)
+    monkeypatch.setattr(runner_impl, "pipeline_for", lambda *a: tmp_path / "pipeline.py")
+    monkeypatch.setattr(runner_impl, "ENDPOINTS", (("e0", "k0"), ("e1", "k1")))
     monkeypatch.setattr(
-        runner,
+        runner_impl,
         "run_judge",
         lambda pipeline, items, out, **kw: [
             JudgeResult(item["id"], True, "CORRECT", "ok", "answer") for item in items
@@ -217,15 +222,15 @@ def test_parallel_aml_users_preserve_historical_search_events(tmp_path, monkeypa
     ]
     pipeline = tmp_path / "pipeline.py"
     pipeline.write_text("# stub")
-    monkeypatch.setattr(runner, "load_plans", lambda *a, **kw: plans)
-    monkeypatch.setattr(runner, "pipeline_for", lambda *a: pipeline)
+    monkeypatch.setattr(runner_impl, "load_plans", lambda *a, **kw: plans)
+    monkeypatch.setattr(runner_impl, "pipeline_for", lambda *a: pipeline)
     seen = []
 
     def judge(path, items, out, **kw):
         seen.extend(items)
         return []
 
-    monkeypatch.setattr(runner, "run_judge", judge)
+    monkeypatch.setattr(runner_impl, "run_judge", judge)
     barrier = Barrier(2)
     memory = defaultdict(list)
     requests = defaultdict(list)

@@ -1,298 +1,138 @@
-# TianXiMem — 常用命令入口
+# TianXiMem — 常用命令入口（**兼容别名**）
 #
-# 已经能真跑：`sync` / `lock` / `fmt` / `lint` / `typecheck` / `test` / `check` / `serve` /
-#            `contract-check` / `probe-reranker` / `router-eval` / `eval` / `t1` / `t2` / `t2-dump` /
-#            `qdrant-up` / `qdrant-down` / `data-check` / `fetch-data`。
-# 其余目标仍指向尚未存在的模块，先以 echo 占位——**别让它们静默成功**，
-# 否则会误以为某一步已经实现。Step 0 / Step 1 起逐个替换为真命令。
+# 命令的定义、参数与那些坑**只有一个家**：`src/tianximem/dev.py`。
+#   · 每个目标只有一行转发：`uv run python -m tianximem.dev <cmd> …`；
+#   · `make help` = `python -m tianximem.dev help`（不再靠 grep|awk 拼表）；
+#   · `<cmd> --help` 带该命令的参数、退出码与判据。
+#   · 占位只剩 `smoke` 一个——它**明确失败**，别误以为某一步已经实现。
 #
 # ⚠ **`make` 不是每台机器都有**（2026-09-24 核实过两台）：
-#   · Windows 侧那台 `which make` / `where make` 都找不到 —— 装一个
-#     （`choco install make` 或 Git Bash 的 make 包）；装之前要手敲每个目标下面那行命令。
+#   · Windows 侧那台 `which make` / `where make` 都找不到 —— 直接用模块入口
+#     `uv run python -m tianximem.dev <cmd>`，见 docs/active-spec/development.md；
 #   · WSL 侧那台**已装**（`sudo apt-get install make`）。
-#   Makefile 始终是命令的**唯一声明处**——目标是什么，与"这台机器装没装 make"无关。
 #
-# ⚠ **`.env` 由 [`common/config.py`](src/tianximem/common/config.py) 读**（2026-09-24 起）
-#   ⇒ `serve` **不需要**额外的 `--env-file`，别再加一条会与它打架的注入路径。
-#   但 `tools/check_env.py` 是**独立进程**、只读 `os.environ`，所以 `check` 那一项
-#   显式带 `--env-file`——它也刻意**不依赖配置层**（配置层坏了它还得能跑）。
-ENV_FILE ?= .env
+# 变量透传：`ARGS='…'` 原样下传；下面几个设了才转成参数（没设 = 用 dev.py 里的默认值）。
+ARGS ?=
+RUN_ARG = $(if $(RUN),--run-id $(RUN))
+PROCESSES_ARG = $(if $(PROCESSES),--processes $(PROCESSES))
+ROUTER_OUT_ARG = $(if $(ROUTER_OUT),--out $(ROUTER_OUT))
+COQ_OUT_ARG = $(if $(COQ_OUT),--out $(COQ_OUT))
 
-# `--env-file` **只在 `.env` 存在时才加**：`uv run` 碰到不存在的 env 文件会**直接报错**，
-# 而取数据**不需要任何密钥**，不该卡在"还没建 `.env`"上（新机器上 `fetch-data` 甚至
-# 可以排在 `cp .env.example .env` 之前）。存在时就必须带上——见 `fetch-data` 的说明。
-ENV_FILE_FLAG = $(if $(wildcard $(ENV_FILE)),--env-file $(ENV_FILE))
-
-# 跑评测时的数据集（`make eval`）。**只有两个计分数据集有加载器**（§12.4）。
+# 跑评测/数据准备时的数据集。**只有两个计分数据集有加载器**（§12.4）。
 DATASET ?= locomo-refined
 DATASET_FLAG = $(if $(filter all,$(DATASET)),--tier all,--dataset $(DATASET))
 
-# `make order-probe` 的 B 臂用几个**独立进程**（见那个目标的说明）。
-# 默认 1 = 测 D25 本身；`PROCESSES=4` = 测「多 worker 到底安不安全」。
-PROCESSES ?= 1
-
-# `make router-eval` 的落点与额外参数（变体见那个目标的说明）。
-ROUTER_OUT ?= eval/reports/runs/router-$(shell date +%Y%m%d)
-ARGS ?=
-
-# `make coq-eval` 的落点（变体见那个目标的说明）。
-# ⚠ 它的 `ARGS` 与上面那个**共用同一个变量**——同时传两份只在同一次 make 里才有意义，
-#    而那两个目标不会同时跑（一个调路由器、一个调多跳，落点也不同）。
-COQ_OUT ?= eval/reports/runs/coq-$(shell date +%Y%m%d)
-
-.PHONY: help sync check fmt lint typecheck test qdrant-up qdrant-down serve contract-check probe-reranker \
+.PHONY: help sync check config-check fmt lint typecheck test qdrant-up qdrant-down serve contract-check probe-reranker \
         router-eval coq-eval coq-decompose order-probe export-multihop image-build up down deploy-check \
-        eval replay-official t1 t2 t2-dump smoke clean \
+        eval replay-official t1 t2 t2-dump smoke clean lock \
         fetch-data data-check data-patch
 
-help:  ## 列出所有目标
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+help:
+	@uv run python -m tianximem.dev help
 
-# ── 现在就能跑 ─────────────────────────────────────────────────────────
-sync:  ## 安装依赖（`--all-extras`：会装上 [local] 的本地模型栈，数 GB）
-	uv sync --all-extras
+# ── 开发环路 ──────────────────────────────────────────────────────────
+sync:
+	uv run python -m tianximem.dev sync
 
-lock:  ## 生成/更新 uv.lock
-	uv lock
+lock:
+	uv run python -m tianximem.dev lock
 
-fmt:  ## 格式化
-	uv run ruff format .
+fmt:
+	uv run python -m tianximem.dev format
 
-lint: typecheck  ## 静态检查（ruff 全仓 + mypy 只查 src/）
-	uv run ruff check .
+lint: typecheck
+	uv run python -m tianximem.dev lint
 
-# ⚠ **只查 `src/`，不查 `eval/` `tests/` `tools/`**（2026-09-25 定）：后三者现在有
-#   19 处存量报错（`conftest.py` 的 sys.path 形状、测试里的 float timeout 等），
-#   一起纳入等于新门禁一上来就是红的，而"永远是红的门禁"与"没有门禁"是同一个东西。
-#   ⇒ 先钉住**唯一进提交链路**的 `src/`；要扩到其余目录时，先清完那 19 处再改这一行。
-typecheck:  ## 类型检查（mypy）
-	uv run mypy src
+typecheck:
+	uv run python -m tianximem.dev typecheck
 
-data-check:  ## 离线校验指定数据集与评分依赖；DATASET=all 校验全档
-	uv run $(ENV_FILE_FLAG) python -m eval.datasets.prepare --check $(DATASET_FLAG)
-# ⚠ 清单里记两套哈希：`upstream_sha256`（上游原始字节）与 `sha256`（本地归档，打完补丁）。
-#    7 个 pipeline 有一处**已声明的本地修订**（上游那份跑不起来），见 docs/benchmark-data.md。
+test:
+	uv run python -m tianximem.dev test $(ARGS)
 
-data-patch:  ## 仅应用指定数据集评分源码的已声明补丁（不下载）
-	uv run $(ENV_FILE_FLAG) python -m eval.datasets.prepare --patch $(DATASET_FLAG)
-# ⚠ 它只做清单里声明的那一处替换（`contextlib.nullcontext` 包住 `Path.open`），
-#    且**幂等**——已经打过的再跑是零处改动。tests/test_benchmark_archive.py 钉住了这条。
+serve:
+	uv run python -m tianximem.dev serve
 
-fetch-data:  ## 按数据集准备 dataset/；DATASET=all 取全档，默认 locomo-refined
-	uv run $(ENV_FILE_FLAG) python -m eval.datasets.prepare --fetch $(DATASET_FLAG)
-# ⚠ 它**必须读 `.env`**（2026-10-04）：`TIANXIMEM_BENCHMARK_DIR` 是数据路径的唯一入口，
-#   而 `.env.example` 明写"本地开发把它指到开发数据集即可"。以前这条用裸 `python3`、
-#   **不读 `.env`**，于是把它改过的人会看到"fetch 下到 benchmark_data/、eval 去别处找"
-#   ——报错仍然是"缺文件"（响亮），但两边对不上。
-# ⚠ **不需要任何凭据**（公开源，请求只带 User-Agent），只要外网直连
-#   raw.githubusercontent.com 与 huggingface.co。
-# ⚠ 目录不存在不用先 mkdir：prepare 会建立暂存路径，校验后才发布数据文件。
-#   测试依据所需文件是否存在决定 skip，不再依据顶层目录。
+config-check:
+	uv run python -m tianximem.dev config-check
 
-check:  ## 环境自检：Qdrant 可达 / 三段模型端点可用 / 密钥已填（含 V7 思考探针）
-	uv run --env-file $(ENV_FILE) python tools/check_env.py
-# ⚠ 不检查 nvidia-smi —— 模型不在本机（D14）。
-# ⚠ LLM 那一项顺带就是 §17.3 V7 的探针：网关默认开思考时，归档 pipeline 的
-#    `generated_answer` 里会混进推理过程，而**裁判读到的就是那个**。
-# 与 `contract-check` 的分工：本项只看"环境通不通"，不打契约。
+check:
+	uv run python -m tianximem.dev check $(ARGS)
 
-qdrant-up:  ## 起 Qdrant server（必须 server 模式；单分片）
-	docker compose -f deploy/compose.yaml up -d qdrant
-# ⚠ **带服务名 `qdrant`**：compose 里现在还有 `app`（容器形态的那一套，见 `up`），
-#    不带服务名会把检索服务也一并起起来，和 `make serve` 抢 8000。
-# ⚠ daemon 在 **Windows 侧**（Docker Desktop，D12）：WSL 里 docker CLI 可能因 socket
-#    权限用不了，那就去 **Windows 侧 Git Bash** 跑同一条命令（见 deploy/CLAUDE.md）。
-#    端口是转发过来的，所以 WSL 里访问 localhost:6333 照样成立。
-# ⚠ 报 `502 Bad Gateway` 而不是「拒绝连接」= 转发在、**容器没起**——正是该跑这条命令的时候。
+# ── 数据准备（D35）────────────────────────────────────────────────────
+data-check:
+	uv run python -m tianximem.dev data-check $(DATASET_FLAG)
 
-qdrant-down:  ## 停 Qdrant
-	docker compose -f deploy/compose.yaml stop qdrant
-# ⚠ `stop` 而不是 `down`：`down` 是**按项目**拆的，会把 `app` 一起拆掉
-#    （哪怕你只是想停一下 Qdrant）。要整栈下线用 `make down`。
+data-patch:
+	uv run python -m tianximem.dev data-patch $(DATASET_FLAG)
 
-# ── 容器形态：整栈（检索服务 + Qdrant）───────────────────────────────────
-# 与上面两条的分工：`qdrant-up` 只起库、`serve` 在本机跑服务（**开发环路**）；
-# 下面三条把**服务本身**也放进容器（**部署环路**，见 deploy/CLAUDE.md）。
+fetch-data:
+	uv run python -m tianximem.dev data-fetch $(DATASET_FLAG)
 
-image-build:  ## 构建检索服务镜像（上下文是仓库根，不是 deploy/）
-	docker build -f deploy/Dockerfile -t tianximem:local .
-# ⚠ `-f deploy/Dockerfile .` 的最后那个 `.` **不能省**：Dockerfile 要 pyproject.toml /
-#    uv.lock / src/ / configs/，所以上下文必须是仓库根（deploy/.dockerignore 在根上）。
-# ⚠ 镜像里【不装 [local] extra】（torch 那几个 G）——提交链路的三个模型全在远端网关。
+# ── 契约 / 探针 / 评测 ────────────────────────────────────────────────
+contract-check:
+	uv run python -m tianximem.dev contract-check $(ARGS)
 
-up:  ## 起整栈（检索服务 + Qdrant，**容器形态**）
-	@test -f deploy/.env || { echo "缺 deploy/.env —— 先 cp deploy/.env.example deploy/.env 并填值"; exit 1; }
-	docker compose -f deploy/compose.yaml up -d --build
-# ⚠ 前置检查是**故意**的：compose 自己的报错是 `env file ... not found`，
-#    它不会告诉你"该从哪拷"。而缺 .env 时 compose 仍可能起容器 ⇒ 服务在容器里
-#    因缺 embedding 密钥响亮失败、restart 策略再把它反复拉起来——看着像崩溃循环。
+diagnose:
+	uv run python -m tianximem.dev diagnose $(RUN_ARG) $(ARGS)
 
-down:  ## 停整栈（**保留卷**；加 `-v` 才会删真源）
-	docker compose -f deploy/compose.yaml down
-# ⚠ **默认不删卷**：`tianxi_data` 里是 SQLite 真源，删了不可恢复（Qdrant 那份才可重建）。
+probe-reranker:
+	uv run python -m tianximem.dev probe-reranker $(ARGS)
 
-deploy-check:  ## 对**已部署的容器**跑契约预检（真 HTTP，不消耗 Smoke 配额）
-	docker compose -f deploy/compose.yaml exec -T app python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
-# ⚠ 预检跑在**容器里**而不是本机：它要打 `http://127.0.0.1:8000`（容器自己的网卡）。
-#    从本机打是 `make contract-check` 那条路（`--base-url http://127.0.0.1:<宿主端口>`）。
+router-eval:
+	uv run python -m tianximem.dev router-eval $(ROUTER_OUT_ARG) $(ARGS)
 
-serve:  ## 起 Add/Search 服务（FastAPI + uvicorn，单进程）
-	uv run uvicorn tianximem.service.app:create_app_from_env --factory --workers 1
-# ⚠ 必须 --workers 1。⚠ **D25 之后原因变了**：旧理由是"按 session 串行化用的是进程内锁，
-#    多 worker 会静默失效"——`SessionLocks` 已删，那条不再成立。现在拒的是
-#    **"放开多 worker 需要的验证一件都没做"**（并发写压力 / busy_timeout 多进程争用 /
-#    各自的 Qdrant 客户端）。⇒ **不要用"反正现在安全了"当理由把它去掉。**
-#    两条防线都会拦：`--workers N`（N>1）被 assert_single_process() 拦下，
-#    TIANXIMEM_WORKERS != 1 被配置校验拦下（见 src/tianximem/common/config.py）。
-# ⚠ 用 --factory 而不是模块级 app：模块级 app 会让"导入本模块"就要求环境变量齐备，
-#    测试没法只导入工厂函数（见 src/tianximem/service/app.py 的 docstring）。
-# ⚠ 需要 .env 里的 AML_EMB_BASE_URL / AML_EMB_API_KEY 与 configs/default.yaml；
-#    缺了会在启动时响亮失败（不会带着空值跑起来）。
-#    开发期建议 TIANXIMEM_PROFILE=local（换用独立的 memories_dev 集合）。
+coq-eval:
+	uv run python -m tianximem.dev coq-eval $(COQ_OUT_ARG) $(ARGS)
 
-test:  ## 跑单元测试
-	uv run pytest
+coq-decompose:
+	uv run python -m tianximem.dev coq-decompose $(ARGS)
 
-contract-check:  ## §2 契约合规自查（打真 HTTP：本地自启服务，**不消耗 Smoke 配额**）
-	uv run python eval/smoke/preflight.py
-# 打真 HTTP、看真响应——契约层只有走 HTTP 才碰得到（eval/CLAUDE.md 的边界）。
-# 缺省自己起一个 uvicorn（临时库 + 临时缓存 + 独立的 memories_preflight 集合），跑完关掉并 drop。
-# 退出码：0 全过 · 1 有检查没过 · 2 前置条件不满足（Qdrant 或 embedding 网关不可达）。
-# ⚠ 需要 .env 里的 AML_EMB_BASE_URL / AML_EMB_API_KEY（由 common/config.py 读）与可达的 Qdrant。
-# 打已经在跑的服务：uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
+order-probe:
+	uv run python -m tianximem.dev order-probe $(PROCESSES_ARG) $(ARGS)
 
-diagnose:  ## 跑批诊断：把「低分」与「模型不行」分开（RUN=run-id；只读产物，不打网关）
-	uv run python tools/diagnose_run.py --run-id $(RUN)
-# **接完一个新数据集、或看到任何低分时的第一件事**。它报四件事：
-#   ① 拒答率（逐字同一句 = 被 prompt 逼的指纹）  ② 拒答 × gold 在不在检索结果里
-#   ③ label 分布（含 JUDGE_ERROR）              ④ 逐类分化
-# ⚠ 2026-10-03 四个数据集的接错缺陷**全是它这套手法找出来的**；判读树在脚本 docstring 里。
-# 用法：make diagnose RUN=base-mqk
+export-multihop:
+	uv run python -m tianximem.dev export-multihop $(ARGS)
 
-probe-reranker:  ## 精排探针：打真网关，验连通性 + 它在链上真的起作用（不消耗 Smoke 配额）
-	uv run python tools/probe_reranker.py
-# 与 contract-check 的分工：那一个验**契约形状**（不关心精排好不好用），
-# 本项验**精排这一环**（端点通不通、线格式对不对、名次有没有真的换掉）。
-# 退出码：0 端点与线格式都正常 · 1 端点不可用或线格式不符 · 2 没配 reranker。
-# ⚠ **顺序有没有变不影响退出码**——那是信息，不是判据（一个诚实但保守的 reranker
-#    完全可能给出与 RRF 相同的顺序）。
+eval:
+	uv run python -m tianximem.dev eval --dataset $(DATASET) $(ARGS)
 
-router-eval:  ## 查询路由的三分类小样本评测（46 题，真端点，**不消耗 Smoke 配额**）
-	uv run --env-file $(ENV_FILE) python tools/router_eval.py --out $(ROUTER_OUT) $(ARGS)
-# 落点默认 eval/reports/runs/router-$(STAMP)：`summary.json`（混淆矩阵 + 逐类 P/R/F1 + 成本）
-# 与 `rows.jsonl`（逐题预测）。
-# ⚠ 它**只调路由器**——不发 Add / Search、不建集合、不写真源 ⇒ 开发机上可以反复跑。
-# ⚠ 需要 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（缺了在跑之前直说）。
-# ⚠ **`router.enabled` 的开与关不影响本目标**：工具是"显式要评测路由器"，
-#    那个键管的是**服务的默认行为**（默认关，D40）。
-# 常用变体：`ARGS='--boundary-only --repeat 3'`（稳定性）· `ARGS='--smoke'`（端到端冒烟）。
-# 判据与结论见 eval/reports/router-20261010.md——⚠ **别只读准确率**：那一条在有类别塌缩时
-# 会给出一个好看的假数（退化解"永远答 DEFAULT"就有 0.47）。
+baseline:
+	uv run python -m tianximem.dev baseline --dataset $(DATASET) $(ARGS)
 
-coq-eval:  ## 多跳检索（Chain-of-Query）的四臂真实评测：E0/E1/E2 ＋ 每轮精排消融
-	uv run --env-file $(ENV_FILE) python tools/coq_eval.py --out $(COQ_OUT) $(ARGS)
-# 落点默认 eval/reports/runs/coq-$(STAMP)：`report.json`（各臂准确率 + §14 用量 + 证据覆盖）
-# 与 `<臂>-hits.json`（逐题返回的 id）与 `<臂>/`（逐题答案与判分）。
-# ⚠ **它会真的调网关**（embedding / 精排 / 对话模型）并**新建一个隔离 Qdrant collection**
-#    + 一份隔离 SQLite 真源（`$(COQ_OUT)/coq-eval.db`）——**不碰开发库**。
-# ⚠ 需要 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（多跳与路由器共用）
-#    与 `TIANXIMEM_RERANKER_*`（每轮精排要用它）。
-# ⚠ 跑一次要**几十分钟**（4 臂 × 25 题，多跳臂每题最多 3 次 LLM + 4 次精排）。
-#    续跑：`ARGS='--skip-add'`（复用已经建好的隔离真源）。
-# 常用变体：`ARGS='--arms e0,e1,e2,a --limit-questions 5'`（先冒烟）·
-#    `ARGS='--skip-judge'`（只测检索覆盖，不叫裁判）。
-# 口径与结论见 eval/reports/coq-multihop-20261010.md。
+replay-official:
+	uv run python -m tianximem.dev replay-official $(ARGS)
 
-coq-decompose:  ## 多跳分解能力探针：**只看问题**，看模型能不能拆出依赖链（2026-10-12）
-	uv run --env-file $(ENV_FILE) python tools/coq_decompose_probe.py --manifest eval/coq-musique.jsonl --out eval/reports/runs/coq-decompose $(ARGS)
-# ⚠ 它**不打检索、不建集合**，只叫对话模型**拆一次/题** ⇒ 很便宜、可反复跑。
-# ⛔ **判定不由模型做**：`judge` 那一版已作废（它至少错判 4/25，且是事实性错误——连金标几跳都
-#    数错）。现在是**人**逐条读候选 vs 金标，填 `eval/coq-decompose-labels.jsonl` 的 `defect`。
-# ⚠ 结论见 eval/reports/coq-musique-20261011.md §4.6：**模型拆不清**（步数 68%、结构同构 **60%**），
-#    失败形态与 CoQ 循环里的"第二轮重述原问题"**同型** ⇒ 病在提示词侧不在检索侧。
-# 变体：`ARGS='--limit 5'`（冒烟）· `ARGS='--reuse'`（**不调模型**，只拿新标签/新算法重算）。
-# ⚠ 重判**必须**用 `--reuse`：重新摇一次模型就是换一份候选分解，而标签是逐条读着那一份填的。
-# ⭐ 产物里的 `decompositions.md` 是**人读的那一份**（原问题 / 模型拆解 / 金标拆解并排），
-#    逐条复核时直接复制它——⚠ 它含数据集原文，落在 runs/（gitignored）。
+t1:
+	uv run python -m tianximem.dev t1 $(ARGS)
 
-order-probe:  ## D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言真源**逐字一致**
-	uv run python tools/order_probe.py --processes $(PROCESSES)
-# ⚠ **它会花掉真实的 embedding 调用**（conv-26 全量 ≈ 216 块）⇒ 不进 `make test`。
-# ⚠ 需要 8131 与 8140..8140+N-1 这些端口空着；它自己起干净服务、各自一个集合，跑完关掉。
-# ⚠ `PROCESSES=4`（默认 1）让 B 臂用 **4 个独立进程**共享同一套存储
-#    ⇒ 那一条回答的是「`uvicorn --workers N` 安不安全」——与 `--workers 1` 那条约束直接相关。
-#    默认 1 时它测的是 D25 本身（乱序/并发 vs 顺序）。
-# ⚠ 跑完**不会自动清库**：`var/order-a/` `var/order-b/` 留着供比对（都在 gitignore 里）。
-#    Qdrant 里那两个 `memories_ab_order_*` 集合也是——要清就手动 drop。
-# 判据与 D25 的关系见 eval/reports/ledger.md 的「D25」一节。
+t2:
+	uv run python -m tianximem.dev t2 $(ARGS)
 
-export-multihop:  ## 打包链式多跳题集（含共享语料池）给外部项目用 → var/exports/
-	uv run python tools/export_multihop_kit.py $(ARGS)
-# 产物：`var/exports/musique-multihop-<日期>/{questions.jsonl, haystack-corpus.jsonl, README.md}`
-#       ＋同名 `.zip`。⚠ **含数据集原文** ⇒ 只进 `var/`（gitignored），⛔ 绝不进 git。
-# ⭐ 它**逐条校验后才打包**：可答 / 严格链 / **每一跳的答案（含末答）都在支持段落正文里**
-#    / 题面不泄中间跳。任一条不过就点名报出并**非零退出**——这种包交出去比不交更糟。
-# ⚠ 包里那个 `haystack-corpus.jsonl` 是**前提不是附件**：只喂目标题自己那 20 段，
-#    证据就全在里面、检索无事可做、链式依赖自动消失（2026-10-10 栽过，见 README）。
+t2-dump:
+	uv run python -m tianximem.dev t2-dump $(ARGS)
 
-eval:  ## 跑一轮代理评测（§13）：DATASET / ARGS 可覆盖
-	uv run --env-file $(ENV_FILE) python -m eval.experiments.run --dataset $(DATASET) $(ARGS)
-# ⚠ **需要服务在跑**（`make serve`）——runner 打 HTTP、不 import `src/`（eval/CLAUDE.md 的边界）。
-#   连不上服务时退出码 2，并提示去起服务（不是"跑失败"）。
-# ⚠ `--env-file` **不是多余的**：裁判那一步起的是 subprocess，它只继承环境变量，而
-#   `.env` 是 `common/config.py` 自己读的。少了它 → Add/Search 全跑完、**裁判才炸**。
-#   缺哪个名字会在跑之前直说（退出码 2）。
-# ⚠ 缺 `--embedder` 时 run record 的模型指纹会写"未声明"——**R1 要求记下换没换模型**，
-#   所以想留下可比记录就设 `TIANXIMEM_EMBED_MODEL`（或 `ARGS='--embedder ...'`）。
-# ⚠ 冒烟用 `ARGS='--limit 3'`；**截断跑会在数据指纹的 note 里留警示**，别拿它跟全量比。
+# ── 容器形态（部署环路，见 deploy/CLAUDE.md）───────────────────────────
+qdrant-up:
+	uv run python -m tianximem.dev qdrant-up $(ARGS)
 
-baseline:  ## 跑一轮**冻结口径**的基线/对照（§13）：DATASET / ARGS 可覆盖
-	uv run --env-file $(ENV_FILE) python -m eval.experiments.run --dataset $(DATASET) --frozen $(ARGS)
-# **判断"改动值不值"就用这个**：口径（跑多少题、要不要分层）由
-# `eval/experiments/recipes.py` 给，不手抄数字——抄错一个数的后果是分数看起来完全正常、却不可比。
-# ⚠ 它**拒绝**与手写的 `--limit` / `--spread` 同时给（那两个只在做消融或冒烟时才用）。
-# ⚠ 墙钟差着量级：locomo ≈44 分（**建议当唯一哨兵**）、mquake ≈4 分、
-#   clbench ≈3.5 小时、beam ≈1 小时、lme ≈12–20 小时。见 `eval/reports/ledger.md`。
-# ✅ 默认按独立用户并行投喂/检索，判分单独并行；可用
-#   `ARGS='--ingest-workers 4 --judge-workers 4'` 控制两段（单用户批次顺序不变）。
-#   两项均设 1 恢复串行。⚠ 别同时跑两条不同的评测链。
-# ⚠ 本仓噪声底是 **346 题上 ~1pt** ⇒ 几十题的小跑法读不出改动。
-# 用法：make baseline DATASET=locomo-refined
-#       make baseline DATASET=clbench ARGS='--run-id clb-after-rerank --switches {…}'
+qdrant-down:
+	uv run python -m tianximem.dev qdrant-down $(ARGS)
 
-replay-official:  ## 重放官方采集流量并判分（README §6.2 线①）：ARGS 可覆盖
-	uv run --env-file $(ENV_FILE) python -m eval.experiments.replay_official $(ARGS)
-# **按采集的 timeline 交错重放**（不是"灌完再问"）——41% 的题早于该 user 的最后一条 add，
-# 先灌完再问会读到未来。payload 用采集原文（不加前缀、不重切批）。
-# ⚠ 前置：套件得先重建过——`uv run python tools/build_official_kit.py`（读采集目录里那三份）。
-# ⚠ 冒烟用 `ARGS='--users 1 --max-questions 3'`；正式的用 `ARGS='--users 261 --run-id …'`。
-# ⚠ 与 `make eval` 同一条纪律：**别同时跑两条不同的链**（抢同一份网关与重试预算）。
+image-build:
+	uv run python -m tianximem.dev image-build $(ARGS)
 
-t1:  ## §13 的 T1 实验：时间戳前缀 带/不带（**改渲染 = 重建索引**）
-	uv run --env-file $(ENV_FILE) python -m eval.experiments.t1_timestamp
-# 两个臂各需**独立集合**（渲染不同 ⇒ 向量不同），见该脚本顶部。
+up:
+	uv run python -m tianximem.dev up $(ARGS)
 
-t2:  ## §13 的 T2 实验：跨 session 失败归因（汇总人工标注，机器半边见 t2-dump）
-	uv run python -m eval.experiments.t2_cross_session
-# 产出的是**待填的标注表**的汇总——三类由人填，脚本拒绝代填（半张表的分布更危险）。
+down:
+	uv run python -m tianximem.dev down $(ARGS)
 
-t2-dump:  ## T2 的机器半边：133 道 multi-session 题的纯 BM25 名次 → 待填表
-	uv run python tools/t2_retrieval_dump.py
-# ⚠ 它**直查 Qdrant**（纯 BM25 单路），不走服务：D15 之后服务只有混合检索一种形态，
-#    给服务加单路查询是 roadmap 里登记过但未实现的切片（本实验不需要它）。
-# ⚠ 前提：语料已经喂进去了（`make eval` 跑过同一批题）。
+deploy-check:
+	uv run python -m tianximem.dev deploy-check $(ARGS)
 
-smoke:  ## S1 判别实验（§17.1）——Smoke 跑通后第一件事
-	@echo "TODO(Step 6): 加一条只有它能回答的记忆，看分数是否变化"
-	@false
+# ── 占位与清理 ────────────────────────────────────────────────────────
+smoke:
+	uv run python -m tianximem.dev smoke
 
-clean:  ## 清运行时产物（保留 dataset/）
-	rm -rf var/*.db var/*.db-journal var/*.db-wal var/*.db-shm
-	rm -rf .pytest_cache .mypy_cache .ruff_cache
-# ⚠ 真源是 var/tianxi.db，**不是 data/**（2026-09-24 修正：这条目标原先删的是 data/*.db，
-#    而没有那个目录——于是它一直静默地什么也没删）。为什么不叫 data/ 见 var/CLAUDE.md。
-# ⚠ **tianxi.db 是 var/ 里唯一不可重建的东西**（embed_cache/ 能重建，只是要重付一遍 embedding
-#    的钱；Qdrant 卷是 deploy/compose.yaml 的 Docker 命名卷、不在 var/ 下，也能从真源全量重建）
-#    ——本目标清得了它，**跑之前想清楚**。
-#    刻意不清 embed_cache/：它是"暂时不用"，不是"要扔掉"。
+clean:
+	uv run python -m tianximem.dev clean

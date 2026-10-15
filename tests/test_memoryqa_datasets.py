@@ -17,6 +17,11 @@ from eval.datasets import data_fingerprint, load_halumem, load_musique, shape_no
 from eval.datasets.musique import ANSWER_CONTRACT, REFUSAL
 from eval.datasets.prepare import entries_for
 from eval.experiments import run as runner
+
+#: run_round 与它调用的协作者住在 runner.py（2026-10-16 拆的）。
+#: ⚠ 补丁必须打在「调用点解析的那个模块」上：打在 runner（= run.py）上的是名字快照，
+#: 而真调用发生在 runner.py 里 ⇒ 补丁静默失效（表现是真去加载数据、真发请求，不是报错）。
+from eval.experiments import runner as runner_impl
 from eval.harness import JudgeResult, SearchHit, ServiceClient, build_input_items, pipeline_for
 from eval.harness import extra_pipeline as extra
 from eval.harness import official_capture_pipeline as capture_pipeline
@@ -377,7 +382,7 @@ def test_http_round_reaches_real_answer_and_judge_functions(bench, tmp_path, mon
             for r in module.read_jsonl(labels)
         ]
 
-    monkeypatch.setattr(runner, "run_judge", run_real_functions)
+    monkeypatch.setattr(runner_impl, "run_judge", run_real_functions)
     with httpx.Client(transport=httpx.MockTransport(handle)) as http:
         client = ServiceClient("http://test", client=http)
         samples, results = runner.run_round(

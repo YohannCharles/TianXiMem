@@ -98,7 +98,7 @@
 - [x] **HTTP 层**：`POST /add` / `POST /search` + Add/Search 编排（③-c）——契约形状钉在 pydantic 模型上
 - [x] `Embedder` 协议 + 两个实现；**架构保持 embedder-agnostic**（§7.4 / §2.3）
 - [x] **落盘的向量缓存**，键 = 渲染文本哈希（§7.2）
-- [x] **`common/config.py`：配置的唯一入口**（③-d）——`service/` 等**五个目录都不再读 `os.environ`**（静态测试钉住）；`rrf_k != 61` 与 `workers != 1` 都**拒绝启动**
+- [x] **`common/config/`：配置的唯一入口**（③-d）——`service/` 等**五个目录都不再读 `os.environ`**（静态测试钉住）；`rrf_k != 61` 与 `workers != 1` 都**拒绝启动**
 - [x] `Search` 路径：混合检索，**精确 ≤ `top_k`**（§2.2）
 - [x] Weighted RRF：**`k=61` 显式设**、`prefetch` 每路带 `using`、根级 `limit` 取请求 `top_k`（§7.3）
       [`../src/tianximem/retrieve/fusion.py`](../src/tianximem/retrieve/fusion.py) + [`../src/tianximem/store/qdrant_store.py`](../src/tianximem/store/qdrant_store.py)。

@@ -363,20 +363,22 @@ def run(args, manifest: dict, jobs) -> int:
                 raise ValueError("judge output does not cover fixed questions uniquely")
         except Exception as exc:  # noqa: BLE001 —— 判分失败（如 524）**不该杀掉整轮**
             qids = [q.qid for q in plan.sample.questions]
-            with failure_lock:
-                with (output / "judge-failures.jsonl").open("a", encoding="utf-8") as handle:
-                    handle.write(
-                        json.dumps(
-                            {
-                                "dataset": plan.sample.dataset,
-                                "user_id": plan.sample.user_id,
-                                "qids": qids,
-                                "error": f"{type(exc).__name__}: {exc}"[:400],
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
+            with (
+                failure_lock,
+                (output / "judge-failures.jsonl").open("a", encoding="utf-8") as handle,
+            ):
+                handle.write(
+                    json.dumps(
+                        {
+                            "dataset": plan.sample.dataset,
+                            "user_id": plan.sample.user_id,
+                            "qids": qids,
+                            "error": f"{type(exc).__name__}: {exc}"[:400],
+                        },
+                        ensure_ascii=False,
                     )
+                    + "\n"
+                )
             print(f"  ⚠ 判分失败，已记题号（{len(qids)} 题）→ 跳过、后面再补：{label}", flush=True)
             return f"{label} (JUDGE-FAILED)"
         write_json(

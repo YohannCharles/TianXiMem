@@ -103,7 +103,7 @@ class HybridParams:
     它是"进入 RRF 融合的候选池"大小，**三个不同的量，不要混用**。
     """
 
-    #: ⚠ 三个默认值**都引用 [`../common/config.py`](../common/config.py) 的单一来源**
+    #: ⚠ 三个默认值**都引用 [`../common/config/constants.py`](../common/config/constants.py) 的单一来源**
     #: ——本目录**不决定**这些值（见 `store/CLAUDE.md`），这里只是给这个 dataclass 一个兜底，
     #: 免得直接构造 `HybridParams()` 时又散出第二份字面量。
     #: **正常路径上它们由 [`../service/app.py`](../service/app.py) 的装配从配置注入。**

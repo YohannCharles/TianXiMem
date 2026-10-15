@@ -8,7 +8,7 @@
 render.py    ✅ 已实现——渲染的**唯一实现**（QA 对与事实片段）
 annotate.py  ✅ 已实现——正文里的相对时间**就地注解**（只改 `content`、不碰索引）
 amounts.py   ✅ 候选——交易事实的单笔数量 × 单价注解（只改 Search `content`）
-config.py    ✅ 已实现——**全包唯一**读环境变量的地方（③-d）
+config/      ✅ 已实现——**全包唯一**读环境变量的地方（③-d）；**一个包**，见下面 §3 的构成
 tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 ```
 
@@ -89,13 +89,31 @@ tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 
 ### 三条结构性质（③-d）
 
-`config.py` 现在是**全包唯一**读 `os.environ` 的地方。三条结构性质，各自有测试钉住：
+配置入口是**一个包**（2026-10-15 从单文件 `config.py` 拆的），各文件按"改变的理由"分开：
+
+```text
+config/__init__.py     公共面：重新导出（`__all__` 31 个名字）＋包级加载顺序说明
+config/constants.py    全部 `DEFAULT_*` / `ENV_*` / `RRF_K` / 取值域常量（**环境变量名的唯一声明处**）
+config/model.py        `ConfigError` ＋ 全部配置 dataclass（值与 `config-reference.md` 的点分键逐段对应）
+config/env.py          `.env` 语法解析与"真实环境变量 ＋ `.env`"的来源合成
+config/yaml_source.py  yaml 读取 / 深合并 / 类型强制 / 各段构造器（`_group` 的可接受键表在这里）
+config/validate.py     `validate` ＋ 逐段校验 ＋ `assert_single_process`
+config/loader.py       `load_config` —— **加载顺序的唯一实现**
+```
+
+拆分是**纯搬迁**：三个 profile 的 `load_config()` 输出逐字相同（改前/改后 diff 为空），
+公共面一个名字都没少。⇒ 下面三条性质的**单位从"那一个文件"变成"那整个包"**：
 
 | 性质 | 由谁保证 |
 | --- | --- |
-| **只有 `config.py` 访问 `os.environ` / `os.getenv`** | `tests/test_config.py::test_only_config_reads_the_environment`——**AST 扫描** `src/tianximem/**/*.py`，不是靠自觉 |
-| **只有 `config.py` 解析 yaml** | 同上的 `test_no_module_reads_config_files_directly` |
+| **只有配置包访问 `os.environ` / `os.getenv`** | `tests/test_config.py::test_only_config_reads_the_environment`——**AST 扫描** `src/tianximem/**/*.py`，不是靠自觉。⚠ 它按**包**豁免（`_config_files()`），且**算不出文件就响亮失败**——否则豁免集合会是空的、用例静默空过 |
+| **只有配置包解析 yaml** | 同上的 `test_no_module_reads_config_files_directly` |
 | **每个键只有一个家**（env 或 yaml，不重叠） | `test_thresholds_are_not_overridable_from_env` + `test_env_owned_keys_are_rejected_in_yaml` |
+
+> ⚠ **那条 AST 检查对别名盲**（2026-10-15 实测）：它只认 `os.environ` / `os.getenv`
+> 与 `from os import environ|getenv`——写 `import os as _o` 再 `_o.environ` 能绕过去。
+> 它挡的是**手滑直接读**，不是**蓄意绕过**；要堵这一条得把检查做成"任何名字绑定到 os 模块"。
+> （`yaml.safe_load` 那条同理，但那条是**文本**匹配，换个名字就查不到了。）
 
 **两层分工**（一处声明在 [`../../../configs/CLAUDE.md`](../../../configs/CLAUDE.md)）：
 

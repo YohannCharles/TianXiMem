@@ -36,14 +36,14 @@ __all__ = [
 ]
 
 #: ⚠ **`DEFAULT_PREFETCH_LIMIT` / `DEFAULT_WEIGHTS` 的初值住在
-#: [`../common/config.py`](../common/config.py)**（理由与 `DEFAULT_EXPANSION_SEED_LIMIT`
+#: [`../common/config/constants.py`](../common/config/constants.py)**（理由与 `DEFAULT_EXPANSION_SEED_LIMIT`
 #: 同一条：`retrieve/` 与 `store/` 都要用，而 `common/` 是最底层）。本模块**只 import**，
 #: 不再各写一份字面量。§7.3 的两条注意事项（`prefetch_limit` **不是**种子数/Top-K；
 #: 权重调整需 ablation 数据）也写在那里，**不在这里重复**——重复描述就是漂移的开始。
 
 #: **正确性常量，不是可调项**（D5）。
 #:
-#: ⚠ 与 `common/config.py` 的 `RRF_K` **各有一份**，这是**有意的**：那边是配置层的拒绝依据，
+#: ⚠ 与 `common/config/constants.py` 的 `RRF_K` **各有一份**，这是**有意的**：那边是配置层的拒绝依据，
 #: 这里是**策略层对直接调用方的防御**——不能只靠"配置层已经查过"。两处相等由
 #: `tests/test_config.py::test_rrf_k_is_the_same_constant_in_both_places` 钉住。
 RRF_K: Final[int] = 61

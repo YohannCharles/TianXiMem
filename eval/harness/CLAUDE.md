@@ -10,14 +10,36 @@ scheduling.py              独立用户的投喂/检索与判分双线程池；�
 plan_driver.py             AML 事件编译、HTTP 分派与逐事件检查点；历史 Search 落盘后才继续 Add
 batching.py                模拟 AML 切批（20 条消息 + 2,000 词的**空白分词近似**）
 add_shape.py               模拟 AML **正文形态**（`<标签>: …` 前缀 + `system` 折叠 + 单条 8,000 字符切分）——线上就是这么发的
-judge.py                   包住 pipeline 的裁判（`run_judge` 跑 `answer`→`evaluate` 两步）
+judge.py                   包住 pipeline 的裁判（`run_judge` 跑 `answer`→`evaluate` 两步）＋
+                           **再导出**下面两个模块的名字（facade，2026-10-15 拆的）
+judge_items.py             **裁判输入侧**：把一次检索结果渲染成喂给裁判的输入项，按数据集家族分派；
+                           并拥有"数据集 → pipeline"那张表（`pipeline_for` / `EXTRA_DATASETS`）
+                           与平台 token 前缀截断（§6.4 / V3）
+judge_results.py           **判分产物侧**：`JudgeResult` ＋ 逐家族标签回读（含续跑前的半行 JSON 清理）
+                           ⚠ 补丁要打**真实现所在的那个模块**：`judge.py` 只再导出名字，
+                           `monkeypatch.setattr(judge, "X", …)` 对搬走的实现**静默失效**
 beam_judge.py              BEAM 批量裁判失败后的逐 rubric 恢复：上游单条模板，要求每条显式有效分数
 model_context.py           显式本地模型上下文前缀适配：保留原 Search 输入，记录实际输入与截断量
-extra_pipeline.py          本地自写的 `official-extra` answer / evaluate（含 MuSiQue）
+extra_pipeline.py          本地自写的 `official-extra` answer / evaluate（含 MuSiQue）——**薄 façade**：
+                           CLI、按数据集分派（`render_answer_prompt` / `_judge_one` 与
+                           `_judge_*` 分支的编排）＋ **再导出**下面七个模块的名字（2026-10-15 拆的）
+                           ⚠ **模型调用的编排刻意留在 façade**（`cmd_*` / `_judge_*` / `_call_judge`）：
+                           消费方直接 monkeypatch `extra_pipeline._chat / _config / _call_judge /
+                           _judge_one`，搬进家族模块会让补丁**静默失效**（家族不许 import façade）
                            ⚠ 判分方式按数据集分岔：MQuAKE/CorporateBench/TempReason 是纯函数、
                            **MuSiQue 可答题默认规则判分**（`evaluate --musique-judge rule`，
                            快速并复现历史数字；显式 `llm` 才走模型裁判；拒答恒走精确匹配）、
                            MemTrapBench/Doc-PP/MedMemoryBench 走 LLM
+extra_base.py              `official-extra` 六个家族的共用底座：归一化（`normalize` / `_contains`）、
+                           判词 JSON 修复与布尔归一、模型调用工具与超时、通用 `ANSWER_PROMPT`、
+                           判分行形状 `_verdict`
+extra_mquake.py / extra_musique.py / extra_tempreason.py
+                           MQuAKE / MuSiQue / TempReason：答案 prompt ＋ 纯函数判分
+                           （MuSiQue 另有规则 / 模型两套裁判与它的解析器）
+extra_memtrapbench.py      MemTrapBench：官方逐字答案 prompt ＋ LLM 四维均分裁判（阈值我们定）
+extra_medmemorybench.py    MedMemoryBench：照上游 `metrics/` 的判分 ＋ 上游裁判模板 ＋
+                           临床多跳答案 prompt
+extra_docpp.py             Doc-PP：上游 `judge_evaluation.py` 两条判据的 prompt 与解析
 corpusqa_pipeline.py       HybridQA / FEVEROUS：Search-only 作答，固定上游函数判分与逐题指标
 personamem_pipeline.py     PersonaMem-v2 适配器——Search 片段替代原始历史，选项与 MCQ 判分复用归档
 scriptmem_pipeline.py      ScriptMem 适配器——**到不了裁判**（加载层与 pipeline 表里都没有它），保留作参考
@@ -137,8 +159,8 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 归档原版只读 `chat_history/messages`。本地选择题适配器把每题 `retrieved_context`
 （兼容旧 `speaker_1_memories`）转成一条 user 历史消息，再调用官方选项构造与 MCQ 判分。
 保留 Search 顺序；空检索不回填原始对话，缺字段直接失败。
-⚠ **平台 token 前缀截断在这条路径上还没接**（[`judge.py`](./judge.py) 的 `_build_personamem_items`
-直接 `render_memories`；其余适配器都截）——**待补**。
+⚠ **平台 token 前缀截断在这条路径上还没接**（[`judge_items.py`](./judge_items.py) 的
+`_build_personamem_items` 直接 `render_memories`；其余适配器都截）——**待补**。
 这属于本地答案输入口径的显式改动，不能认定 AML 线上也是同一输入方式。
 旧完整历史答案与成绩不能直接复用；适配器校验输入版本和指纹，重跑使用新 run-id。
 `--max-tokens` 控制实际答案输出预算；答案记录保存预算与 `finish_reason`，
@@ -168,8 +190,9 @@ FEVEROUS 的严格分包含完整证据组要求，采集重放仍按其原有 l
 
 ### MedMemoryBench native 临床多跳作答
 
-`extra_pipeline.py` 对输入 `category=multi_hop_clinical_deduction` 使用病史依据与
-推理格式，仍只将问题和 Search 文本放入提示词。格式路由不读 gold；没有该公开
+`extra_medmemorybench.py` 对输入 `category=multi_hop_clinical_deduction` 使用病史依据与
+推理格式，仍只将问题和 Search 文本放入提示词（分派仍在 `extra_pipeline.py` 的
+`render_answer_prompt` / `_is_mmb_clinical`）。格式路由不读 gold；没有该公开
 分类字段的采集请求保留原有入口。诊断、适用范围和原始就诊对照见
 [临床多跳报告](../reports/optimization-20261007.md)。
 
@@ -216,7 +239,7 @@ MemTrapBench 在严格 JSON 解析失败后，修复理由字符串中的未转�
 4. ⇒ **之后每次续跑都在同一个样本上确定性失败**——现象是"**卡在同一道题**"，
    而它**看起来仍像网络问题**（第一次确实是），于是排查方向整个跑偏。
 
-**处置（已落地，都在 [`judge.py`](./judge.py)）**：
+**处置（已落地：`_sanitize_jsonl` 在 [`judge_results.py`](./judge_results.py)，`_run` 在 [`judge.py`](./judge.py)）**：
 
 | 症状 | 修法 |
 | --- | --- |

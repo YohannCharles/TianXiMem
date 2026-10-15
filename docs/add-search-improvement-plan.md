@@ -211,7 +211,7 @@ Search 只返回原文或事实，完整范围需要原文中的全集声明、�
 | `store/qdrant_store.py` | 两类记录的派生索引、元数据过滤及按记录 ID 取回 |
 | `retrieve/fusion.py`、新的查询条件模块 | 候选预算与返回名额分离，实体／关系／时间条件及回退 |
 | `rank/` 中新的证据选择器 | 依据对象／事件／参与关系选择证据，再交给现有预算打包 |
-| `common/render.py`、`common/config.py` | 固定事实渲染及版本、参数唯一入口；API 响应保持原契约 |
+| `common/render.py`、`common/config/` | 固定事实渲染及版本、参数唯一入口；API 响应保持原契约 |
 
 这是一份按用户新约束提出的设计扩展；**实施结果与本文提案不逐条相同**——最终形态、
 未采用的取舍与偏离声明见 [共同取证整理](../eval/reports/retrieval-evidence-20261005.md)

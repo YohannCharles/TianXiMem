@@ -382,7 +382,7 @@ def test_http_respects_index_order_and_batches() -> None:
 
 
 def test_qwen3_embedding_model_default_is_not_hardcoded_away() -> None:
-    """直接构造时模型名有默认值；**同一个值也写在 `common/config.py` 里**。
+    """直接构造时模型名有默认值；**同一个值也写在 `common/config/model.py` 里**。
 
     两处的相等由 `tests/test_config.py::test_model_default_is_the_same_in_both_places` 钉住
     ——这份用例只确认这里**有**那个默认值（否则直接构造这个类的人会拿到空模型名）。

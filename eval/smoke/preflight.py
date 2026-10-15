@@ -82,7 +82,7 @@ EXIT_PRECONDITION_FAILED = 2
 
 _REPO = Path(__file__).resolve().parents[2]
 
-#: ⚠ 这两个名字的**单一声明**在 `src/tianximem/common/config.py` 的 `ENV_*` 表。
+#: ⚠ 这两个名字的**单一声明**在 `src/tianximem/common/config/constants.py` 的 `ENV_*` 表。
 #: 本文件不能 import 它（`eval/` 不 import `src/`），所以这里是一处**有意的重复**——
 #: 由 `tests/test_contract_preflight.py::test_env_names_match_the_single_declaration` 钉住相等。
 _ENV_QDRANT_URL = "TIANXIMEM_QDRANT_URL"
@@ -91,7 +91,7 @@ _ENV_EMBED_API_KEY = "AML_EMB_API_KEY"
 _ENV_CONFIG_DIR = "TIANXIMEM_CONFIG_DIR"
 _ENV_PROFILE = "TIANXIMEM_PROFILE"
 
-#: `TIANXIMEM_QDRANT_URL` 没设时的回落值（与 `config.py` 的内置默认同值）。
+#: `TIANXIMEM_QDRANT_URL` 没设时的回落值（与 `common/config/constants.py` 的内置默认同值）。
 _DEFAULT_QDRANT_URL = "http://localhost:6333"
 _ENV_SQLITE_PATH = "TIANXIMEM_SQLITE_PATH"
 _ENV_EMBED_CACHE_DIR = "TIANXIMEM_EMBED_CACHE_DIR"

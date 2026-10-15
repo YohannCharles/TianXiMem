@@ -109,7 +109,7 @@ COPY --chown=root:root eval/smoke/ /app/eval/smoke/
 #    于是 app 用户能写。目录不存在的话卷归 root，服务启动即失败（而且是写库时才炸）。
 RUN mkdir -p /data/embed_cache /data/capture && chown -R app:app /data
 
-# `TIANXIMEM_WORKERS=1`：§15 的第二道防线（第一道是 `common/config.py` 的 validate()）。
+# `TIANXIMEM_WORKERS=1`：§15 的第二道防线（第一道是 `common/config/validate.py` 的 validate()）。
 ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache \
     TIANXIMEM_SQLITE_PATH=/data/tianxi.db \
     TIANXIMEM_EMBED_CACHE_DIR=/data/embed_cache \

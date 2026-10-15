@@ -264,7 +264,7 @@ def test_walk_audit_overflow_returns_all_original_evidence_in_hybrid(store):
 
 
 def test_walk_audit_and_fact_selection_share_one_snapshot_and_execute_once(store, monkeypatch):
-    import tianximem.service.pipeline as module
+    import tianximem.service.search_pipeline as module
 
     apply_batch(
         store,

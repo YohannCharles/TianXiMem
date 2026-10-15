@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # ⚠ 这个 python 版本**还没有被任何步骤消费**：uv 按仓库根的 `.python-version`（3.12）
+        #    建 venv。真要接线（`uv sync --dev --python ${{ matrix.python }}`）之前先清掉这里：
+        #    `eval/harness/batching.py:88` 用了 PEP 695（`def batches[T](`），3.11 语法上跑不了
+        #    ——而 `requires-python` 写的是 ">=3.11,<3.14"（pyproject.toml）。
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Ruff
+        run: uv run python -m tianximem.dev lint
+      - name: Mypy
+        run: uv run python -m tianximem.dev typecheck
+      - name: Tests
+        run: uv run python -m tianximem.dev test
+      - name: Config contract
+        run: uv run python -m tianximem.dev config-check

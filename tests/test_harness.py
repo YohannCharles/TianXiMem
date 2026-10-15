@@ -713,7 +713,7 @@ def test_config_fingerprint_hash_is_order_insensitive(tmp_path):
 def test_config_fingerprint_hashes_the_config_snapshot(tmp_path):
     """③-d 之后**开关的家是 `configs/<profile>.yaml`**——指纹必须覆盖它。
 
-    harness 不解析 yaml（那会与 `common/config.py` 抢知识），只逐字节哈希；
+    harness 不解析 yaml（那会与 `common/config/` 抢知识），只逐字节哈希；
     **"改了配置但没人注意到"靠哈希就够发现了**。
     """
     (tmp_path / "default.yaml").write_text("retrieval:\n  prefetch_limit: 200\n", encoding="utf-8")
@@ -1188,16 +1188,19 @@ def test_injection_is_capped_at_the_platform_prefix(monkeypatch):
 
 def test_build_input_items_reports_truncation(monkeypatch, capsys):
     """截断要在跑批时**可见**（打印一行），否则"这一题的上下文少了一截"没人知道。"""
-    from eval.harness import judge
+    from eval.harness import judge_items
     from eval.harness.driver import SearchHit
 
-    monkeypatch.setattr(judge, "truncate_to_platform_prefix", lambda text: (text[:10], True))
+    # ⚠ 补丁必须打在**真实现所在的模块**上（2026-10-15 拆包）：`build_input_items` 现在住在
+    # `judge_items.py`，它按自己的模块全局查这个名字；`judge.py` 只是**再导出**——
+    # 打在那个 façade 上会**静默失效**（补丁没人读，用例照过，却什么都没测）。
+    monkeypatch.setattr(judge_items, "truncate_to_platform_prefix", lambda text: (text[:10], True))
     hit = SearchHit(id="a", content="Q: x\nA: y" * 100, created_at="", score=1.0)
     question = type("Q", (), {"qid": "q1", "question": "?", "gold": "g"})()
     sample = type(
         "S", (), {"questions": [question], "speaker_names": ("A", "B"), "dataset": "locomo-refined"}
     )()
-    judge.build_input_items(sample, {"q1": [hit]})
+    judge_items.build_input_items(sample, {"q1": [hit]})
     assert "被截到平台前缀" in capsys.readouterr().out
 
 

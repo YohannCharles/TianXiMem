@@ -277,7 +277,7 @@ def test_sqlite_failure_does_not_touch_qdrant(
     def _boom(*args, **kwargs):  # noqa: ANN002, ANN003
         raise RuntimeError("模拟 SQLite 失败")
 
-    monkeypatch.setattr("tianximem.service.pipeline.apply_batch", _boom)
+    monkeypatch.setattr("tianximem.service.add_pipeline.apply_batch", _boom)
 
     with pytest.raises(RuntimeError, match="模拟 SQLite"):
         pipeline.apply(_batch(_rid(1), "Q1", "A1"))

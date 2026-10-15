@@ -33,6 +33,8 @@
 | [decisions.md](./decisions.md) | 哪些决策被推翻过、为什么、影响哪些节（**逐条 `Dn` + 待决事项**） | 想改一个"已锁定"的决定之前 |
 | [submission.md](./submission.md) | Smoke/Full 还剩几次、版本冻结在哪、S 未知清了没有 | 每次发 Smoke / Full 之前 |
 | [benchmark-data.md](./benchmark-data.md) | 归档里哪些文件是真数据、schema 落差在哪、许可证什么情况 | 写 harness / 加载器时 |
+| [active-spec/development.md](./active-spec/development.md) | Linux/Windows 共用的开发命令与路径规则 | 新机器初始化、运行检查、准备数据时 |
+| [capture-evaluation-pipeline.md](./capture-evaluation-pipeline.md) | 官方采集如何按数据集归类、固定题目评测、输出两版对比表 | 准备采集重放与版本对比时 |
 | [fixed-selection-suite.md](./fixed-selection-suite.md) | Memory600 与官方抽样如何合成共享 ID 题单、复用现有原生评测 | 多人协作与固定题单比较时 |
 | [reference-implementations.md](./reference-implementations.md) | ReFind / InvMem 候选 / MemMachine 的源码来源、许可与固定 commit | 研读外部实现时 |
 | [memmachine-reference.md](./memmachine-reference.md) | MemMachine 参考源码的获取方式、研读路径与改进方向 | 研读记忆机制、选择下一项改进时 |

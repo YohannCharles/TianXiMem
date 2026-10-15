@@ -5,10 +5,14 @@
 ## 要写什么
 
 ```text
-app.py        FastAPI 实例 + 对象图装配（`--factory` 入口）、lifespan
+app.py        FastAPI 实例 + HTTP 注册（`--factory` 入口）、lifespan
+wiring.py     依赖对象图装配；把配置到实现的映射集中在一个入口
 routes.py     POST /add、POST /search、GET /health（薄路由，只做形状映射）
 schemas.py    请求与响应模型（pydantic）= §2.1 的字面翻译
-pipeline.py   Add / Search 的**编排**（"按什么顺序调"；Search 先试共同取证，不适用则回退原链）
+add_pipeline.py    Add 链的**编排**（`AddOutcome` / `AddPipeline`）——apply_batch → 取回本批行 → render+embed → Qdrant upsert
+search_pipeline.py Search 链的**编排**（`SearchPipeline` / `_SearchTrace` / `AgenticSearch`）——先试共同取证，不适用则回退原混合检索链
+pipeline.py   两条链共用的**薄 façade**：重新导出上面两个模块的名字，没有自己的逻辑（"为什么编排在本目录"写在它的模块 docstring）
+search_stages.py  共同事实快照、索引回填和证据选择 stage；不拥有 HTTP 或普通检索尾巴
 errors.py     异常 → 保持"可重试"的边界处理
 capture.py    请求**原文**采集（诊断旁路，默认关）—— **S6** 的唯一直接观察口
 ```
@@ -20,13 +24,13 @@ capture.py    请求**原文**采集（诊断旁路，默认关）—— **S6** 
 > ⚠ 它是本层**唯一**允许"吞掉自己内部错误"的地方（只留 WARNING），理由见那条纪律 4：
 > **诊断不该有能力把一次 Add 变成 500**。
 
-> **配置不在本目录**：由 [`../common/config.py`](../common/config.py) 统一提供，**注入** `build_services()`。
+> **配置不在本目录**：由 [`../common/config/`](../common/config/) 统一提供，**注入** `build_services()`。
 > **`service/` 自己不读 `os.environ`**——这一条有静态测试钉住
 > （`tests/test_config.py::test_only_config_reads_the_environment`）。
 >
-> ⇒ 本目录拿到的是一个 [`AppConfig`](../common/config.py) 对象；**它不知道那些值从哪来**。
+> ⇒ 本目录拿到的是一个 [`AppConfig`](../common/config/model.py) 对象；**它不知道那些值从哪来**。
 
-> **为什么有 `pipeline.py`**：本层"不做检索、不做配对、不碰存储"指的是**不重新实现**那些逻辑（全部往下调用）。而 Search 的链横跨 `facts/`、`retrieve/` 与 `rank/`、Add 的链横跨 `pairing/`、`facts/`、`store/`、`embed/`——**没有任何单个下层模块能拥有整条链**，所以"顺序"必须有人拥有，就在这里（路由仍然是薄的，`routes.py` 只有形状映射）。
+> **为什么编排在本目录**：本层"不做检索、不做配对、不碰存储"指的是**不重新实现**那些逻辑（全部往下调用）。而 Search 的链横跨 `facts/`、`retrieve/` 与 `rank/`、Add 的链横跨 `pairing/`、`facts/`、`store/`、`embed/`——**没有任何单个下层模块能拥有整条链**，所以"顺序"必须有人拥有，就在这里（路由仍然是薄的，`routes.py` 只有形状映射）。两条链各住一个文件：Add 链在 [`add_pipeline.py`](./add_pipeline.py)、Search 链在 [`search_pipeline.py`](./search_pipeline.py)；[`pipeline.py`](./pipeline.py) 是薄 façade，只重新导出它们的名字（`wiring.py` / `routes.py` / `__init__.py` 与多处文档照旧指着它）。
 
 ## 这一层只做两件事
 
@@ -89,8 +93,8 @@ Add 侧：`apply_batch` 在**同一个写事务**里逐行索引事实（开关�
 
 | 防线 | 在哪 | 拦住什么 |
 | --- | --- | --- |
-| **配置阶段** | `common/config.py` 的 `validate()` | `TIANXIMEM_WORKERS != 1` ⇒ `ConfigError` |
-| **进程阶段** | `common/config.py` 的 `assert_single_process()`，由 `create_app_from_env()` 调用 | **命令行**给的 `--workers 4`——配置层看不见它 |
+| **配置阶段** | `common/config/validate.py` 的 `validate()` | `TIANXIMEM_WORKERS != 1` ⇒ `ConfigError` |
+| **进程阶段** | `common/config/validate.py` 的 `assert_single_process()`，由 `create_app_from_env()` 调用 | **命令行**给的 `--workers 4`——配置层看不见它 |
 
 进程阶段的判据是 `multiprocessing.parent_process() is not None`：uvicorn 的 `--workers N`（N>1）会用
 `multiprocessing` 派生子进程来跑 app，而单进程启动时它是 `None`。

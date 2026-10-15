@@ -154,7 +154,7 @@ PLAN_RECOVERY_STATUSES: Final[tuple[str, ...]] = (
     "skipped_budget_exhausted",
 )
 
-#: 最终精排 Query 的两种构造方式。**与 React 同名同义**（取值域定义在 `config.py`）。
+#: 最终精排 Query 的两种构造方式。**与 React 同名同义**（取值域定义在 `common/config/constants.py`）。
 FINAL_QUERY_MODES: Final[tuple[str, ...]] = ("combined", "original")
 
 _DECOMPOSE_FILLER: Final[re.Pattern[str]] = re.compile(

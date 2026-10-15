@@ -1,10 +1,15 @@
-"""`common/config.py` —— 配置的唯一入口（§15 / §12.1 R1 对冲 3）。
+"""`common/config/`（包）—— 配置的唯一入口（§15 / §12.1 R1 对冲 3）。
 
 ## 这个文件里最重要的一条
 
 `test_only_config_reads_the_environment` —— 它**静态地**扫描 `src/tianximem/**/*.py`，
-断言除 `common/config.py` 之外**没有任何模块访问 `os.environ` / `os.getenv`**。
+断言**除配置入口那一整个包之外**没有任何模块访问 `os.environ` / `os.getenv`**。
 "唯一入口"是一个可以被写成断言的**结构性质**，而不是一条靠自觉的约定。
+
+⚠ 豁免的**单位是包**（`common/config/`），不是某一个文件：入口从 `config.py` 拆成
+`config/{constants,model,env,yaml_source,validate,loader,__init__}.py` 之后，
+那条性质一字不变，只是要豁免几个文件。⇒ 豁免集合由 `_config_files()` 现算，
+**算不出东西就响亮失败**（否则它会变成一个空集合，这几条用例全部静默空过）。
 
 ## 本文件全部用例都**不依赖真实环境变量**
 
@@ -71,7 +76,32 @@ def _load(config_dir: Path, **env: str) -> AppConfig:
 
 # ── 1. 唯一入口：**结构性质，不是约定** ────────────────────────────────
 
-_CONFIG_MODULE = _SRC / "common" / "config.py"
+#: 配置入口是**一个包**（2026-10-15 拆的：`config.py` → `config/`）。
+_CONFIG_PACKAGE = _SRC / "common" / "config"
+_CONFIG_FILES: frozenset[Path] = frozenset(_CONFIG_PACKAGE.rglob("*.py"))
+
+
+def _config_files() -> frozenset[Path]:
+    """配置入口的全部源文件。
+
+    ⚠ **包不在了就要响亮失败**：豁免集合若算成空的，下面两条扫描用例会把
+    配置包自己也算成"违规"（断言红），或者更糟——把豁免名单弄丢后**静默空过**。
+    这里宁可报一句人话。
+    """
+    assert _CONFIG_FILES, (
+        f"没找到 {_CONFIG_PACKAGE.relative_to(_REPO)} 下的任何 .py ——"
+        "配置入口从单文件变成包了吗？改了这个结构就要同步改本文件，"
+        "否则下面的豁免集合是空的、这几条用例会**静默空过**。"
+    )
+    return _CONFIG_FILES
+
+
+def _config_trees() -> list[ast.Module]:
+    """配置包内每个文件的语法树（AST 断言按**包**扫，不是按某一个文件）。"""
+    return [
+        ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for path in sorted(_config_files())
+    ]
 
 
 def _env_reads(tree: ast.Module) -> list[tuple[int, str]]:
@@ -93,39 +123,41 @@ def _env_reads(tree: ast.Module) -> list[tuple[int, str]]:
 
 
 def test_only_config_reads_the_environment() -> None:
-    """**除 `common/config.py` 外，全包不得访问环境变量。**
+    """**除配置入口那个包之外，全包不得访问环境变量。**
 
     这不是洁癖：读取点一多，"这次跑的是哪套值"就无法从一个地方回答，
     而 §13 的每一条对照实验都依赖那个回答。
     """
+    config_files = _config_files()
     offenders: list[str] = []
     for path in sorted(_SRC.rglob("*.py")):
-        if path == _CONFIG_MODULE:
+        if path in config_files:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for lineno, what in _env_reads(tree):
             offenders.append(f"{path.relative_to(_SRC)}:{lineno} 用了 {what}")
 
     assert offenders == [], (
-        "只有 common/config.py 能读环境变量（见 common/CLAUDE.md 与本文件顶部）：\n  "
+        "只有 common/config/ 这个包能读环境变量（见 common/CLAUDE.md 与本文件顶部）：\n  "
         + "\n  ".join(offenders)
     )
 
 
 def test_config_module_itself_reads_only_through_load_config() -> None:
-    """反向确认：`config.py` **确实**读了环境变量（否则上面那条是空过的）。"""
-    tree = ast.parse(_CONFIG_MODULE.read_text(encoding="utf-8"))
-    assert _env_reads(tree), "config.py 竟然没有访问 os.environ ——那它不是唯一入口而是一个空壳"
+    """反向确认：配置入口**确实**读了环境变量（否则上面那条是空过的）。"""
+    hits = [hit for tree in _config_trees() for hit in _env_reads(tree)]
+    assert hits, "配置包里竟然没有访问 os.environ ——那它不是唯一入口而是一个空壳"
 
 
 def test_no_module_reads_config_files_directly() -> None:
-    """除 `common/config.py` 外**没有**模块自己去读 `configs/*.yaml`。
+    """除配置入口那个包之外**没有**模块自己去读 `configs/*.yaml`。
 
     否则"配置从哪来"就有了第二条路径，与"唯一入口"是同一个问题。
     """
+    config_files = _config_files()
     offenders: list[str] = []
     for path in sorted(_SRC.rglob("*.py")):
-        if path == _CONFIG_MODULE:
+        if path in config_files:
             continue
         source = path.read_text(encoding="utf-8")
         if re.search(r"yaml\.safe_load|yaml\.load\b", source):
@@ -170,27 +202,29 @@ _NOT_A_CONFIG_KEY_SUFFIX = (".yaml", ".yml", ".md", ".py", ".json", ".sql", ".to
 
 
 def _code_yaml_keys() -> set[str]:
-    """AST 扫 `config.py` 的 `_group(..., where=..., allowed={...})`，还原它接受的**点分键**。
+    """AST 扫配置入口的 `_group(..., where=..., allowed={...})`，还原它接受的**点分键**。
 
     `where` 就是前缀——**这不是猜的，是那条调用约定本身**（`where="storage.sqlite"`
     配 `allowed={"busy_timeout_ms"}` ⇒ `storage.sqlite.busy_timeout_ms`）。
 
     只保留**叶子**：`storage.sqlite` 这类中间段不是键，是 `storage.sqlite.*` 的前缀。
+
+    ⚠ 扫的是**整个包**（拆包后那些 `_group(...)` 住在 `yaml_source.py`）。
     """
-    tree = ast.parse(_CONFIG_MODULE.read_text(encoding="utf-8"))
     keys: set[str] = set()
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_group"):
-            continue
-        where: str | None = None
-        allowed: set[str] | None = None
-        for kw in node.keywords:
-            if kw.arg == "where" and isinstance(kw.value, ast.Constant):
-                where = kw.value.value
-            elif kw.arg == "allowed" and isinstance(kw.value, ast.Set):
-                allowed = {e.value for e in kw.value.elts if isinstance(e, ast.Constant)}
-        if where and allowed:
-            keys |= {f"{where}.{name}" for name in allowed}
+    for tree in _config_trees():
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_group"):
+                continue
+            where: str | None = None
+            allowed: set[str] | None = None
+            for kw in node.keywords:
+                if kw.arg == "where" and isinstance(kw.value, ast.Constant):
+                    where = kw.value.value
+                elif kw.arg == "allowed" and isinstance(kw.value, ast.Set):
+                    allowed = {e.value for e in kw.value.elts if isinstance(e, ast.Constant)}
+            if where and allowed:
+                keys |= {f"{where}.{name}" for name in allowed}
     return {k for k in keys if not any(other != k and other.startswith(k + ".") for other in keys)}
 
 
@@ -268,7 +302,7 @@ def test_switch_table_only_claims_wired_keys_that_the_code_accepts() -> None:
     code = _code_yaml_keys()
     offenders = [f"{switch} 声称接了 {key}" for switch, key in wired if key not in code]
     assert offenders == [], (
-        "§2 的开关表标了 ✅、但 `common/config.py` 不接受这些键：\n  " + "\n  ".join(offenders)
+        "§2 的开关表标了 ✅、但 `common/config/` 包不接受这些键：\n  " + "\n  ".join(offenders)
     )
 
 
@@ -293,7 +327,7 @@ def test_default_profile_loads_the_repo_yaml(config_dir: Path) -> None:
     assert cfg.packaging.inject_abs_time is True
     # 2026-10-01 起默认为 0（**D31：扩窗 + 段合并未挣到自己的位置**）——同上，
     # 这是那个决定在本仓的**回归位**：谁把它改回非 0，这里立刻红。
-    # ⚠ 与 `common/config.py::DEFAULT_RADIUS` **必须相等**（两处不等就又分叉了）；
+    # ⚠ 与 `common/config/` 的 `DEFAULT_RADIUS` **必须相等**（两处不等就又分叉了）；
     # 代码常量那一侧由 `test_reranker.py` 的 `_MAX_RADIUS_UNDER_TEST` 注释说明为何解耦。
     assert cfg.neighbor.radius == 0
 
@@ -526,7 +560,7 @@ def test_illegal_rrf_k_is_rejected(config_dir: Path) -> None:
 
 
 def test_rrf_k_is_the_same_constant_in_both_places() -> None:
-    """`RRF_K` 在 `common/config.py` 与 `retrieve/fusion.py` 各有一份 ⇒ **必须相等**。
+    """`RRF_K` 在 `common/config/` 与 `retrieve/fusion.py` 各有一份 ⇒ **必须相等**。
 
     两份是**有意**的：配置层拒绝非法值（启动时），策略层拒绝非法参数（直接调用方）。
     但值本身只能有一个——这条用例就是那道保险。见 D5。

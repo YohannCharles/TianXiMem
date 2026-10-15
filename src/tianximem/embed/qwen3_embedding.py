@@ -15,7 +15,7 @@ Step 5 之后停止使用。⚠ 2026-10-13 起是 **4B**，不是 8B——开发
 维度来自真实返回，**不在此声明**——见 `base.py` 的说明。
 
 ⚠ **本模块不读环境变量**：`base_url` / `api_key` / `model` 都由装配点传进来
-（`common/config.py` 是全包唯一读环境变量的地方，③-d）。
+（`common/config/` 是全包唯一读环境变量的地方，③-d）。
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from tianximem.embed.base import OpenAICompatEmbedder
 
 __all__ = ["DEFAULT_MODEL", "Qwen3EmbeddingEmbedder"]
 
-#: 开发期模型名。⚠ 与 `common/config.py` 的 `ModelsConfig.embedder` 默认值是**同一个值**
+#: 开发期模型名。⚠ 与 `common/config/model.py` 的 `ModelsConfig.embedder` 默认值是**同一个值**
 #: （那边是配置的默认，这里是直接构造这个类时的默认）。两处相等由
 #: `tests/test_config.py::test_model_default_is_the_same_in_both_places` 钉住。
 #:

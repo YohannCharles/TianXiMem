@@ -1,7 +1,7 @@
 # configs/ — 运行时配置
 
 > **状态**：`default.yaml` 与 `local.yaml` **已建**，由
-> [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py) 加载。
+> [`../src/tianximem/common/config/`](../src/tianximem/common/config/) 加载。
 > **`runs/` 保留新实验入口说明**：旧分支快照已于 2026-10-10 清理；`v1.0` / `v1.1.1` 标签对比与补题已完成，结果见 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。
 > `submit.yaml` **已建**（2026-09-28）——**现在只有 `models.embedder` 一项**
 > （`text-embedding-v4`）；**由模型派生的量（token 预算实测量、全部标定阈值）待 Step 5 重标定后往这里补**。
@@ -40,7 +40,7 @@
 > 把上一套实验的 point **静默留给下一套**，V9）与 `rerank.enabled: false`（开发期不花那份墙钟——
 > 基线里是 `true`，那是提交口径）。**`submit.yaml` 现在只覆盖一项**：`models.embedder`。
 
-**两个 profile 之外的加载细节**（实现在 [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py)）：
+**两个 profile 之外的加载细节**（实现在 [`../src/tianximem/common/config/`](../src/tianximem/common/config/)）：
 
 | 变量 | 作用 |
 | --- | --- |
@@ -48,7 +48,7 @@
 | `TIANXIMEM_CONFIG_DIR` | 换一份配置**目录**（替代集合的 arm 快照就靠它，见下 `runs/`） |
 | `TIANXIMEM_ENV_FILE` | 换 `.env` 的位置（默认 cwd 下的 `.env`） |
 
-⚠ **`.env` 由 `common/config.py` 读取**。它**不是**一条独立来源，而是"这台机器的环境"的本地副本——**排在真实环境变量之下**，`export` 过的值压过它。
+⚠ **`.env` 由 `common/config/` 读取**。它**不是**一条独立来源，而是"这台机器的环境"的本地副本——**排在真实环境变量之下**，`export` 过的值压过它。
 
 ---
 

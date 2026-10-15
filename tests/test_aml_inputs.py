@@ -22,6 +22,11 @@ from eval.datasets.layout import local_path
 from eval.datasets.preprocess import Message, Question, Sample, Session
 from eval.datasets.registry import _sources, benchmark_dir
 from eval.experiments import run as runner
+
+#: run_round 与它调用的协作者住在 runner.py（2026-10-16 拆的）。
+#: ⚠ 补丁必须打在「调用点解析的那个模块」上：打在 runner（= run.py）上的是名字快照，
+#: 而真调用发生在 runner.py 里 ⇒ 补丁静默失效（表现是真去加载数据、真发请求，不是报错）。
+from eval.experiments import runner as runner_impl
 from eval.experiments.recipes import flags_for, recipe_for
 from eval.harness import SearchHit, ServiceClient, build_input_items
 from eval.harness import corpusqa_pipeline as pipeline
@@ -848,7 +853,7 @@ def test_runner_uses_ordered_plan_cached_hits_and_original_questions(
         seen.extend(items)
         return []
 
-    monkeypatch.setattr(runner, "run_judge", judge)
+    monkeypatch.setattr(runner_impl, "run_judge", judge)
     log: list[dict] = []
     client = _client(log)
     options = dict(

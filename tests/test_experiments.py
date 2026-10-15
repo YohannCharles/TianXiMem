@@ -19,6 +19,11 @@ import httpx
 import pytest
 from eval.datasets import Message, Question, Sample, Session
 from eval.experiments import run as runner
+
+#: run_round 与它调用的协作者住在 runner.py（2026-10-16 拆的）。
+#: ⚠ 补丁必须打在「调用点解析的那个模块」上：打在 runner（= run.py）上的是名字快照，
+#: 而真调用发生在 runner.py 里 ⇒ 补丁静默失效（表现是真去加载数据、真发请求，不是报错）。
+from eval.experiments import runner as runner_impl
 from eval.harness import ServiceClient
 
 # ── fixture ────────────────────────────────────────────────────────────────
@@ -153,7 +158,7 @@ def test_switches_must_be_a_json_object():
 def test_run_round_ingests_searches_and_judges(bench_dir, tmp_path, monkeypatch):
     """一轮的完整形状：**先 Add 后 Search**、每题一次 `top_k=100`、裁判落在 per-user 目录。"""
     recorder = _Recorder()
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
+    monkeypatch.setattr(runner_impl, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
 
     samples, results = runner.run_round(
         dataset="locomo-refined",
@@ -191,7 +196,7 @@ def test_run_round_parallel_judging_matches_serial(bench_dir, tmp_path, monkeypa
     所以 Add / Search 的请求顺序**必须与串行完全相同**。
     """
     samples = [_sample(f"conv-{i}") for i in (1, 2, 3)]
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: samples)
+    monkeypatch.setattr(runner_impl, "_load", lambda dataset, bench, limit, spread=False: samples)
 
     serial_recorder, parallel_recorder = _Recorder(), _Recorder()
     _, serial = runner.run_round(
@@ -232,17 +237,17 @@ def test_judging_rotates_endpoints_and_defaults_to_parallel(
     **不该改变任何判定**（上面那条用例守的就是那一半：并行 == 串行，逐题逐字）。
     """
     samples = [_sample(f"conv-{i}") for i in (1, 2, 3)]
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: samples)
-    monkeypatch.setattr(runner, "ENDPOINTS", (("http://e0/v1", "k0"), ("http://e1/v1", "k1")))
+    monkeypatch.setattr(runner_impl, "_load", lambda dataset, bench, limit, spread=False: samples)
+    monkeypatch.setattr(runner_impl, "ENDPOINTS", (("http://e0/v1", "k0"), ("http://e1/v1", "k1")))
 
     seen: list[tuple[str, int | None]] = []
-    real_run_judge = runner.run_judge
+    real_run_judge = runner_impl.run_judge
 
     def recording(pipeline, items, out_dir, *, dataset="locomo-refined", endpoint_index=None, **kw):
         seen.append((Path(out_dir).name, endpoint_index))
         return real_run_judge(pipeline, items, out_dir, dataset=dataset, **kw)
 
-    monkeypatch.setattr(runner, "run_judge", recording)
+    monkeypatch.setattr(runner_impl, "run_judge", recording)
     runner.run_round(
         dataset="locomo-refined",
         base_url="http://stub",
@@ -260,7 +265,7 @@ def test_judging_rotates_endpoints_and_defaults_to_parallel(
 def test_run_round_skips_ingest_when_asked(bench_dir, tmp_path, monkeypatch):
     """`--skip-ingest` 只掉 Add，**Search 一次都不能少**——少检索就是静默漏题。"""
     recorder = _Recorder()
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
+    monkeypatch.setattr(runner_impl, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
 
     runner.run_round(
         dataset="locomo-refined",
@@ -297,7 +302,7 @@ def test_max_questions_only_trims_the_questions_not_the_corpus(bench_dir, tmp_pa
     ⚠ 若连语料一起裁，检索就没有素材、分数全是假的——而它在报告里看起来只是"分低"。
     """
     recorder = _Recorder()
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
+    monkeypatch.setattr(runner_impl, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     sample = _sample()
 
     _, results = runner.run_round(
@@ -334,8 +339,8 @@ def test_main_returns_precondition_code_when_service_is_unreachable(
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
     monkeypatch.setattr(runner, "ensure_dataset", lambda *a, **kw: None)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
-    monkeypatch.setattr(runner, "ServiceClient", _exploding_client)
+    monkeypatch.setattr(runner_impl, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
+    monkeypatch.setattr(runner_impl, "ServiceClient", _exploding_client)
     _pretend_judge_is_configured(monkeypatch)
 
     code = runner.main(["--dataset", "locomo-refined", "--reports-dir", str(tmp_path / "reports")])
@@ -353,8 +358,8 @@ def test_main_writes_a_record_that_carries_the_fingerprints(bench_dir, tmp_path,
     recorder = _Recorder()
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
     monkeypatch.setattr(runner, "ensure_dataset", lambda *a, **kw: None)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
-    monkeypatch.setattr(runner, "ServiceClient", lambda *a, **kw: recorder.client())
+    monkeypatch.setattr(runner_impl, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
+    monkeypatch.setattr(runner_impl, "ServiceClient", lambda *a, **kw: recorder.client())
     _pretend_judge_is_configured(monkeypatch)
     reports = tmp_path / "reports"
 
@@ -399,18 +404,18 @@ def test_main_fails_before_running_when_the_judge_is_not_configured(
 ):
     """**裁判跑不起来时要在跑之前失败**（§15 的口径：别把"整轮白跑"伪装成"跑完没分"）。
 
-    裁判是 subprocess，只继承环境变量；而 `.env` 由 `common/config.py` 自己读。
+    裁判是 subprocess，只继承环境变量；而 `.env` 由 `common/config/` 自己读。
     ⇒ 少了 `--env-file` 时 Add/Search 会**全部正常跑完**，然后才在裁判那一步炸。
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
     monkeypatch.setattr(runner, "ensure_dataset", lambda *a, **kw: None)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
+    monkeypatch.setattr(runner_impl, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
     monkeypatch.setattr(runner, "judge_preconditions", lambda: ["AML_BASE_URL", "AML_MODEL"])
 
     def _never(*_a, **_kw):  # pragma: no cover —— 走到这里就说明检查没拦住
         raise AssertionError("前置条件没过就不该去连服务")
 
-    monkeypatch.setattr(runner, "ServiceClient", _never)
+    monkeypatch.setattr(runner_impl, "ServiceClient", _never)
 
     code = runner.main(["--dataset", "locomo-refined", "--reports-dir", str(tmp_path)])
 
@@ -495,14 +500,14 @@ def test_runner_flag_reaches_the_injection(bench_dir, tmp_path, monkeypatch):
     from eval.experiments import run as runner
 
     seen: dict = {}
-    real_build = runner.build_input_items
+    real_build = runner_impl.build_input_items
 
     def spy(sample, hits_by_qid, **kwargs):
         seen.update(kwargs)
         return real_build(sample, hits_by_qid, **kwargs)
 
-    monkeypatch.setattr(runner, "build_input_items", spy)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
+    monkeypatch.setattr(runner_impl, "build_input_items", spy)
+    monkeypatch.setattr(runner_impl, "_load", lambda dataset, bench, limit, spread=False: [_sample()])
 
     runner.run_round(
         dataset="locomo-refined",
@@ -1125,14 +1130,14 @@ def test_main_gives_a_hint_when_the_dataset_loads_to_nothing(
     """
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
     monkeypatch.setattr(runner, "ensure_dataset", lambda *a, **kw: None)
-    monkeypatch.setattr(runner, "_load", lambda dataset, bench, limit, spread=False: [])
+    monkeypatch.setattr(runner_impl, "_load", lambda dataset, bench, limit, spread=False: [])
     monkeypatch.setattr(runner, "judge_preconditions", lambda: [])
     monkeypatch.setattr(runner, "missing_pipeline", lambda dataset, bench: None)
 
     def _never(*_a, **_kw):  # pragma: no cover —— 走到这里就说明没拦住
         raise AssertionError("一个样本都没有就不该去连服务")
 
-    monkeypatch.setattr(runner, "ServiceClient", _never)
+    monkeypatch.setattr(runner_impl, "ServiceClient", _never)
 
     code = runner.main(["--dataset", "locomo-refined", "--reports-dir", str(tmp_path)])
 
@@ -1161,7 +1166,7 @@ def test_main_fails_before_running_when_the_judge_script_is_missing(
     def _never(*_a, **_kw):  # pragma: no cover —— 走到这里就说明检查没拦住
         raise AssertionError("裁判脚本都没有就不该去连服务（更不该投喂）")
 
-    monkeypatch.setattr(runner, "ServiceClient", _never)
+    monkeypatch.setattr(runner_impl, "ServiceClient", _never)
 
     code = runner.main(["--dataset", "locomo-refined", "--reports-dir", str(tmp_path)])
 

@@ -1,6 +1,6 @@
 # 基线配置 —— 所有 profile 的父级
 #
-# 加载顺序（见 src/tianximem/common/config.py）：
+# 加载顺序（见 src/tianximem/common/config/）：
 #
 #     本文件 ← configs/<profile>.yaml ← 环境变量
 #
@@ -193,7 +193,7 @@ rerank:
   #   只在 §14 里 `rerank.calls` 涨而 `rerank.degraded` 同步涨时看得出来。
   #   `make probe-reranker` 是那条便宜的判据（退出码 0 才算通）。
   # ⚠ 它**不是可调旋钮**（配置化 ≠ 可调）：值只有"对面那一端是哪种"这一个正确答案，
-  #   写别的会被 `common/config.py` 在启动阶段拒绝。
+  #   写别的会被 `common/config/` 在启动阶段拒绝。
   envelope: query
   # C —— 单次 rerank 请求的超时（秒）。
   # ⚠ 两条约束方向相反：**太紧 ⇒ 伪降级**（网关排队被报成"reranker 坏了"，V8 的单点风险），
@@ -224,7 +224,7 @@ router:
   #   就用 profile 覆盖或臂快照（`configs/runs/`，见 `configs/CLAUDE.md`）。
   # ⚠ 开启它需要一个**可用的对话端点**：`validate()` 在 `enabled = true` 而
   #   `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` 缺一时**拒绝启动**（理由见
-  #   `common/config.py` 的 `_validate_router`：缺端点的表现是"每一臂都降级"，
+  #   `common/config/validate.py` 的 `_validate_router`：缺端点的表现是"每一臂都降级"，
   #   而那会被读成"路由没有帮助"——归因完全错）。
   enabled: true
   # C —— 单次路由调用的超时（秒）。
@@ -278,7 +278,7 @@ agentic:
   #          （提示词、解析、停止判据**各自独立**，见 `src/tianximem/agent/plan*.py`）。
   #   `react`：原版 Chain-of-Query —— 每轮重新决定"充分了吗 / 下一跳问什么"。
   # ⚠ **它选的是执行器，不是"走不走这条路"**——路由仍归 `router.enabled` / `force`。
-  # ⚠ **代码内置缺省仍是 `react`**（`config.py` 的 `DEFAULT_AGENTIC_MODE`）：那是给
+  # ⚠ **代码内置缺省仍是 `react`**（`common/config/constants.py` 的 `DEFAULT_AGENTIC_MODE`）：那是给
   #   **不填这个键的旧配置**留的"逐字不变"出口。本文件是**提交口径**，所以在这里写死 `plan`
   #   —— 与 `retrieval.grounded_evidence` 同一种分工（内置缺省 false / 本文件 true）。
   mode: plan
@@ -323,7 +323,7 @@ agentic:
   #   ⛔ `react` 模式**不看它**（两条路的输出形状不一样，合成一个数会卡住其中一边）。
   plan_max_output_tokens: 768
 
-  # C —— 单次调用超时（秒）。⚠ 与路由器的 10s 不是一回事（见 config.py 的常量说明）。
+  # C —— 单次调用超时（秒）。⚠ 与路由器的 10s 不是一回事（见 common/config/constants.py 的常量说明）。
   timeout_seconds: 30.0
   # C —— 生成温度。**默认 0 是"这一步要可复现"的声明**（§6）。
   temperature: 0.0
