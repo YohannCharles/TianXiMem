@@ -958,6 +958,58 @@ def _read_beam_labels(answers_path: Path, labels_path: Path) -> list[JudgeResult
     return results
 
 
+def _recover_beam_labels(
+    pipeline: Path,
+    items: list[dict],
+    answers_path: Path,
+    labels_path: Path,
+    out_dir: Path,
+    endpoint_index: int | None,
+) -> None:
+    """`pipeline_beam.py evaluate` 失败后的**逐 rubric 恢复**（[`beam_judge`][eval.harness.beam_judge]）。
+
+    上游 batch 裁判一次要模型给**每一个 rubric 索引恰好一个分**；模型偶尔不合规就整批
+    `ValueError`。这里改用**逐 rubric 单条模板**重判（每条都要显式有效分），产出与
+    `evaluate` **相同的标签行**（`id` / `llm_judge_score` / `judge_response`），覆盖写
+    `labels_path` 后交给 `_read_beam_labels` 读。恢复目录可续跑（逐 rubric 落 `-completed.json`）。
+    """
+    from eval.harness import beam_judge
+
+    generated = {
+        str(row["id"]): str(row.get("generated_answer") or "")
+        for row in (
+            json.loads(line)
+            for line in answers_path.read_text(encoding="utf-8").split("\n")
+            if line.strip()
+        )
+    }
+    # ⚠ **每个 item 一个子目录**：`judge_independently` 的产物名是 `{rubric_index}-completed.json`，
+    #   多个 item 共用一个目录会**同名相撞** ⇒ `Saved rubric judgment has different input`。
+    recovery_root = out_dir / "beam-recovery"
+    labels_path.write_text(
+        "".join(
+            _jsonl_line(
+                beam_judge.judge_independently(
+                    pipeline,
+                    item,
+                    generated.get(str(item["id"]), ""),
+                    recovery_root / str(item["id"]).replace("/", "_").replace("\\", "_"),
+                    endpoint_index or 0,
+                )
+            )
+            for item in items
+        ),
+        encoding="utf-8",
+    )
+
+
+#: 判分子进程的**上限**（秒）。`run_judge` 的 `timeout=None` 视为取它（见 `run_judge` 的 docstring）。
+#: ⚠ **1200s（20 分钟）**：**不返回就记题号、跳过**（用户 2026-10-14 定，所有数据集统一）。
+#: 口径是「**一个用户的某一步**（`answer` 或 `evaluate`）**整体**超过 20 分钟」——
+#: ⛔ 不是"单题 20 分钟"（归档 pipeline 本来就按用户整批跑）。20 分钟 > 最慢的合法 clbench 子进程。
+DEFAULT_JUDGE_TIMEOUT: float = 1200.0
+
+
 def run_judge(
     pipeline: Path,
     items: list[dict],
@@ -974,8 +1026,10 @@ def run_judge(
     `mkdir(parents=True)`**（`clb_pipeline.py` 会）。文件不存在时它以 `"a"` 模式打开，
     所以目录缺了就是 `FileNotFoundError`。
 
-    ⚠ **超时默认 `None`**：Full run 要连续跑 0.5–2 天，一个"看着合理"的超时会把
-    **慢**伪装成**失败**（§15）。要设就设得比 `Full` 的时长还宽。
+    ⚠ **超时默认 `DEFAULT_JUDGE_TIMEOUT`（1200s = 20 分钟）**（2026-10-14 定）：之前是"`None` = 不超时"，
+    但实测一个**真挂住**的子进程会**永久阻塞**那个 worker（clbench 一条 0 字节挂了 57 分钟）。
+    ⇒ 现在 20 分钟不返回就走调用方的「记下题号、跳过」。口径是**一个用户的某一步整体**，
+    ⛔ 不是"单题"（归档 pipeline 按用户整批跑）。
 
     **两步之间的不对称**：`answer` 以**追加**模式打开并按 `id` 跳过已完成的题
     （所以中断后重跑是安全的）；`evaluate` 以 `"w"` **覆盖**打开。
@@ -1008,12 +1062,41 @@ def run_judge(
     #   · 其余：两个子命令都收
     answer_extra = [] if dataset == "clbench" else ["--max-tokens", str(max_tokens)]
     evaluate_extra = ["--max-tokens", str(max_tokens)] if dataset not in ("clbench", "beam") else []
+    # ⚠ `None` ⇒ 取上限（`DEFAULT_JUDGE_TIMEOUT`）：真挂住的子进程不能永久阻塞 worker。
+    timeout = timeout if timeout is not None else DEFAULT_JUDGE_TIMEOUT
     _run(
         pipeline,
         ["answer", "--input", str(input_path), "--output", str(answers_path), *answer_extra],
         timeout=timeout,
         endpoint_index=endpoint_index,
     )
+    if dataset == "beam":
+        # ⚠ 归档 `pipeline_beam.py evaluate` 要求"每个 rubric 索引**恰好一次**"；模型偶尔
+        #   不合规就整批 `ValueError`（2026-10-14 实测：第一个 beam 用户就撞上，整轮中止）。
+        #   逐 rubric 单条模板恢复（`beam_judge.py`，产出与 evaluate **相同的标签行**）
+        #   ⇒ 不因一条不合规丢掉整轮；恢复也失败才响亮抛出。
+        try:
+            _run(
+                pipeline,
+                [
+                    "evaluate",
+                    "--input",
+                    str(input_path),
+                    "--answers",
+                    str(answers_path),
+                    "--output",
+                    str(labels_path),
+                    *evaluate_extra,
+                ],
+                timeout=timeout,
+                endpoint_index=endpoint_index,
+            )
+        except RuntimeError:
+            _recover_beam_labels(
+                pipeline, items, answers_path, labels_path, out_dir, endpoint_index
+            )
+        return _read_beam_labels(answers_path, labels_path)
+
     _run(
         pipeline,
         [
@@ -1032,8 +1115,6 @@ def run_judge(
 
     if dataset == "clbench":
         return _read_clbench_labels(answers_path, labels_path)
-    if dataset == "beam":
-        return _read_beam_labels(answers_path, labels_path)
 
     generated = {
         row["id"]: row["generated_answer"]

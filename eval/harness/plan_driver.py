@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -13,6 +14,34 @@ from eval.datasets.aml.plan import AddEvent, InputPlan, SearchEvent, digest
 from .add_shape import split_prefixed_payload
 from .batching import batches
 from .driver import SearchHit, ServiceClient
+
+#: 判定「这一轮能不能续」时**真正要比**的东西：**wire 身份**（不是整份 fingerprint）。
+#:
+#: `plan.fingerprint()` 里的 `metadata` 含 `execution_policy_sha256`（`plan_driver.py` /
+#: `add_shape.py` / `batching.py` 三个文件的哈希）——那是个**代理**：改 `plan_driver.py` 的
+#: **非-wire** 逻辑（比如并发、改个日志）也会让它变，但它**并不改变 wire**。真正决定能不能续的是
+#: **user_id / wire_sha256 / evaluation_sha256 / top_k**。
+#: ⚠ `add_shape.py` / `batching.py` 若**真**改了 wire，会反映在 `wire_sha256`（以及 `user_id`）
+#: 上 ⇒ 比这几项**既够用、又不误伤**（2026-10-14 起）。
+_WIRE_KEYS: tuple[str, ...] = (
+    "input_contract",
+    "dataset",
+    "user_id",
+    "wire_sha256",
+    "evaluation_sha256",
+    "n_questions",
+    "top_k",
+)
+
+
+def wire_identity(fingerprint: dict) -> dict:
+    """从一份 `plan.fingerprint()`（或 `plans_fingerprint` 的 `plans[i]`）取出 **wire 身份**。"""
+    return {key: fingerprint.get(key) for key in _WIRE_KEYS}
+
+
+def _plans_wire(data_fingerprint: dict) -> list[dict]:
+    """`plans_fingerprint(...)` 的 `plans` 列表 → 各自的 wire 身份（用于计划级的续跑判断）。"""
+    return [wire_identity(plan) for plan in data_fingerprint.get("plans", [])]
 
 
 class PlanStateError(ValueError):
@@ -128,10 +157,42 @@ def freeze_run(out_dir: Path, plans: list[InputPlan], *, execution: dict) -> dic
     manifest = {"data_fingerprint": fingerprint, "execution": execution}
     path = out_dir / "input-manifest.json"
     if path.exists():
-        if json.loads(path.read_text(encoding="utf-8")) != manifest:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        # ⚠ **题单/数据/wire 身份变了 = 真不兼容**：比的是 **wire 身份**（`user_id` /
+        #   `wire_sha256` / `evaluation_sha256` / `top_k` …，见 `wire_identity`），**不是**整份
+        #   fingerprint——后者的 `metadata` 含 `execution_policy_sha256`（三个文件的哈希），那是个
+        #   **代理**：改 `plan_driver.py` 的**非-wire** 逻辑（如并发）也会变，却**不改变 wire**。
+        #   真改了 wire（`add_shape`/`batching`）会落在 `wire_sha256`/`user_id` 上 ⇒ 比较够用。
+        if _plans_wire(saved.get("data_fingerprint") or {}) != _plans_wire(
+            manifest["data_fingerprint"]
+        ):
             raise PlanStateError(
-                "AML run input/execution changed; use a new run-id and storage snapshot"
+                "AML run 题单/数据/wire 指纹 changed; use a new run-id and storage snapshot"
             )
+        # ⚠ **只有代码/配置漂移**（`judge.py`、`configs/*.yaml`、`service_revision` …）
+        #   ⇒ **不拒绝**：大声警告、把漂移记进 `execution-drift.jsonl`、**继续跑**。理由
+        #   （2026-10-14）：改判分/配置本不该逼人重跑十几小时；真正的不兼容由上面那条
+        #   `data_fingerprint` 与 `execute_plan` 的逐用户 checkpoint 指纹保证。
+        #   ⚠ 代价是**前几题用旧代码/旧配置、后几题用新的**——这条记录就是复核口径用的。
+        if saved != manifest:
+            drifted = sorted(
+                key
+                for key in set(saved) | set(manifest)
+                if key != "data_fingerprint" and saved.get(key) != manifest.get(key)
+            )
+            print(
+                f"  ⚠ 运行执行指纹漂移（代码/配置变了：{drifted}）；记入后继续、不重跑",
+                flush=True,
+            )
+            with (out_dir / "execution-drift.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {"drifted_keys": drifted, "prior_execution": saved.get("execution")},
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+            _write_atomic(path, manifest)
         for plan in plans:
             checkpoint = out_dir / plan.sample.user_id / "checkpoint.json"
             if not checkpoint.is_file():
@@ -159,7 +220,12 @@ def freeze_run(out_dir: Path, plans: list[InputPlan], *, execution: dict) -> dic
 
 
 def execute_plan(
-    plan: InputPlan, *, client: ServiceClient, out_dir: Path, top_k: int = 100
+    plan: InputPlan,
+    *,
+    client: ServiceClient,
+    out_dir: Path,
+    top_k: int = 100,
+    add_workers: int = 1,
 ) -> dict[str, list[SearchHit]]:
     """每个成功 Search 先落盘才允许执行后续 Add，保证历史检索可续跑。
 
@@ -178,8 +244,10 @@ def execute_plan(
     state = {"fingerprint": fingerprint, "next_event": 0, "hits": {}}
     if path.exists():
         state = json.loads(path.read_text(encoding="utf-8"))
-        if state.get("fingerprint") != fingerprint:
-            raise PlanStateError("AML checkpoint fingerprint changed; use a new run-id")
+        # ⚠ 与 `freeze_run` **同一条口径**：只比 **wire 身份**（不比含 policy 代理的整份
+        #   fingerprint）⇒ 改 `plan_driver.py` 的非-wire 逻辑（如并发）**不必重跑**。
+        if wire_identity(state.get("fingerprint") or {}) != wire_identity(fingerprint):
+            raise PlanStateError("AML checkpoint 的 wire 身份变了；use a new run-id")
     elif out_dir.exists() and any(out_dir.iterdir()):
         raise PlanStateError("AML user outputs are missing their checkpoint; use a fresh namespace")
     else:
@@ -193,10 +261,12 @@ def execute_plan(
             "AML checkpoint is missing historical Search snapshots; use a fresh namespace"
         )
     hits = {qid: [SearchHit(**h) for h in rows] for qid, rows in state["hits"].items()}
-    for index in range(cursor, len(plan.events)):
+    index = cursor
+    while index < len(plan.events):
         event = plan.events[index]
-        result = send_event(client, plan.sample.user_id, event, top_k=top_k)
         if isinstance(event, SearchEvent):
+            # Search：**一个一个来**、成功即落盘（历史检索可续跑的事实来源）。
+            result = send_event(client, plan.sample.user_id, event, top_k=top_k)
             hits[event.qid] = result
             state["hits"][event.qid] = [
                 {
@@ -207,6 +277,31 @@ def execute_plan(
                 }
                 for hit in result
             ]
-        state["next_event"] = index + 1
+            index += 1
+            state["next_event"] = index
+            _write_atomic(path, state)
+            continue
+        # Add 段：把「到下一个 Search 为止」的所有 Add **并发**发出去（≤ `add_workers`）。
+        # ⚠ 安全：每个 Add 有自己的 `request_id`，位置是**请求的纯函数**（D28）⇒ 并发不发号、
+        #   服务的写事务自己串行（`BEGIN IMMEDIATE`）。⚠ **Search 必须等 Add 全完**——这条
+        #   边界由「整段 Add 跑完才把游标推过它」保证；崩在中间 ⇒ 游标仍停在段首 ⇒ 重投整段
+        #   （同 `request_id`/payload ⇒ 幂等，服务按 `applied_batches` 去重）。
+        stop = index
+        while stop < len(plan.events) and isinstance(plan.events[stop], AddEvent):
+            stop += 1
+        batch = plan.events[index:stop]
+        if add_workers > 1 and len(batch) > 1:
+            with ThreadPoolExecutor(max_workers=add_workers) as pool:
+                list(
+                    pool.map(
+                        lambda e: send_event(client, plan.sample.user_id, e, top_k=top_k),
+                        batch,
+                    )
+                )
+        else:
+            for item in batch:
+                send_event(client, plan.sample.user_id, item, top_k=top_k)
+        index = stop
+        state["next_event"] = index
         _write_atomic(path, state)
     return hits
