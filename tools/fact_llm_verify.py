@@ -17,6 +17,7 @@ from typing import Any
 
 from fact_entity_smoke import _score_triples, load_cases
 from fact_llm_extract import _load_env_file, _relation_vocabulary
+
 from tianximem.facts.evidence import key, relation_key
 from tianximem.llm.base import LlmUnavailable
 from tianximem.llm.openai_chat import OpenAiCompatChat
@@ -166,9 +167,11 @@ def _parse_decisions(
         triple = (out_subject.strip(), out_relation.strip(), out_object.strip())
         accepted_row = False
         if decision in {"keep", "correct"}:
-            if relation_key(triple[1]) not in vocabulary:
-                decision = "drop"
-            elif triple[0].casefold() not in source_folded or triple[2].casefold() not in source_folded:
+            if (
+                relation_key(triple[1]) not in vocabulary
+                or triple[0].casefold() not in source_folded
+                or triple[2].casefold() not in source_folded
+            ):
                 decision = "drop"
             else:
                 accepted.append(triple)
@@ -293,10 +296,6 @@ def main(argv: list[str] | None = None) -> int:
                     verified, local_decisions = _parse_decisions(
                         raw, risky_candidates, case["text"], vocabulary
                     )
-                    verified_by_index = {
-                        local_index: item
-                        for local_index, item in enumerate(verified)
-                    }
                     # Keep every non-risky candidate unchanged, and replace the
                     # risky subset with only verifier-approved rows.
                     relations = [

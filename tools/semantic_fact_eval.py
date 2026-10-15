@@ -23,6 +23,7 @@ from typing import Any
 
 from fact_entity_smoke import load_cases
 from fact_llm_extract import _load_env_file
+
 from tianximem.facts.entities import EntityExtractor, load_spacy_extractor
 from tianximem.facts.evidence import key, relation_key
 from tianximem.facts.grammar import _model_fact_candidates
