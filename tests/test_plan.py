@@ -806,9 +806,10 @@ def test_an_unresolved_or_conflicting_step_stops_the_plan_without_guessing(
     assert [c["query"] for c in retriever.calls if c["query"] != "orig?"] == [
         "Where did the trip start?"
     ]
-    # ⚠ `unresolved` 会多一次**原题兜底**检索（§新）——那是恢复分支，不是"下一跳"；
-    #   `conflict` **不触发**恢复分支（本功能只针对 unresolved）。
-    assert len(retriever.calls) == (2 if status == "unresolved" else 1)
+    # ⚠ `unresolved` **与** `conflict` **都会**多一次**原题兜底**检索（2026-10-15 起两者
+    #   同类：模型明确说"走不通"）——那是恢复分支，**不是"下一跳"**（所以下面那条仍然只
+    #   看到第一步被检索）。
+    assert len(retriever.calls) == 2
     assert len(llm.calls) == 2  # 拆解 + 一次逐轮，没有第三次
     assert result.plan_history[0].status == status
     assert result.plan_history[0].answer is None
@@ -1262,40 +1263,122 @@ def test_a_normal_finish_never_touches_the_recovery_branch() -> None:
     assert result.stats.stop_reason == "plan_complete"
 
 
-@pytest.mark.parametrize(("answered_rounds", "expected"), [(0, 60), (1, 40), (2, 20)])
-def test_the_fallback_budget_is_eighty_minus_the_rounds_already_spent(
-    answered_rounds: int, expected: int
-) -> None:
-    """② 第 1/2/3 轮 `unresolved` ⇒ 原题兜底分别以 **60 / 40 / 20** 检索；每题**只一次**。"""
+@pytest.mark.parametrize("answered_rounds", [0, 1, 2, 3])
+def test_the_fallback_always_recalls_the_requests_top_k(answered_rounds: int) -> None:
+    """② 任一第 N 轮 `unresolved` ⇒ 原题兜底**一律按请求的 `top_k`** 召回；每题**只一次**。
+
+    ⚠ 2026-10-15 前这里是"`80 − 轮数 × per_round_top_k`"（⇒ 60/40/20/**0**）——
+    现在**与轮数解耦**：兜底和每一轮一样按请求的 `top_k` 召回（**含第 4 轮**）。
+    """
     llm = _unresolved_at(answered_rounds)
     retriever = _big_retriever()
     result = _agent(llm=llm, retriever=retriever).search(user_id="u", query="orig?", top_k=100)
 
     fallback = [c for c in retriever.calls if c["query"] == "orig?"]
     assert len(fallback) == 1, "⭐ 每题**最多一次**原题兜底"
-    assert fallback[0]["top_k"] == expected
-    # ⚠ `executed_rounds` **含刚刚返回 unresolved 的那一轮**（它的候选已经进池子）。
+    assert fallback[0]["top_k"] == 100, "⭐ 与轮数无关：永远按请求的 `top_k`"
+    # ⚠ `executed_rounds` **含刚刚返回 unresolved 的那一轮**（它的候选已经进池子）；
+    #    它仍然如实记下，只是**不再决定补多少**。
     assert result.recovery.executed_rounds == answered_rounds + 1
-    assert result.recovery.remaining_top_k == expected
+    assert result.recovery.target_top_k == 100
     assert result.recovery.status == "success"
     # ⭐ 兜底**不增加 LLM 调用**：拆解 1 次 ＋ 每轮 1 次。
     assert result.stats.llm_calls == 1 + answered_rounds + 1
-    assert result.recovery.recalled == expected
+    assert result.recovery.recalled == 100
 
 
-def test_the_fourth_unresolved_round_exhausts_the_budget_without_retrieving() -> None:
-    """③ 第 4 轮 `unresolved` ⇒ `remaining=0`、**不检索**，但精排仍用原题。"""
+def test_the_pool_is_topped_up_to_top_k_and_deduped() -> None:
+    """③ 补位**补到 `top_k` 就停**、按稳定 ID 去重、兜底候选排在分步候选**之后**。
+
+    `_big_retriever` 对任何 query 都返回 m0..m119 ⇒ 各轮各取前 20 全是 m0..m19，
+    池子里只有 20 条；兜底召回的 100 条（m0..m99）里 **m0..m19 与它重复**。
+    """
     retriever = _big_retriever()
-    result = _agent(llm=_unresolved_at(3), retriever=retriever).search(
+    result = _agent(llm=_unresolved_at(0), retriever=retriever).search(
         user_id="u", query="orig?", top_k=100
     )
+    ids = [c.memory_id for c in result.candidates]
+    assert len(ids) == 100, "⭐ 补到目标就停（不是把 100 条全塞进去）"
+    assert len(set(ids)) == len(ids), "⭐ 重复的 memory_id 只保留一份"
+    assert ids[:20] == [f"m{i}" for i in range(20)], "分步候选的名次保持在前"
+    assert ids[20:] == [f"m{i}" for i in range(20, 100)]
+    assert result.recovery.target_top_k == 100 and result.recovery.pool_before == 20
+    assert result.recovery.added_unique == 80, "100 条兜底里有 20 条已经在池中"
+
+
+def test_a_pool_that_already_reaches_the_target_skips_the_fallback() -> None:
+    """③′ 池子**已经达到**目标（`top_k` 比已有池子还小）⇒ **不检索**，记 `skipped_pool_full`。"""
+    retriever = _big_retriever()
+    result = _agent(llm=_unresolved_at(0), retriever=retriever).search(
+        user_id="u", query="orig?", top_k=20
+    )
     assert result.recovery.entered is True
-    assert result.recovery.status == "skipped_budget_exhausted"
-    assert result.recovery.remaining_top_k == 0
-    assert result.recovery.recalled == 0
-    assert "orig?" not in retriever.queries  # ⛔ 一次兜底检索都没发生
+    assert result.recovery.status == "skipped_pool_full"
+    assert result.recovery.target_top_k == 20 and result.recovery.recalled == 0
+    assert "orig?" not in retriever.queries, "⛔ 一次兜底检索都没发生"
     assert result.rerank_query == "orig?"  # ⭐ 精排词仍然是原题
     assert result.recovery.rerank_query_mode == "original"
+
+
+def test_the_fallback_does_not_pad_when_it_cannot_fill_the_target() -> None:
+    """③″ 兜底**给不够就不凑**：能补多少补多少，⛔ 不做第二次检索、不造假候选。"""
+    # 兜底只返回 30 条（m0..m29）⇒ 池子只能到 20 + 10 = 30，够不到 100。
+    retriever = FakeRetriever(default=_candidates(*[f"m{i}" for i in range(30)]))
+    result = _agent(llm=_unresolved_at(0), retriever=retriever).search(
+        user_id="u", query="orig?", top_k=100
+    )
+    assert result.recovery.status == "success"
+    assert result.recovery.recalled == 30
+    assert result.recovery.added_unique == 10  # m20..m29（前 20 条已在池中）
+    assert len(result.candidates) == 30, "⭐ 补不满就停在 30，⛔ 不凑到 100"
+    assert len([c for c in retriever.calls if c["query"] == "orig?"]) == 1, "⛔ 只补一次"
+
+
+def test_the_fallback_rerank_runs_even_when_the_per_round_switch_is_off() -> None:
+    """⭐ 兜底那一次精排**不受 `agentic.round_rerank_enabled` 管**（§13 的开关纯度）。
+
+    那个开关只管"每轮"。若它顺手把兜底也关掉，"每轮不精排"那一臂就同时在
+    **两个维度**上变了——而那正是那条消融要避免的。
+    """
+    reranker = FakeReranker()
+    retriever = _big_retriever()
+    # ⚠ 真源必须**认得住**这些候选：`_fetch` 拼不出文档就退化成 `degraded`
+    #   （与"端点挂了"看起来一样）⇒ 那样这条用例就测不到"精排真的跑了"。
+    store = FakeStore([FakePair(f"m{i}", f"q{i}", f"a{i}") for i in range(120)])
+    result = _agent(
+        llm=_unresolved_at(0),
+        retriever=retriever,
+        reranker=reranker,
+        store=store,
+        round_rerank_enabled=False,
+    ).search(user_id="u", query="orig?", top_k=100)
+
+    # ⛔ 每轮一次都没排（开关关着）⇒ `rerank_calls` 里只剩兜底那一次
+    assert result.stats.rerank_calls == 1, "开关关着 ⇒ 每轮 0 次，但**兜底那次照跑**"
+    assert len(reranker.calls) == 1, "⭐ 兜底精排发生了，而且只发生一次"
+    assert reranker.calls[0]["query"] == "orig?"
+    assert len(reranker.calls[0]["documents"]) == 100, "它评的是兜底召回的全部 100 条"
+    assert result.recovery.reranked == "called"
+
+
+def test_a_degraded_fallback_rerank_falls_back_to_rrf_order() -> None:
+    """⭐ 兜底精排端点挂了 ⇒ **退回 RRF 序**（记 `degraded`），⛔ 不抛、不影响答题路。"""
+    reranker = FakeReranker(raises=True)
+    retriever = _big_retriever()
+    store = FakeStore([FakePair(f"m{i}", f"q{i}", f"a{i}") for i in range(120)])
+    result = _agent(
+        llm=_unresolved_at(0),
+        retriever=retriever,
+        reranker=reranker,
+        store=store,
+        round_rerank_enabled=False,
+    ).search(user_id="u", query="orig?", top_k=100)
+
+    assert result.recovery.status == "success", "⛔ 精排失败不是整条路的失败"
+    assert result.recovery.reranked == "degraded"
+    assert len(reranker.calls) == 1, "端点**被真的调了**，只是它挂了"
+    # 退回原序 ⇒ 补进来的仍是 m20..m99（与"没精排"同一条序）
+    assert [c.memory_id for c in result.candidates][20:] == [f"m{i}" for i in range(20, 100)]
 
 
 def test_an_unresolved_last_step_is_never_recorded_as_plan_complete() -> None:
@@ -1312,7 +1395,7 @@ def test_an_unresolved_last_step_is_never_recorded_as_plan_complete() -> None:
 
     assert result.stats.stop_reason == "dependency_unresolved"
     assert result.recovery.executed_rounds == 2
-    assert result.recovery.remaining_top_k == 40  # 80 − 2×20
+    assert result.recovery.target_top_k == 100  # ⚠ 与轮数无关（2026-10-15 起）
     assert result.rerank_query == "orig?"
 
 
@@ -1332,19 +1415,15 @@ def test_a_failed_fallback_keeps_every_candidate_and_still_finishes() -> None:
     assert result.rerank_query == "orig?"
 
 
-def test_only_unresolved_triggers_the_recovery_branch() -> None:
-    """⛔ 拆解失败 / `conflict` / 逐轮 LLM 挂 **一律不触发**（各自保持原行为）。"""
+def test_tooling_failures_never_trigger_the_recovery_branch() -> None:
+    """⛔ 拆解失败（`plan_invalid`）/ 逐轮 LLM 挂 **不触发**——**工具坏了**不是"模型说走不通"。
+
+    ⚠ 与 `conflict` 的区别正是这条用例存在的理由：**`conflict` 会触发**（见下一条）。
+    """
     # 拆解失败（`plan_invalid`）
     invalid = _agent(llm=FakeLlm([_plan_reply([{"id": "s1", "query": "a", "depends_on": ["s9"]}])]))
     failed = invalid.search(user_id="u", query="orig?", top_k=100)
     assert failed.recovery.entered is False and failed.recovery.status == "not_triggered"
-    # `conflict`（不是 `unresolved`）
-    conflict = _agent(
-        llm=FakeLlm([_TWO_STEP, _step_reply(status="conflict", answer=None)]),
-        retriever=_big_retriever(),
-    ).search(user_id="u", query="orig?", top_k=100)
-    assert conflict.stats.stop_reason == "binding_conflict"
-    assert conflict.recovery.entered is False
     # 逐轮 LLM 挂
     dead = _agent(
         llm=FakeLlm([_TWO_STEP, LlmUnavailable("端点挂了")]), retriever=_big_retriever()
@@ -1353,20 +1432,45 @@ def test_only_unresolved_triggers_the_recovery_branch() -> None:
     assert dead.recovery.entered is False
 
 
+def test_a_binding_conflict_also_triggers_the_fallback() -> None:
+    """⭐ **`conflict` 与 `unresolved` 同类**：模型明确说"走不通" ⇒ **也补一次原题兜底**。
+
+    ⚠ 2026-10-15 之前**只有** `unresolved` 触发。放宽的理由：`conflict` 时选池里往往
+    只有前几轮攒下的一小撮，直接收口等于**把"模型已经发现有问题"当成"没事"**。
+    """
+    llm = FakeLlm(
+        [_TWO_STEP, _step_reply(answer="Lisbon"), _step_reply(status="conflict", answer=None)]
+    )
+    retriever = _big_retriever()
+    result = _agent(llm=llm, retriever=retriever).search(user_id="u", query="orig?", top_k=100)
+
+    assert result.stats.stop_reason == "binding_conflict"
+    # ⭐ 触发了：按**请求的 `top_k`** 补一次**原题**检索（每题只一次）
+    fallback = [c for c in retriever.calls if c["query"] == "orig?"]
+    assert len(fallback) == 1 and fallback[0]["top_k"] == 100
+    assert result.recovery.entered is True and result.recovery.status == "success"
+    assert result.recovery.target_top_k == 100
+    # ⭐ 最终精排**用原题**——与 `unresolved` 同一条：进了恢复分支就退回原题
+    assert result.rerank_query == "orig?"
+    assert result.recovery.rerank_query_mode == "original"
+    # 已经答出来的那一步**一条候选都不丢**
+    assert result.stats.steps_executed == 2
+
+
 def test_the_fallback_candidates_are_merged_by_stable_id_and_never_truncated() -> None:
-    """⑤⑥ 按稳定 ID 合并去重；兜底结果**不再被截成每轮 Top20**；不足 80 条也不补检索。"""
+    """⑤⑥ 按稳定 ID 合并去重；兜底结果**不再被截成每轮 Top20**；只补一次。"""
     retriever = _big_retriever()
     result = _agent(llm=_unresolved_at(0), retriever=retriever).search(
         user_id="u", query="orig?", top_k=100
     )
     ids = [c.memory_id for c in result.candidates]
-    # 分步那 20 条（m0..m19）与兜底那 60 条（m0..m59）重叠 20 条 ⇒ 并起来 60 条
-    assert len(ids) == 60
+    # 分步那 20 条（m0..m19）与兜底那 100 条（m0..m99）重叠 20 条 ⇒ 补到 100 为止
+    assert len(ids) == 100
     assert len(set(ids)) == len(ids), "⭐ 重复的 memory_id 只保留一份"
-    assert result.recovery.added_unique == 40
+    assert result.recovery.added_unique == 80
     assert len([c for c in retriever.calls if c["query"] == "orig?"]) == 1
-    # ⛔ 兜底候选**没有**被截成 20（截过的话并集就只有 20 条）
-    assert ids[20:] == [f"m{i}" for i in range(20, 60)]
+    # ⛔ 兜底候选**没有**被截成每轮那个 20（截过的话并集就只有 20 条）
+    assert ids[20:] == [f"m{i}" for i in range(20, 100)]
 
 
 def test_no_unbound_placeholder_is_ever_sent_to_the_retriever() -> None:

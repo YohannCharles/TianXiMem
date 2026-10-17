@@ -625,33 +625,33 @@ def test_a_recovery_question_gets_no_execution_record_in_its_answer_input() -> N
     assert [c["qid"] for c in _recovery_calls(calls)] == ["q2"]
 
 
-def test_the_budget_exhausted_case_also_skips_the_record() -> None:
+def test_the_pool_already_full_case_also_skips_the_record() -> None:
     """⚠ 判据是 `entered`，⛔ 不是 `status == "success"`：
 
-    "触发但预算耗尽"（没真检索）的题**同样**不带执行记录——中间步骤失败，
+    "触发但池子已经够了"（没真检索）的题**同样**不带执行记录——中间步骤失败，
     不代表原题答不出来（用户口径）。
     """
     from tools.coq_eval import _plan_record_texts, _recovery_calls
 
-    calls = [_plan_call("q1", entered=True, status="skipped_budget_exhausted")]
+    calls = [_plan_call("q1", entered=True, status="skipped_pool_full")]
     assert _plan_record_texts(calls) == {}
     assert len(_recovery_calls(calls)) == 1
 
 
 def test_the_plan_summary_separates_the_four_recovery_states() -> None:
-    """⭐ **"触发但预算耗尽"与"真的跑了兜底"在汇总里分得开**。"""
+    """⭐ **"触发但池子已经够了"与"真的跑了兜底"在汇总里分得开**。"""
     from tools.coq_eval import _plan_summary
 
     calls = [
         _plan_call("q1", entered=False),
         _plan_call("q2", entered=True, status="success"),
-        _plan_call("q3", entered=True, status="skipped_budget_exhausted"),
+        _plan_call("q3", entered=True, status="skipped_pool_full"),
     ]
     summary = _plan_summary(calls)
     assert summary["recovery_statuses"] == {
         "not_triggered": 1,
         "success": 1,
-        "skipped_budget_exhausted": 1,
+        "skipped_pool_full": 1,
     }
     assert summary["rerank_query_modes"] == {"joint": 1, "original": 2}
     assert summary["answer_input_without_record"] == 2
@@ -694,9 +694,11 @@ def test_the_recorder_really_writes_the_recovery_fields() -> None:
             entered=True,
             status="success",
             executed_rounds=1,
-            remaining_top_k=60,
-            recalled=60,
-            added_unique=40,
+            target_top_k=100,
+            pool_before=20,
+            recalled=100,
+            reranked="called",
+            added_unique=80,
             latency_ms=12.5,
             rerank_query_mode="original",
         ),
@@ -711,8 +713,10 @@ def test_the_recorder_really_writes_the_recovery_fields() -> None:
     record = recorder.calls[-1]
     assert record["recovery"]["entered"] is True
     assert record["recovery"]["status"] == "success"
-    assert record["recovery"]["remaining_top_k"] == 60
-    assert record["recovery"]["added_unique"] == 40
+    assert record["recovery"]["target_top_k"] == 100
+    assert record["recovery"]["pool_before"] == 20
+    assert record["recovery"]["reranked"] == "called"
+    assert record["recovery"]["added_unique"] == 80
     assert record["recovery"]["rerank_query_mode"] == "original"
     # ⭐ 进去了恢复分支 ⇒ 答案输入**不折**执行记录。
     assert record["answer_input_has_record"] is False
