@@ -93,7 +93,10 @@ MEMTRAP_DIMENSIONS = (
     "dimension_4_delivery_efficiency_and_optimality",
 )
 
-ANSWER_TIMEOUT = 180.0
+#: 答案 HTTP 调用的超时（秒）。⚠ 600s（原 180s，2026-10-15）：答案输出上限提到 8,192
+#: （平台 Answer 窗口口径）后，满额生成实测约 137s（TTFT≈12s + ≈65 tok/s），
+#: 180s 在并发下只剩 1.3× 余量 ⇒ 会把"截断"换成"超时失败"。**裁判那一路不用动**（回复短）。
+ANSWER_TIMEOUT = 600.0
 JUDGE_TIMEOUT = 180.0
 
 
@@ -744,24 +747,51 @@ def _config(which: str) -> tuple[str, str, str]:
     return api_config.ANSWER_API_BASE, api_config.ANSWER_API_KEY, api_config.ANSWER_MODEL
 
 
+_CHAT_RETRY_ATTEMPTS = 3
+_CHAT_RETRY_BACKOFF = 5.0  # 秒，与 judge._run 的退避一致
+
+
 def _chat(base: str, key: str, model: str, prompt: str, *, max_tokens: int, timeout: float) -> str:
+    """单条 LLM 调用，**瞬时网络/网关故障自动重试**。
+
+    ⚠ `judge._run` 已在**子进程级**重试 3 次（attempts=3），但实测 halumem 的单题
+    answer 步仍然因瞬时 SSL/网关 5xx 连续 3 次失败而被记题号跳过（21 个用户、48 题，
+    见 v1flow-20261015）。根因是 `_chat` 本身**零重试**——一次抖动就把整条子进程判死。
+    在这里加 HTTP 级重试更便宜（不重跑整步）、且只重试**可安全重发**的瞬时故障
+    （`temperature=0` 幂等）。**5xx / 超时 / 连接错误**重试，**4xx（含 401/429）不重试**。
+    """
     import httpx
 
     if not base:
         raise SystemExit("端点未配置（AML_BASE_URL）——本脚本不能离线跑模型调用")
-    response = httpx.post(
-        f"{base.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {key}"},
-        json={
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": max_tokens,
-        },
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
+    last_exc: Exception | None = None
+    for attempt in range(1, _CHAT_RETRY_ATTEMPTS + 1):
+        try:
+            response = httpx.post(
+                f"{base.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "max_tokens": max_tokens,
+                },
+                timeout=timeout,
+            )
+            # 5xx 重试；4xx（401/403/429/422 等）不重试——重发也不变
+            if response.status_code >= 500:
+                raise httpx.HTTPStatusError(
+                    f"HTTP {response.status_code}", request=response.request, response=response
+                )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+        except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as exc:
+            last_exc = exc
+            if attempt < _CHAT_RETRY_ATTEMPTS:
+                import time as _time
+                _time.sleep(_CHAT_RETRY_BACKOFF)
+    # 三次都失败——照旧抛出，让 judge._run 的子进程级重试兜底
+    raise last_exc
 
 
 #: 答案 prompt。**我们写的**（官方那 6 份的模板在 `dataset/.upstream/aml/pipeline_*.py`）。

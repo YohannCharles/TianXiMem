@@ -26,9 +26,9 @@
    │       c. 一次 LLM：**只回答本轮**（⛔ 不回步骤编号、不回下一查询）
    │       d. 程序校验：索引合法、引句逐字存在；**下一查询由程序按固定模板绑定**
    ├─→ ④ 停？（计划跑完 / 依赖未解 / 绑定冲突 / 输出非法 / 轮数用尽 / 模型或检索失败）
-   └─→ ⑤ ⭐ **`unresolved` 恢复分支**（只有它触发；**程序侧、一次性**）：
-          按剩余候选预算补一次**原题**检索（`80 − 已执行轮数 × per_round_top_k`），
-          与已有候选按稳定 ID 合并；最终精排**只用原题**
+   └─→ ⑤ ⭐ **恢复分支**（`unresolved` **或** `conflict` 触发；**程序侧、一次性**）：
+          按**请求的 `top_k`** 补一次**原题**检索并**精排一次**（挑哪几条进池），
+          与已有候选按名次去重合并、补到池子满为止（不够不凑）；最终精排**只用原题**
           ⇒ 各轮候选按稳定 ID 去重，交回调用方（最终精排与打包在编排层）
 ```
 
@@ -52,9 +52,10 @@
 6. **每轮只记当前步骤的回答**：v2 起提示词只要 `status` / `answer` / `evidence`
    三个字段 ⇒ "模型回了别的步骤"**结构性地不可能**（步骤编号由程序附加）；
    ⛔ 模型也**不再**产出下一查询，所以"自由改写被采用"这条路整条没有了。
-7. ⭐ **`unresolved` 之后的那一次原题检索也是程序的**（`_recover`）：模型**不知道**
-   它发生过、也没有第二个问题要答。候选池的补充**不属于任何一步**
-   ⇒ ⛔ 不计步骤、不加 LLM 调用、不截 Top-20、不额外精排。
+7. ⭐ **"走不通"之后的那一次原题检索也是程序的**（`_recover`；触发面
+   `unresolved` **或** `conflict`）：模型**不知道**它发生过、也没有第二个问题要答。
+   候选池的补充**不属于任何一步** ⇒ ⛔ 不计步骤、不加 LLM 调用、不截 Top-20。
+   ⚠ 它**自己精排一次**（挑哪几条进池）——那不是"第二次最终精排"，见 `_rerank_fallback`。
 """
 
 from __future__ import annotations
@@ -93,9 +94,9 @@ from tianximem.store.sqlite_store import QaPair, SqliteStore
 
 __all__ = [
     "FINAL_QUERY_MODES",
-    "PLAN_FALLBACK_QUOTA",
     "PLAN_MAX_STEPS",
     "PLAN_RECOVERY_STATUSES",
+    "PLAN_RECOVERY_TRIGGERS",
     "PLAN_STOP_REASONS",
     "PlanAgent",
     "PlanRecovery",
@@ -134,24 +135,48 @@ PLAN_STOP_REASONS: Final[tuple[str, ...]] = (
 #: 计划的步数上限（方案是 1～4）。⚠ **不是** `agentic.max_rounds`，见 `parse_plan` 的说明。
 PLAN_MAX_STEPS: Final[int] = 4
 
-#: ⭐ **`unresolved` 之后原题兜底检索的候选名额预算**（2026-10-13）。
+#: ⭐ **`unresolved` 之后原题兜底的池子口径**（2026-10-15 改）。
 #:
-#: 口径：`remaining_top_k = max(0, 这个数 − 已执行轮数 × per_round_top_k)`，
-#: 其中**已执行轮数含刚刚返回 `unresolved` 的那一轮**（那一轮的候选已经进了池子）。
-#: ⇒ `per_round_top_k=20` 时：第 1 轮 60 · 第 2 轮 40 · 第 3 轮 20 · 第 4 轮 **0（不检索）**。
+#: ⛔ **不再是"按轮数算的剩余名额"**——旧口径 `max(0, 80 − 已执行轮数 × per_round_top_k)`
+#: （⇒ 补 60/40/20/0，且**池子恒为 80**）**已删除**。
 #:
-#: ⚠ 它是**按轮数算的名额预算**，⛔ **不是**"还差多少条才凑满 80"
-#: （去重后的实际条数取决于重叠，拿它反推会让同一种输入给出不同的检索）。
-#: ⚠ 80 与 `per_round_top_k` 是**同一道预算题**的两半：改一个要连另一个一起想。
-PLAN_FALLBACK_QUOTA: Final[int] = 80
+#: 现在的口径就是**请求的 `top_k`**：兜底按 `top_k` 召回 → 精排一次 → 按名次去重补位，
+#: **补到池子达到 `top_k` 为止**；兜底给不够就**停在有什么算什么**（⛔ 绝不硬凑）。
+#:
+#: ⇒ 池子上限从"恒 80（= `max_rounds` × `per_round_top_k`）"变成 **≤ `top_k`**。
+#: ⚠ 这条把兜底与**每一轮**的召回口径**对齐**了（每一轮也是按请求的 `top_k` 召回），
+#: 且与 `per_round_top_k` **不再耦合**（改那个数不再牵动兜底）。
+#: 见 `_recover` 与 `docs/config-reference.md` §5。
 
-#: 恢复分支的四种状态。⚠ **"触发但预算耗尽"与"真的跑了兜底"靠它分开**——
-#: 只看 `entered` 会把"第 4 轮停下来"读成"兜底过"。
+#: 恢复分支的四种状态。⚠ **"触发但池子已经够了"与"真的跑了兜底"靠它分开**——
+#: 只看 `entered` 会把"没检索"读成"兜底过"。
 PLAN_RECOVERY_STATUSES: Final[tuple[str, ...]] = (
     "not_triggered",
     "success",
     "error",
-    "skipped_budget_exhausted",
+    "skipped_pool_full",
+)
+
+#: ⭐ **哪些停止原因会触发恢复分支**（2026-10-15 由"只有 `unresolved`"放宽）。
+#:
+#: 判据是**"模型明确报告了它没走通"**，⛔ 不是"哪一步失败了"：
+#:
+#: | 停止原因 | 谁报告的 | 触发？ |
+#: | --- | --- | --- |
+#: | `dependency_unresolved` | **模型**：这一步解不出来 | ✅ |
+#: | `binding_conflict` | **模型**：证据互相冲突 | ✅ |
+#: | `plan_invalid` / `llm_unavailable` / `llm_error` / `retrieval_error` | **程序或端点**：工具坏了 | ⛔ 不触发 |
+#: | `unbound_placeholder` / `invalid_output` / `max_rounds` / `plan_complete` | 程序（绑定 / 校验 / 预算 / 跑完） | ⛔ 不触发 |
+#:
+#: **为什么把 `conflict` 也收进来**：它与 `unresolved` 是**同一类事**——模型读到手上的证据后
+#: **明确说了"我走不通"**。那时候选池里往往只有前几轮攒下的一小撮，直接收口等于
+#: **把"模型已经发现有问题"当成"没事"**。补一次原题检索正对应"退回到老实按原题捞一遍"。
+#:
+#: ⛔ **工具性失败仍不触发**：`plan_invalid` / `llm_*` / `retrieval_error` 是**我们这边坏了**，
+#: 它们的处置是"保留已有候选、把原因原样交出去"（`fallback_reason` 只在一条都没攒到时才落）。
+#: 把它们也拉进来会让"哪一种失败走了哪条路"再也数不清——**那条理由没变。**
+PLAN_RECOVERY_TRIGGERS: Final[frozenset[str]] = frozenset(
+    {"dependency_unresolved", "binding_conflict"}
 )
 
 #: 最终精排 Query 的两种构造方式。**与 React 同名同义**（取值域定义在 `config.py`）。
@@ -209,16 +234,17 @@ class PlanStepRecord:
 
 @dataclass(frozen=True, slots=True)
 class PlanRecovery:
-    """⭐ `unresolved` 恢复分支的**程序侧决定与结果**（2026-10-13）。
-
-    ⚠ **"触发恢复但预算耗尽"与"真的跑了兜底"靠 `status` 分开**：
+    """⭐ **恢复分支**（2026-10-13；**2026-10-15 触发面放宽到 `conflict`**）——
+    依赖链"走不通"之后那条**程序侧、一次性**的候选池补充（`PlanRecovery`）。
 
     | `status` | `entered` | 检索了吗 | 什么时候 |
     | --- | --- | --- | --- |
-    | `not_triggered` | `False` | 否 | 计划正常跑完 / 停在别的原因上 |
-    | `skipped_budget_exhausted` | `True` | **否**（`remaining_top_k=0`） | 第 4 轮 `unresolved` |
+    | `not_triggered` | `False` | 否 | 计划正常跑完 / 停在**工具性失败**或程序性停止上 |
+    | `skipped_pool_full` | `True` | **否**（池子已 ≥ 目标） | 请求的 `top_k` 比已有池子还小时 |
     | `success` | `True` | 是 | 兜底检索返回了候选 |
     | `error` | `True` | 是（失败了） | 兜底检索抛异常 ⇒ **已有候选一条不动**，继续最终精排与答题 |
+
+    ⚠ 是否进入由 `PLAN_RECOVERY_TRIGGERS` 决定（`unresolved` **或** `conflict`）。
 
     ⛔ 它**不是** `fallback_reason`：那个词在本仓的含义是"整条路降级回混合检索、
     执行器的候选全丢"。这里**恰好相反**——候选一条都不丢，只是**补一批**。
@@ -227,15 +253,22 @@ class PlanRecovery:
     #: 是否进入恢复分支（= 触发条件成立）。
     entered: bool = False
     status: str = "not_triggered"
-    #: ⭐ **已执行轮数**（**含刚刚返回 `unresolved` 的那一轮**）——预算就是按它算的。
+    #: ⭐ **已执行轮数**（**含刚刚返回 `unresolved` 的那一轮**）——**只作诊断**：
+    #: 2026-10-15 起补位名额**不再按它算**（与轮数解耦，见 `_recover`）。
     executed_rounds: int = 0
-    #: 兜底检索要的名额（`max(0, 80 − 已执行轮数 × per_round_top_k)`）。0 ⇒ 不检索。
-    remaining_top_k: int = 0
+    #: 补位**目标**（= 请求的 `top_k`）：池子到此为止，⛔ **不够也不凑**。
+    target_top_k: int = 0
+    #: 兜底**动手前**池子里已有多少条（诊断用；`target − pool_before` 才是要补的名额）。
+    pool_before: int = 0
     #: 兜底**实际召回**条数（`success` 时才有意义）。
     recalled: int = 0
+    #: 兜底那一次精排的三分状态（`called` / `degraded` / `disabled`）。
+    #: ⚠ 它**不受 `agentic.round_rerank_enabled` 管**（那个开关只管"每轮"）——
+    #: 兜底精排是**另一个机制**：决定"`top_k` 条里哪几条有资格进池"，**常开**。
+    reranked: str = "disabled"
     #: 合并去重后**真正新增**的候选数（全都已在池子里时是 0）。
     added_unique: int = 0
-    #: 兜底那一次检索的耗时（**如实记录**：它是真实发生的用量）。
+    #: 兜底那一次检索 **＋ 精排** 的耗时（**如实记录**：它是真实发生的用量）。
     latency_ms: float = 0.0
     #: 最终精排用哪一句：`original`（恢复分支，只用最初的原题）／`joint`（其余，现状）。
     rerank_query_mode: str = "joint"
@@ -531,8 +564,8 @@ class PlanAgent:
                 step_llm_calls=0,
                 plan=None,
                 original=query,
-                # ⚠ 拆解就失败 ⇒ **不是** `unresolved` ⇒ 恢复分支**不触发**（`not_triggered`）：
-                #   本功能只针对 `unresolved`，其余情况保持原行为。
+                # ⚠ 拆解就失败 ⇒ **不在 `PLAN_RECOVERY_TRIGGERS` 里** ⇒ 恢复分支
+                #   **不触发**（`not_triggered`）。工具性失败一律保持原行为。
                 recovery=PlanRecovery(),
                 started=started,
             )
@@ -713,16 +746,24 @@ class PlanAgent:
             if stop_reason is not None:
                 break
 
-        # ── ⑤ `unresolved` 恢复分支（**程序侧、一次性**）──────────────────
+        # ── ⑤ 恢复分支（`unresolved` **或** `conflict`；**程序侧、一次性**）────────
         # ⚠ 它**不是**一条新的多跳路，是**对候选池的一次补充**：不计步骤、不加 LLM 调用、
-        #   不截 Top-20、不额外精排。⚠ 也**不走 `fallback_reason`**——那个词的含义是
-        #   "整条路降级回混合检索"，而这里**一条候选都不丢**。
+        #   不截 Top-20，按请求的 `top_k` 补到池子满为止（**不够不凑**）。
+        # ⚠ 它**自己精排一次**（挑选"哪几条有资格进池"）——那**不算**"第二次最终精排"：
+        #   最终精排仍然只有一次，在编排层的 `_rank_and_package`。
+        #   也**不走 `fallback_reason`**——那个词的含义是"整条路降级回混合检索"，
+        #   而这里**一条候选都不丢**。
         recovery = self._recover(
             state=state,
             user_id=user_id,
             original=query,
             stop_reason=stop_reason or "plan_complete",
+            top_k=top_k,
         )
+        # ⭐ 兜底那一次精排**也要计入 §14 的 `rerank_calls`**：`_recover` 改不了这个
+        #    局部变量，所以在调用点加回去（漏了会让"多跳一共排了几次"少算一次）。
+        if recovery.reranked == "called":
+            rerank_calls += 1
 
         return self._finish(
             state=state,
@@ -740,38 +781,54 @@ class PlanAgent:
             started=started,
         )
 
-    # ── `unresolved` 恢复分支 ────────────────────────────────────────────
+    # ── 恢复分支（`unresolved` / `conflict`）─────────────────────────────
     def _recover(
-        self, *, state: _State, user_id: str, original: str, stop_reason: str
+        self, *, state: _State, user_id: str, original: str, stop_reason: str, top_k: int
     ) -> PlanRecovery:
-        """`unresolved` 之后按剩余预算补一次**原题**检索。**从不抛异常。**
+        """**依赖链"走不通"之后**按**请求的 `top_k`** 补一次**原题**检索。**从不抛异常。**
 
-        ⭐ **它只做一件事**：把原题检索回来的候选**并进候选池**。
-        后续（那一次最终精排、打包、答题）走的还是原来那一条路——
-        ⛔ 本方法不碰名次、不做精排、不生成任何 Query。
+        ⭐ **它做两件事**：
+        1. 按 `top_k` 召回原题的候选，并**精排一次**（决定"哪几条有资格进池"）；
+        2. 按精排名次**去重补位**，把池子补到 `top_k` 为止。
 
-        ⚠ **触发面刻意很窄**：只有 `dependency_unresolved`。拆解失败 / `conflict` /
-        LLM 调用失败 / 检索失败**一律保持原行为**（它们各自有已声明的处置，
-        往这里加会让"哪一种失败走了哪条路"再也数不清）。
+        ⛔ **兜底给不够就停在有什么算什么**——绝不硬凑。
+        后续（那一次最终精排、打包、答题）走的还是原来那一条路。
+
+        ## 与"每轮"的关系（2026-10-15 改）
+
+        旧口径是 `max(0, 80 − 已执行轮数 × per_round_top_k)`（⇒ 补 60/40/20/0，且
+        **池子恒为 80**）。现在**与轮数解耦**：兜底和**每一轮**一样按**请求的 `top_k`** 召回。
+        ⇒ 池子上限从"恒 80"变成 **≤ `top_k`**。
+
+        ⚠ **那次精排不受 `agentic.round_rerank_enabled` 管**（那个开关只管"每轮"）——
+        见 `_rerank_fallback`。理由是 §13 的开关纯度：一个开关管两件事，
+        那一臂的消融就同时在两个维度上变了。
+
+        ⚠ **触发面**：只看 `stop_reason in PLAN_RECOVERY_TRIGGERS`
+        ——即 `dependency_unresolved` **或** `binding_conflict`，
+        **模型明确说"走不通"的那两种**。⛔ 工具性失败（`plan_invalid` / `llm_*` /
+        `retrieval_error`）与程序性停止（`unbound_placeholder` / `invalid_output` /
+        `max_rounds`）**一律保持原行为**。
         """
-        if stop_reason != "dependency_unresolved":
+        if stop_reason not in PLAN_RECOVERY_TRIGGERS:
             return PlanRecovery()
-        # ⚠ **已执行轮数含刚刚返回 `unresolved` 的那一轮**：它没答出来，
-        #   但它的候选**已经进池子**了（下面 `remaining` 按它扣）。
+        # ⚠ **已执行轮数仍如实记下**（诊断用），但它**不再决定补多少**。
         executed_rounds = len(state.executed)
-        remaining = max(0, PLAN_FALLBACK_QUOTA - executed_rounds * self._per_round_top_k)
-        if remaining <= 0:
-            # ⭐ "**触发恢复但预算耗尽**"——与"真的跑了兜底"分开记（见 `PlanRecovery`）。
-            #    ⛔ 这里**不补检索**：名额是"按轮数算的预算"，不是"还差多少条才凑满"。
+        target = top_k
+        pool_before = len(state.ordered_ids)
+        if pool_before >= target:
+            # ⭐ "**触发恢复但池子已经够了**"（请求的 `top_k` 比已有池子还小）
+            #    ——与"真的跑了兜底"分开记（见 `PlanRecovery`）。这里**不检索**。
             return PlanRecovery(
                 entered=True,
-                status="skipped_budget_exhausted",
+                status="skipped_pool_full",
                 executed_rounds=executed_rounds,
-                remaining_top_k=0,
+                target_top_k=target,
+                pool_before=pool_before,
             )
         started = monotonic()
         try:
-            extra = self._retriever.search(user_id=user_id, query=original, top_k=remaining)
+            extra = self._retriever.search(user_id=user_id, query=original, top_k=target)
         except Exception:  # noqa: BLE001 —— 与执行器其余各处同一条纪律
             # ⛔ 兜底失败**不是**整条路的失败：已有候选**一条不动**，
             #   继续走原来那一次最终精排与答题。**绝不**退化成"整条路降级"。
@@ -779,11 +836,17 @@ class PlanAgent:
                 entered=True,
                 status="error",
                 executed_rounds=executed_rounds,
-                remaining_top_k=remaining,
+                target_top_k=target,
+                pool_before=pool_before,
                 latency_ms=_ms(started),
             )
+        # ⚠ **补位前先精排**：否则补进去的是"RRF 序的前若干条"，而漏掉的可能是
+        #   精排会排到很前的那几条。这一步只决定"谁有资格进池"，不改已有顺序。
+        ranked, rerank_status = self._rerank_fallback(query=original, candidates=list(extra))
         added = 0
-        for candidate in extra:
+        for candidate in ranked:
+            if len(state.ordered_ids) >= target:
+                break  # ⛔ 到目标就停：**不为了凑满而多塞**
             # ⚠ 兜底候选**追加在分步候选之后**（保序去重：分步的名次保持在前）——
             #   最终精排本来就会整体重排，这里不动已有顺序。
             if candidate.memory_id not in state.ordered_ids:
@@ -793,8 +856,10 @@ class PlanAgent:
             entered=True,
             status="success",
             executed_rounds=executed_rounds,
-            remaining_top_k=remaining,
+            target_top_k=target,
+            pool_before=pool_before,
             recalled=len(extra),
+            reranked=rerank_status,
             added_unique=added,
             latency_ms=_ms(started),
         )
@@ -863,8 +928,44 @@ class PlanAgent:
         ⚠ 与 `CoqAgent._rerank_round` **同一条语义**（三分状态、降级回原顺序、不改候选集合）。
         两份实现是刻意的：React 那一份**不许被本次改动碰到**。要改这里的语义时，
         先去看那一边的 docstring——那里写全了"为什么降级必须被记下来"。
+
+        ⚠ **它受 `agentic.round_rerank_enabled` 管**（关掉它这一路整块不跑）。
+        ⛔ 与**兜底**那一次**不是同一个开关口径**——见 `_rerank_fallback`。
         """
-        if not self._round_rerank or self._reranker is None or not candidates:
+        return self._rerank_candidates(
+            query=query, candidates=candidates, respect_round_switch=True
+        )
+
+    def _rerank_fallback(
+        self, *, query: str, candidates: list[Candidate]
+    ) -> tuple[list[Candidate], str]:
+        """兜底那一次的**挑选**精排。**常开**——⛔ **不读** `agentic.round_rerank_enabled`。
+
+        与 `_rerank_round` 共用同一个主体（`_rerank_candidates`），**只差"要不要看那个
+        '每轮'开关"**。分开的理由（2026-10-15）：兜底精排是**另一个机制**
+        （从 `top_k` 条里挑哪几条进池），而 §13 要求"一个开关只影响它命名的那一件事"
+        ——让 `round_rerank_enabled` 顺手把它也关掉，"每轮不精排"那一臂就同时在
+        **两个维度**上变了，而那正是那条消融要避免的。
+
+        ⇒ 它只受 `reranker is None` 管：没配精排就退回 RRF 序，记 `disabled`。
+        """
+        return self._rerank_candidates(
+            query=query, candidates=candidates, respect_round_switch=False
+        )
+
+    def _rerank_candidates(
+        self, *, query: str, candidates: list[Candidate], respect_round_switch: bool
+    ) -> tuple[list[Candidate], str]:
+        """精排一份候选；返回 `(候选, 状态)`，状态取 `called` / `degraded` / `disabled`。
+
+        ⚠ **降级一律退回原顺序**（D12）：端点不可用不是"整条路失败"。
+        ⛔ **不改候选集合**——只重排名次（`Candidate` 的 docstring 那条契约）。
+        """
+        if (
+            (respect_round_switch and not self._round_rerank)
+            or self._reranker is None
+            or not candidates
+        ):
             return candidates, "disabled"
         pairs = self._fetch([candidate.memory_id for candidate in candidates])
         documents = [

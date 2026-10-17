@@ -319,7 +319,9 @@ def _has_a_broken_skeleton(question_id: str) -> bool:
     return any(len(hop_ids & broken) >= 2 for broken in _BROKEN_SKELETONS)
 
 
-def select_chain_question_ids(rows: list[dict], *, limit: int = 50) -> list[str]:
+def select_chain_question_ids(
+    rows: list[dict], *, limit: int = 50, min_shared: int = 2, base: Sequence[str] = ()
+) -> list[str]:
     """按**确定性规则**挑出链式依赖题（`eval/coq-musique.jsonl` 头部写的生成规则）：
 
     1. `answerable == True`；
@@ -328,11 +330,28 @@ def select_chain_question_ids(rows: list[dict], *, limit: int = 50) -> list[str]
     4. ⭐ **题面不泄中间实体**（见 `_does_not_leak_the_intermediate_entity`）；
     5. ⛔ **金标坏掉的题及其骨架**一律不要（见 `_has_a_broken_skeleton`）——
        形式判据看不见它们，只能声明；
-    6. 排序 `(-跳数, id)` 后**贪心**：新题与已选题的 hop 集合**共享 <2 个元素**才收
-       —— 共享 ≥2 跳 = 同一条骨架换了个入口，收进来就是重复出题。
+    6. 排序 `(-跳数, id)` 后**贪心**：新题与已选题的 hop 集合**共享 ≥`min_shared` 个元素**就跳过
+       —— 共享多跳 = 同一条骨架换了个入口，收进来就是重复出题。
+
+    ## `base`（2026-10-16 加）—— 扩充题单时把老题**钉在最前**
+
+    ⛔ **`limit=300, min_shared=3` 并不能保证"前 50 道还是原来那批"**：放宽阈值后，
+    原先被 `min_shared=2` 跳过的**早期候选**会被接受，于是前 50 名就换了人。
+    ⇒ 扩充题单必须显式把老题传进来，它的 hop 集合**先占位**，再往后贪心加。
+    这样"50 → 300"是**前缀不变**的扩充（老结果仍是新题单的子集，可比）。
+
+    ## `min_shared` —— 扩大题量时唯一能松的旋钮
+
+    | `min_shared` | dev 里能到 | 含义 |
+    | --- | --- | --- |
+    | `2`（缺省，最严） | **128 道** | 两道题**共享 2 跳就不共存** ⇒ 骨架零重叠 |
+    | `3` | **579 道** | 允许共享 2 跳（同骨架换入口）⇒ **部分子链是重复出题** |
+
+    ⚠ **放宽它的代价是"有效独立性 < 题数"**：共享 2 跳的两道题共用同一条子链、
+    分数**正相关** ⇒ n 的涨法不是线性的。报"扩到 300 道"时**必须一起报这个阈值**。
 
     ⚠ 规则写**在代码里**而不是只写在清单的注释里：清单是可被替换的产物，
-    而规则必须能重放（同一个 `limit` 永远给出同一批 id）。
+    而规则必须能重放（同一组 `(limit, min_shared, base)` 永远给出同一批 id）。
     """
     candidates: list[tuple[int, str, frozenset[str]]] = []
     for row in rows:
@@ -352,10 +371,13 @@ def select_chain_question_ids(rows: list[dict], *, limit: int = 50) -> list[str]
         )
     candidates.sort(key=lambda item: (-item[0], item[1]))
 
-    picked: list[str] = []
-    used: list[frozenset[str]] = []
+    # `base` 先占位：老题的骨架一进来，后面的贪心就会绕开它们。
+    picked: list[str] = list(base)
+    used: list[frozenset[str]] = [frozenset(q.split("__")[1].split("_")) for q in base]
     for _hops, question_id, hop_ids in candidates:
-        if any(len(hop_ids & seen) >= 2 for seen in used):
+        if question_id in picked:
+            continue
+        if any(len(hop_ids & seen) >= min_shared for seen in used):
             continue
         picked.append(question_id)
         used.append(hop_ids)
