@@ -147,7 +147,10 @@ def cmd_answer(args: argparse.Namespace) -> int:
         import httpx
 
         with output.open("a", encoding="utf-8") as handle:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            # ⚠ 600s（原 120s，2026-10-15）：答案输出上限提到 8,192（平台 Answer 窗口口径）后，
+            #    长答案的生成时间远超 120s——实测网关 TTFT≈12s + ≈65 tok/s ⇒ 满额约 137s。
+            #    不改这里的话，**截断会变成超时失败**（更糟：finish_reason 都没了）。
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 for index, item in enumerate(items):
                     ident = str(item.get("id", index))
                     if ident in done:

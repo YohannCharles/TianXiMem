@@ -39,6 +39,7 @@ from eval.harness.run_record import config_fingerprint
 
 def evaluation_fingerprint(args) -> dict:
     from eval.harness import api_config
+    from eval.harness.api_config import ENDPOINTS
 
     root = Path(__file__).resolve().parents[2]
     code = list((root / "eval/harness").glob("*.py"))
@@ -52,6 +53,7 @@ def evaluation_fingerprint(args) -> dict:
         "top_k": 100,
         "memory_date": args.memory_date,
         "workers": getattr(args, "workers", 1),
+        "endpoints": len(ENDPOINTS),
         "scheduling": (
             f"{getattr(args, 'workers', 1)}-way cross-user; each user ordered checkpoints"
             if getattr(args, "workers", 1) > 1
@@ -285,6 +287,7 @@ def compare(left: Path, right: Path, output: Path) -> dict:
 def run(args, manifest: dict, jobs) -> int:
     from eval.datasets.prepare import ensure_dataset
     from eval.harness import api_config
+    from eval.harness.api_config import ENDPOINTS
 
     required = {
         "AML_BASE_URL": api_config.ANSWER_API_BASE,
@@ -338,30 +341,42 @@ def run(args, manifest: dict, jobs) -> int:
     workers = max(1, getattr(args, "workers", 1))
     failure_lock = Lock()  # 多线程写 `judge-failures.jsonl` 的串行点
 
-    def _run_user(job) -> str:
+    def _run_user(job_index) -> str:
         """跑一个用户：Add/Search（`execute_plan`）→ answer/judge（`run_judge`）。
 
         ⚠ **用户内部严格串行**（有序检查点的事实来源）；并发只在**用户之间**（下面线程池）。
-        ⚠ **判分失败不中止整轮**（如网关 524）：记下**题号**、跳过；那题不写 `task-results.json`
-        = 留在"未完成"里，**下次续跑自动重做**。⛔ 一条网关错误绝不该拖死整轮。
+        ⚠ **任一步失败都不中止整轮**（Add/Search 的 5xx、判分的 524）：记下**题号**、跳过；
+        不写 `task-results.json` = 留在"未完成"里，**下次续跑自动重做**。
+        ⛔ 一条网关抖动绝不该拖死整轮——2026-10-15 就是只包了判分那一段，`execute_plan` 里
+        的一次 embedding `SSLError` 直接把整轮打死（exit 1）。
+        ⚠ **端点轮转**（D39）：`endpoint_index = job_index % len(ENDPOINTS)` ——
+        多个对话端点（memory2 / memory3）按 job 序号轮流，不挤一个。
         """
+        job = jobs[job_index]
+        endpoint_index = job_index % len(ENDPOINTS)
         plan, entries = job
         directory = output / plan.sample.user_id
         label = f"{plan.sample.dataset}/{plan.sample.user_id}"
         # ⚠ 已完成的用户直接跳过（续跑不重判）——`task-results.json` 就是"这个用户做完了"。
         if (directory / "task-results.json").is_file():
             return f"{label} (done)"
-        hits = execute_plan(plan, client=client, out_dir=directory, add_workers=workers)
-        items = build_input_items(plan.sample, hits, date_mode=args.memory_date)
-        pipeline = pipeline_for(args.data_root, plan.sample.dataset)
         try:
+            # ⚠ **Add/Search 也必须包在这层 try 里**（2026-10-15 事故）：此前只包了 `run_judge`，
+            #    于是 embedding 网关的一次 `SSLError`（服务侧转成 500）从 `execute_plan` 抛出，
+            #    `pool.map` 在迭代处原样上抛 ⇒ **整轮 exit 1**。
+            #    与"判分失败不中止整轮"同一个理由：网关抖动是**可重试**的——该用户的检查点
+            #    还在盘上，续跑会接着走 ⇒ 一条抖动绝不该浪费掉整轮。
+            hits = execute_plan(plan, client=client, out_dir=directory, add_workers=workers)
+            items = build_input_items(plan.sample, hits, date_mode=args.memory_date)
+            pipeline = pipeline_for(args.data_root, plan.sample.dataset)
             results = run_judge(
-                pipeline, items, directory, dataset=plan.sample.dataset, max_tokens=args.max_tokens
+                pipeline, items, directory, dataset=plan.sample.dataset, max_tokens=args.max_tokens,
+                timeout=getattr(args, "judge_timeout", None), endpoint_index=endpoint_index,
             )
             ids = {q.qid: row["id"] for q, row in zip(plan.sample.questions, entries, strict=True)}
             if {r.qid for r in results} != set(ids) or len(results) != len(ids):
                 raise ValueError("judge output does not cover fixed questions uniquely")
-        except Exception as exc:  # noqa: BLE001 —— 判分失败（如 524）**不该杀掉整轮**
+        except Exception as exc:  # noqa: BLE001 —— 单步失败（Add/Search 的 5xx、判分的 524）
             qids = [q.qid for q in plan.sample.questions]
             with failure_lock:
                 with (output / "judge-failures.jsonl").open("a", encoding="utf-8") as handle:
@@ -377,8 +392,12 @@ def run(args, manifest: dict, jobs) -> int:
                         )
                         + "\n"
                     )
-            print(f"  ⚠ 判分失败，已记题号（{len(qids)} 题）→ 跳过、后面再补：{label}", flush=True)
-            return f"{label} (JUDGE-FAILED)"
+            print(
+                f"  ⚠ 该用户失败（Add/Search 或判分），已记题号（{len(qids)} 题）"
+                f"→ 跳过、后面再补：{label}",
+                flush=True,
+            )
+            return f"{label} (FAILED)"
         write_json(
             directory / "task-results.json",
             [{"id": ids[r.qid], "result": asdict(r)} for r in results],
@@ -392,7 +411,7 @@ def run(args, manifest: dict, jobs) -> int:
                     f"[{index}/{len(jobs)}] {job[0].sample.dataset}: {len(job[1])} tasks",
                     flush=True,
                 )
-                _run_user(job)
+                _run_user(index - 1)
                 summary = summarize(output)["groups"]["overall"]
                 print(f"completed {summary['completed']}/{summary['expected']}", flush=True)
         else:
@@ -401,7 +420,7 @@ def run(args, manifest: dict, jobs) -> int:
             #   任一用户抛异常 ⇒ `pool.map` 在迭代处原样抛出（不吞），已完成用户留在检查点里。
             print(f"跨用户并发 {workers} 路（每个用户内部仍串行）", flush=True)
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                for done, name in enumerate(pool.map(_run_user, jobs), 1):
+                for done, name in enumerate(pool.map(_run_user, range(len(jobs))), 1):
                     summary = summarize(output)["groups"]["overall"]
                     print(
                         f"completed {summary['completed']}/{summary['expected']}  "
@@ -454,7 +473,16 @@ def main(argv=None) -> int:
             p.add_argument("--reports-dir", default="eval/reports")
             p.add_argument("--configs-dir", type=Path, default=Path("configs"))
             p.add_argument("--profile", default="local")
-            p.add_argument("--max-tokens", type=int, default=1024)
+            #: 答案步的输出上限——**镜像平台的 Answer 窗口**（1,024 → 8,192，2026-10-15）。
+            #: ⚠ 之前 1,024 把 personamem-v2 的 15/51 题截在半句（14 题判错）。
+            #: 改它 = 改答案 ⇒ **换 run-id**（部分 pipeline 会拒绝复用旧预算的答案）。
+            p.add_argument("--max-tokens", type=int, default=8192)
+            #: 单个用户「一步」（`answer` 或 `evaluate`）的子进程超时（秒）。缺省 `None`
+            #: ⇒ `judge.DEFAULT_JUDGE_TIMEOUT`（1200s）。⚠ 归档 pipeline **按用户整批跑**，
+            #: 所以一个用户的题越多、这一步就越长——2026-10-15 实测：corporatebench 那个
+            #: **26 题/用户**（输入 3.7MB/题、~120s/题）一次要 ~52 分钟，被 1200s 掐在半路。
+            #: 补跑这种大用户时显式调大，例如 `--judge-timeout 3600`。
+            p.add_argument("--judge-timeout", type=float, default=None)
             p.add_argument("--memory-date", choices=DATE_MODES, default="none")
             p.add_argument("--offline", action="store_true")
             p.add_argument("--annotate-mark", default="paren", choices=("paren",))

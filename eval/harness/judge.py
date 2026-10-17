@@ -696,6 +696,17 @@ PLATFORM_TOKEN_PREFIX: Final[int] = 117_760
 #: 能断言两处相等——**两侧各写各的字面量，分叉时不会报错**。
 PLATFORM_TOKENIZER: Final[str] = "o200k_base"
 
+#: 平台**答案阶段**留给答案模型的输出预算（§2.2 / §6.4）。128k 窗口的完整划分是
+#: **8,192 输出 + 2,048 安全余量 + 117,760 输入**——输入侧由 `PLATFORM_TOKEN_PREFIX`
+#: 镜像，输出侧由这一条镜像。harness 的答案步**必须给够**：少了答案会被截在半句，
+#: 而判分只看那段残缺的文本 ⇒ **整题记为错**（与 §6.4 的"排在后面的证据作废"同型）。
+#:
+#: ⚠ 2026-10-15 实测（`shared-fullchain-20261014c`）：上限还是 1,024 时，personamem-v2
+#: **15/51 题**的答案 `finish_reason=length`，其中 **14 题判错**（未截断那批准确率 58%）。
+#: ⛔ **别与 `EMBED_MAX_TOKENS`（8,192，那是 `text-embedding-v4` 的**输入**窗口）混**——
+#: 数字撞了，含义无关。
+PLATFORM_OUTPUT_TOKENS: Final[int] = 8_192
+
 
 def _encoder():
     import tiktoken  # 只在真要用时才 import（harness 的纯逻辑用例不必装它）
@@ -1016,7 +1027,10 @@ def run_judge(
     out_dir: Path,
     *,
     dataset: str = "locomo-refined",
-    max_tokens: int = 1024,
+    #: 答案步的输出上限——**镜像平台的 Answer 窗口**（`PLATFORM_OUTPUT_TOKENS`，§2.2 / §6.4）。
+    #: ⚠ 同一个值也传给 `evaluate`；裁判自己的回复很短，放大上限**不改变任何判分结果**，
+    #:    所以这里只需要回答一个问题："答案有没有被截断"。
+    max_tokens: int = PLATFORM_OUTPUT_TOKENS,
     timeout: float | None = None,
     endpoint_index: int | None = None,
 ) -> list[JudgeResult]:
