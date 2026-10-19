@@ -22,10 +22,13 @@
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 
-ANSWER_TIMEOUT = 180.0
+ANSWER_TIMEOUT = 600.0
 JUDGE_TIMEOUT = 180.0
+_CHAT_RETRY_ATTEMPTS = 3
+_CHAT_RETRY_BACKOFF = 5.0
 
 
 # ── 归一化：所有精确判分共用一份（改它等于改分，别在别处再写一个）───────────────
@@ -177,23 +180,33 @@ def _config(which: str) -> tuple[str, str, str]:
 
 
 def _chat(base: str, key: str, model: str, prompt: str, *, max_tokens: int, timeout: float) -> str:
+    """Retry transient transport and server errors; client errors fail immediately."""
     import httpx
 
     if not base:
         raise SystemExit("端点未配置（AML_BASE_URL）——本脚本不能离线跑模型调用")
-    response = httpx.post(
-        f"{base.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {key}"},
-        json={
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": max_tokens,
-        },
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
+    for attempt in range(_CHAT_RETRY_ATTEMPTS):
+        try:
+            response = httpx.post(
+                f"{base.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "max_tokens": max_tokens,
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500:
+                raise
+            if attempt + 1 == _CHAT_RETRY_ATTEMPTS:
+                raise
+            time.sleep(_CHAT_RETRY_BACKOFF)
+    raise AssertionError("chat retry attempts must be positive")
 
 
 #: 答案 prompt。**我们写的**（官方那 6 份的模板在 `dataset/.upstream/aml/pipeline_*.py`）。

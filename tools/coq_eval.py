@@ -150,8 +150,8 @@ def _plan_calls(calls: list[dict]) -> list[dict]:
 def _recovery_calls(calls: list[dict]) -> list[dict]:
     """⭐ 进了 `unresolved` 恢复分支的那些请求（见 `PlanRecovery`）。
 
-    ⚠ 判据是 `entered`——**"触发但预算耗尽"也算**：那种题的最终答题输入同样
-    **不**带执行记录（用户口径：中间步骤失败，不代表原题答不出来）。
+    ⚠ 判据是 `entered`——**"触发但池子已经够了（没检索）"也算**：那种题的最终答题输入
+    同样**不**带执行记录（用户口径：中间步骤失败，不代表原题答不出来）。
     """
     return [c for c in _plan_calls(calls) if (c.get("recovery") or {}).get("entered")]
 
@@ -170,7 +170,9 @@ def _plan_record_texts(calls: list[dict]) -> dict[str, str]:
     }
 
 
-def _require_plan_records(calls: list[dict], qids: set[str]) -> dict[str, str]:
+def _require_plan_records(
+    calls: list[dict], qids: set[str], *, default_routed: int = 0
+) -> dict[str, str]:
     """Plan 那一臂的执行记录：**每一道"该带记录"的题都要有**，缺一条就响亮失败。
 
     ⚠ **分母要把恢复分支的题排除**（2026-10-13 修）：那些题的答题输入按设计
@@ -178,18 +180,35 @@ def _require_plan_records(calls: list[dict], qids: set[str]) -> dict[str, str]:
     "恢复生效"就会被读成"记录丢了"。实测在 LoCoMo 那 25 题上就有 9 题进了恢复分支，
     于是这条守卫报了一条**假的** `16/25`，而真正该拦的（`--reuse-hits` 那种"一条记录
     都没有"）反而被淹没在噪声里。
+
+    ⚠ **还要把"被判 `DEFAULT` 的题"排除**（2026-10-16 修）：E2 的**路由器是开着的**，
+    判成 `DEFAULT` 的题**根本不会调执行器** ⇒ 按定义就没有 plan 记录。
+    ⛔ **这一条不能靠"跳过守卫"绕过**：执行记录是**前置进答案输入**的
+    （见调用点的 `build_input_items(..., execution_record=...)`），少了它判的就是
+    **另一种配置**，而分数看起来完全正常——那正是这条守卫要防的事。
+    ⇒ 判据是"缺的条数**不超过**被路由到 `DEFAULT` 的条数"（`default_routed`），
+    超过就说明**真的有记录丢了**，照旧响亮失败。
     """
     record_text = _plan_record_texts(calls)
     recovery_qids = {call["qid"] for call in _recovery_calls(calls) if call.get("qid")}
     expected = set(qids) - recovery_qids
-    if set(record_text) != expected:
-        missing = sorted(expected - set(record_text))
+    missing = sorted(expected - set(record_text))
+    if missing and len(missing) > default_routed:
         raise SystemExit(
             f"✗ Plan 那一臂只拿到 {len(record_text)}/{len(expected)} 题的执行记录"
-            f"（缺 {missing[:5]}）。\n"
-            "  ⚠ 恢复分支（`recovery.entered`）的题**不在分母里**，缺的不是它们。\n"
+            f"（缺 {missing[:5]}，共 {len(missing)} 条）。\n"
+            "  ⚠ 恢复分支（`recovery.entered`）与**被判 `DEFAULT`**（执行器不会跑）的题"
+            "都在分母之外，缺的不是它们。\n"
+            f"  ⚠ 本轮 `router.routes['DEFAULT']` = {default_routed}，"
+            "解释不了这个缺口。\n"
             "  原因通常是 `--reuse-hits`（没重跑 Search ⇒ 没有 plan_history）。\n"
             "  ⇒ 去掉 `--reuse-hits`，或用一个会真的跑 Search 的 `--out`。"
+        )
+    if missing:
+        # ⭐ 预期内的那一种：被路由到 DEFAULT 的题本就没有记录。
+        print(
+            f"    ⚠ {len(missing)} 题被路由器判为 DEFAULT（执行器本就不该跑）⇒ 没有执行记录，属预期",
+            flush=True,
         )
     return record_text
 
@@ -247,8 +266,8 @@ def _plan_summary(calls: list[dict]) -> dict:
         "stop_reasons": dict(stop_reasons),
         "dependencies_repaired": repaired,
         #: ⭐ 恢复分支（`unresolved`）的四态分布：`not_triggered` / `success` /
-        #: `error` / `skipped_budget_exhausted`。**"触发但预算耗尽"与"真的跑了兜底"
-        #: 就在这里分开**（前者 `skipped_budget_exhausted`、后者 `success`）。
+        #: `error` / `skipped_pool_full`。**"触发但池子已经够了"与"真的跑了兜底"
+        #: 就在这里分开**（前者 `skipped_pool_full`、后者 `success`）。
         "recovery_statuses": dict(recovery_statuses),
         "fallback_recalled": fallback_recalled,
         "fallback_added_unique": fallback_added,
@@ -658,8 +677,10 @@ class _RecordingAgent:
                 "entered": result.recovery.entered,
                 "status": result.recovery.status,
                 "executed_rounds": result.recovery.executed_rounds,
-                "remaining_top_k": result.recovery.remaining_top_k,
+                "target_top_k": result.recovery.target_top_k,
+                "pool_before": result.recovery.pool_before,
                 "recalled": result.recovery.recalled,
+                "reranked": result.recovery.reranked,
                 "added_unique": result.recovery.added_unique,
                 "latency_ms": result.recovery.latency_ms,
                 "rerank_query_mode": result.recovery.rerank_query_mode,
@@ -847,6 +868,13 @@ def main(argv: list[str] | None = None) -> int:
         help="复用本轮 <臂>-hits.json 的检索结果，**不重跑 Search**（答案/判分仍会重做）",
     )
     parser.add_argument(
+        "--judge-timeout",
+        type=float,
+        default=None,
+        help="覆盖判分的**单批**超时（秒）；不传用 `DEFAULT_JUDGE_TIMEOUT`（1200s）。"
+        "多跳/plan 臂每题上下文大 ⇒ 答案步很慢，默认 20 分钟可能不够",
+    )
+    parser.add_argument(
         "--max-rounds",
         type=int,
         default=None,
@@ -986,11 +1014,32 @@ def main(argv: list[str] | None = None) -> int:
                 hits = _reuse_hits(out_dir, arm_key) if args.reuse_hits else None
                 if hits is None:
                     hits = _search_all(samples, client, recorder)
+                elif recorder is not None:
+                    # ⚠ 复用 hits ⇒ Search 没跑 ⇒ `recorder.calls` 是空的，而 Plan 那一臂的
+                    #   答案输入**必须**带上执行记录（见 `_require_plan_records`）。
+                    #   记录本身没丢——上一轮已落在 `<臂>-rounds.json`，这里按写盘顺序读回来。
+                    rounds_path = out_dir / f"{arm_key}-rounds.json"
+                    if rounds_path.exists():
+                        recorder.calls = json.loads(rounds_path.read_text(encoding="utf-8"))
+                        print(
+                            f"    （--reuse-hits：从 {rounds_path.name} 载入 "
+                            f"{len(recorder.calls)} 条执行记录）",
+                            flush=True,
+                        )
                 # ⚠ **必须连正文一起存**（2026-10-12 修）：以前只存 `{id, created_at}`，
                 #   于是"答案步挂了想续跑"只能**重跑 Search**（17 分钟）——
                 #   因为答案步要用正文拼 `retrieved_context`，而从 SQLite 反推正文
                 #   是"看起来一样、其实不是同一份输入"（本项目最忌讳的那类）。
                 _write_hits(out_dir / f"{arm_key}-hits.json", hits)
+                metrics_snapshot = _snapshot(services)
+                if args.reuse_hits:
+                    # ⚠ 复用 hits ⇒ Search 没跑 ⇒ 实时快照全是 0。报告要的是**真跑过那一轮**
+                    #   的观测值：`router.routes.DEFAULT` 尤其——Plan 那一臂的守卫靠它把
+                    #   "被判 `DEFAULT`、执行器根本没跑"的题排除在缺口之外（见
+                    #   `_require_plan_records`）。缺了它，那 14 题会被读成"记录丢了"。
+                    prev_metrics = out_dir / f"{arm_key}-metrics.json"
+                    if prev_metrics.exists():
+                        metrics_snapshot = json.loads(prev_metrics.read_text(encoding="utf-8"))
                 entry: dict = {
                     "label": arm_label,
                     "switches": {
@@ -1009,7 +1058,7 @@ def main(argv: list[str] | None = None) -> int:
                         "agentic.max_rounds": max_rounds,
                     },
                     "coverage": _evidence_coverage(samples, hits, gold_evidence),
-                    "metrics": _snapshot(services),
+                    "metrics": metrics_snapshot,
                     # ⚠ 把**跑的时候是哪份 profile** 记下来：`local` 与 `default` 的差别
                     #   （精排开关）已经在这里被钉住了，但"其余差别是什么"要能追溯。
                     "profile": base.profile,
@@ -1040,8 +1089,14 @@ def main(argv: list[str] | None = None) -> int:
                     if mode == "plan":
                         # ⛔ **响亮失败**：Plan 那一臂的答案输入**必须**带上执行记录，
                         #   否则判的是"少一段上下文"的另一种配置，而分数看起来正常。
-                        #   ⚠ 分母排除恢复分支的题——见 `_require_plan_records`。
-                        execution_record = _require_plan_records(recorder.calls, set(hits))
+                        #   ⚠ 分母排除两类题——恢复分支的、与**被判 `DEFAULT`** 的
+                        #   （后者执行器根本不跑）。见 `_require_plan_records`。
+                        default_routed = (
+                            (entry["metrics"].get("router") or {}).get("routes", {}).get("DEFAULT", 0)
+                        )
+                        execution_record = _require_plan_records(
+                            recorder.calls, set(hits), default_routed=default_routed
+                        )
                         entry["plan"] = _plan_summary(recorder.calls)
                         print(
                             "    Plan 过程：" + json.dumps(entry["plan"], ensure_ascii=False),
@@ -1059,6 +1114,7 @@ def main(argv: list[str] | None = None) -> int:
                         items,
                         out_dir / arm_key,
                         dataset=DATASETS[dataset]["judge"],
+                        timeout=args.judge_timeout,
                     )
                     correct = sum(1 for r in results if r.is_correct)
                     entry["judged"] = len(results)

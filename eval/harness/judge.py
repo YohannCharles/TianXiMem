@@ -205,6 +205,7 @@ def _run(
 #: 口径是「**一个用户的某一步**（`answer` 或 `evaluate`）**整体**超过 20 分钟」——
 #: ⛔ 不是"单题 20 分钟"（归档 pipeline 本来就按用户整批跑）。20 分钟 > 最慢的合法 clbench 子进程。
 DEFAULT_JUDGE_TIMEOUT: float = 1200.0
+PLATFORM_OUTPUT_TOKENS: int = 8_192
 
 
 def run_judge(
@@ -213,7 +214,7 @@ def run_judge(
     out_dir: Path,
     *,
     dataset: str = "locomo-refined",
-    max_tokens: int = 8192,
+    max_tokens: int = PLATFORM_OUTPUT_TOKENS,
     timeout: float | None = None,
     endpoint_index: int | None = None,
 ) -> list[JudgeResult]:

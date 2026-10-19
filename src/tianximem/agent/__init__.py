@@ -46,9 +46,9 @@ from tianximem.agent.coq import (
 from tianximem.agent.coq_prompt import COQ_PROMPT, COQ_PROMPT_VERSION
 from tianximem.agent.parse import CoqDecision, InvalidCoqOutput, parse_coq_decision
 from tianximem.agent.plan import (
-    PLAN_FALLBACK_QUOTA,
     PLAN_MAX_STEPS,
     PLAN_RECOVERY_STATUSES,
+    PLAN_RECOVERY_TRIGGERS,
     PLAN_STOP_REASONS,
     PlanAgent,
     PlanRecovery,
@@ -81,9 +81,9 @@ __all__ = [
     "FINAL_QUERY_MODES",
     "PLAN_DECOMPOSE_PROMPT",
     "PLAN_DECOMPOSE_PROMPT_VERSION",
-    "PLAN_FALLBACK_QUOTA",
     "PLAN_MAX_STEPS",
     "PLAN_RECOVERY_STATUSES",
+    "PLAN_RECOVERY_TRIGGERS",
     "PLAN_STEP_KEYS",
     "PLAN_STEP_PROMPT",
     "PLAN_STEP_PROMPT_VERSION",

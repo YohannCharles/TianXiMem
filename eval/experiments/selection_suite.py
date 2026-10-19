@@ -32,7 +32,7 @@ from eval.harness import (
     run_judge,
     shape_batch,
 )
-from eval.harness.judge import DATE_MODES
+from eval.harness.judge import DATE_MODES, PLATFORM_OUTPUT_TOKENS
 from eval.harness.plan_driver import compile_plan, execute_plan, freeze_run
 from eval.harness.run_record import config_fingerprint
 
@@ -52,6 +52,7 @@ def evaluation_fingerprint(args) -> dict:
         "top_k": 100,
         "memory_date": args.memory_date,
         "workers": getattr(args, "workers", 1),
+        "endpoints": len(api_config.ENDPOINTS),
         "scheduling": (
             f"{getattr(args, 'workers', 1)}-way cross-user; each user ordered checkpoints"
             if getattr(args, "workers", 1) > 1
@@ -338,30 +339,37 @@ def run(args, manifest: dict, jobs) -> int:
     workers = max(1, getattr(args, "workers", 1))
     failure_lock = Lock()  # 多线程写 `judge-failures.jsonl` 的串行点
 
-    def _run_user(job) -> str:
+    def _run_user(job_index) -> str:
         """跑一个用户：Add/Search（`execute_plan`）→ answer/judge（`run_judge`）。
 
         ⚠ **用户内部严格串行**（有序检查点的事实来源）；并发只在**用户之间**（下面线程池）。
-        ⚠ **判分失败不中止整轮**（如网关 524）：记下**题号**、跳过；那题不写 `task-results.json`
+        ⚠ **Add/Search 或判分失败不中止整轮**：记下**题号**、跳过；那题不写 `task-results.json`
         = 留在"未完成"里，**下次续跑自动重做**。⛔ 一条网关错误绝不该拖死整轮。
         """
-        plan, entries = job
+        plan, entries = jobs[job_index]
+        endpoint_index = job_index % len(api_config.ENDPOINTS)
         directory = output / plan.sample.user_id
         label = f"{plan.sample.dataset}/{plan.sample.user_id}"
         # ⚠ 已完成的用户直接跳过（续跑不重判）——`task-results.json` 就是"这个用户做完了"。
         if (directory / "task-results.json").is_file():
             return f"{label} (done)"
-        hits = execute_plan(plan, client=client, out_dir=directory, add_workers=workers)
-        items = build_input_items(plan.sample, hits, date_mode=args.memory_date)
-        pipeline = pipeline_for(args.data_root, plan.sample.dataset)
         try:
+            hits = execute_plan(plan, client=client, out_dir=directory, add_workers=workers)
+            items = build_input_items(plan.sample, hits, date_mode=args.memory_date)
+            pipeline = pipeline_for(args.data_root, plan.sample.dataset)
             results = run_judge(
-                pipeline, items, directory, dataset=plan.sample.dataset, max_tokens=args.max_tokens
+                pipeline,
+                items,
+                directory,
+                dataset=plan.sample.dataset,
+                max_tokens=args.max_tokens,
+                timeout=getattr(args, "judge_timeout", None),
+                endpoint_index=endpoint_index,
             )
             ids = {q.qid: row["id"] for q, row in zip(plan.sample.questions, entries, strict=True)}
             if {r.qid for r in results} != set(ids) or len(results) != len(ids):
                 raise ValueError("judge output does not cover fixed questions uniquely")
-        except Exception as exc:  # noqa: BLE001 —— 判分失败（如 524）**不该杀掉整轮**
+        except Exception as exc:  # noqa: BLE001 —— 单用户失败保留检查点，续跑时重做
             qids = [q.qid for q in plan.sample.questions]
             with (
                 failure_lock,
@@ -379,8 +387,8 @@ def run(args, manifest: dict, jobs) -> int:
                     )
                     + "\n"
                 )
-            print(f"  ⚠ 判分失败，已记题号（{len(qids)} 题）→ 跳过、后面再补：{label}", flush=True)
-            return f"{label} (JUDGE-FAILED)"
+            print(f"  ⚠ 用户失败，已记题号（{len(qids)} 题）→ 跳过、后面再补：{label}", flush=True)
+            return f"{label} (FAILED)"
         write_json(
             directory / "task-results.json",
             [{"id": ids[r.qid], "result": asdict(r)} for r in results],
@@ -394,7 +402,7 @@ def run(args, manifest: dict, jobs) -> int:
                     f"[{index}/{len(jobs)}] {job[0].sample.dataset}: {len(job[1])} tasks",
                     flush=True,
                 )
-                _run_user(job)
+                _run_user(index - 1)
                 summary = summarize(output)["groups"]["overall"]
                 print(f"completed {summary['completed']}/{summary['expected']}", flush=True)
         else:
@@ -403,7 +411,7 @@ def run(args, manifest: dict, jobs) -> int:
             #   任一用户抛异常 ⇒ `pool.map` 在迭代处原样抛出（不吞），已完成用户留在检查点里。
             print(f"跨用户并发 {workers} 路（每个用户内部仍串行）", flush=True)
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                for done, name in enumerate(pool.map(_run_user, jobs), 1):
+                for done, name in enumerate(pool.map(_run_user, range(len(jobs))), 1):
                     summary = summarize(output)["groups"]["overall"]
                     print(
                         f"completed {summary['completed']}/{summary['expected']}  "
@@ -456,7 +464,8 @@ def main(argv=None) -> int:
             p.add_argument("--reports-dir", default="eval/reports")
             p.add_argument("--configs-dir", type=Path, default=Path("configs"))
             p.add_argument("--profile", default="local")
-            p.add_argument("--max-tokens", type=int, default=1024)
+            p.add_argument("--max-tokens", type=int, default=PLATFORM_OUTPUT_TOKENS)
+            p.add_argument("--judge-timeout", type=float, default=None)
             p.add_argument("--memory-date", choices=DATE_MODES, default="none")
             p.add_argument("--offline", action="store_true")
             p.add_argument("--annotate-mark", default="paren", choices=("paren",))
