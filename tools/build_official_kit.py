@@ -82,9 +82,11 @@ PROMPT_REFS: dict[str, dict[str, str]] = {
     },
     "personamem-v2": {
         "answer": "dataset/.upstream/aml/pipeline_v2_personamem.py#official_generative_messages",
-        "judge": "eval/harness/official_capture_pipeline.py#_narrow_judge（采集开放题）",
+        "judge": "dataset/.upstream/aml/pipeline_v2_personamem.py#evaluate_narrow"
+        "（JUDGE_PROMPT_NARROW_POSITIVE / _NEGATIVE）",
         "observed": "（采集题为开放题；官方追加 recall personalization 后缀）",
-        "note": "采集重放按开放题走官方 generative prompt；独立题库 MCQ 仍走官方 MCQ 适配器",
+        "note": "**官方 narrow 口径**：`preference` 来自 benchmark.csv（采集 search 里没有，"
+        "按 query 逐字匹配补上）；裁判回 0–1 分，阈值是我们定的（见 D34）",
     },
     "beam": {
         "answer": "dataset/.upstream/aml/pipeline_beam.py#OPEN_ENDED_ANSWER_TEMPLATE",
@@ -242,13 +244,19 @@ def _gold_source(row: dict) -> tuple[str, str] | None:
 
 
 def _judge_key(dataset: str) -> str:
-    """该数据集用哪一类判分——**套件里唯一的判分语义字段**（见模块 docstring 的枚举）。"""
+    """该数据集用哪一类判分——**套件里唯一的判分语义字段**。
+
+    取值域：`letters` / `exact` / `llm` / `rubric` / `narrow` / `none`。
+    `narrow` 是 PersonaMem 的官方 `evaluate-narrow`（0–1 连续分，见
+    `official_capture_pipeline._narrow_judge`）；`none` = 没有公开金标、不评分。
+    """
     return {
         "scriptmem": "letters",
-        # ⚠ PersonaMem-v2 在**采集里的那批**是 **open 题 + 长文本答案**（不是它题库里的 MCQ）——
-        #   官方的 `evaluate_narrow` 要 `preference` 元数据，而采集的 search 里没有那个字段，
-        #   所以退到文本匹配（口径见 `official_capture_pipeline.py` 的 docstring）。
-        "personamem-v2": "exact",
+        # ⚠ PersonaMem-v2 在**采集里的那批**是 **open 题**（不是它题库里的 MCQ）——
+        #   官方 AML 走 `evaluate-narrow`：`preference` + 模型回答 → 裁判回 0–1 分。
+        #   采集 search 本身没有 `preference`，但 `official-gold-extra` 从
+        #   `benchmark.csv` 按 query 逐字匹配补上了（114/114 全部命中）⇒ 走官方口径。
+        "personamem-v2": "narrow",
         "locomo-refined": "llm",
         "beam": "rubric",
         "memtrapbench": "rubric",

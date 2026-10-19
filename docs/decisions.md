@@ -1517,7 +1517,7 @@ add/search 原文）本地的复放，**不套 `run.py` 的通用路径**，而�
 | --- | --- | --- |
 | LoCoMo / ScriptMem / BEAM / CL-Bench | **官方那份**（归档 pipeline 的函数直接调） | `benchmark_data/pipeline_*.py` |
 | MQuAKE / MemTrapBench / CorporateBench / MedMemoryBench / TempReason / Doc-PP | 自写（Doc-PP 的裁判 prompt 读上游文件） | `eval/harness/extra_pipeline.py` |
-| **PersonaMem-v2** | 上游 `evaluate_narrow` 要 `preference` 元数据，而采集的 search 里没有 ⇒ 换成"拿参考回答当标准"的 LLM 裁判 | `_NARROW_JUDGE_PROMPT` |
+| **PersonaMem-v2** | **官方 `evaluate-narrow` 口径**（2026-10-19 改回）：`preference` 从 `benchmark.csv` 按 query 逐字匹配补上（114/114 命中），prompt 与 `extract_boxed_score` 直接用归档那份；**二值化阈值 0.5 是我们定的** | `pipeline_v2_personamem.py#evaluate_narrow` + `_narrow_judge` |
 | **HaluMem** | 上游只发布一份 LLM 裁判（`Correct`/`Hallucination`/`Omission`），**逐字读归档那份** | `benchmark_data/halumem/eval_tools.py` |
 | **FEVEROUS** | **只判 label**（三分类），**不判证据 id 的 F1** | `_feverous_judge` |
 | **BEAM 的二值化** | 均分 `== 1.0` 才算对（官方只报均分） | 与 `_read_beam_labels` 同一口径 |

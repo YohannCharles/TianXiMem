@@ -17,19 +17,21 @@ mquake / corporatebench / medmemorybench / memtrapbench），每题该用哪套 
 | `scriptmem` | `pipeline_scriptmem.py` 的 answer prompt | `predicted_letters` + `score_item` |
 | `beam` | `pipeline_beam.py#render_answer_prompt` | 同文件的 rubric 批量裁判（三点制均分） |
 | `clbench` | `clb_pipeline.py#build_answer_prompt` | 同文件 rubric 裁判（全有全无 + 比例分） |
-| `personamem-v2` | `pipeline_v2_personamem.py#official_generative_messages` | **归一化文本匹配**（见下） |
+| `personamem-v2` | `pipeline_v2_personamem.py#official_generative_messages` | **官方 `evaluate_narrow`**（`JUDGE_PROMPT_NARROW_POSITIVE` / `_NEGATIVE`，见下） |
 | 上表之外的 6 个 | `extra_pipeline.py#render_answer_prompt` | `extra_pipeline.py#judge_one` |
 
 **prompt 与判分逻辑一行都不重写**：归档那几份用 `sys.path` + `import` 直接调
 （文件名带连字符的用 `importlib`），`official-extra` 那六个走 `extra_pipeline` 的公开入口。
 
-## 两处口径是**我们定的**，写在这里免得被当成官方口径
+## 口径说明
 
-1. **`personamem-v2` 的判分**：上游对开放题走 `evaluate_narrow` 的 **LLM 裁判**，
-   而它要 `item["preference"]`（偏好元数据）——**采集的 search 请求里没有这个字段**
-   （那份 pipeline 根本不读检索字段，题与偏好都在它自己的题库里）。
-   ⇒ 这里换成**同一类但不看偏好**的 LLM 裁判：拿 `correct_answer` 整段当参考回答，
-   只判"意思对不对"（prompt 在 `_NARROW_JUDGE_PROMPT`）。**分数只在仓内前后比。**
+1. **`personamem-v2` 走官方 narrow 口径**（2026-10-19 改回）：采集题是开放题，官方
+   `evaluate-narrow` 用 `preference` + 模型回答问裁判要 0–1 分。`preference` 不在采集
+   search 里，但 `official-gold-extra` 已从 `benchmark.csv` 按 query 逐字匹配补上
+   （114/114 全部命中）⇒ **prompt 与打分函数逐字用归档那份**，只在外面加一层
+   「0–1 分 → `is_correct`」的二值化。
+   ⚠ **阈值是我们定的**：`PERSONAMEM_NARROW_PASS = 0.5`（与 `BEAM` 的"均分 == 1.0"
+   不是一回事，别混）。原始分进 `partial` 与 `judge_response`，换阈值不用重跑裁判。
 2. **`beam` 的二值化**：官方只给逐条 rubric 的均分（`llm_judge_score`），
    `is_correct` 是我们定的 `均分 == 1.0`——与 `judge.py` 的 `_read_beam_labels` **同一口径**。
 
@@ -75,6 +77,28 @@ _EXTRA_FAMILIES = frozenset(
 #: **判分在本文件里**的采集家族；PersonaMem 的答案 prompt 另走官方 generative，
 #: HaluMem / FEVEROUS 没有官方 answer pipeline，仍由 `_answer_prompt` 的本地分派处理。
 _LOCAL_JUDGE_FAMILIES = frozenset({"personamem-v2", "halumem", "feverous"})
+
+
+def supports(dataset: str | None, judge_kind: str | None) -> bool:
+    """这个家族 + 判分语义**会不会真的被判**（而不是落到 `JUDGE_ERROR`）。
+
+    它是 `_judge()` 分派表的**纯函数镜像**——给跑批前的预检用，避免"跑了 8,783 题、
+    最后一天才发现某族全是 `JUDGE_ERROR`"。实现必须与 `_judge()` 的分支保持一致：
+
+    * 显式分支：归档五份 + `official-extra` 六份 + 本地三份；
+    * 其余家族走 `_generic_judge`，只有 `exact` / `llm` 两种 `judge_kind` 有实现。
+
+    ⚠ 新增一个家族时**两边都要改**；`tests/test_official_capture.py` 里有一个
+    逐家族对照用例（拿套件里真实出现过的组合逐个断言）。
+    """
+    family = str(dataset or "")
+    return (
+        family in _ARCHIVED
+        or family in _EXTRA_FAMILIES
+        or family in _LOCAL_JUDGE_FAMILIES
+        or (str(judge_kind or "") in {"exact", "llm"})
+    )
+
 
 #: FEVEROUS 的三分类词表。**不能用别名包含判**——`SUPPORTS` 会命中任何含 "supports"
 #: 的句子（而 `NOT ENOUGH INFO` 里也含 `SUPPORT` 的反义表述），必然假阳性。
@@ -326,49 +350,64 @@ def _answer_prompt(item: dict) -> str:
     return _extra().render_answer_prompt(item)
 
 
-#: PersonaMem-v2 的金标是**整段参考回答**（不是答案串）⇒「包含」几乎不可能成立。
-#: 这道 LLM 裁判是**我们定的口径**（上游 `evaluate_narrow` 要 `preference` 元数据，
-#: 而采集的 search 请求里没有那个字段）。判据只有一条：**意思对不对**。
-_NARROW_JUDGE_PROMPT = """\
-You are grading whether a model's answer to a user's question is correct.
-
-Grade CORRECT if the answer conveys the same key information as the reference answer \
-(it does not need the same wording). Grade WRONG if it misses the key information, \
-contradicts the reference, or refuses while the reference contains the answer.
-
-Question: {question}
-
-Reference answer: {gold}
-
-Model answer: {generated}
-
-Reply with a single JSON object: {{"label": "CORRECT" or "WRONG", "why": "<one short sentence>"}}"""
+#: PersonaMem-v2 的 narrow 分**二值化阈值**。官方只回 0–1 连续分、不规定过线，
+#: 所以阈值是我们定的（与 `BEAM` 的"均分 == 1.0"不是一回事，别混）。
+#: ⚠ 原始分进 `partial` 与 `judge_response` ⇒ **换阈值不用重跑裁判**。
+PERSONAMEM_NARROW_PASS: float = 0.5
 
 
 def _narrow_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
-    """PersonaMem-v2 开放题的 LLM 裁判（见常量注释）。"""
+    """PersonaMem-v2 开放题——**官方 `evaluate_narrow` 口径**（2026-10-19 改回）。
+
+    上游 `pipeline_v2_personamem.py` 的 `evaluate-narrow`：
+    `preference` 以 `do not` 开头用 `JUDGE_PROMPT_NARROW_NEGATIVE`，否则
+    `JUDGE_PROMPT_NARROW_POSITIVE`；裁判回 `\\boxed{score}`（0–1），
+    `extract_boxed_score` 解析。**prompt 与解析都直接调归档那份，不重写。**
+
+    `preference` 来自 `item["gold_answer"]["preference"]`（套件 `gold_native` 带过来的，
+    源头是 `benchmark.csv`）。⚠ **缺 `preference` 就响亮报 `JUDGE_ERROR`**，不静默
+    退回"拿参考回答当标准"——那会**悄悄换掉官方口径**，而分数看起来完全正常。
+    """
     extra = _extra()
-    gold = [str(g) for g in (item.get("gold_answers") or [])]
     qid = str(item["id"])
-    if not gold:
-        return extra.verdict(qid, False, "无金标")
-    if not (generated or "").strip():
-        return extra.verdict(qid, False, "模型输出为空")
-    prompt = _NARROW_JUDGE_PROMPT.format(
-        question=item["question"], gold=gold[0], generated=generated
-    )
-    raw = extra.chat(
-        *extra.config("judge"), prompt, max_tokens=max_tokens, timeout=extra.JUDGE_TIMEOUT
-    )
-    label = _parse_label(raw)
-    if label is None:
+    native = item.get("gold_answer")
+    preference = ""
+    if isinstance(native, dict):
+        preference = str(native.get("preference") or "").strip()
+    if not preference:
         return {
             "id": qid,
             "is_correct": False,
             "label": "JUDGE_ERROR",
-            "judge_response": f"裁判响应里没有 CORRECT/WRONG｜{raw[:2000]}",
+            "judge_response": (
+                "PersonaMem-v2 走官方 narrow 口径，但这一行没有 `preference`"
+                "（见 tools/recover_official_gold.py 的 load_personamem）"
+            ),
         }
-    return {"id": qid, "is_correct": label == "CORRECT", "label": label, "judge_response": raw}
+    if not (generated or "").strip():
+        return extra.verdict(qid, False, "模型输出为空")
+    module = _archived("personamem-v2")
+    template = (
+        module.JUDGE_PROMPT_NARROW_NEGATIVE
+        if preference.lower().startswith("do not")
+        else module.JUDGE_PROMPT_NARROW_POSITIVE
+    )
+    prompt = template.format(
+        user_query=item.get("question") or "",
+        preference=preference,
+        model_response=generated,
+    )
+    raw = extra.chat(
+        *extra.config("judge"), prompt, max_tokens=max_tokens, timeout=extra.JUDGE_TIMEOUT
+    )
+    score = module.extract_boxed_score(raw)
+    return {
+        "id": qid,
+        "is_correct": score >= PERSONAMEM_NARROW_PASS,
+        "label": f"SCORE={score:.2f}",
+        "judge_response": raw,
+        "partial": score,
+    }
 
 
 def _parse_label(raw: str) -> str | None:
@@ -581,6 +620,51 @@ def _clbench_judge(item: dict, generated: str) -> dict:
     }
 
 
+#: `judge_kind == "llm"` 的**通用**裁判：拿参考回答当标准，判"意思对不对"。
+#: ⚠ 与 PersonaMem 的官方 narrow 裁判**不是一回事**——后者要 `preference` 元数据。
+#: 这一份给「补一族金标、套件里写 `judge_kind: llm`」那条路径用。
+_REFERENCE_LLM_PROMPT = """\
+You are grading whether a model's answer to a user's question is correct.
+
+Grade CORRECT if the answer conveys the same key information as the reference answer \
+(it does not need the same wording). Grade WRONG if it misses the key information, \
+contradicts the reference, or refuses while the reference contains the answer.
+
+Question: {question}
+
+Reference answer: {gold}
+
+Model answer: {generated}
+
+Reply with a single JSON object: {{"label": "CORRECT" or "WRONG", "why": "<one short sentence>"}}"""
+
+
+def _reference_llm_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
+    """`judge_kind == "llm"` 的通用实现（见 `_REFERENCE_LLM_PROMPT`）。"""
+    extra = _extra()
+    gold = [str(g) for g in (item.get("gold_answers") or [])]
+    qid = str(item["id"])
+    if not gold:
+        return extra.verdict(qid, False, "无金标")
+    if not (generated or "").strip():
+        return extra.verdict(qid, False, "模型输出为空")
+    prompt = _REFERENCE_LLM_PROMPT.format(
+        question=item["question"], gold=gold[0], generated=generated
+    )
+    raw = extra.chat(
+        *extra.config("judge"), prompt, max_tokens=max_tokens, timeout=extra.JUDGE_TIMEOUT
+    )
+    label = _parse_label(raw)
+    if label is None:
+        return {
+            "id": qid,
+            "is_correct": False,
+            "label": "JUDGE_ERROR",
+            "judge_response": f"裁判响应里没有 CORRECT/WRONG｜{raw[:2000]}",
+        }
+    return {"id": qid, "is_correct": label == "CORRECT", "label": label, "judge_response": raw}
+
+
 def _generic_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
     """**没有专属判分的家族**——按套件里那一个语义字段 `judge_kind` 二选一。
 
@@ -590,8 +674,11 @@ def _generic_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
     | `judge_kind` | 怎么判 |
     | --- | --- |
     | `exact` | 别名包含（`extra_pipeline.judge_tempreason` 的那套归一化）——短答案串 |
-    | `llm` | 拿参考回答当标准的 LLM 裁判（`_narrow_judge`）——整段参考回答 |
+    | `llm` | 拿参考回答当标准的 LLM 裁判（`_reference_llm_judge`）——整段参考回答 |
     | 其它 | `JUDGE_ERROR`（**说出来**，别静默判 0） |
+
+    ⚠ PersonaMem 的 `narrow` **不走这里**——它在 `_judge()` 里有显式分支
+    （要 `preference` 元数据，通用 LLM 裁判没有那个输入）。
     """
     extra = _extra()
     kind = str(item.get("judge_kind") or "")
@@ -599,7 +686,7 @@ def _generic_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
         ok, why = extra.judge_tempreason(generated, item.get("gold_answers") or [])
         return extra.verdict(str(item["id"]), ok, why)
     if kind == "llm":
-        return _narrow_judge(item, generated, max_tokens=max_tokens)
+        return _reference_llm_judge(item, generated, max_tokens=max_tokens)
     return {
         "id": str(item["id"]),
         "is_correct": False,

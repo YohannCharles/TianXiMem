@@ -51,6 +51,16 @@ REQUEST_TIMEOUT_S = 1800.0
 ADD_RETRY_ATTEMPTS: Final[int] = 3
 ADD_RETRY_BACKOFF_S: Final[float] = 2.0
 
+#: `Search` 的**有界**重试次数与退避基数（秒）。
+#:
+#: ⚠ 与 `Add` 的区别只是"要不要幂等"：`Search` 是只读的，重试没有任何副作用。
+#: 而官方采集全量重放要发 **8,783 次 search**、跑几十小时——一次瞬时 5xx 就打死
+#: 整轮（旧版实测过），代价与收益完全不成比例。
+#:
+#: ⛔ **4xx 一律不重试**：那是我方 bug（例如 `top_k` 传错），重试只会把它藏起来。
+SEARCH_RETRY_ATTEMPTS: Final[int] = 3
+SEARCH_RETRY_BACKOFF_S: Final[float] = 2.0
+
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
@@ -147,31 +157,8 @@ class ServiceClient:
         raise AssertionError("unreachable")  # pragma: no cover — 最后一轮必抛
 
     # ── Search ─────────────────────────────────────────────────────────
-    def search_raw(self, *, user_id: str, query: str, top_k: int) -> dict:
-        """原样返回响应体——**预检要看的是这个**，不是我们自己那个 dataclass。
-
-        ⚠ 缺字段（比如 `created_at`）在 `SearchHit(**item)` 里是 `TypeError`，
-        而预检必须把它报成**一条结论**而不是崩掉。所以形状检查走这里。
-        """
-        payload_body = {"user_id": user_id, "query": query, "top_k": top_k}
-        try:
-            response = self._client.post(f"{self.base_url}/search", json=payload_body)
-            response.raise_for_status()
-        except httpx.HTTPStatusError as error:
-            # 只在**服务端错误**上兜底（4xx 是我们自己的 bug，兜底会把 bug 藏起来）。
-            if self._fallback is None or error.response.status_code < 500:
-                raise
-            self.fallback_used += 1
-            print(
-                f"  ⚠ {self.base_url} 返回 {error.response.status_code} ⇒ "
-                f"**兜底**到 {self._fallback.base_url}（该题）",
-                flush=True,
-            )
-            response = self._fallback._client.post(
-                f"{self._fallback.base_url}/search", json=payload_body
-            )
-            response.raise_for_status()
-        payload = response.json()
+    def _checked_search_body(self, payload: dict, top_k: int) -> dict:
+        """§2.1 / §2.2 的两条形状检查——**预检和真检索走同一条**。"""
         data = payload.get("data")
         if not isinstance(data, list):
             # `null` 会让下游静默变成"没有记忆"——§2.1 要求空结果是 `[]`。
@@ -184,6 +171,62 @@ class ServiceClient:
                 f"返回 {len(data)} 条 > top_k={top_k}——§2.2 契约错误（不会被静默截断）"
             )
         return payload
+
+    def search_raw(self, *, user_id: str, query: str, top_k: int) -> dict:
+        """原样返回响应体——**预检要看的是这个**，不是我们自己那个 dataclass。
+
+        ⚠ 缺字段（比如 `created_at`）在 `SearchHit(**item)` 里是 `TypeError`，
+        而预检必须把它报成**一条结论**而不是崩掉。所以形状检查走这里。
+
+        **5xx / 网络层有界重试**（`SEARCH_RETRY_ATTEMPTS`）：官方采集全量重放要发
+        8,783 次 search、跑几十小时，一次瞬时抖动打死整轮是不划算的。`Search` 只读，
+        重试没有副作用。4xx 仍然**不重试**（那是我方 bug）。
+        兜底实例只在最后一次尝试上使用——它是"主实例彻底不可用"的退路，
+        不是"每次抖动都换一个服务"。
+        """
+        payload_body = {"user_id": user_id, "query": query, "top_k": top_k}
+        for attempt in range(1, SEARCH_RETRY_ATTEMPTS + 1):
+            last = attempt == SEARCH_RETRY_ATTEMPTS
+            try:
+                response = self._client.post(f"{self.base_url}/search", json=payload_body)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                # 4xx = 我方 bug（兜底/重试都只会把它藏起来）⇒ 立刻抛。
+                if error.response.status_code < 500:
+                    raise
+                if not last:
+                    print(
+                        f"  ⚠ /search 第 {attempt} 次失败（服务端 "
+                        f"{error.response.status_code}）⇒ "
+                        f"{SEARCH_RETRY_BACKOFF_S * attempt:.0f}s 后重试",
+                        flush=True,
+                    )
+                    time.sleep(SEARCH_RETRY_BACKOFF_S * attempt)
+                    continue
+                if self._fallback is None:
+                    raise
+                self.fallback_used += 1
+                print(
+                    f"  ⚠ {self.base_url} 返回 {error.response.status_code} ⇒ "
+                    f"**兜底**到 {self._fallback.base_url}（该题）",
+                    flush=True,
+                )
+                response = self._fallback._client.post(
+                    f"{self._fallback.base_url}/search", json=payload_body
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as error:  # 网络层：连不上 / 读到一半断
+                if last:
+                    raise
+                print(
+                    f"  ⚠ /search 第 {attempt} 次失败（{type(error).__name__}）⇒ "
+                    f"{SEARCH_RETRY_BACKOFF_S * attempt:.0f}s 后重试",
+                    flush=True,
+                )
+                time.sleep(SEARCH_RETRY_BACKOFF_S * attempt)
+                continue
+            return self._checked_search_body(response.json(), top_k)
+        raise AssertionError("unreachable")  # pragma: no cover — 最后一轮必抛
 
     def search(self, *, user_id: str, query: str, top_k: int) -> list[SearchHit]:
         return [

@@ -394,6 +394,72 @@ def test_personamem_capture_uses_official_generative_prompt() -> None:
     )
 
 
+def test_personamem_narrow_judge_uses_official_prompt_and_preference(monkeypatch) -> None:
+    """PersonaMem 走**官方 narrow 口径**：`preference` + 官方 prompt → 0–1 分。
+
+    ⚠ 三件事一起钉住（少任何一条，口径都会**静默**漂回自写裁判）：
+    ① prompt 逐字来自归档那份（`JUDGE_PROMPT_NARROW_*`）；
+    ② `preference` 从 `gold_answer` 取，且 `do not` 开头走 NEGATIVE 模板；
+    ③ 0–1 分按我们定的阈值二值化，原始分进 `partial`。
+    """
+    from eval.harness import extra_pipeline as extra
+    from eval.harness import official_capture_pipeline as capture
+
+    module = capture._archived("personamem-v2")
+    seen: list[str] = []
+
+    def fake_chat(_base, _key, _model, prompt, **_kwargs):
+        seen.append(prompt)
+        return "Reasoning … final score \\boxed{0.8}"
+
+    monkeypatch.setattr(extra, "chat", fake_chat)
+    item = {
+        "id": "110",
+        "dataset": "personamem-v2",
+        "judge_kind": "narrow",
+        "question": "What warm-up should I do?",
+        "gold_answer": {"preference": "Practices yoga daily"},
+        "gold_answers": ["reference answer"],
+    }
+    row = capture._judge(item, "Do yoga first.", max_tokens=64)
+    assert row["is_correct"] is True
+    assert row["partial"] == 0.8
+    assert seen[0].startswith(module.JUDGE_PROMPT_NARROW_POSITIVE.split("{")[0])
+    assert "Practices yoga daily" in seen[0]
+
+    seen.clear()
+    negative = capture._judge(
+        {**item, "gold_answer": {"preference": "do not mention my surgery"}}, "ok", max_tokens=64
+    )
+    assert seen[0].startswith(module.JUDGE_PROMPT_NARROW_NEGATIVE.split("{")[0])
+    assert negative["partial"] == 0.8
+
+
+def test_personamem_narrow_judge_fails_loudly_without_preference(monkeypatch) -> None:
+    """缺 `preference` **不许**静默退回"拿参考回答当标准"——那会悄悄换掉官方口径。"""
+    from eval.harness import extra_pipeline as extra
+    from eval.harness.official_capture_pipeline import _judge
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("没有 preference 就不该调裁判")
+
+    monkeypatch.setattr(extra, "chat", boom)
+    row = _judge(
+        {
+            "id": "110",
+            "dataset": "personamem-v2",
+            "judge_kind": "narrow",
+            "question": "q",
+            "gold_answer": None,
+            "gold_answers": ["reference answer"],
+        },
+        "answer",
+        max_tokens=64,
+    )
+    assert row["label"] == "JUDGE_ERROR"
+    assert "preference" in row["judge_response"]
+
+
 def test_feverous_verdict_is_not_alias_containment() -> None:
     """FEVEROUS 三分类：**顺序敏感**——`does not support` 不能被读成 `SUPPORTS`。
 
@@ -514,3 +580,28 @@ def test_gold_recovery_reads_corpus_rows_with_or_without_a_text_prefix(tmp_path)
         ("Q3", "P2", "Q4"),
     ]
     assert [triple for _ts, triple in index[USER_A]["update"]] == [("Q1", "P1", "Q9")]
+
+
+def test_support_mirror_matches_every_real_kit_combination():
+    """预检的 `supports()` 必须与 `_judge()` 的分派表**逐组合**一致。
+
+    ⚠ 不钉住它，预检就会说"8,783 题都能跑"，而实际某一族全落 `JUDGE_ERROR`——
+    那种错误只会在跑完 Add/Search 之后才出现，白花一整轮的钱。
+    """
+    from eval.datasets.registry import capture_dir
+    from eval.harness.official_capture_pipeline import supports
+
+    kit_path = Path(capture_dir()) / "official-eval-kit.jsonl"
+    if not kit_path.exists():
+        pytest.skip("采集套件不在（见 tools/build_official_kit.py）")
+    combos = set()
+    for line in kit_path.open(encoding="utf-8"):
+        row = json.loads(line)
+        if row["judge_kind"] != "none":
+            combos.add((row["dataset"], row["judge_kind"]))
+    assert combos
+    assert {(d, k) for d, k in combos if not supports(d, k)} == set()
+    # 反例：没有金标的行、以及 generic 分支不支持的 judge_kind 必须判 false。
+    assert not supports("unknown", "none")
+    assert not supports("hybridqa", "rubric")
+    assert not supports("musique", "letters")
