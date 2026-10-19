@@ -26,7 +26,7 @@ D35 后 `__file__` 在 `dataset/.upstream/aml/` 下，`parents[2]` 指向数据�
 
 ## 对话端点有**多个**，本进程用哪一个是**被指派**的（D39，2026-10-09）
 
-`memory2` 与 `memory3` 提供的是**同一个** `Qwen/Qwen3.5-9B`（128K），但**各有各的 key**
+`memory` 与 `memory2` 提供的是**同一个** `Qwen/Qwen3.5-9B`（128K），但**各有各的 key**
 （对调都是 401）⇒ 端点是 `(base_url, api_key)` **成对**的，不能只管 url。
 
 端点表按序号后缀拼：`AML_BASE_URL` / `AML_API_KEY`（主）、`AML_BASE_URL_2` / `AML_API_KEY_2`、
@@ -123,7 +123,7 @@ ENDPOINT_INDEX: Final[int] = _selected_index(len(ENDPOINTS))
 
 _SELECTED_BASE, _SELECTED_KEY = ENDPOINTS[ENDPOINT_INDEX]
 
-#: 答案模型端点。**两个对话网关之一**（`memory2` / `memory3`），见模块 docstring。
+#: 答案模型端点。**两个对话网关之一**（`memory` / `memory2`），见模块 docstring。
 ANSWER_API_BASE = _SELECTED_BASE
 ANSWER_API_KEY = _SELECTED_KEY
 ANSWER_MODEL = os.environ.get("AML_MODEL", "")

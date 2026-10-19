@@ -72,7 +72,8 @@ CASES_PER_USER = 64
 SHAPE_NOTE = (
     "⚠ **形状是本地约定**：一条事实/改写 = 一条消息，**整个 Sample 共用一个 session**；"
     f"一个 Sample = {CASES_PER_USER} 个 case（MQuAKE 没有「用户」这个概念，"
-    "捆起来是为了让记忆远多于证据——一个 case 只有 2–4 条事实，检索无从谈起）"
+    "捆起来是为了让记忆远多于证据——一个 case 只有 2–4 条事实，检索无从谈起）；"
+    "**改写后链里未被编辑的边（`new_triples`）也进语料**（2026-10-17）"
 )
 
 #: ⚠ 四份文件的 `case_id` **各自从 1 开始**，互不重叠地拼 `sample_id` 时必须带上文件名。
@@ -108,15 +109,28 @@ def _rows(path: Path) -> Iterator[dict]:
 
 
 def _memory_messages(row: dict) -> list[Message]:
-    """一个 case 的记忆：原始事实 + 改写——**一条消息一条事实**（顺序即事实链的顺序）。
+    """一个 case 的记忆：原始事实 + 改写链——**一条消息一条事实**（顺序即事实链的顺序）。
 
     ⚠ **整个 case 挤在一个 `Session` 里是对的**：**D29** 之后一段没有非 user 跟随的连续
     user，**每条各自独立成块** ⇒ 粒度照样保得住，而 Add 次数少一个数量级。
+
+    ⚠ **`new_triples` 里未被编辑的链边必须也进语料**（2026-10-17）：改写后的多跳链是
+    `new_triples`，其中**只有被编辑的那一条**由改写句给出；其余边（例如
+    `Croatia — head of state — Kolinda Grabar-Kitarović`）**不在 `orig_triples` 里**。
+    只发原始链 + 改写句时，256 个 case 里有 **44 个**的第二跳在语料里根本不存在
+    （实测；`eval/datasets/aml/mquake.py` 从一开始就补了这些边，两个加载器必须一致）。
     """
+    edited = {tuple(str(x) for x in triple[:2]) for triple in row.get("edit_triples") or ()}
     messages: list[Message] = []
     for triple in row.get("orig_triples_labeled") or []:
         subject, relation, object_ = (str(x) for x in triple)
         messages.append(Message(role="user", content=_triple_text(subject, relation, object_)))
+    for ids, labels in zip(
+        row.get("new_triples") or (), row.get("new_triples_labeled") or (), strict=True
+    ):
+        if (str(ids[0]), str(ids[1])) not in edited:
+            subject, relation, object_ = (str(x) for x in labels)
+            messages.append(Message(role="user", content=_triple_text(subject, relation, object_)))
     for rewrite in row.get("requested_rewrite") or []:
         messages.append(Message(role="user", content=_update_text(rewrite)))
     return messages

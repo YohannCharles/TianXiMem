@@ -474,3 +474,43 @@ def test_every_family_gets_its_memories_in_the_answer_prompt() -> None:
         items = build_official_items(rows[:1], {str(rows[0]["seq"]): hits}, date_mode="none")
         prompt = _answer_prompt(items[0])
         assert marker in prompt, f"{family}：答案 prompt 里没有检索到的正文（接错键了？）"
+
+
+def test_gold_recovery_reads_corpus_rows_with_or_without_a_text_prefix(tmp_path):
+    """`_corpus_index` 必须按 `Corpus:` 的位置切，不能要求正文以它开头。
+
+    ⚠ 两个都会**静默**把改写/原始事实漏掉，进而把 MQuAKE 的 `gold_variant` 判反：
+    ① 官方 add 的正文带 `[dataset][session][Dx:y][text] ` 前缀；
+    ② 普通事实行是 `Corpus: {json}`（同一行），照旧实现取最后一行的结果不是 JSON。
+    """
+    from tools.recover_official_gold import _corpus_index
+
+    adds = [
+        {
+            "ts": "2025-01-01T00:00:00+00:00",
+            "user_id": USER_A,
+            "messages": [
+                {"content": 'Corpus: {"subject_id": "Q1", "relation_id": "P1", "object_id": "Q2"}'},
+                {
+                    "content": "[ds][session_1][D1:1][text] Corpus: "
+                    '{"subject_id": "Q3", "relation_id": "P2", "object_id": "Q4"}'
+                },
+                {
+                    "content": "[ds][session_2][D2:1][text] Corpus: UPDATE: replace the prior "
+                    'value\n{"subject_id": "Q1", "relation_id": "P1", "object_id": "Q9"}'
+                },
+                {"content": "not a corpus row"},
+                {"content": "Corpus: not-json"},
+            ],
+        }
+    ]
+    path = tmp_path / "adds.jsonl"
+    _write(path, adds)
+
+    index = _corpus_index(path, {USER_A})
+
+    assert [triple for _ts, triple in index[USER_A]["fact"]] == [
+        ("Q1", "P1", "Q2"),
+        ("Q3", "P2", "Q4"),
+    ]
+    assert [triple for _ts, triple in index[USER_A]["update"]] == [("Q1", "P1", "Q9")]

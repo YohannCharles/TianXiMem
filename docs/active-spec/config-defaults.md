@@ -12,6 +12,7 @@
 | 键 | 当前值 |
 | --- | --- |
 | `retrieval.grounded_evidence` | `true` |
+| `retrieval.grounded_planner.enabled` | `true` |
 | `packaging.annotate_relatives` | `true` |
 | `router.enabled` | `true` |
 | `agentic.enabled` | `true` |

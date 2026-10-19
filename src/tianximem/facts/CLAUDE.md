@@ -29,7 +29,22 @@ conversation.py 具名发言切分（`named_utterances`）与显式句末切分�
 
 * `evidence.py` 的一条记录只写原文里能指出出处的部分：数量、容器、时段等进 `qualifiers`；给答案模型读的 `content` 由 [`../common/render.py`](../common/render.py) 的事实渲染入口生成——**渲染不在本目录**。交易的派生单笔金额只在 Search 打包时注解，不写入事实。
 * `grammar.py` 覆盖**有限的显式句法**（英文为主 + 部分中文，不承诺覆盖全部表达）：角色归属、容器与单项数量、署名 / 邮件元数据、明确月份区间、具名发言内的本人陈述等；引用、否定、计划与虚构的句子不产生正向事实。
+  显式更新句（`… (this replaces the earlier value)`）另有一张 `_UPDATE_FORMS` 表：
+  `The name of the current head of state in X is Y`、`X speaks the language of Y`、
+  `The headquarters of X is located in the city of Y` 等**只在更新句上尝试**，
+  且照抄数据源拼写（`univeristy` / `origianl`）。解析出的替换事实带
+  `replaces_earlier`，执行器据此取值（2026-10-17，MQuAKE 修复）。
+  **本人自述的档案字段**（`My highest education level is PhD` / `my personality type
+  is INTJ`）也抽，但**字段名走 `_PROFILE_FIELDS` 白名单**（15 个）：泛化的
+  `my X is Y` 会把叙述句变成事实。同一张表的同义写法（`MBTI personality type` ≡
+  `personality type`）在 `evidence.relation_key` 归一——**抽取侧与查询侧必须同时认**
+  （2026-10-18，D48）。
+  **官方采集的语料是各数据集的原始格式**（D51）：`{"subject":…,"relation":…,"object":…}`
+  这种 **JSON 三元组**按三个字段逐字读；`UPDATE: replace the prior value …` 前缀与末尾的
+  `(this replaces the earlier value)` 是同一件事——都落成带 `replaces_earlier` 的替换事实。
+  ⚠ 多行记录**不再被 `"\n" not in question` 挡掉**（官方更新句就是两行）。
 * `query.py` 的计划只绑定共同字段与共同操作（条件筛选、有限关系连接、显式区间比较、当前输入），**不为任何业务类别建专用执行路径**。`walk_root` / `walk_relations` 给出有序依赖；关键词集合不再证明路径完成。
+* **逐次取证**（`QueryPlan.per_occurrence`，标题 / 主题 / 出席这类"哪几次"的问法）：同一条事实在**不同来源**里的每一次出现各自算证据——执行器不得按三元组去重，也不得先用时间窗口把事实裁掉（窗口比较由答案模型看着每条证据的来源日期做）。
 * `input.py` 只回答"当前问题的输入是否已全部给出、是否无须历史"；配套的 `current` 计划返回空结果是**有定义的降级**，不计算也不返回答案。
 
 ## 与上下游的接口
@@ -43,6 +58,8 @@ conversation.py 具名发言切分（`named_utterances`）与显式句末切分�
 | **开关** | [`../common/config.py`](../common/config.py) 的 `retrieval.grounded_evidence` 与取证上限 | 键语义与取值在 [`../../../docs/config-reference.md`](../../../docs/config-reference.md)；**本目录不拥有开关**，也不定义业务专用键 |
 
 抽取的输入是配对后的 `QaPair.question` / `answer` / `event_time`（形状归 [`../pairing/`](../pairing/)，本目录不解析原始 `messages`）；Add、幂等重放与旧库补索引共用 `extract_evidence` 这一个入口。
+⚠ **同一 Add 内的姓名绑定在 `pairing/apply.py`**（不是本目录）：它按 `fetch_by_request`
+找同一次 Add 里的 `My name is X`，把第一人称事实的主语换成人名——跨 Add 不做（D24 / D28）。
 
 **回退是结构性的**：`compile_query` 给不出计划、当前用户索引未扫完、计划不适用、范围内还有未解释的相关声明或有冲突、取证超限——任一成立都交回**原混合检索链**，而不是返回部分结果或近似名单。
 
@@ -79,6 +96,7 @@ conversation.py 具名发言切分（`named_utterances`）与显式句末切分�
 ### 语域、时间与数量
 
 * 引用、否定、计划、虚构一律不产生正向事实；判据按**整条发言**计算——一条发言里出现计划 / 否定 / 引用标记，该发言的角色类事实**整条不产出**。⚠ **"整段标签不能吞掉另一条未解释的正向声明"是执行期来源覆盖审查的规则**（[`../retrieve/evidence.py`](../retrieve/evidence.py)，且只在计划带字面范围守卫时运行），不是抽取层的保证。明显的引文续行不重绑说话人。
+  **唯一例外是并列从句**（D47）：`, so` / `, but` / `;` 切开后，**不含标记的前半句**照常抽取——`Lost my job as a banker yesterday, so I'm gonna …` 的后半句是计划，前半句是已发生的事件。逗号直接连接的从句仍整句不抽。
 * user / assistant / system 通用标签按大小写无关识别；question 侧用户自述绑定第一人称。
   assistant / system 标签不产生本人正向事实；明确具名的真实发言仍可来自两侧。
 * 区间比较只用**原文明确写出的起止月份**；`source_date`（来源记录日期）**不冒充事件日期**。

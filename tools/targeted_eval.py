@@ -3,6 +3,11 @@
 manifest 显式列出 dataset、user_id、source（历史 input.jsonl）、qids 和 group。
 不加载金标图，不裁剪语料，不改变答案提示词。每题独立保存结果以便中断续跑，
 deadline 为 UTC Unix 秒；到期不再发起检索或模型调用。
+
+⚠ **`AML_MODEL` / `AML_BASE_URL` / `AML_API_KEY` 必须在真实环境里**：
+`eval/harness/api_config.py` 读的是 `os.environ`（**不**读 `.env`），冻结指纹里的
+`answer_model` 就取自它——只写在 `.env` 里会让指纹变成空串并撞"冻结指纹发生变化"。
+跑之前先把这一族导出去（`set -a; . <(grep -E '^AML_[A-Z0-9_]+=' .env); set +a`）。
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ import json
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 
@@ -22,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 from eval.datasets import benchmark_dir  # noqa: E402
 from eval.datasets.prepare import sha256_file  # noqa: E402
 from eval.harness import ServiceClient, pipeline_for, run_judge  # noqa: E402
-from eval.harness.api_config import ANSWER_MODEL, JUDGE_MODEL  # noqa: E402
+from eval.harness.api_config import ANSWER_MODEL, ENDPOINTS, JUDGE_MODEL  # noqa: E402
 from eval.harness.judge import EXTRA_DATASETS, render_memories  # noqa: E402
 
 
@@ -89,7 +95,27 @@ def main() -> int:
     parser.add_argument("--group", action="append", default=[])
     parser.add_argument("--deadline", type=float, required=True)
     parser.add_argument("--offline", action="store_true", help="禁止下载裁判依赖")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=2,
+        help="并行题目数；每个 worker 的 answer/judge 固定到一个对话网关",
+    )
+    parser.add_argument(
+        "--fallback-is-error",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="检索命中 top_k 条兜底结果时直接记录错误，不调用 answer/judge",
+    )
+    parser.add_argument(
+        "--endpoint-index",
+        type=int,
+        default=None,
+        help="固定所有 answer/judge 到指定对话网关；不传则按 worker 轮转",
+    )
     args = parser.parse_args()
+    if args.workers < 1:
+        raise SystemExit("--workers 必须 >= 1")
     manifest = json.loads(args.manifest.read_text())
     from eval.datasets.prepare import ensure_dataset
 
@@ -116,67 +142,122 @@ def main() -> int:
         "freeze": frozen,
         "base_url": args.base_url,
         "groups": args.group,
+        "workers": args.workers,
+        "fallback_is_error": args.fallback_is_error,
     }
     if not (args.output / "metadata.json").exists():
         write_json(args.output / "metadata.json", metadata)
-    with ServiceClient(args.base_url, timeout=180) as client:
-        for group in manifest["groups"]:
-            if args.group and group["group"] not in args.group:
-                continue
-            items = {str(row["id"]): row for row in read_rows(Path(group["source"]))}
-            for qid in group["qids"]:
-                if (group["dataset"], group["user_id"], qid) in done:
-                    continue
-                if time.time() + 180 >= args.deadline:
-                    print("到达停止边界，保留已完成结果", flush=True)
-                    write_json(args.output / "summary.json", summarize(results))
-                    return 0
-                item = dict(items[qid])
-                started = time.monotonic()
-                hits = client.search(
-                    user_id=group["user_id"], query=item["question"], top_k=frozen["top_k"]
-                )
-                search_seconds = time.monotonic() - started
-                context = render_memories(hits)
-                context_tokens = len(encoder.encode(context))
-                item[
-                    "retrieved_context"
-                    if group["dataset"] in EXTRA_DATASETS
-                    else "speaker_1_memories"
-                ] = context
-                if group["dataset"] not in EXTRA_DATASETS:
-                    item["speaker_2_memories"] = ""
-                out = args.output / group["user_id"] / qid
-                write_json(
-                    out / "search.json",
-                    {"query": item["question"], "hits": [asdict(hit) for hit in hits]},
-                )
-                print(
-                    f"{group['group']} {qid}: {len(hits)} 片段 / {context_tokens} tokens",
-                    flush=True,
-                )
-                result = run_judge(
-                    pipeline_for(benchmark_dir(), group["dataset"]),
-                    [item],
-                    out,
-                    dataset=group["dataset"],
-                )[0]
-                row = {
-                    "dataset": group["dataset"],
-                    "user_id": group["user_id"],
+    tasks: list[tuple[dict, dict, str]] = []
+    for group in manifest["groups"]:
+        if args.group and group["group"] not in args.group:
+            continue
+        items = {str(row["id"]): row for row in read_rows(Path(group["source"]))}
+        for qid in group["qids"]:
+            if (group["dataset"], group["user_id"], qid) not in done:
+                tasks.append((group, items[qid], qid))
+
+    def evaluate_one(task_index: int, task: tuple[dict, dict, str]) -> dict:
+        group, source_item, qid = task
+        if time.time() + 180 >= args.deadline:
+            raise TimeoutError("到达停止边界")
+        item = dict(source_item)
+        started = time.monotonic()
+        with ServiceClient(args.base_url, timeout=180) as client:
+            hits = client.search(
+                user_id=group["user_id"], query=item["question"], top_k=frozen["top_k"]
+            )
+        search_seconds = time.monotonic() - started
+        context = render_memories(hits)
+        context_tokens = len(encoder.encode(context))
+        out = args.output / group["user_id"] / qid
+        write_json(
+            out / "search.json",
+            {"query": item["question"], "hits": [asdict(hit) for hit in hits]},
+        )
+        print(
+            f"{group['group']} {qid}: {len(hits)} 片段 / {context_tokens} tokens",
+            flush=True,
+        )
+        # 命中 top_k 只是候选池达到请求上限，并不能证明服务走了兜底分支。
+        # 只有显式传入 --fallback-is-error 时，才按该实验约定跳过答案阶段；
+        # 默认仍把完整候选池交给 answer/judge。
+        if args.fallback_is_error and len(hits) >= frozen["top_k"]:
+            row = {
+                "dataset": group["dataset"],
+                "user_id": group["user_id"],
+                "qid": qid,
+                "group": group["group"],
+                "result": {
                     "qid": qid,
-                    "group": group["group"],
-                    "result": asdict(result),
-                    "context_tokens": context_tokens,
-                    "hit_count": len(hits),
-                    "search_seconds": search_seconds,
-                    "total_seconds": time.monotonic() - started,
-                }
-                with results_path.open("a") as handle:
+                    "is_correct": False,
+                    "label": "fallback-retrieval-error",
+                    "judge_response": "检索命中 top_k 兜底上限，按实验约定计错并跳过 answer/judge",
+                    "generated_answer": "",
+                    "partial": 0.0,
+                    "metrics": None,
+                },
+                "context_tokens": context_tokens,
+                "hit_count": len(hits),
+                "search_seconds": search_seconds,
+                "total_seconds": time.monotonic() - started,
+                "skipped_llm": True,
+            }
+            print("  fallback=error (skip answer/judge)", flush=True)
+            return row
+        item[
+            "retrieved_context"
+            if group["dataset"] in EXTRA_DATASETS
+            else "speaker_1_memories"
+        ] = context
+        if group["dataset"] not in EXTRA_DATASETS:
+            item["speaker_2_memories"] = ""
+        endpoint_index = (
+            args.endpoint_index
+            if args.endpoint_index is not None
+            else task_index % max(1, len(ENDPOINTS))
+        )
+        result = run_judge(
+            pipeline_for(benchmark_dir(), group["dataset"]),
+            [item],
+            out,
+            dataset=group["dataset"],
+            endpoint_index=endpoint_index,
+        )[0]
+        row = {
+            "dataset": group["dataset"],
+            "user_id": group["user_id"],
+            "qid": qid,
+            "group": group["group"],
+            "result": asdict(result),
+            "context_tokens": context_tokens,
+            "hit_count": len(hits),
+            "search_seconds": search_seconds,
+            "total_seconds": time.monotonic() - started,
+            "endpoint_index": endpoint_index,
+        }
+        print(f"  correct={result.is_correct} score={result.partial}", flush=True)
+        return row
+
+    if tasks:
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futures = {
+                pool.submit(evaluate_one, index, task): task
+                for index, task in enumerate(tasks)
+            }
+            for future in as_completed(futures):
+                try:
+                    row = future.result()
+                except TimeoutError:
+                    print("到达停止边界，保留已完成结果", flush=True)
+                    continue
+                except Exception as exc:
+                    group, _, qid = futures[future]
+                    print(f"{group['group']} {qid}: worker 失败: {exc}", flush=True)
+                    continue
+                with results_path.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(row, ensure_ascii=False) + "\n")
                 results.append(row)
                 write_json(args.output / "summary.json", summarize(results))
-                print(f"  correct={result.is_correct} score={result.partial}", flush=True)
     write_json(args.output / "summary.json", summarize(results))
     return 0
 

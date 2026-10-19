@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 import time
 from collections.abc import Iterator, Sequence
@@ -717,6 +718,30 @@ class SqliteStore:
                 ),
             )
 
+    def _owner_name(self, conn: sqlite3.Connection, user_id: str) -> str:
+        """该 user 自我介绍写下的真名（`name` 事实的 subject_key），没有就空串。
+
+        ⚠ **只查已落库的 `name` 事实**，不猜、不从别处推。它是读取期解析：
+        无论自我介绍那次 Add 先到还是后到，同一份库读出来的主语都一样。
+        """
+        row = conn.execute(
+            "SELECT subject_key FROM memory_facts"
+            " WHERE user_id=? AND version=? AND relation_key='name'"
+            " ORDER BY source_date, id LIMIT 1",
+            (user_id, EVIDENCE_VERSION),
+        ).fetchone()
+        return row[0] if row else ""
+
+    def _owner_display(self, conn: sqlite3.Connection, user_id: str) -> str:
+        """真名的**原始写法**（渲染用）；`_owner_name` 给的是规范化匹配键。"""
+        row = conn.execute(
+            "SELECT subject FROM memory_facts"
+            " WHERE user_id=? AND version=? AND relation_key='name'"
+            " ORDER BY source_date, id LIMIT 1",
+            (user_id, EVIDENCE_VERSION),
+        ).fetchone()
+        return row[0] if row else ""
+
     def fetch_evidence(
         self,
         conn: sqlite3.Connection,
@@ -726,9 +751,27 @@ class SqliteStore:
         limit: int,
         deduplicate: bool = True,
     ) -> list[EvidenceFact]:
-        """共同字段约束 + 去除完全同义重复。超限须回退，不能装作扫描完整。"""
+        """共同字段约束 + 去除完全同义重复。超限须回退，不能装作扫描完整。
+
+        ⚠ **第一人称与真名是同一主体**（2026-10-18，D50）：HaluMem 一类记录把自我介绍
+        与档案字段拆在不同 Add 里，档案事实的主语停在字面 `"i"`，而题面问的是人名。
+        这里在**读取时**把两者并成同一个约束——**不在写入时改写事实**，因为那会让
+        主语依赖 Add 的到达顺序（D28：位置与内容都必须是请求的纯函数）。
+        """
         conditions: list[str] = []
         params: list[str | int] = [user_id, user_id, EVIDENCE_VERSION]
+        # `object_terms` / `container_terms` 是**正则**，SQLite 没有内置 REGEXP——
+        # 这里注册一个，语义与 `FactPattern.matches` 那侧逐字相同（都是 `re.search`）。
+        conn.create_function(
+            "REGEXP",
+            2,
+            lambda pattern, value: 1
+            if pattern and re.search(pattern, str(value or ""), re.I)
+            else 0,
+            deterministic=True,
+        )
+        owner = self._owner_name(conn, user_id)
+        owner_display = self._owner_display(conn, user_id)
         for pattern in patterns:
             clauses = []
             if pattern.relations:
@@ -742,9 +785,32 @@ class SqliteStore:
                 )
                 params.extend(pattern.source_ids)
             for column, value in (("subject_key", pattern.subject), ("object_key", pattern.object)):
-                if value:
-                    clauses.append(f"f.{column}=?")
+                if not value:
+                    continue
+                if column == "subject_key" and owner and value in {"i", "user", "用户"}:
+                    # 题面问"我"⇒ 真名的事实也算。
+                    clauses.append(f"(f.{column}=? OR f.{column}=?)")
+                    params.extend([value, owner])
+                    continue
+                if column == "subject_key" and owner and value == owner:
+                    # 题面问真名 ⇒ 第一人称的事实也算（同一个人的两种写法）。
+                    # ⚠ 这里的占位符与参数必须**一一对应**：`IN` 里是字面量，不再占位。
+                    clauses.append(f"(f.{column}=? OR f.{column} IN ('i','user','用户'))")
                     params.append(value)
+                    continue
+                clauses.append(f"f.{column}=?")
+                params.append(value)
+            # **`object_terms` 也要在 SQL 里生效**（2026-10-18）：它原来只在
+            # `FactPattern.matches`（Python 侧）里跑，于是带它的计划在**取回阶段**
+            # 会把该 relation 的全部事实拉回来（实测打满 96 条上限，整题回退）。
+            # 词元用 `(?=.*\bX\b)` 的正则串联——SQLite 的 `regexp` 由下面的
+            # `create_function` 提供，语义与 `matches` 那一侧逐字相同。
+            if pattern.object_terms:
+                clauses.append("f.object REGEXP ?")
+                params.append(pattern.object_terms)
+            if pattern.container_terms:
+                clauses.append("json_extract(f.qualifiers,'$.container') REGEXP ?")
+                params.append(pattern.container_terms)
             conditions.append("(" + " AND ".join(clauses or ["1"]) + ")")
         constraint = " OR ".join(conditions or ["1"])
         params.append(max(0, limit))
@@ -776,13 +842,22 @@ class SqliteStore:
                 id=row["id"],
                 parent_memory_id=row["parent_memory_id"],
                 user_id=row["user_id"],
-                subject=row["subject"],
+                # 第一人称的行在**读取时**归到该 user 的真名（与上面的匹配同一条规则）。
+                # ⚠ 只改返回值，**不改库里的行**——写入侧仍与到达顺序无关（D28）。
+                subject=(
+                    owner_display
+                    if owner_display and row["subject_key"] in {"i", "user", "用户"}
+                    else row["subject"]
+                ),
                 relation=row["relation"],
                 object=row["object"],
                 source_quote=row["source_quote"],
                 source_side=row["source_side"],
-                statement=row["statement"],
-                content=row["content"],
+                # ⚠ **`statement` 与 `content` 也要跟着改**：`content` 是写入时由
+                # `statement` 渲染的字符串，只改 `subject` 会让返回给 AML 的正文
+                # 仍然写着 `I's highest education level`（2026-10-18 实测踩到）。
+                statement=_rebind(row["statement"], row["statement"], owner_display),
+                content=_rebind(row["content"], row["statement"], owner_display),
                 event_time=row["event_time"],
                 source_date=row["source_date"],
                 qualifiers=tuple(sorted(json.loads(row["qualifiers"]).items())),
@@ -883,3 +958,26 @@ def _to_pair(row: sqlite3.Row) -> QaPair:
         status=status,
         event_time=row["event_time"],
     )
+
+def _rebind(text: str, subject_key: str, owner: str) -> str:
+    """把第一人称的正文归到真名（只替换**主语位置**的那一处，不碰引句里的原文）。
+
+    `statement` / `content` 是写入时按字面 `I` 渲染的（`I's highest education level is
+    PhD`）。读取时换成真名，返回给 AML 的正文才与题面一致。
+
+    ⚠ **只在主语是字面第一人称时调用**（调用方已判断 `subject_key`）。
+    ⚠ `Source quotation:` 那一行是**原文逐字**，一个字节都不能改——所以只替换
+    出现在该行之前的正文部分。
+    """
+    if not owner or not text:
+        return text
+    marker = "\nSource quotation:"
+    head, sep, tail = text.partition(marker)
+    for pronoun in ("I's", "I’s", "My", "my"):
+        if pronoun in head:
+            head = head.replace(pronoun, f"{owner}'s" if pronoun.endswith("s") else owner)
+            break
+    else:
+        if head.startswith("I "):
+            head = owner + head[1:]
+    return head + sep + tail

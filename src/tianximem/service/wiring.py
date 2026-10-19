@@ -36,6 +36,7 @@ from tianximem.rank import RemoteReranker, Reranker
 from tianximem.retrieve import DenseArm, EvidenceChecker, HybridRetriever, make_hybrid_params
 from tianximem.retrieve.router import QueryRouter
 from tianximem.service.capture import RequestCapture
+from tianximem.service.grounded_planner import GroundedPlanner
 from tianximem.service.pipeline import AddPipeline, AgenticSearch, SearchPipeline
 from tianximem.store.qdrant_store import QdrantStore
 from tianximem.store.sqlite_store import SqliteStore
@@ -65,6 +66,9 @@ class Services:
         agentic = self.search.agentic
         if isinstance(agentic, (CoqAgent, PlanAgent)) and isinstance(agentic.llm, OpenAiCompatChat):
             agentic.llm.close()
+        planner = self.search.grounded_planner
+        if planner is not None and isinstance(planner.llm, OpenAiCompatChat):
+            planner.llm.close()
         if self.capture is not None:
             self.capture.close()
 
@@ -102,6 +106,7 @@ def build_services(config: AppConfig) -> Services:
     retriever = HybridRetriever(store=qdrant, dense=dense)
     counter = load_counter(config.budget.tokenizer)
     reranker = build_reranker(config)
+    grounded_planner = build_grounded_planner(config)
     return Services(
         store=store,
         qdrant=qdrant,
@@ -131,6 +136,7 @@ def build_services(config: AppConfig) -> Services:
             evidence_limit=config.retrieval.evidence_limit,
             evidence_hop_limit=config.retrieval.evidence_hop_limit,
             fact_backfill_limit=config.retrieval.fact_backfill_limit,
+            grounded_planner=grounded_planner,
             router=build_query_router(config),
             agentic=build_agentic(
                 config,
@@ -147,7 +153,11 @@ def build_services(config: AppConfig) -> Services:
 
 
 def build_llm(config: AppConfig, *, timeout: float | None = None) -> LlmClient | None:
-    if not (config.router.enabled or config.agentic.enabled):
+    if not (
+        config.router.enabled
+        or config.agentic.enabled
+        or (config.retrieval.grounded_evidence and config.retrieval.grounded_planner.enabled)
+    ):
         return None
     return OpenAiCompatChat(
         base_url=config.llm_base_url,
@@ -168,6 +178,27 @@ def build_query_router(config: AppConfig) -> QueryRouter | None:
         max_output_tokens=config.router.max_output_tokens,
         temperature=config.router.temperature,
         prompt_version=config.router.prompt_version,
+    )
+
+
+def build_grounded_planner(config: AppConfig) -> GroundedPlanner | None:
+    """Build the optional LLM interpreter for deterministic evidence plans.
+
+    It shares the configured Qwen/OpenAI-compatible endpoint with Search's
+    other LLM consumers.  The planner is useful only when grounded evidence
+    is enabled; otherwise no extra client or request is created.
+    """
+    planner_config = config.retrieval.grounded_planner
+    if not (config.retrieval.grounded_evidence and planner_config.enabled):
+        return None
+    client = build_llm(config, timeout=planner_config.timeout_seconds)
+    if client is None:
+        return None
+    return GroundedPlanner(
+        client,
+        max_output_tokens=planner_config.max_output_tokens,
+        temperature=planner_config.temperature,
+        prompt_version=planner_config.prompt_version,
     )
 
 

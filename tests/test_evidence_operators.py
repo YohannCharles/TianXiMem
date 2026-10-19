@@ -10,6 +10,7 @@ import pytest
 
 from tianximem.common.render import render_pair
 from tianximem.common.tokens import O200kCounter
+from tianximem.facts.evidence import relation_key
 from tianximem.facts.grammar import extract_evidence
 from tianximem.facts.query import compile_query
 from tianximem.pairing import AddBatch, Message, PayloadMismatchError, apply_batch
@@ -247,6 +248,99 @@ def test_quoted_planned_negated_and_third_person_sentences_are_not_own_positive_
     assert not extract(text)
 
 
+def test_planned_tail_does_not_erase_a_completed_event_in_the_head_clause():
+    # "Lost my job …, so I'm gonna …"：后半句是计划，前半句是已发生的过去时陈述。
+    # 只救回**不含标记**的前半句；整句仍不产出角色/状态类事实。
+    facts = extract(
+        "Alex: Lost my job as a banker yesterday, "
+        "so I'm gonna take a shot at starting my own business."
+    )
+    assert [(f.subject, f.relation, f.object) for f in facts] == [
+        ("Alex", "participated in", "my job as a banker yesterday")
+    ]
+    # 计划在前、事实在后 ⇒ 不救（前半句本身就是计划）。
+    assert not extract("Alex: I will move to Leeds, so I got a new job.")
+
+
+def test_when_did_question_uses_the_event_objects_first_content_word():
+    plan = compile_query("When did Alex start to go to the gym?")
+    assert plan is not None and plan.operator == "filter"
+    # 跳过开头的 `to`（停用词），否则会命中 "trip to Rome" 这类无关事件。
+    assert plan.patterns[0].object_terms == r"\bgym\b"
+    assert plan.patterns[0].subject == "alex"
+
+
+@pytest.mark.parametrize(
+    "question,relation",
+    [
+        ("What is the name of the current leader of the country where Alex is a citizen?",
+         "head of government"),
+        ("Who is the head of state in the country that created Widget?", "head of state"),
+        ("What is the name of the leader of the government in the country where Alex "
+         "holds citizenship?", "head of government"),
+    ],
+)
+def test_leader_and_origin_frames_compile_to_literal_walks(question, relation):
+    plan = compile_query(question)
+    assert plan is not None and plan.operator == "walk"
+    assert plan.walk_relations[-1] == relation
+
+
+def test_profile_fields_are_facts_only_inside_the_whitelist():
+    facts = extract("user: Of course. My highest education level is PhD, and my major is Law.")
+    # `relation_key` 把 `highest education level` 归一到 `education level`
+    # （与题面的 `MBTI personality type` 同一张同义表）。
+    assert [(f.subject, f.relation, f.object) for f in facts] == [
+        ("I", "education level", "PhD")
+    ]
+    # 叙述句不是档案字段——泛化的 `my X is Y` 会把它变成事实。
+    assert not extract("user: My journey is values like empathy and kindness.")
+
+
+def test_profile_field_question_compiles_with_its_time_qualifier():
+    plan = compile_query("What is Sarah Garcia's highest education level as of September 4, 2025?")
+    assert plan is not None and plan.operator == "walk"
+    assert plan.walk_root == "sarah garcia"
+    assert plan.walk_relations == ("education level",)
+    assert plan.date_bounds is not None
+    # 同义字段归一：题面问 MBTI，事实写 personality type。
+    assert compile_query("What is Alex's MBTI personality type?").walk_relations == (
+        "personality type",
+    )
+
+
+def test_introduction_in_the_same_add_binds_first_person_facts_to_the_name(store):
+    apply_batch(
+        store,
+        AddBatch(
+            "opaque",
+            "u",
+            "s",
+            (
+                Message("user", "My name is Dana Reed, and I am a Female."),
+                Message("user", "My highest education level is PhD."),
+            ),
+        ),
+        grounded_evidence=True,
+    )
+    with store.read() as conn:
+        subjects = {
+            fact.subject
+            for fact in store.fetch_evidence(conn, "u", (), limit=100)
+            if relation_key(fact.relation) in {"education level", "date of birth", "live"}
+        }
+    assert subjects == {"Dana Reed"}
+
+
+def test_hope_is_a_plan_only_with_a_person_subject():
+    # "Hope Lange" 是人名，不是计划动词；"I hope" 仍是计划。
+    assert compile_query(
+        "What is the name of the current head of the government of the country "
+        "where Hope Lange is a citizen?"
+    ) is not None
+    assert compile_query("What do I hope to achieve next year?") is None
+
+
 @pytest.mark.parametrize("intro", ["Bea wrote:\n", 'I read this quote: "\n', "Bea said: “\n"])
 def test_named_quote_continuation_cannot_rebind_the_speaker(intro):
     assert not extract("Alex: " + intro + "Bea: My online clothing store is open!")
@@ -420,8 +514,8 @@ def test_unparsed_explicit_edit_remains_original_text_without_an_invented_edge(t
         store,
         "Corpus: Alex — country of citizenship — State",
         "Corpus: State — head of government — Old Leader",
-        "Corpus: The name of the current head of the State government is New Leader "
-        "(this replaces the earlier value)",
+        # ⚠ 这句话**不在**任何受支持的更新句法里（无主谓结构），必须保持未解析。
+        "Corpus: State leadership reshuffle brings New Leader (this replaces the earlier value)",
     )
     hits = run(store, "Who is the head of government of the country of citizenship of Alex?")
     assert (
@@ -429,6 +523,26 @@ def test_unparsed_explicit_edit_remains_original_text_without_an_invented_edge(t
         and any("Old Leader" in h.content for h in hits)
         and any("New Leader" in h.content for h in hits)
     )
+
+
+def test_parsed_update_sentence_supersedes_the_plain_edge(tmp_path):
+    """更新句法被解析成真实替换事实后，walk 按替换取值（2026-10-17 起）。
+
+    更新句本身声明"它替换早先的值"——所以即使没有 `event_time`，同一
+    subject|relation 的旧普通陈述不再进证据（与规则层 `_current` 同口径）。
+    """
+    store = SqliteStore.open(tmp_path / "db")
+    add(
+        store,
+        "Corpus: Alex — country of citizenship — State",
+        "Corpus: State — head of government — Old Leader",
+        "Corpus: The name of the current head of the State government is New Leader "
+        "(this replaces the earlier value)",
+    )
+    hits = run(store, "Who is the head of government of the country of citizenship of Alex?")
+    assert len(hits) == 2
+    assert any("New Leader" in h.content for h in hits)
+    assert all("Old Leader" not in h.content for h in hits)
 
 
 def test_punctuation_collisions_never_join_different_entities(tmp_path):

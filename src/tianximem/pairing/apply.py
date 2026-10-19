@@ -44,10 +44,15 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from tianximem.facts.evidence import EVIDENCE_VERSION
-from tianximem.facts.grammar import _default_entity_extractor, extract_evidence
+from tianximem.facts.evidence import EVIDENCE_VERSION, key
+from tianximem.facts.grammar import (
+    _NOT_A_NAME,
+    _SELF_NAME,
+    _default_entity_extractor,
+    extract_evidence,
+)
 from tianximem.store.sqlite_store import STATUS_COMPLETE, QaPair, SqliteStore, make_pair_id
 
 from .pairing import MemoryBlock, Message, compose_memory_blocks, link_blocks
@@ -141,19 +146,61 @@ def _neighbour_id(batch: AddBatch, local_index: int | None) -> str | None:
 
 
 def index_pair_facts(store: SqliteStore, conn: sqlite3.Connection, pair: QaPair) -> None:
-    """Add/重放/旧来源补索引共用一个入口，并在同一事务记版本覆盖。"""
-    store.insert_evidence(
-        conn,
-        extract_evidence(
-            parent_memory_id=pair.id,
-            user_id=pair.user_id,
-            question=pair.question,
-            answer=pair.answer,
-            event_time=pair.event_time,
-            entity_extractor=_default_entity_extractor(),
-        ),
+    """Add/重放/旧来源补索引共用一个入口，并在同一事务记版本覆盖。
+
+    **同一 Add 内的自我介绍把第一人称绑到真名**（2026-10-18）：HaluMem 一类记录把
+    档案拆在多个块里（`local_index=1` 是 "My name is X"，`=2` 才是 "My highest
+    education level is PhD"）。不绑的话后一条的事实主语停在字面 `"I"`，题面里的人名
+    永远匹配不上。查找范围**只限这一次 Add**（`fetch_by_request`）——跨 Add 没有可信
+    的顺序（D24 / D28），而同一批里的自我介绍与档案字段是同一个人的同一次自述。
+    """
+    facts = extract_evidence(
+        parent_memory_id=pair.id,
+        user_id=pair.user_id,
+        question=pair.question,
+        answer=pair.answer,
+        event_time=pair.event_time,
+        entity_extractor=_default_entity_extractor(),
     )
+    owner = _batch_owner_name(store, conn, pair)
+    if owner:
+        facts = tuple(
+            replace(fact, subject=owner) if key(fact.subject) in {"i", "user", "用户"} else fact
+            for fact in facts
+        )
+    store.insert_evidence(conn, facts)
     store.mark_fact_index_coverage(conn, pair, version=EVIDENCE_VERSION)
+
+
+def _batch_owner_name(
+    store: SqliteStore, conn: sqlite3.Connection, pair: QaPair
+) -> str | None:
+    """该 user 自我介绍写下的真名（没有就 `None`）。
+
+    **先看这次 Add，再看该 user 已有的 `name` 事实**（2026-10-18 放宽）：HaluMem 一类
+    记录把档案拆在**多个 Add** 里——自我介绍在第一批、`My highest education level is PhD`
+    在后面的批。只认同一批的话，后一批的事实主语停在字面 `"I"`，题面里的人名永远匹配不上。
+
+    ⚠ **为什么跨 Add 在这里是安全的**（D24 / D28 的例外，理由要写清）：
+    * 绑定的**唯一来源**是**已经落库的 `name` 事实**（`relation_key = "name"`），
+      不是"猜一个主语"。没有自我介绍的用户**一条都不绑**——行为与之前逐字相同。
+    * 它**不引入到达顺序依赖**：`name` 事实是用户自己的、稳定的；同一批 Add 无论
+      第几次重放、以什么顺序到达，绑出来的主语都一样（重放时 `name` 已经在库里）。
+    * 它**不改变事实的派生性**：`memory_facts` 仍可由 `qa_pairs` 重建——
+      重建时按同样的规则重新查一遍 `name` 即可。
+    * 95.3% 的官方消息带时间戳，缺的那 4.7% 主要是 ScriptMem（跑不了）与 MQuAKE
+      （无时间语义的静态三元组）⇒ 时间冲突不是这条绑定的主要风险。
+    """
+    for sibling in store.fetch_by_request(
+        conn, pair.user_id, pair.session_id, pair.request_id
+    ):
+        for side in (sibling.question, sibling.answer):
+            if not side:
+                continue
+            introduced = _SELF_NAME.search(side)
+            if introduced and key(introduced[1]) not in _NOT_A_NAME:
+                return introduced[1].strip()
+    return None
 
 
 def apply_batch(

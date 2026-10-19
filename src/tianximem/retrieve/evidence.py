@@ -359,6 +359,11 @@ def walk_sources_supported(
                     actor = "i"
                 if actor in subjects:
                     return False
+                # **点名同一主体的介绍句不算未解释**（2026-10-18）：HaluMem 的
+                # "My name is Barbara Jones, and I am a Female" 只是自我介绍，
+                # 不是与已选事实冲突的另一条声明——它正是把第一人称绑到该主体的那句。
+                if " my name is " in f" {words_key(body)} ":
+                    continue
                 if "i" in subjects and not actor and side == "question":
                     if " i " in f" {words_key(body)} " or "我" in body:
                         return False
@@ -391,7 +396,9 @@ def evaluate_evidence(
             return EvidenceDecision(None, "unresolved_interval")
     else:
         selected = [f for f in facts if any(p.matches(f) for p in plan.patterns)]
-        if plan.date_bounds:
+        # 逐次取证的计数问题**不按窗口裁事实**：模型要看到带日期的每一次出现，
+        # 才回答得了"这段时间里几次"（窗口内 0 次也是答案，裁掉就什么都看不见）。
+        if plan.date_bounds and not plan.per_occurrence:
             valid = []
             for fact in selected:
                 value = str(fact.get("scope_date", fact.source_date))

@@ -80,6 +80,15 @@ def validate(cfg: AppConfig) -> AppConfig:
             "  它是**护栏**不是阈值：`capture.enabled` 忘了关时，代价必须是有界的"
             "（写满就停），而不是把磁盘写满。"
         )
+    planner = cfg.retrieval.grounded_planner
+    if planner.timeout_seconds <= 0:
+        raise ConfigError("`retrieval.grounded_planner.timeout_seconds` 必须为正")
+    if planner.max_output_tokens <= 0:
+        raise ConfigError("`retrieval.grounded_planner.max_output_tokens` 必须为正")
+    if planner.temperature < 0:
+        raise ConfigError("`retrieval.grounded_planner.temperature` 不得为负")
+    if not planner.prompt_version.strip():
+        raise ConfigError("`retrieval.grounded_planner.prompt_version` 不能为空")
     if cfg.server.workers != 1:
         raise ConfigError(
             f"`server.workers`（`{ENV_WORKERS}`）必须是 1，收到 {cfg.server.workers}。\n"

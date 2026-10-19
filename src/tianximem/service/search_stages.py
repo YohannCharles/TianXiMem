@@ -86,6 +86,9 @@ class GroundedEvidenceStage:
                 user_id,
                 patterns,
                 limit=fetch_limit + 1,
+                # 逐次取证的计划（"出现几次"、标题清单）靠**重复的行**计数；
+                # 按三元组去重会把跨来源的多次出现压成一条。
+                deduplicate=not plan.per_occurrence,
             )
             if len(evidence) > fetch_limit:
                 return EvidenceDecision(None, "fetch_limit")

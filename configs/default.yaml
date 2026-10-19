@@ -47,6 +47,13 @@ retrieval:
   evidence_hop_limit: 4
   # 旧记忆按用户/版本分批补事实索引；未扫完时回退原检索。
   fact_backfill_limit: 1024
+  # LLM 只负责把未覆盖的问法映射为受限计划；事实选择与来源审查仍是确定性的。
+  grounded_planner:
+    enabled: true
+    timeout_seconds: 10.0
+    max_output_tokens: 256
+    temperature: 0.0
+    prompt_version: v3
   # C —— 每路进入 RRF 融合的候选池大小（§7.3 的 N）。
   # ⚠ 不是种子数（§10 的 20）、不是 Top-K（§2.2 的 100）——三个不同的量。
   # 融合池上界：200 × 2 路 = 至多 400 条，给 100 个名额留出邻域折叠与去重的余量。
@@ -205,7 +212,8 @@ rerank:
 # ══ 查询路由器（Search 的**共同取证之后**那一站）══════════════════════════
 # 二分类（MULTI_HOP / DEFAULT）→ 两条已有路径之一。实现在
 # `src/tianximem/retrieve/router.py`，提示词与解析契约在那个文件的 docstring 里。
-# ⚠ **它不是 Search 的第一站**（2026-10-14 起）：共同事实取证（确定性、不调 LLM）
+# ⚠ **它不是 Search 的第一站**（2026-10-14 起）：共同事实取证先试；确定性计划失败时
+#    可由 grounded_planner 用 LLM 生成受限计划，事实执行与来源审查仍不调 LLM。
 #    无条件先试，只有它没给出**完整**证据时才走到本段。
 # ⚠ **端点 / 密钥 / 模型名不在这里**——它们在 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` /
 #    `AML_MODEL`（②层分工：模型名属"端点身份"，跟 base_url 一起住 .env）。

@@ -53,6 +53,10 @@ class SearchObservation:
     grounded_status: str = "not_recorded"
     grounded_operator: str | None = None
     grounded_projection: str | None = None
+    grounded_plan_source: str | None = None
+    grounded_planner_status: str = "not_called"
+    grounded_planner_calls: int = 0
+    grounded_planner_latency_ms: float | None = None
     selected_facts: int = 0
     selected_sources: int = 0
 
@@ -182,6 +186,10 @@ class SnapshotMetricsSink:
     grounded_outcomes: dict[str, int] = field(default_factory=dict)
     grounded_operators: dict[str, int] = field(default_factory=dict)
     grounded_projections: dict[str, int] = field(default_factory=dict)
+    grounded_plan_sources: dict[str, int] = field(default_factory=dict)
+    grounded_planner_statuses: dict[str, int] = field(default_factory=dict)
+    grounded_planner_calls: int = 0
+    grounded_planner_latency_ms_sum: float = 0.0
     #: 路由的三个分布 + 耗时。**它们是"路由到底有没有在跑"的唯一出口**
     #: （响应里装不下——形状是契约；§14 那条 V12 的同款处境）。
     router_routes: dict[str, int] = field(default_factory=dict)
@@ -231,6 +239,8 @@ class SnapshotMetricsSink:
                 (self.grounded_outcomes, observation.grounded_status),
                 (self.grounded_operators, observation.grounded_operator),
                 (self.grounded_projections, observation.grounded_projection),
+                (self.grounded_plan_sources, observation.grounded_plan_source),
+                (self.grounded_planner_statuses, observation.grounded_planner_status),
                 (self.router_routes, observation.route),
                 (self.router_statuses, observation.route_status),
                 (self.router_reasons, observation.route_reason),
@@ -244,6 +254,9 @@ class SnapshotMetricsSink:
                 self.router_latency_ms_max = max(
                     self.router_latency_ms_max, observation.route_latency_ms
                 )
+            self.grounded_planner_calls += observation.grounded_planner_calls
+            if observation.grounded_planner_latency_ms is not None:
+                self.grounded_planner_latency_ms_sum += observation.grounded_planner_latency_ms
             self.selected_facts += observation.selected_facts
             self.selected_sources += observation.selected_sources
             for counts, value in (
@@ -296,6 +309,15 @@ class SnapshotMetricsSink:
                 "outcomes": dict(self.grounded_outcomes),
                 "operators": dict(self.grounded_operators),
                 "projections": dict(self.grounded_projections),
+                "plan_sources": dict(self.grounded_plan_sources),
+                "planner": {
+                    "statuses": dict(self.grounded_planner_statuses),
+                    "llm_calls": self.grounded_planner_calls,
+                    "latency_ms_mean": (
+                        round(self.grounded_planner_latency_ms_sum / self.grounded_planner_calls, 3)
+                        if self.grounded_planner_calls else None
+                    ),
+                },
                 "selected_facts": self.selected_facts,
                 "selected_sources": self.selected_sources,
             },

@@ -61,6 +61,7 @@ from tianximem.retrieve.evidence import (
 )
 from tianximem.retrieve.fusion import Candidate
 from tianximem.retrieve.router import QueryRouter, Route
+from tianximem.service.grounded_planner import GroundedPlanner
 from tianximem.service.search_stages import GroundedEvidenceStage
 from tianximem.store.qdrant_store import QdrantStore
 from tianximem.store.sqlite_store import QaPair, SqliteStore
@@ -131,6 +132,10 @@ class _SearchTrace:
     grounded_status: str = "disabled"
     grounded_operator: str | None = None
     grounded_projection: str | None = None
+    grounded_plan_source: str | None = None
+    grounded_planner_status: str = "not_called"
+    grounded_planner_calls: int = 0
+    grounded_planner_latency_ms: float | None = None
     selected_facts: int = 0
     selected_sources: int = 0
     rerank_calls: int = 0
@@ -221,6 +226,7 @@ class SearchPipeline:
         evidence_limit: int = 12,
         evidence_hop_limit: int = 4,
         fact_backfill_limit: int = 1024,
+        grounded_planner: GroundedPlanner | None = None,
         router: QueryRouter | None = None,
         agentic: AgenticSearch | None = None,
         agentic_force: bool = False,
@@ -252,6 +258,10 @@ class SearchPipeline:
         self._evidence_limit = evidence_limit
         self._evidence_hop_limit = evidence_hop_limit
         self._fact_backfill_limit = fact_backfill_limit
+        #: Optional LLM interpretation for query surfaces the deterministic
+        #: compiler does not recognize.  It only returns a bounded plan;
+        #: execution and source auditing stay in GroundedEvidenceStage.
+        self._grounded_planner = grounded_planner
         self._grounded_stage = GroundedEvidenceStage(
             store=store,
             evidence_limit=evidence_limit,
@@ -323,6 +333,11 @@ class SearchPipeline:
         """当前接的多跳执行器（**今天恒为 `None`**，D13）。"""
         return self._agentic
 
+    @property
+    def grounded_planner(self) -> GroundedPlanner | None:
+        """LLM query interpreter used only after deterministic planning fails."""
+        return self._grounded_planner
+
     def _grounded_decision(self, user_id: str, plan: QueryPlan) -> EvidenceDecision:
         """事实选择与相关原文审查的兼容转发。"""
         return self._grounded_stage.decide(user_id, plan, evaluator=evaluate_evidence)
@@ -349,6 +364,10 @@ class SearchPipeline:
                 grounded_status=trace.grounded_status,
                 grounded_operator=trace.grounded_operator,
                 grounded_projection=trace.grounded_projection,
+                grounded_plan_source=trace.grounded_plan_source,
+                grounded_planner_status=trace.grounded_planner_status,
+                grounded_planner_calls=trace.grounded_planner_calls,
+                grounded_planner_latency_ms=trace.grounded_planner_latency_ms,
                 selected_facts=trace.selected_facts,
                 selected_sources=trace.selected_sources,
                 route=trace.route,
@@ -403,6 +422,16 @@ class SearchPipeline:
         if self._grounded_evidence and not self._agentic_force:
             trace.grounded_status = "no_plan"
             plan = compile_query(query)
+            if plan is not None:
+                trace.grounded_plan_source = "rule"
+            if plan is None and self._grounded_planner is not None:
+                planning = self._grounded_planner.decide(query)
+                trace.grounded_planner_status = planning.status
+                trace.grounded_planner_calls = planning.llm_calls
+                trace.grounded_planner_latency_ms = planning.latency_ms
+                plan = planning.plan
+                if plan is not None:
+                    trace.grounded_plan_source = "llm"
             if plan is not None:
                 trace.grounded_operator = plan.operator
                 if plan.operator == "current":

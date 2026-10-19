@@ -20,6 +20,8 @@ from .constants import (
     DEFAULT_COQ_SUFFICIENCY_THRESHOLD,
     DEFAULT_COQ_TIMEOUT_S,
     DEFAULT_EXPANSION_SEED_LIMIT,
+    DEFAULT_GROUNDED_PLANNER_MAX_OUTPUT_TOKENS,
+    DEFAULT_GROUNDED_PLANNER_PROMPT_VERSION,
     DEFAULT_PLAN_DECOMPOSE_PROMPT_VERSION,
     DEFAULT_PLAN_MAX_OUTPUT_TOKENS,
     DEFAULT_PLAN_STEP_PROMPT_VERSION,
@@ -91,7 +93,7 @@ class ModelsConfig:
     #: ⚠ **这里是模型名的家**，不是 `.env`：它是 profile 之间**唯一真正该变**的东西，
     #: 而 `local.yaml` / `submit.yaml` 存在的理由就是让"哪些量随模型变"能被看见
     #: （config-reference §9）。
-    #: ⚠ 开发期 2026-10-13 起是 **4B**（`memory2.021130.xyz` 上只有它）——与 `default.yaml`
+    #: ⚠ 开发期使用 **4B**（`memory2.021130.xyz` 提供 embedding）——与 `default.yaml`
     #: 及 `embed/qwen3_embedding.py::DEFAULT_MODEL` **三处同值**，由
     #: `tests/test_config.py::test_model_default_is_the_same_in_both_places` 钉住。
     embedder: str = "Qwen/Qwen3-Embedding-4B"
@@ -120,6 +122,17 @@ class RrfConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class GroundedPlannerConfig:
+    """Optional LLM interpretation after deterministic query compilation."""
+
+    enabled: bool = False
+    timeout_seconds: float = DEFAULT_ROUTER_TIMEOUT_S
+    max_output_tokens: int = DEFAULT_GROUNDED_PLANNER_MAX_OUTPUT_TOKENS
+    temperature: float = 0.0
+    prompt_version: str = DEFAULT_GROUNDED_PLANNER_PROMPT_VERSION
+
+
+@dataclass(frozen=True, slots=True)
 class RetrievalConfig:
     """混合检索（§7.1–§7.3）。"""
 
@@ -134,6 +147,7 @@ class RetrievalConfig:
     evidence_limit: int = 12
     evidence_hop_limit: int = 4
     fact_backfill_limit: int = 1024
+    grounded_planner: GroundedPlannerConfig = field(default_factory=GroundedPlannerConfig)
     rrf: RrfConfig = field(default_factory=RrfConfig)
 
 

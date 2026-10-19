@@ -120,6 +120,11 @@ SEED_PLACEMENTS: Final[tuple[str, ...]] = ("keep", "front", "echo")
 DEFAULT_PREFETCH_LIMIT: Final[int] = 200
 DEFAULT_WEIGHTS: Final[tuple[float, float]] = (0.5, 0.5)
 
+# Grounded query planner. The planner interprets query wording; evidence
+# execution remains deterministic and source-audited.
+DEFAULT_GROUNDED_PLANNER_MAX_OUTPUT_TOKENS: Final[int] = 256
+DEFAULT_GROUNDED_PLANNER_PROMPT_VERSION: Final[str] = "v3"
+
 #: rerank 调用的超时（秒）。**C 类自设阈值**（`rerank.timeout_seconds`，config-reference §7）。
 #:
 #: ⚠ 定这个值的两条约束**方向相反**，别只看着一边调：

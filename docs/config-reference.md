@@ -13,6 +13,16 @@ Add 把有逐字来源的独立事实写进 `memory_facts`；Search 把受支持
 来源扫描或事实审查超限均整体回退。既有受控知识补全问题保留原来的证据召回语义。
 `retrieval.evidence_hop_limit`（正整数，默认 `4`）限制关系连接深度。
 `retrieval.fact_backfill_limit`（正整数，默认 `1024`）限制一次 Search 对旧原文的补索引量。
+`retrieval.grounded_planner.enabled`（布尔，默认 `true`）只在确定性问题计划编译失败后调用一次
+配置的对话模型，把未见表面形式转换为受限 `filter`/`walk` 计划。模型不得返回事实或答案；
+实体必须出现在原问题中，计划仍由共同证据执行器做索引完整性、来源审查、冲突和超限检查。
+题面的时间措辞由模型**逐字**抄进 `period`，本地解析成区间（解析不出即弃权）；
+题面里有时间措辞而计划没有区间时也弃权——限制条件不许被悄悄丢掉。
+解析失败或证据不完整时整体回退原混合检索。`retrieval.grounded_planner.timeout_seconds`、
+`retrieval.grounded_planner.max_output_tokens`、
+`retrieval.grounded_planner.temperature` 和
+`retrieval.grounded_planner.prompt_version`（当前 `v2`，**改提示词必须升版本**）分别控制
+该步骤的请求超时、输出上限、温度和提示词版本。
 Add、幂等重放和旧库补索引共用一个抽取器与版本覆盖表 `evidence_coverage`。
 没有事实的来源也记扫描覆盖；版本变化后重新扫描。当前用户尚未扫描完、范围超限、
 相关原文仍有未解释声明或数量冲突时，回到原混合检索，不能把部分索引当作完整集合。

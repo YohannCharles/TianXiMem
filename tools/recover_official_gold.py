@@ -368,7 +368,13 @@ def _corpus_index(
     """把官方 `/add` 里 `Corpus:` 那两族抽成 `user → {"update"/"fact": [(ts, (s, r, o))]}`。
 
     只留 `users` 里那些人的——采集原文 300+ MB，没必要全留在内存里；坏行一律跳过。
+
+    ⚠ **不能要求正文以 `Corpus:` 开头**（2026-10-19）：官方 add 的正文可能带
+    `[dataset][session][Dx:y][text] ` 前缀，而事实行的正文就是 `Corpus: {json}`
+    ——只取第一行会拿到带前缀的整串，`json.loads` 必然失败。这里统一**按
+    `Corpus:` 的位置切**：它后面若是 `UPDATE:`，JSON 在第二行；否则 JSON 就在同一行。
     """
+    marker = "Corpus:"
     index: dict[str, dict[str, list[tuple[str, tuple]]]] = {
         u: {"update": [], "fact": []} for u in users
     }
@@ -380,12 +386,19 @@ def _corpus_index(
                 continue
             for message in record.get("messages") or []:
                 content = message.get("content")
-                if not isinstance(content, str) or not content.startswith("Corpus:"):
+                if not isinstance(content, str):
                     continue
-                kind = "update" if content.startswith("Corpus: UPDATE") else "fact"
+                start = content.find(marker)
+                if start < 0:
+                    continue
+                rest = content[start + len(marker) :].lstrip()
+                kind = "update" if rest.startswith("UPDATE") else "fact"
+                payload = rest.split("\n", 1)[-1] if kind == "update" else rest
                 try:
-                    body = json.loads(content.split("\n", 1)[-1])
+                    body = json.loads(payload)
                 except (json.JSONDecodeError, IndexError):
+                    continue
+                if not isinstance(body, dict):
                     continue
                 triple = (body.get("subject_id"), body.get("relation_id"), body.get("object_id"))
                 index[user][kind].append((record["ts"], triple))

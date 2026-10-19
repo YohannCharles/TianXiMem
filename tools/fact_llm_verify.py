@@ -15,18 +15,30 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fact_entity_smoke import _score_triples, load_cases
-from fact_llm_extract import _load_env_file, _relation_vocabulary
+try:  # Direct script execution keeps the historical imports.
+    from fact_entity_smoke import _score_triples, load_cases
+    from fact_llm_extract import _load_env_file, _relation_vocabulary
+    from fact_llm_gate import _scopes, _trigger_supported
+except ModuleNotFoundError:  # Package import from pytest.
+    from tools.fact_entity_smoke import _score_triples, load_cases
+    from tools.fact_llm_extract import _load_env_file, _relation_vocabulary
+    from tools.fact_llm_gate import _scopes, _trigger_supported
 
 from tianximem.facts.evidence import key, relation_key
 from tianximem.llm.base import LlmUnavailable
 from tianximem.llm.openai_chat import OpenAiCompatChat
 
-PROMPT_VERSION = "common-facts-qwen-v14-verify-strict"
+PROMPT_VERSION = "common-facts-qwen-v17-abstain"
+DEFAULT_VERIFY_RELATIONS = (
+    "occupation,employee,employer,author,plans to open,plans to expand,"
+    "profession,location,place of birth,head of government,capital,founded by,"
+    "country of citizenship"
+)
 PROMPT_VERSIONS = (
     "common-facts-qwen-v14-verify-strict",
     "common-facts-qwen-v15-verify-normalize",
     "common-facts-qwen-v16-verify-context",
+    "common-facts-qwen-v17-abstain",
 )
 
 
@@ -74,6 +86,62 @@ def _candidate_prompt(
         f"C{index}: subject={subject!r}; relation={relation!r}; object={object_!r}"
         for index, (subject, relation, object_) in enumerate(candidates)
     )
+    if prompt_version == "common-facts-qwen-v17-abstain":
+        return f"""Review untrusted fact candidates against SOURCE. Do not extract new facts.
+SOURCE is authoritative, including fictional or counterfactual Corpus rows.
+Do not use world knowledge. Independently check each candidate's local clause,
+speaker turn, or labeled record; the presence of both names somewhere in a
+document does not establish their relation.
+
+SOURCE:
+{source}
+
+CANDIDATES:
+{candidate_lines or '(none)'}
+
+Return JSON only:
+{{"decisions":[{{"candidate_index":0,"decision":"keep","evidence":"exact local quote","reason":"supported"}}]}}
+
+Decisions:
+- keep: directly supported, including independent biography facts and every
+  explicit Corpus row even when a later row replaces it.
+- drop: a clear semantic error. Quote the exact source clause that demonstrates
+  the mistake and choose a reason below. Do not rewrite endpoints or relations.
+- uncertain: ambiguous, missing context, fragmented wording, or normalization
+  differences. Do not drop merely because the document is long or a label differs.
+
+Permitted drop reasons:
+- wrong-speaker: a first-person claim belongs to another named speaker.
+- wrong-role: a profile Profession became employer/employee, or a To recipient
+  became attendee without an explicit attendee assertion.
+- unsupported-authorship: title/possession/mention alone became authorship.
+- wrong-modality: a proposed/completed action is confused with an intention;
+  preserve the source's commitment and tense, and abstain if ambiguous.
+- wrong-relation: the local clause expresses a clearly different relation or
+  direction, such as integrating districts into a city becoming founded-by-city.
+
+Judge meaning rather than exact string equality. Output one decision per
+candidate. If unsure, choose uncertain. Only drop with a decisive local quote.
+
+Mandatory calibration examples:
+- SOURCE `Jaroslav Pelikan works for Valparaiso University from 1946 to 1949.`
+  plus candidate `(Jaroslav Pelikan, employee, Valparaiso University)` is KEEP.
+  A source sentence whose predicate literally says `works for`, `was born in`,
+  `is a citizen of`, or `was founded by` is decisive support for that relation;
+  never drop it because another paragraph is long or because a gold file may
+  omit the row.
+- SOURCE `Scot's book is titled The Discoverie of Witchcraft` plus candidate
+  `(The Discoverie of Witchcraft, author, Scot)` is DROP with reason
+  `unsupported-authorship`: possession and `is titled` do not assert authorship.
+- SOURCE `Jon: Lost my job as a banker` plus candidate `(Gina, occupation,
+  banker)` is DROP with reason `wrong-speaker`; the banker fact belongs to Jon.
+- SOURCE `I'm starting a dance studio` plus candidate `(Jon, plans to open,
+  dance studio)` is UNCERTAIN unless the source explicitly says want/plan/open;
+  preserve it rather than converting a completed/current action.
+- SOURCE `Profession: Colour Technologist` plus candidate `(Craig Baker,
+  employee, Colour Technologist)` is DROP with reason `wrong-role`; the profile
+  profession is not employment.
+"""
     base = f"""You are a fact-extraction verifier. SOURCE is authoritative. The C rows
 are untrusted proposals from another extractor, not facts.
 
@@ -140,6 +208,8 @@ def _parse_decisions(
     candidates: list[tuple[str, str, str]],
     source: str,
     vocabulary: set[str],
+    *,
+    abstain: bool = False,
 ) -> tuple[list[tuple[str, str, str]], list[dict[str, Any]]]:
     payload = _parse_json(raw)
     if not isinstance(payload, dict) or not isinstance(payload.get("decisions"), list):
@@ -156,9 +226,42 @@ def _parse_decisions(
             continue
         seen.add(index)
         decision = item.get("decision")
-        if decision not in {"keep", "correct", "drop"}:
+        if decision not in {"keep", "correct", "drop", "uncertain"}:
             continue
         original = candidates[index]
+        if abstain:
+            evidence = item.get("evidence", "")
+            reason = item.get("reason", "")
+            decisive = (
+                decision == "drop"
+                and isinstance(evidence, str)
+                and len(evidence.strip()) >= 3
+                and evidence.strip() in source
+                and reason in {
+                    "wrong-speaker", "wrong-role", "unsupported-authorship",
+                    "wrong-modality", "wrong-relation",
+                }
+            )
+            scope = _candidate_scope(source, original[0], original[2])
+            protected = scope is not None and _trigger_supported(scope, original[1], original[2])
+            if decisive and protected:
+                decisive = False
+                reason = "literal-support-protected"
+            if _modality_conflict(source, original):
+                decisive = True
+                reason = "local-modality-conflict"
+                evidence = scope or evidence
+            if not decisive:
+                accepted.append(original)
+            decisions.append({
+                "candidate_index": index,
+                "decision": "drop" if decisive else "keep" if decision == "keep" else "uncertain",
+                "input": dict(zip(("subject", "relation", "object"), original, strict=True)),
+                "evidence": evidence,
+                "reason": reason,
+                "accepted": not decisive,
+            })
+            continue
         out_subject = item.get("subject", original[0])
         out_relation = item.get("relation", original[1])
         out_object = item.get("object", original[2])
@@ -193,6 +296,8 @@ def _parse_decisions(
                 "accepted": accepted_row,
             }
         )
+    if abstain:
+        accepted.extend(candidate for index, candidate in enumerate(candidates) if index not in seen)
     return list(dict.fromkeys(accepted)), decisions
 
 
@@ -202,6 +307,57 @@ def _select_cases(cases: tuple[dict[str, Any], ...], args: argparse.Namespace):
         return tuple(case for case in cases if case["id"] in wanted)
     selected = cases[args.offset :]
     return selected[: args.limit] if args.limit is not None else selected
+
+
+def _candidate_scope(source: str, subject: str, object_: str) -> str | None:
+    """Find the smallest record that owns both endpoints.
+
+    Named-speaker subjects are resolved to their own turn before generic
+    same-scope matching, preventing a name mentioned in another turn from
+    protecting a cross-speaker hallucination.
+    """
+    lines = source.splitlines()
+    has_speaker = False
+    for index, line in enumerate(lines):
+        match = re.match(r"^\s*([^:]{1,80}):\s*", line)
+        if match and match.group(1).strip().casefold() == subject.casefold():
+            has_speaker = True
+            end = index + 1
+            while end < len(lines) and not re.match(r"^\s*([^:]{1,80}):\s*", lines[end]):
+                end += 1
+            turn = "\n".join(lines[index:end])
+            if object_.casefold() in turn.casefold():
+                return turn
+            continue
+    if has_speaker:
+        return None
+    for scope in _scopes(source):
+        folded = scope.casefold()
+        if subject.casefold() in folded and object_.casefold() in folded:
+            return scope
+    return None
+
+
+def _modality_conflict(source: str, triple: tuple[str, str, str]) -> bool:
+    """Identify a plan label attached to a current/completed action clause."""
+    subject, relation, object_ = triple
+    if relation_key(relation) != "plans to open":
+        return False
+    scope = _candidate_scope(source, subject, object_)
+    if scope is None:
+        return False
+    folded = scope.casefold()
+    object_folded = object_.casefold()
+    plan_words = (
+        "want to open", "wanna open", "plan to open",
+        "search for a place to open", "looking for a place to open",
+    )
+    action_words = ("i'm starting", "im starting", "started", "start my own")
+    return (
+        object_folded in folded
+        and any(word in folded for word in action_words)
+        and not any(word in folded for word in plan_words)
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -221,8 +377,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prompt-version", choices=PROMPT_VERSIONS, default=PROMPT_VERSION)
     parser.add_argument(
         "--verify-relations",
-        default="",
-        help="comma-separated relation labels to verify; empty means verify every candidate",
+        default=DEFAULT_VERIFY_RELATIONS,
+        help="comma-separated high-risk relation labels to verify",
     )
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -294,7 +450,8 @@ def main(argv: list[str] | None = None) -> int:
                         temperature=0.0,
                     )
                     verified, local_decisions = _parse_decisions(
-                        raw, risky_candidates, case["text"], vocabulary
+                        raw, risky_candidates, case["text"], vocabulary,
+                        abstain=args.prompt_version == "common-facts-qwen-v17-abstain",
                     )
                     # Keep every non-risky candidate unchanged, and replace the
                     # risky subset with only verifier-approved rows.
@@ -312,7 +469,10 @@ def main(argv: list[str] | None = None) -> int:
                 row["decisions"] = decisions
                 row["raw"] = raw
             except (LlmUnavailable, ValueError, json.JSONDecodeError) as exc:
-                row["relations"] = []
+                row["relations"] = (
+                    [{"subject": s, "relation": r, "object": o} for s, r, o in candidates]
+                    if args.prompt_version == "common-facts-qwen-v17-abstain" else []
+                )
                 row["decisions"] = []
                 row["error"] = str(exc)
             _append_row(args.out, row)

@@ -1986,3 +1986,320 @@ v3 曾引入第 4 个输出值 `NONE`（"输入为空 / 无效 / 无法归类时
 **下一步（不要自动开工）**：若要继续这条路，第一个该做的**不是**调提示词，而是
 **单轮扩大 Top-K** 的对照（§12.6）——它把"候选变多"与"查询被改写"分开，
 而这是本阶段这两件事绑在一起、无法归因的地方。
+
+## D42 · 共同取证的"逐次取证"与计划里的时间片段（2026-10-16）
+
+**决策**：三条一起定——它们都在回答同一件事：**证据的形状**归谁。
+
+1. **逐次取证**：`QueryPlan.per_occurrence`（标题 / 主题 / 出席这类"哪几次"的计划）⇒
+   执行器**关掉按三元组的去重**（同一条事实在不同来源里的每次出现各自算证据），
+   且**不先用时间窗口裁事实**；窗口与次数的比较由答案模型看着每条证据的来源日期做。
+   ⛔ 不要在证据层"贴心地"裁窗口：裁完之后"窗口内 0 次"和"没有这条会议"在证据里**长得一模一样**。
+2. **LLM 计划的时间片段**：`grounded_planner` 的 filter schema 加 `period`——模型把题面的
+   时间措辞**逐字**抄进来，本地用 `time_bounds()` 解析成半开区间（解析不出 ⇒ 弃权；
+   题面有时间措辞而计划没有区间 ⇒ `missing_period` 弃权）。**限制条件不许被悄悄丢掉**。
+   护栏里只留真正不可表达的（否定、比较、多实体、相对今天的时间、频率词）。
+3. **标题匹配只用一个归一化**：查询侧与事实侧同为 `key()`（保留标点身份）；
+   末尾的 "meeting" 在捕获阶段剥掉，不再用 `title_key` 做第二次抹平。
+
+**证据**（CorporateBench 失败 50 题，事实库 = LLM 抽取版，报告见
+[`../eval/reports/corporatebench-facts-20261016.md`](../eval/reports/corporatebench-facts-20261016.md)）：
+修前 5 道"出现几次"的题全部 0 命中；修后逐题与 gold 相等（1 / 5 / 0 / 5 / 11）。
+根因两处都不是模型：`title_key` 抹标点 ⇒ `-`、`<>`、`1:1` 永不命中；
+`fetch_evidence` 的三元组去重把跨文档的同一标题压成一条 ⇒ 数不出次数。
+
+**2026-10-17 补（planner 三处）**：① 词级护栏改成**上下文短语**——只有
+`last/next/this + 时间单位` 才算相对时间限制，标题里的 `last`（"The Last Good Year"）不再拦；
+② `missing_period` 改成**字面感知**——时间词若已出现在计划字面里（年份在标题中），不算"限制被丢"；
+③ 提示词加**多跳 walk 示范**（作者→母校、配偶→出生地），版本升 **v3**。
+目的都是让"计划能表达的问法"变多——实测瓶颈在计划而不是抽取（见
+[`../eval/reports/common-facts-rule-vs-llm-20261016.md`](../eval/reports/common-facts-rule-vs-llm-20261016.md) §八）。
+
+**2026-10-17 补**：同一个 bug 在**事实侧**还有一半——`grammar.py` 给标题事实写的
+`match_object=title_key(...)`（抹标点），与查询侧的 `key()` 对不上，带标点的标题
+**永远匹配不上**。修掉后 CorporateBench 的规则臂命中从 **59 → 106**（250 题）。
+抽取表示变了 ⇒ `EVIDENCE_VERSION` 升到 **`memory-facts-v10-title-match`**
+（不升，已覆盖的来源不会重扫，修复对那些行永远不生效）。
+
+**代价与边界**：`per_occurrence` 的计划会让超出 `evidence_limit` 的长系列整体回退——
+"同一系列出现 20 次以上"的问法仍然回退，不是返回半份清单。
+planner 提示词因此改版：`prompt_version` **v1 → v2**（改提示词必须升版本，同路由器的纪律）。
+
+**2026-10-17 补（goal 模式收敛，四处）**：① planner 关系词表补 `located in` / `located at` /
+`date of birth` / `live` / `lives in`；② `time_bounds()` 支持 **`as of <date>`**、**裸日期**与
+**ISO 日期**（"as of Sept 4, 2025"、"September 4, 2025"、"1984-06-16"）——planner 逐字抄下来的
+时间片段必须能解析，否则整题被 `invalid_period` 弃权；③ planner 调用 **3 次退避重试**——
+网关瞬时 5xx 曾让整题被 `llm_unavailable` 跳过（11 道可答题里丢 4 道）；
+④ 评测侧抽取器（[`../tools/run_llm_add_corporatebench.py`](../tools/run_llm_add_corporatebench.py)
+的提示词同族）新增关系 **`date of birth`** 并要求"记录里有出生日期就抽 `born on`"。
+效果与逐数据集数字见 [`../eval/reports/common-facts-rule-vs-llm-20261016.md`](../eval/reports/common-facts-rule-vs-llm-20261016.md) §九：
+HaluMem 规则臂 0 命中 → LLM 臂 13/13 精确，goal 门栏（LLM 独有且正确 ≥15）以 **16** 达成。
+⚠ 范围：`date of birth` 是**规范关系词**，不是"为某业务类别建专用执行路径"——它仍走通用
+filter 计划，没有任何按类别分支的代码。
+
+## D43 · **显式更新句是共同句法，不是评测特例**（2026-10-17）
+
+**决策**：`… (this replaces the earlier value)` 这类**显式更新句**由 `facts/` 的
+确定性语法解析成普通替换事实（带 `replaces_earlier`），与普通陈述走同一张事实表、
+同一套执行器；**不为任何数据集建更新专用分支**。三条落地规则：
+
+1. **`grammar.py` 的 `_UPDATE_FORMS`**：`The name of the current head of state in X is
+   Y`、`X speaks the language of Y`、`The headquarters of X is located in the city of Y`
+   等 20 余种**来源句法**只在更新句上尝试（普通陈述的守卫不变）；主体/宾语都在句子里，
+   不允许推断。数据源自己的拼写（`univeristy` / `origianl`）照抄才匹配得上。
+2. **`paths.py` 的"属性 of 国家"两跳问法**是通用嵌套（`capital/continent/official
+   language … of the country where/that X is a citizen`、反向所有格 `whose citizen is
+   X`），进 `noun_path` 与 `question_path` 的常规表，不是 MQuAKE 专用路径。
+3. **评测语料必须与 AML 适配器同形**：原生 MQuAKE 加载器补上 `new_triples` 里**未被
+   编辑的链边**（`eval/datasets/aml/mquake.py` 早已如此），否则更新后的多跳链在语料里
+   断掉——这是语料 bug，不是模型问题。
+
+**证据**（MQuAKE 768 题，报告见
+[`../eval/reports/common-facts-rule-vs-llm-20261016.md`](../eval/reports/common-facts-rule-vs-llm-20261016.md) §十）：
+四个根因（语料缺边 44/256 case、LLM 把更新句整句跳过 272/861、规则层 161/349 更新模板
+未解析、编译器不认 102 个两跳问法）修复后，规则臂精确率 **0.41 → 1.00**（557 命中 /
+556 含金标），LLM 臂 **0.05 → 0.61**。
+
+**代价与边界**：
+* 抽取表示变了 ⇒ `EVIDENCE_VERSION` 升 **`memory-facts-v11-update-forms`**（不升，
+  已覆盖的来源不会重扫）。
+* **语料形状变了** ⇒ MQuAKE 每用户事实数 221/224/224/192 → **256**，`SHAPE_NOTE`
+  已改（进数据指纹）；**旧 MQuAKE 分数不得与新分数并入同一比较**。
+* `_current` 的 `event_time` 守卫（无时间戳 ⇒ 不折叠）**没有动**——那是
+  [`../docs/open-questions.md`](../docs/open-questions.md) D1 的待决项，本轮不依赖它。
+
+## D44 · 共同事实取证的**覆盖边界**：事实检索题才走这条路（2026-10-17）
+
+**决策**：按官方 Search 题量把 12 个数据集跑了一遍（6,985 对 / 610 题），确认共同事实取证
+**只能覆盖"关系型事实"问法**——这不是实现不足，是 §2.1 红线（不做名单/计数/汇总）与
+问题类型本身决定的。据此定三条边界：
+
+1. **可覆盖**：HaluMem（通用人物属性）、MQuAKE（关系链）、TempReason（时间区间 + 职位）。
+   这三集规则层分别命中 14/20、71/89、39/40，**证据精确率 1.00**。
+2. **结构上不适用**：CL-Bench / BEAM / PersonaMem / MemTrap（160 题）是代码修改、
+   UI 建议、物理电路计算——答案不在任何三元组里；HybridQA / MedMemoryBench 是计数聚合。
+   **正确行为是回退原检索**，不是硬造计划。
+3. **可扩但要改编译器**：LoCoMo 的时间/事件问法、MuSiQue 的词表外多跳——**扩 `paths.py`
+   与关系词表**，不是扩抽取。
+
+**本轮新增的通用能力**（都不针对具体数据集）：
+* `My name is X` 把第一人称绑定到真名（此前事实主语停在字面 `"I"`）；
+* `I was born on <date>` ⇒ `date of birth`（日期原样保留）；
+* 编译器认 `birth date` / `when was X born` / `where does X live`（含 `as of <date>`）；
+* `_UNSAFE_SCOPE` **不再因为出现年份而弃权**——字面日期交给 `time_bounds()` 成区间。
+
+**证据**：报告
+[`../eval/reports/common-facts-rule-vs-llm-20261016.md`](../eval/reports/common-facts-rule-vs-llm-20261016.md) §十一。
+450 道可比对题上：规则 127/127、LLM 105/81、并集 128/128，**LLM 独有且正确仅 1 题**。
+
+**代价**：`EVIDENCE_VERSION` 已在 D43 升到 `memory-facts-v11-update-forms`（本轮语法改动
+同属该版本）；HaluMem 从"不可测"名单移出，它的 14 个正确命中此前被记成 `-`。
+
+## D45 · 事件时间问法与省略主语（2026-10-17）
+
+**决策**：`When did X <动词> <宾语>` 这类问法编译成**普通 filter 计划**（`participated`
+等事件关系 + 宾语词元），答案由**那条事实的 `source_date`** 带出（渲染成
+`Source record date`）——**不做日历换算、不新增算子**。三条落地：
+
+1. **编译器**（`query.py`）补通用事件时间框架（`go to / attend / visit / host / launch /
+   start / begin / get / paint / draw / join / apply to / receive / mention / design`）。
+   ⚠ 这不是"事件专用执行路径"：计划仍是 filter，日期仍是来源字段。
+2. **抽取**（`grammar.py`）对**省略主语**的事件句补回第一人称——前提是说话人**有名字**
+   且句首是明确的过去时事件动词；`Been hectic` 这类状态句不补（会造出 "I been hectic"）。
+3. **`joined` 不进谓词表**：`I joined a church and a gym` 这类并列句不适合当单一事件，
+   既有测试钉着"不产生事实"。
+
+**证据**（LoCoMo 120 题，报告
+[`../eval/reports/common-facts-rule-vs-llm-20261016.md`](../eval/reports/common-facts-rule-vs-llm-20261016.md) §十二）：
+命中 3 → **12**（证据含金标 11）。唯一不精确的一题是相对时间（`last year` + 来源日期
+2023 ⇒ 2022），属于 D22 注解的职责，不是取证错误。
+
+**代价**：`EVIDENCE_VERSION` 已在 D43 升版（本轮语法改动同属该版本，已覆盖的来源会重扫）。
+
+## D46 · 标注字段与会议主题：**原文明写的字段就是事实**（2026-10-17）
+
+**决策**：Calendar invite 的 `Attendees:` / `Organizer:` 与邮件正文里的会议主题句
+（`meeting to discuss X` / `session on X`）都是**原文标注字段**，与署名块同一口径——
+确定性解析成普通事实（`attendee` / `organizer` / `meeting topic`），**不调用 LLM、
+不推断**（§2.1 / §11.3）。三条落地边界：
+
+1. **会议主题要过形状守卫**：名词短语才算主题，从句碎片（`what we'll be covering`）
+   拒绝；停用词（`and` / `the` / `for` …）不参与匹配。
+2. **主题匹配用词元全包含，不用相等**：事实存原文长句、题面是短名，相等永远匹配不上。
+3. **会议主题计划不设 `guard_literal`**：会议邮件里大量与本主题无关的句子会被来源审查
+   当成"未解释的冲突"而整题回退（实测 `unsupported_source`）。
+
+**证据**（报告
+[`../eval/reports/common-facts-rule-vs-llm-20261016.md`](../eval/reports/common-facts-rule-vs-llm-20261016.md) §十三）：
+CorporateBench 规则臂 106 → **107 命中**（精确 103 → 104）；事实层 562 → **694 条**
+（+70 attendee / +32 organizer / +15 meeting topic）。12 集合计规则 136 → **137**。
+
+⚠ **`Who was absent from …` 抽不到是对的**：全库检索 `%bsent%` 为 0——语料里没有任何
+缺席声明，那些题的 gold 就是 `[]`。
+
+## D47 · 事件句的**并列从句**与问法词表的边界（2026-10-17）
+
+**决策**：`grammar.py` 的"计划/否定/引用整句作废"规则加一条**从句级**例外：句子被
+`, so` / `, but` / `;` 切开后，**不含标记的前半句**仍是独立陈述，照常抽取；后半句
+（计划）整段丢弃。同一轮把 `lost` / `participated in` 补进事件谓词表，并修两处
+编译器边界：
+
+1. **`When did X …` 的宾语匹配词取"第一个实词"**（跳过 `to` 与停用词），
+   不取宾语首词、也不要求全部实词都出现——前者会命中 `trip to Rome`，
+   后者会被目的状语（`for his store`）拖死。
+2. **`hope` 只在带人称主语时才是计划动词**：MQuAKE 的
+   `where Hope Lange is a citizen` 曾被词级护栏整题毙成 `unsupported_scope`。
+
+**证据**（12 集 610 题，报告
+[`../eval/reports/common-facts-rule-vs-llm-20261016.md`](../eval/reports/common-facts-rule-vs-llm-20261016.md)
+§十四）：规则臂 137 → **161 命中（159 精确）**；LoCoMo 13 → 14、MQuaKE 71 → **94/94**。
+全量测试 1746 → 1752 passed（D47 那轮新增 6 条）。
+
+**代价**：抽取表示再变 ⇒ `EVIDENCE_VERSION` 升 **`memory-facts-v12-event-clauses`**
+（已覆盖来源会按新版本重扫）。⚠ **并列从句的救回只覆盖 `, so` / `, but` / `;`**
+——逗号直接连接的从句（`I got a job, I moved to Leeds`）仍整句不抽，宁缺毋滥。
+
+## D48 · 档案字段是事实；**同一 Add 内的自我介绍把第一人称绑到真名**（2026-10-18）
+
+**决策**：`My highest education level is PhD` / `my personality type is INTJ` /
+`my major is …` 这类**本人自述的档案字段**是原文写明的独立事实（与 D46 的标注字段
+同一口径），确定性抽取成普通事实。四条落地：
+
+1. **字段名走白名单**（15 个）：泛化的 `my X is Y` 会把叙述句
+   （`my journey is values like empathy`）也变成事实——那是推断，不是原文字段。
+2. **问法编译**：`What is <人名>'s <字段>`（含 `as of <date>`）⇒ walk；字段同义写法
+   （`MBTI personality type` ≡ `personality type`）在 `relation_key` 归一。
+3. **同一 Add 内绑定真名**：HaluMem 一类记录把档案拆在多个块里（`local_index=1` 是
+   `My name is X`、`=2` 才是档案字段）。`index_pair_facts` 按 `fetch_by_request`
+   找**同一次 Add** 里的自我介绍，把第一人称事实的主语换成人名。
+   ⚠ **只在同一 Add 内**——跨 Add 没有可信顺序（D24 / D28）。
+4. **来源审查不再把自我介绍当成冲突**：`My name is X, and I am a Female` 曾让整题
+   回退成 `unsupported_source`。
+
+**证据**（1,023 题按官方题量加权，报告
+[`../eval/reports/common-facts-rule-vs-llm-20261016.md`](../eval/reports/common-facts-rule-vs-llm-20261016.md) §十五）：
+HaluMem **14 → 19**（零回归）；规则事实层 1,877 → **2,094 条**。
+全量测试 **1755 passed**（新增 3 条钉住本轮行为）。
+
+**代价**：抽取表示再变 ⇒ `EVIDENCE_VERSION` 升 **`memory-facts-v13-profile-fields`**。
+
+## D49 · LLM 抽取提示词：**"返回空"指令会让模型在对话记录上一律给空**（2026-10-18）
+
+**决策**：`tools/facts_rule_vs_llm.py` 的抽取提示词改写，并记下这条可复现的模型行为：
+
+> 旧提示词的标题句 `Extract every explicitly stated relation` 与规则
+> `Return [] if nothing is stated.` **同时在场**时，该模型对**对话 / 邮件 / 档案**类记录
+> 一律返回 `[]`；只有 `Corpus: A — r — B` 那种一行式记录能抽出来。
+
+逐行二分（保留前 N 行 / 逐条删除 / 单独加回）定位到这两处措辞；**换掉标题句、删掉
+"返回空"那条、把示例并入规则、去掉"关系限 2-4 词"**之后，同一批 24 条记录从
+**0 条事实**变成 **22/24 非空、93 条事实**。
+
+⚠ **更新句必须带逐字示例**：只改标题句时，
+`The name of the current head of state in X is Y (this replaces the earlier value)`
+会被抽成 `subject=Y`（主宾颠倒）。把这条整句写进规则 5 的示例后恢复正确。
+
+**证据**（同上报告 §十五）：36,779 对全量重抽后 LLM 事实层 **2,352 → 12,978 条**。
+
+⚠ **撤回一条曾被误报的结论**（2026-10-19）：重抽后一度记录为"两臂在 1,023 题上逐题追平
+（各 236 命中）"——**那是工具 bug**：`stage_index --rule-only` 每次都会重建两个库，把
+`llm.sqlite` 覆盖成了规则层，于是"两臂相同"其实是同一份数据跟自己比。修掉后真实结果是
+**规则 236/220（0.93）vs LLM 158/144（0.91），规则独有 78 题、LLM 独有 0 题**。
+⇒ 提示词修复救回的是**事实数量**（对话类记录不再全空），**不是命中**。
+
+⚠ **这是评测工具的提示词，不是产品代码**——`Add` 路径本来就不调用 LLM（§7.2）。
+它测的是"如果抽取更强能多拿多少"，而本轮的答案是**提示词 bug 吃掉了全部对话类记录**。
+
+## D50 · 第一人称与真名：**读取时解析，不改库里的行**（2026-10-18）
+
+**决策**：HaluMem 一类记录把自我介绍与档案字段拆在**不同的 Add** 里。为了让
+`My highest education level is PhD`（第一批）能答 `What is Sarah Garcia's …`（另一批），
+**在读取期**把 `subject_key ∈ {i, user, 用户}` 的事实归到该 user 的 `name` 事实：
+
+1. **写入侧不变**：`memory_facts` 里那一行的主语仍是字面 `I`。**不在写入时改写**，
+   因为那会让主语依赖 Add 的到达顺序——`profile` 先到就绑不上、`intro` 先到就绑得上，
+   而 D28 要求"位置与内容都是请求的纯函数"。
+2. **读取侧解析**：`fetch_evidence` 先查该 user 的 `name` 事实（`relation_key='name'`，
+   由 `My name is X` 落库），命中时**同时**把返回值的 `subject`、`statement`、`content`
+   三处一起换掉。⚠ 只改 `subject` 会让返回给 AML 的正文仍写着 `I's highest education
+   level`——`content` 是写入时由 `statement` 渲染的字符串（实测踩到）。
+3. **`Source quotation:` 那一行一个字节都不改**：它是原文逐字。
+4. **没有自我介绍的用户一条都不绑**，行为与之前逐字相同。
+5. **`_NOT_A_NAME` 守卫**：`I am Stable and Normal` 曾被 `_SELF_NAME` 当成名字
+   `Stable`，进而把同一 Add 里所有第一人称事实的主语都改成它（实测：`monthly income`
+   的主语变成 `Stable`）。状态/形容词小表拦住这一类。
+
+**为什么跨 Add 在这里安全**（D24 / D28 的例外，理由要留档）：
+* 绑定来源**只有已落库的 `name` 事实**，不猜；
+* 它**不引入到达顺序依赖**——同一份库，无论哪次 Add 先到，读出来的主语都一样；
+* 它**不改变事实的派生性**：`memory_facts` 仍可由 `qa_pairs` 重建（重建时按同样规则查一遍）；
+* 官方 **95.3% 的消息带时间戳**（43,272 条 add / 454,937 条消息实测），缺的 4.7% 主要是
+  ScriptMem（无正文、跑不了）与 MQuAKE（无时间语义的静态三元组）⇒ 时间冲突不是主要风险。
+
+**证据**：HaluMem 事实层 8 → **1,521 条**；`Sarah Garcia` 的 `education level` /
+`monthly income` 两题从 `unsupported_walk` 变为 `selected`。全量测试 **1755 passed**。
+
+## D51 · 官方采集语料是**各数据集的原始格式**，不是我们构造的形状（2026-10-18）
+
+**决策**：`official-dataset-2026-09-29` 的 `official-adds.jsonl` 是 AML 真实发来的请求，
+**每个数据集保留自己的原始格式**。规则层必须逐种认，不能假设 `A — r — B` 那种构造形状：
+
+| 数据集 | 官方语料形状 | 本轮补的解析 |
+| --- | --- | --- |
+| MQuAKE | `Corpus: {"subject": …,"relation": …,"object": …}` | **JSON 三元组**抽取 |
+| MQuAKE 更新句 | `UPDATE: replace the prior value …\n{json}` | `_UPDATE_PREFIX` |
+| LoCoMo / HaluMem | 对话 + `[Time: …]` 前缀 | 偏好句、`name` 事实 |
+
+⚠ **`"\n" not in question` 那条旧守卫**把两行的更新句整条挡在外面（MQuAKE 1,124 题
+**0 命中**）。放宽成"首行是标签 + 余下是一条显式声明"后 **620 命中（55%）**。
+
+**代价**：抽取表示变了 ⇒ `EVIDENCE_VERSION` 升 **`memory-facts-v14-event-verbs`**
+（本轮同时补了偏好句、`name` 事实与事件谓词；不升，旧库的覆盖表会认为已扫过、
+不会按新语法重扫）。
+
+**证据**（报告
+[`../eval/reports/common-facts-rule-vs-llm-20261016.md`](../eval/reports/common-facts-rule-vs-llm-20261016.md)
+§十六）：官方 6,834 题 / 1,297 用户 / 222,964 块上，MQuAKE **0 → 620**、LoCoMo 56 → 60、
+HaluMem 8 → 10、CorporateBench 122。
+
+**边界**：官方 MQuAKE **每用户只有 3–9 条记忆**，而题目要 2–4 跳 ⇒ 剩余 405 题
+`unsupported_walk` 是**语料缺边**，不是规则缺陷（例：`Zimbabwe → head of government →
+Emmangagwa` 存在，但没有 Mnangagwa 的职业边）。
+
+## D52 · 端到端测量的结论：**主瓶颈在证据层；CorporateBench 的计数题例外**（2026-10-19）
+
+**决策**：在官方语料上补测"答案生成 + 判分"（3 份有判分链的数据集，3,388 题），
+据此确定后续投入方向。三层损耗如下：
+
+```text
+6,834 题
+  └─ 754 有证据（22%）
+      └─ 526 证据含金标（精确率 70%）
+          └─ 442 答对（转化率 84.0%）
+```
+
+⚠ **分子只算"证据含金标且答对"的题**：把"证据不含金标却答对"的 38 题
+（CorporateBench 37 题）算进分子会虚高到 91.3%。
+
+**转化率必须分数据集看，不能合成一个数**：
+
+| 数据集 | 证据含金标 | 答对 | 转化率 | 剩余失败的性质 |
+| --- | ---: | ---: | ---: | --- |
+| MQuAKE | 432 | 393 | **91.0%** | 39 个失败：**20 个答的是另一套金标**（`original`/`updated` 选反）；若干是**同义形式**（`British` vs `United Kingdom…`、`Dutch` vs `Netherlands`、`espionage` vs `spy`）——语义对但不在别名表；少数是真的取错证据 |
+| CorporateBench | 86 | 41 | **47.7%** | **41/45 是模型答错的计数题**（拿到 2 条带日期的事实却答 `0`，手工复跑可复现）；另 4 个是网关 `HTTPStatusError` |
+| HaluMem | 8 | 8 | 100% | — |
+
+⇒ **证据层仍是主瓶颈（上限 78%）**；但 **CorporateBench 的计数题上答案层是并列瓶颈**，
+且那批题的证据已经给到位——短板是答案模型不会在事实列表上做集合计数，不是取证。
+
+**三份"无证据"已查明都是语料限制，不是规则缺陷**（逐条见报告 §十七.4）：
+MQuAKE 每用户仅 3–9 条记忆（多跳链缺边）、CorporateBench 的题单会议与语料会议不重合、
+HaluMem 问的字段语料里不存在。
+
+⚠ **绝对分数不能对齐榜分**：答案/裁判都是 `Qwen3.5-9B`（非官方 `gpt-4o-mini` /
+`Qwen3-14B`），MQuAKE 与 CorporateBench 的判分是仓内自写纯函数。**只有相对结构可信。**
+
+**顺带修的三处查询侧缺陷**（与这条决策无依赖，但同轮发现）：
+1. 会议主题把时间词当主题词元（`about X between January 2 and 5, 2024`）⇒ 只取前半句；
+2. `object_terms` 只在 Python 侧生效、没进 SQL ⇒ 带它的计划取回阶段拉全量打满上限；
+3. 会议标题（`document title`）未参与会议取证 ⇒ 计划现在同时查它与 `meeting topic`。

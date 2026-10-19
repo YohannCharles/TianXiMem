@@ -22,6 +22,8 @@ from .constants import (
     DEFAULT_COQ_SUFFICIENCY_THRESHOLD,
     DEFAULT_COQ_TIMEOUT_S,
     DEFAULT_EXPANSION_SEED_LIMIT,
+    DEFAULT_GROUNDED_PLANNER_MAX_OUTPUT_TOKENS,
+    DEFAULT_GROUNDED_PLANNER_PROMPT_VERSION,
     DEFAULT_PLAN_DECOMPOSE_PROMPT_VERSION,
     DEFAULT_PLAN_MAX_OUTPUT_TOKENS,
     DEFAULT_PLAN_STEP_PROMPT_VERSION,
@@ -44,6 +46,7 @@ from .model import (
     BudgetConfig,
     CaptureConfig,
     ConfigError,
+    GroundedPlannerConfig,
     ModelsConfig,
     NeighborConfig,
     PackagingConfig,
@@ -226,13 +229,22 @@ def _retrieval(raw: object) -> RetrievalConfig:
             "evidence_limit",
             "evidence_hop_limit",
             "fact_backfill_limit",
+            "grounded_planner",
             "rrf",
         },
     )
     r = _group(g.get("rrf"), where="retrieval.rrf", allowed={"k", "weights"})
+    p = _group(
+        g.get("grounded_planner"),
+        where="retrieval.grounded_planner",
+        allowed={"enabled", "timeout_seconds", "max_output_tokens", "temperature", "prompt_version"},
+    )
     evidence = g.get("grounded_evidence", False)
     if not isinstance(evidence, bool):
         raise ConfigError("`retrieval.grounded_evidence` 必须是布尔值")
+    planner_enabled = p.get("enabled")
+    if planner_enabled is not None and not isinstance(planner_enabled, bool):
+        raise ConfigError("`retrieval.grounded_planner.enabled` 必须是布尔值")
     return RetrievalConfig(
         prefetch_limit=_int(
             g.get("prefetch_limit"),
@@ -249,6 +261,29 @@ def _retrieval(raw: object) -> RetrievalConfig:
         ),
         fact_backfill_limit=_int(
             g.get("fact_backfill_limit"), where="retrieval.fact_backfill_limit", default=1024
+        ),
+        grounded_planner=GroundedPlannerConfig(
+            enabled=False if planner_enabled is None else planner_enabled,
+            timeout_seconds=_float(
+                p.get("timeout_seconds"),
+                where="retrieval.grounded_planner.timeout_seconds",
+                default=DEFAULT_ROUTER_TIMEOUT_S,
+            ),
+            max_output_tokens=_int(
+                p.get("max_output_tokens"),
+                where="retrieval.grounded_planner.max_output_tokens",
+                default=DEFAULT_GROUNDED_PLANNER_MAX_OUTPUT_TOKENS,
+            ),
+            temperature=_float(
+                p.get("temperature"),
+                where="retrieval.grounded_planner.temperature",
+                default=0.0,
+            ),
+            prompt_version=_str(
+                p.get("prompt_version"),
+                where="retrieval.grounded_planner.prompt_version",
+                default=DEFAULT_GROUNDED_PLANNER_PROMPT_VERSION,
+            ),
         ),
         rrf=RrfConfig(
             k=_int(r.get("k"), where="retrieval.rrf.k", default=RRF_K),

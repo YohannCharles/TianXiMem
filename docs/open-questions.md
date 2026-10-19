@@ -290,6 +290,7 @@ D20 当年把连续 user 并进同一个 `question` 来兜这件事，**D32（20
 不再撞 125 秒上限，**不是**我们缩小了返回。逐数据集的实测 token 与状态见
 [`../eval/reports/ledger.md`](../eval/reports/ledger.md)。 | 实测 + **D32**（2026-10-03） |
 | ✓ **V15 已清**（2026-10-01） | **CL-Bench 本地跑不起来的病因是本地打包**，不是数据集、也不是网关。官方实测两条预算——单条消息 **8,000 字符**（2,514 条正好、0 条超过）、每条 Add **2,000 词**（官方明文那一半；真实语料每-add 空白词数 p99 = 2,056）——本地两条都没实现 ⇒ 一条 158,789 字符的正文切完仍是同 role 的一串片、按 D24 合并成一个 160,273 字符的块 ⇒ 嵌入 400。**两条都落地后 clbench / beam 端到端跑通**——见 [`add_shape.MAX_MESSAGE_CHARS`](../eval/harness/add_shape.py) 与 [`batching.MAX_BATCH_WORDS`](../eval/harness/batching.py)。<br>⚠ **残留**：词数计数官方是“冻结 Adapter 计”，本仓用**空白分词近似**（S2 那半条仍未清） | 实测（2026-10-01） |
+| **V19** | **按检查点裁剪语料的评测路径只有官方重放有，临时对照工具没有**（2026-10-19）。`eval/datasets/official_capture.replay_plan` 按 timeline 交错、**add 先于同刻 search**（`tests/test_official_capture.py` 钉着"先灌完再问 ⇒ 41% 的题读到未来"）；而 `tools/facts_rule_vs_llm.py` 的官方语料对照**把每个 user 的全部 add 都建进库**，题目只按 `user_id` 取证 ⇒ **2,249 / 6,834 题（33%）能看到提问之后才到达的记忆**（LoCoMo 936 · HaluMem 713 · MQuAKE 378 · MedMemory 222）。**后果**：检索命中可能虚高（未来轮次里就有金标），MQuAKE 的 `original` / `updated` 两套金标可能按错的检查点判分（已在 3 个带 `[dataset][session][Dx:y][text]` 前缀的用户上确认 `gold_variant` 被误判成 `original`）。**怎么清**：用 `replay_plan` / `replay_official` 重跑，或给对照工具加 `prior_adds_for_user` 的截断；清之前**不要把该工具的绝对命中率与官方分数对齐**。 | 实测（2026-10-19） |
 
 > **V9 的处置建议**：**集合名与配置指纹绑定**（[`experiments.md`](./experiments.md) 记录格式里的"配置指纹"字段正好可复用），而不是所有实验共用一个 `memories`。**磁盘比一次跑错的实验便宜。** 若坚持单集合，则**每次 run 前必须清空并重建**——重建的 embedding 成本靠 §7.2 的内容哈希缓存摊薄。
 >

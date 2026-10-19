@@ -11,7 +11,7 @@ from typing import Literal
 
 from tianximem.common.render import day_granularity, render_evidence, render_record_evidence
 
-EVIDENCE_VERSION = "memory-facts-v9-entities"
+EVIDENCE_VERSION = "memory-facts-v14-event-verbs"
 Qualifier = str | int | bool
 SourceSide = Literal["question", "answer"]
 
@@ -73,6 +73,23 @@ _ALIASES = {
 }
 
 
+#: 档案字段的同义写法 → 规范字段名（`my personality type` 与题面的 `MBTI personality
+#: type` 是同一件事）。只收**同一字段的不同叫法**，不收相邻但不同的字段。
+_PROFILE_ALIASES = {
+    "mbti personality type": "personality type",
+    "myers-briggs personality type": "personality type",
+    "myers briggs personality type": "personality type",
+    "highest education level": "education level",
+    "education": "education level",
+    "current job title": "job title",
+    "life goal statement": "life goal",
+    # 题面的"状态"说法与原文的字段名是同一件事（HaluMem，2026-10-19）。
+    "physical health status": "physical condition",
+    "physical health": "physical condition",
+    "mental health status": "mental health",
+}
+
+
 def relation_key(value: str) -> str:
     value = re.sub(r"\s+(?:of|at|for|in|to|with)$", "", key(value))
     value = " ".join(
@@ -82,6 +99,10 @@ def relation_key(value: str) -> str:
     )
     if value in _ALIASES:
         return _ALIASES[value]
+    # 档案字段的**同义写法**归一到同一字段名：原文写 `my personality type is INTJ`，
+    # 题面问 `MBTI personality type`——不归一就永远匹配不上（2026-10-18 实测）。
+    if value in _PROFILE_ALIASES:
+        return _PROFILE_ALIASES[value]
     mapped = {_ALIASES[w] for w in value.split() if w in _ALIASES}
     if len(mapped) == 1 and all(w in _ALIASES for w in value.split()):
         return next(iter(mapped))

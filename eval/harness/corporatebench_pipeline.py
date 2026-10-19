@@ -247,20 +247,41 @@ _ANSWER_FORMATS = {
 
 _AGGREGATE_RULES = {
     "int": (
-        "Count distinct entities or events across the documents, not emails or mentions. "
-        "An agenda and an email about the same event count once; distinguish occurrences "
-        "by their event identity and date/time. Check the requested time range.\n"
+        "This is an aggregation task. First scan every memory and make an internal list "
+        "of candidate entities or events. Keep a candidate only when every constraint in "
+        "the question is explicitly supported (including relation, meeting type/topic, "
+        "and date range). Evidence for one recurring meeting series may be distributed "
+        "across its emails and calendar entries; link records by their exact title and "
+        "participants instead of requiring every detail in one record. Do not count a "
+        "team label as a department, or count parent/child labels as separate concepts. "
+        "Then count unique entities or event occurrences, not emails, "
+        "mentions, or search-result rows. An agenda and an email about the same event "
+        "count once; distinguish different occurrences by event identity and date/time. "
+        "Do not infer a join date, attendance, recurrence, or event identity from a mere "
+        "mention. If the supplied corpus has been scanned and no candidate matches, output "
+        "0; do not refuse merely because the answer is not stated in one memory.\n"
     ),
     "list[str]": (
-        "Enumerate every supported matching name or title across all supplied documents. "
-        "Do not stop at the first match. Deduplicate names and preserve their exact spelling. "
-        "Check every relation and time constraint; a meeting merely mentioning a project "
-        "does not necessarily belong to that project's meeting series.\n"
+        "This is an enumeration task. First scan every memory and make an internal list of "
+        "candidates. Keep a name/title only when every constraint in the question is "
+        "explicitly supported. Evidence for one recurring meeting series may be distributed "
+        "across its emails and calendar entries; link records by exact title and participants "
+        "instead of requiring every detail in one record. Do not stop at the first match. "
+        "Deduplicate repeated messages and preserve the exact spelling used in the source. "
+        "A meeting merely mentioning a project, a person in an email To header, or a "
+        "related topic is not enough to count as a matching meeting or attendee. If the "
+        "supplied corpus has been scanned and no candidate matches, output [] rather than "
+        "refusing.\n"
     ),
     "bool": (
-        "Check all constraints together: entity, relation, meeting type, topic and time. "
-        "A project meeting is not a team or direct-report meeting; a related topic alone "
-        "does not establish a matching event.\n"
+        "Check all constraints together. Test each candidate event/entity against the full "
+        "question: entity, relation, meeting type, topic, participants, and time. A project "
+        "meeting is not a team or direct-report meeting; a related topic alone does not "
+        "establish a matching event. A To header alone does not prove attendance, and an "
+        "email date is not automatically the meeting date when a scheduled date is given. "
+        "After scanning the supplied corpus, output true only for an explicitly supported "
+        "match and false when the complete scan finds none; do not refuse merely because "
+        "the match is negative.\n"
     ),
 }
 
@@ -284,18 +305,27 @@ def build_answer_prompt(item: dict, *, scalar_template: str | None = None) -> st
     task_rules = _AGGREGATE_RULES.get(kind, "")
     if kind in _AGGREGATE_RULES:
         task_rules += (
-            "A negative answer ([], 0, or false) needs evidence ruling out matches or "
-            "complete coverage of the requested scope. Missing a fact in retrieved "
-            "documents alone does not establish its absence.\n"
+            "The memories below are the retrieved corpus for this question and may contain "
+            "many distractors. Treat 100 candidates as a normal full candidate set, not as "
+            "a reason to stop. Work silently in this order: (a) identify the requested "
+            "entity/event and all constraints, (b) inspect every candidate, (c) link records "
+            "belonging to the same named event or entity, (d) mark each candidate as match "
+            "or non-match, (e) deduplicate, and (f) emit only the JSON "
+            "value. Never fill a gap with outside knowledge or a plausible guess. A negative "
+            "answer ([], 0, or false) is valid after this complete scan or complete coverage "
+            "of the supplied scope; reserve the exact "
+            "refusal for a genuinely missing or unusable corpus, not for a difficult or "
+            "multi-document question. Missing a fact in one memory alone does not establish "
+            "its absence when the rest of the supplied corpus can be scanned.\n"
         )
     return (
-        "You are an assistant that answers a corporate question using only the memories "
-        "provided below.\n\n"
+        "You are a careful evidence auditor answering a corporate question using only the "
+        "memories provided below.\n\n"
         "Rules:\n"
         "1. Use only the information in the memories. Do not use outside knowledge.\n"
-        "2. Reason from the evidence even when the answer is not stated verbatim. "
-        "If the evidence cannot establish the requested answer, reply exactly: "
-        "Cannot determine from the memories.\n"
+        "2. Reason from the evidence even when the answer is distributed across several "
+        "memories. Do not invent facts or silently relax a constraint. If the corpus is "
+        "genuinely missing or unusable, reply exactly: Cannot determine from the memories.\n"
         f"{task_rules}"
         f"3. Otherwise output {_ANSWER_FORMATS[kind]}. "
         "Do not add Markdown, explanations, or additional keys.\n\n"

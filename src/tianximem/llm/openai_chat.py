@@ -12,7 +12,7 @@ Content-Type: application/json
 ## 为什么只有一个实现，而不是 `gpt_4o_mini.py` + `qwen_local.py`
 
 `llm/CLAUDE.md` 原计划按模型分两个文件。**实测后并成一个**：开发期的
-`Qwen/Qwen3.5-9B`（`memory2` / `memory3`）与提交期的 `gpt-4o-mini`（DashScope）
+`Qwen/Qwen3.5-9B`（`memory` / `memory2`）与提交期的 `gpt-4o-mini`（DashScope）
 **说的是同一套线格式**（OpenAI 兼容的 `/chat/completions`），差别只有
 `base_url` / `key` / `model` 三个值——而**那三个值全部来自 `.env`**。
 

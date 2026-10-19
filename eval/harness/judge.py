@@ -119,7 +119,7 @@ def _subprocess_env(endpoint_index: int | None = None) -> dict[str, str]:
     条目，import 继续往后找到这里。归档因此**保持只读**。
 
     `endpoint_index` 非 None ⇒ 一并写进 `AML_ENDPOINT_INDEX`：子进程里 import 的
-    `api_config` 据此选中那一号对话端点（`memory2` / `memory3` 是同一个模型、两把 key，
+    `api_config` 据此选中那一号对话端点（`memory` / `memory2` 是同一个模型、两把 key，
     **D39**）。⚠ 它是**每个子进程**唯一的端点开关——父进程 `os.environ` 是共享的，
     在线程池里改不了（见 `api_config` 的模块 docstring）。
     """

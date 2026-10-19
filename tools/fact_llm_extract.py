@@ -15,13 +15,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fact_entity_smoke import _score_triples, load_cases
+try:  # Direct script execution.
+    from fact_entity_smoke import _score_triples, load_cases
+except ModuleNotFoundError:  # Package import from pytest.
+    from tools.fact_entity_smoke import _score_triples, load_cases
 
 from tianximem.facts.evidence import key, relation_key
 from tianximem.llm.base import LlmUnavailable
 from tianximem.llm.openai_chat import OpenAiCompatChat
 
-PROMPT_VERSION = "common-facts-qwen-v4"
+PROMPT_VERSION = "common-facts-qwen-v11-demonstrated"
 PROMPT_VERSIONS = (
     "common-facts-qwen-v4",
     "common-facts-qwen-v5-source-anchored",
@@ -37,6 +40,10 @@ PROMPT_VERSIONS = (
     "common-facts-qwen-v15-segmented-atomic",
     "common-facts-qwen-v16-micro-segmented",
     "common-facts-qwen-v17-recall-guarded",
+    "common-facts-qwen-v18-precision-guarded",
+    "common-facts-qwen-v19-generalized",
+    "common-facts-qwen-v20-compact-generalized",
+    "common-facts-qwen-v21-compact-demonstrated",
 )
 DEFAULT_MODEL = "Qwen/Qwen3.5-9B"
 
@@ -212,6 +219,116 @@ Additional extraction policy for this version:
 - For labeled profiles and calendar records, use the exact schema spans and
   roles. A profession field is not an employee relation; a `To:` header is not
   an attendee; an explicit `Attendees:` list is.
+""",
+        "common-facts-qwen-v18-precision-guarded": """
+Additional extraction policy for this version:
+- Treat each named-speaker turn, each `Corpus:` row, and each labeled profile
+  block as a separate local evidence record. Never combine an endpoint from
+  one record with a predicate or endpoint from another record.
+- In `Speaker: ...`, first-person facts belong only to that speaker. A name
+  mentioned in a reply is not the subject of the prior speaker's fact. In
+  particular, `Jon: I lost my job as a banker` means Jon -> occupation ->
+  banker, while `Gina: I lost my job at Door Dash` means Gina -> employee ->
+  Door Dash. Never assign banker to Gina.
+- Distinguish current/completed action from intention: `I'm starting X` maps
+  to `started`; `I want/wanna/plan/search for a place to open X` maps to
+  `plans to open`. Do not replace one with the other.
+- A title, possession, dedication, or nearby name is not authorship. In
+  `Scot's book is titled The Discoverie of Witchcraft ... one dedication is to
+  Sir Roger Manwood`, emit the dedication only; do not emit book -> author ->
+  Scot unless the source explicitly says Scot authored it.
+- In a profile, `Profession` licenses `profession`, `Location` licenses the
+  location relation, and neither licenses `employee`. Bind fields to the
+  profile's `Name` only.
+- For `Corpus:` rows, copy the row's exact subject and object. Do not broaden
+  `United Nations Secretary-General` to `United Nations`, and do not change
+  `officeholder` into `head of government`.
+- A long biography may contain additional explicit facts. Keep them only when
+  their own sentence directly asserts the relation; do not import a relation
+  from a neighboring structured row or infer it from a title or mention.
+""",
+        "common-facts-qwen-v19-generalized": """
+Additional extraction policy for this version:
+- Treat each sentence, speaker turn, labeled field block, or structured row as
+  a local evidence record. A relation is valid only when the subject, predicate
+  meaning, and object are linked inside that record.
+- Bind first-person words to the named speaker on the same turn. Do not copy a
+  fact to a person who is merely mentioned. In user/assistant transcripts,
+  assistant advice, examples, questions, and quoted text are not user facts.
+- Distinguish assertion, intention, negation, and hypothetical language. Do not
+  turn a plan into a completed action or a question into an event.
+- For profiles, email, calendar, and table-like records, use the field label or
+  explicit predicate that licenses the relation. A profession is not employment;
+  a recipient is not an attendee unless attendance is asserted.
+- For `Corpus:` or equivalent subject-relation-object rows, preserve the row's
+  direction and meaning. Replacement wording does not authorize inference from
+  neighboring rows, and conflicting rows should each be emitted if explicit.
+- A name near a title, possession, apposition, date, or mention is not enough
+  to create authorship, ownership, location, or another relation.
+- Extract every independently asserted fact, but never add world knowledge,
+  second-hop facts, summaries, counts, or facts absent from the source.
+""",
+        "common-facts-qwen-v20-compact-generalized": """
+Additional extraction policy for this version:
+- Scan the source record by record and emit every independently asserted
+  relation. The subject, relation meaning, and object must be connected by the
+  same clause or one recognized structured field.
+- Resolve `I/me/my` to the named speaker on the same turn only. Ignore facts in
+  questions, requests, advice, examples, quotations, hypotheticals, and
+  assistant text unless the source explicitly adopts them.
+- Preserve modality: an intention (`want/plan to`) is not a completed/current
+  action (`started/works/attended`), and a negated statement is not positive.
+- For profiles and labeled records, map fields only to their licensed meaning:
+  Name + Profession -> profession, Name + Location -> location/lives in,
+  explicit works-for -> employee/employer, explicit Attendees -> attendee.
+  Do not infer employment from a profession or attendance from a recipient.
+- For subject-relation-object rows, preserve direction and meaning, including
+  explicit replacement rows. Do not infer second-hop facts from adjacent rows.
+- A nearby name, title, possession, date, apposition, or mention does not create
+  authorship or another relation. Use the shortest natural source spans for
+  endpoints, while preserving meaningful labels when the record uses them.
+- Normalize paraphrases only to the closest relation in the supplied vocabulary;
+  never invent a relation or use world knowledge. Deduplicate exact triples.
+
+Generic calibration:
+- `A works for B` -> `(A, employee, B)` when `employee` is available.
+- `A wants to open B` -> `(A, plans to open, B)`; `A started B` is not a plan.
+- `B is titled C` does not imply `(C, author, B)` or `(B, author, C)`.
+""",
+        "common-facts-qwen-v21-compact-demonstrated": """
+Additional extraction policy for this version:
+- Work locally: each named-speaker turn, sentence, profile block, email/calendar
+  block, or Corpus row is an evidence record. Emit all facts explicitly asserted
+  in that record, but do not combine unrelated records.
+- Bind `I/me/my` to the named speaker on the same turn. Questions, requests,
+  advice, examples, quotations, hypotheticals, and assistant text are not facts
+  about the user unless explicitly adopted.
+- Preserve relation direction and modality. An intention is not a completed
+  action; a negation is not a positive fact; a mention or title is not a relation.
+- Structured fields license only their own meaning: Profession -> profession,
+  Location -> location/lives in, works-for -> employee/employer, and Attendees ->
+  attendee. A profession is not employment and a recipient is not an attendee.
+- For Corpus rows, preserve the row's subject, direction, and explicit relation;
+  emit explicit replacement rows too. Do not infer a second hop from adjacent rows.
+- Use the shortest natural source spans for endpoints and normalize only to the
+  supplied relation vocabulary. Never add world knowledge, summaries, counts,
+  or facts not supported by SOURCE. Deduplicate exact triples.
+
+Abstract examples:
+SOURCE: Ava: I lost my job at Northwind.
+OUTPUT: {"relations":[{"subject":"Ava","relation":"employee","object":"Northwind"}]}
+
+SOURCE: Ava: I want to open a bakery.
+OUTPUT: {"relations":[{"subject":"Ava","relation":"plans to open","object":"a bakery"}]}
+
+SOURCE: Name: Rowan\nProfession: archivist\nLocation: Bristol
+OUTPUT: {"relations":[{"subject":"Rowan","relation":"profession","object":"archivist"},{"subject":"Rowan","relation":"location","object":"Bristol"}]}
+
+SOURCE: The novel is titled River Glass; it does not state its author.
+OUTPUT: {"relations":[]}
+
+SOURCE: Corpus: Northwind — headquarters location — Bristol
+OUTPUT: {"relations":[{"subject":"Northwind","relation":"headquarters location","object":"Bristol"}]}
 """,
         "common-facts-qwen-v12-evidence-ledger": """
 Additional extraction policy for this version:

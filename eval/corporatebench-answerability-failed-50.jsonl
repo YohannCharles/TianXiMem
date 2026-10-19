@@ -1,0 +1,50 @@
+{"qid": "kb_qa-0", "verdict": "open", "kind": "counting", "note": "语料确实提到这些实体，但需要实体归类（department/team/task）与去重后的计数"}
+{"qid": "kb_qa-1", "verdict": "open", "kind": "counting", "note": "语料确实提到这些实体，但需要实体归类（department/team/task）与去重后的计数"}
+{"qid": "kb_qa-2", "verdict": "open", "kind": "counting", "note": "语料确实提到这些实体，但需要实体归类（department/team/task）与去重后的计数"}
+{"qid": "kb_qa-5", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-6", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-11", "verdict": "paraphrase", "kind": "topic_paraphrase", "note": "topic 在 graph.nq 里有实体，但在文档里只是正文的顺带一提（措辞还不一致），meetingType 完全不在正文里"}
+{"qid": "kb_qa-15", "verdict": "absent", "kind": "topic_absent", "note": "题面要求的 (meetingType × topic) 组合在 graph.nq 里为空；文档正文不含 meetingType，topic 也常只出现在看不见的文件名上"}
+{"qid": "kb_qa-16", "verdict": "open", "kind": "attendance", "note": "语料有 32 篇带 Attendees:/Organizer: 字段的邀请，可用逐次出现的出席集合做差；需要跨来源推理而不是单条事实"}
+{"qid": "kb_qa-18", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-19", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-28", "verdict": "absent", "kind": "topic_absent", "note": "题面要求的 (meetingType × topic) 组合在 graph.nq 里为空；文档正文不含 meetingType，topic 也常只出现在看不见的文件名上"}
+{"qid": "kb_qa-29", "verdict": "open", "kind": "attendance", "note": "语料有 32 篇带 Attendees:/Organizer: 字段的邀请，可用逐次出现的出席集合做差；需要跨来源推理而不是单条事实"}
+{"qid": "kb_qa-30", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-31", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-32", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-36", "verdict": "absent", "kind": "topic_absent", "note": "题面要求的 (meetingType × topic) 组合在 graph.nq 里为空；文档正文不含 meetingType，topic 也常只出现在看不见的文件名上"}
+{"qid": "kb_qa-38", "verdict": "exact", "kind": "title", "note": "题面即文档标题，标题与每次出现的来源日期都能从事实层逐条读出"}
+{"qid": "kb_qa-39", "verdict": "paraphrase", "kind": "topic_paraphrase", "note": "topic 在 graph.nq 里有实体，但在文档里只是正文的顺带一提（措辞还不一致），meetingType 完全不在正文里"}
+{"qid": "kb_qa-41", "verdict": "open", "kind": "attendance", "note": "语料有 32 篇带 Attendees:/Organizer: 字段的邀请，可用逐次出现的出席集合做差；需要跨来源推理而不是单条事实"}
+{"qid": "kb_qa-43", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-44", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-45", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-48", "verdict": "paraphrase", "kind": "topic_paraphrase", "note": "topic 在 graph.nq 里有实体，但在文档里只是正文的顺带一提（措辞还不一致），meetingType 完全不在正文里"}
+{"qid": "kb_qa-49", "verdict": "paraphrase", "kind": "topic_paraphrase", "note": "topic 在 graph.nq 里有实体，但在文档里只是正文的顺带一提（措辞还不一致），meetingType 完全不在正文里"}
+{"qid": "kb_qa-51", "verdict": "exact", "kind": "title", "note": "题面即文档标题，标题与每次出现的来源日期都能从事实层逐条读出"}
+{"qid": "kb_qa-54", "verdict": "open", "kind": "attendance", "note": "语料有 32 篇带 Attendees:/Organizer: 字段的邀请，可用逐次出现的出席集合做差；需要跨来源推理而不是单条事实"}
+{"qid": "kb_qa-55", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-56", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-61", "verdict": "absent", "kind": "topic_absent", "note": "题面要求的 (meetingType × topic) 组合在 graph.nq 里为空；文档正文不含 meetingType，topic 也常只出现在看不见的文件名上"}
+{"qid": "kb_qa-63", "verdict": "exact", "kind": "title", "note": "题面即文档标题，标题与每次出现的来源日期都能从事实层逐条读出"}
+{"qid": "kb_qa-65", "verdict": "absent", "kind": "topic_absent", "note": "题面要求的 (meetingType × topic) 组合在 graph.nq 里为空；文档正文不含 meetingType，topic 也常只出现在看不见的文件名上"}
+{"qid": "kb_qa-66", "verdict": "open", "kind": "attendance", "note": "语料有 32 篇带 Attendees:/Organizer: 字段的邀请，可用逐次出现的出席集合做差；需要跨来源推理而不是单条事实"}
+{"qid": "kb_qa-68", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-69", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-70", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-74", "verdict": "paraphrase", "kind": "topic_paraphrase", "note": "topic 在 graph.nq 里有实体，但在文档里只是正文的顺带一提（措辞还不一致），meetingType 完全不在正文里"}
+{"qid": "kb_qa-78", "verdict": "absent", "kind": "topic_absent", "note": "题面要求的 (meetingType × topic) 组合在 graph.nq 里为空；文档正文不含 meetingType，topic 也常只出现在看不见的文件名上"}
+{"qid": "kb_qa-79", "verdict": "open", "kind": "attendance", "note": "语料有 32 篇带 Attendees:/Organizer: 字段的邀请，可用逐次出现的出席集合做差；需要跨来源推理而不是单条事实"}
+{"qid": "kb_qa-80", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-81", "verdict": "absent", "kind": "join", "note": "gold 由 graph.nq 的 worksAt+beginning 算出（12 人中仅 2 人有日期，其余 10 人在窗口开始前已在职）；文档只有 2 处间接线索，KB 字段在正文里不出现"}
+{"qid": "kb_qa-86", "verdict": "absent", "kind": "topic_absent", "note": "题面要求的 (meetingType × topic) 组合在 graph.nq 里为空；文档正文不含 meetingType，topic 也常只出现在看不见的文件名上"}
+{"qid": "kb_qa-87", "verdict": "exact", "kind": "title", "note": "题面即文档标题，标题与每次出现的来源日期都能从事实层逐条读出"}
+{"qid": "kb_qa-88", "verdict": "exact", "kind": "title", "note": "题面即文档标题，标题与每次出现的来源日期都能从事实层逐条读出"}
+{"qid": "kb_qa-91", "verdict": "open", "kind": "attendance", "note": "语料有 32 篇带 Attendees:/Organizer: 字段的邀请，可用逐次出现的出席集合做差；需要跨来源推理而不是单条事实"}
+{"qid": "kb_qa-115", "verdict": "paraphrase", "kind": "topic_paraphrase", "note": "topic 在 graph.nq 里有实体，但在文档里只是正文的顺带一提（措辞还不一致），meetingType 完全不在正文里"}
+{"qid": "kb_qa-127", "verdict": "paraphrase", "kind": "topic_paraphrase", "note": "topic 在 graph.nq 里有实体，但在文档里只是正文的顺带一提（措辞还不一致），meetingType 完全不在正文里"}
+{"qid": "kb_qa-138", "verdict": "absent", "kind": "topic_absent", "note": "题面要求的 (meetingType × topic) 组合在 graph.nq 里为空；文档正文不含 meetingType，topic 也常只出现在看不见的文件名上"}
+{"qid": "kb_qa-161", "verdict": "paraphrase", "kind": "topic_paraphrase", "note": "topic 在 graph.nq 里有实体，但在文档里只是正文的顺带一提（措辞还不一致），meetingType 完全不在正文里"}
+{"qid": "kb_qa-173", "verdict": "absent", "kind": "topic_absent", "note": "题面要求的 (meetingType × topic) 组合在 graph.nq 里为空；文档正文不含 meetingType，topic 也常只出现在看不见的文件名上"}
+{"qid": "kb_qa-240", "verdict": "absent", "kind": "topic_absent", "note": "题面要求的 (meetingType × topic) 组合在 graph.nq 里为空；文档正文不含 meetingType，topic 也常只出现在看不见的文件名上"}

@@ -5,7 +5,7 @@
 
 ## 对话端点有**多个**（D39），每一个都要探
 
-`memory2` 与 `memory3` 提供同一个 `Qwen/Qwen3.5-9B`，但**各有各的 key**（对调都是 401）
+    `memory` 与 `memory2` 提供同一个 `Qwen/Qwen3.5-9B`，但**各有各的 key**（对调都是 401）
 ⇒ 端点按序号后缀列（`AML_BASE_URL` / `AML_BASE_URL_2` …），**逐个探**。
 只探第一个的话，"第二个端点的 key 填错了"要等到判分**轮转到它**才炸——
 而那时整轮的 Add / Search 与前面几题的判分都已经付出去了。
@@ -300,7 +300,7 @@ def check_reranker(base: str, key: str, model: str = "") -> Check:
 def check_llm(base: str, key: str, model: str) -> Check:
     """**一个**对话端点 + V7 那个探针（见模块 docstring）。
 
-    ⚠ **每个端点各调一次**（D39）：`memory2` 与 `memory3` 是同一个模型、**两把 key**，
+    ⚠ **每个端点各调一次**（D39）：`memory` 与 `memory2` 是同一个模型、**两把 key**，
     只探第一个的话，"第二个端点 key 填错了"要等到判分轮转到它才炸——那时前面几题
     与整轮的 Add / Search 都已经付出去了。名字里带上 host，屏幕上才分得清是哪一台。
     """
