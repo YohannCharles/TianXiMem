@@ -45,7 +45,7 @@ _ADD_PAYLOAD: dict[str, Any] = {
 def _mini_config_dir(tmp_path: Path, capture_block: str = "") -> Path:
     """一份**最小可加载**的配置目录：只有我们写进去的那个段，其余走内置默认值。
 
-    `default.yaml` 存在但不写任何键是合法的（`_read_yaml(required=True)` 只要求它存在
+    `default.yaml` 存在但不写任何键是合法的（`_read_yaml` 只要求它存在
     且是个映射）——这样每条用例只面对**它自己**声明的那几个键。
     """
     where = tmp_path / "configs"
@@ -87,7 +87,11 @@ def _app_with_capture(wired: Wired, cap: RequestCapture):
 
 
 def test_capture_is_off_by_default(tmp_path: Path) -> None:
-    """默认关——它按设计只在"要看清官方发了什么"时打开（S6）。"""
+    """**代码内置缺省**是关：缺键的旧快照按"采集关闭"跑。
+
+    ⚠ 与 `configs/default.yaml` 的基线（`true`）是两处口径，形状同
+    `agentic.enabled` / `router.enabled`——本用例只钉前者。
+    """
     cfg = _load(tmp_path)
     assert cfg.capture.enabled is False
     assert cfg.capture.max_bytes == 50 * 1024 * 1024  # 每份 50 MiB，写满就换下一份

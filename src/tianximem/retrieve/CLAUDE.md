@@ -26,7 +26,7 @@ router.py    **二分类查询路由器**（MULTI_HOP / DEFAULT）——共同�
 > ⚠ **提示词只有一版**（`ROUTER_PROMPT`，`ROUTER_PROMPT_VERSION = "v5"`，**二分类**：`MULTI_HOP` / `DEFAULT`）——
 > 2026-10-10 按要求把 v1/v2/v3 删掉了；v5（2026-10-14）去掉了 `COUNT` 那一支。**代价记在那份报告里**：
 > "换提示词值不值"的基线**从此不能再原样重跑**。历史与实测见
-> [`../../eval/reports/router-v4-20261010.md`](../../eval/reports/router-v4-20261010.md)。
+> [`../../../eval/reports/router-v4-20261010.md`](../../../eval/reports/router-v4-20261010.md)。
 > ⛔ **提示词里没有 `NONE`**：空 / 无效输入归**入口**（HTTP 边界 + `SearchPipeline`
 > 的 `blank_query` 短路），**不外包给 LLM**——它既多花一次调用，又要靠模型
 > 执行一条它没有强制力的规矩。
@@ -67,12 +67,9 @@ router.py    **二分类查询路由器**（MULTI_HOP / DEFAULT）——共同�
 
 ## §7.3 — Weighted RRF
 
-```json
-{"prefetch": [{"query": <bm25>,  "using": "bm25",  "limit": N},
-              {"query": <dense>, "using": "dense", "limit": N}],
- "query": {"rrf": {"weights": [w_bm25, w_dense], "k": 61}},
- "limit": 2 × N}
-```
+**请求形状的权威写法在 PRD §7.3**（`prefetch` 两路 + 根级 `rrf{weights, k}`），本文件不复制。
+⚠ **与 PRD 唯一的有意差异**：PRD 片段的根级 `limit` 写的是 `<top_k>`，实现取 **`2 × N`**
+（要全部融合结果，截断在排序之后做）——依据见 ledger 的「V13 补完」。
 
 | 要点 | 说明 |
 | --- | --- |
@@ -159,17 +156,9 @@ router.py    **二分类查询路由器**（MULTI_HOP / DEFAULT）——共同�
 
 > **RRF 融合后的分数不是校准量**——Qdrant 官方明确警告不要把单路阈值用到根级 `score_threshold`，**"照搬 dense-only 的阈值会静默截断结果"**。
 
-改用**名次一致性判据**：分别跑一次 `bm25-only` 与一次 `dense-only`，用两者返回的**排名**做判断：
-
-```text
-足够（Direct Return）：
-  两路 top1 相同
-  或 两路 top-5 重叠 ≥ 3
-  或 bm25 top1 的名次在 dense 结果中位于前 3
-
-否则：
-  → Agentic Search
-```
+改用**名次一致性判据**：分别跑一次 `bm25-only` 与一次 `dense-only`，用两者返回的**排名**做判断。
+⚠ **判据的三条阈值原文在 PRD §8**（`两路 top1 相同` / `top-5 重叠 ≥ 3` / `bm25 top1 在前 3`），
+本文件不复制；实现在 [`checker.py`](./checker.py)。
 
 ⚠ **v1 的调用方不跑这两次查询**（D26 之后 A4 已移出 v1）：`decide()` 接受可选的 `arm_rankings`，但唯一的调用方不传 ⇒ `criterion_would_say` 恒记 `None`。判据本身写全并测到了，见 [`checker.py`](./checker.py)。
 

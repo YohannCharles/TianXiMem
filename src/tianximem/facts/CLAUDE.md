@@ -55,7 +55,7 @@ conversation.py 具名发言切分（`named_utterances`）与显式句末切分�
 | **读取** | [`../retrieve/evidence.py`](../retrieve/evidence.py) 的 `select_evidence(...)` | 执行 `query.py` 编译的 `QueryPlan`，返回事实投影或原文投影；不适用 / 冲突 / 超限 ⇒ `None` |
 | **存储** | [`../store/sqlite_store.py`](../store/sqlite_store.py) 与 [`../store/schema.sql`](../store/schema.sql) | `memory_facts`（共同事实表）+ `evidence_coverage`（按来源与版本记扫描覆盖）；**本目录不写 SQL** |
 | **编排** | [`../service/pipeline.py`](../service/pipeline.py) | Search 先试共同取证与事实打包（`_fact_snapshot` / `_search` 的 grounded 分支 / `_package_evidence`），事实片段沿用既有槽位与 token 预算 |
-| **开关** | [`../common/config.py`](../common/config.py) 的 `retrieval.grounded_evidence` 与取证上限 | 键语义与取值在 [`../../../docs/config-reference.md`](../../../docs/config-reference.md)；**本目录不拥有开关**，也不定义业务专用键 |
+| **开关** | [`../common/config/`](../common/config/) 的 `retrieval.grounded_evidence` 与取证上限 | 键语义与取值在 [`../../../docs/config-reference.md`](../../../docs/config-reference.md)；**本目录不拥有开关**，也不定义业务专用键 |
 
 抽取的输入是配对后的 `QaPair.question` / `answer` / `event_time`（形状归 [`../pairing/`](../pairing/)，本目录不解析原始 `messages`）；Add、幂等重放与旧库补索引共用 `extract_evidence` 这一个入口。
 ⚠ **同一 Add 内的姓名绑定在 `pairing/apply.py`**（不是本目录）：它按 `fetch_by_request`

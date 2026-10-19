@@ -15,10 +15,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+if __package__ in (None, ""):  # 直接执行：把仓库根放上 sys.path（`eval.*` 要用）。
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 try:  # Direct script execution.
     from fact_entity_smoke import _score_triples, load_cases
 except ModuleNotFoundError:  # Package import from pytest.
     from tools.fact_entity_smoke import _score_triples, load_cases
+
+from eval.jsonl_io import jsonl_line, read_jsonl  # noqa: E402
 
 from tianximem.facts.evidence import key, relation_key
 from tianximem.llm.base import LlmUnavailable
@@ -671,14 +676,6 @@ def _extract_segmented(
     return tuple(dict.fromkeys(relations)), raw_parts
 
 
-def _gold_triples(case: dict[str, Any]) -> set[tuple[str, str, str]]:
-    return {
-        (key(subject), relation_key(predicate), key(object_))
-        for subject, predicate, object_ in case.get("relations", ())
-        if relation_key(predicate) != "explicit replacement"
-    }
-
-
 def _select_cases(
     cases: tuple[dict[str, Any], ...], args: argparse.Namespace
 ) -> tuple[dict[str, Any], ...]:
@@ -693,13 +690,8 @@ def _select_cases(
 
 
 def _read_cache(path: Path) -> dict[str, dict[str, Any]]:
-    if not path.exists():
-        return {}
     cache: dict[str, dict[str, Any]] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for row in read_jsonl(path):
         if isinstance(row, dict) and isinstance(row.get("id"), str):
             cache[row["id"]] = row
     return cache
@@ -708,7 +700,7 @@ def _read_cache(path: Path) -> dict[str, dict[str, Any]]:
 def _append_row(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        handle.write(jsonl_line(row))
 
 
 def main(argv: list[str] | None = None) -> int:

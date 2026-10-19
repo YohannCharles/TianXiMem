@@ -140,15 +140,41 @@ def _weights(value: object, /, *, where: str) -> tuple[float, float]:
         raise ConfigError(f"`{where}` 必须是两个数：{value!r}") from exc
 
 
-def _read_yaml(path: Path, /, *, required: bool) -> Mapping[str, Any]:
+def _bool(
+    value: object,
+    /,
+    *,
+    where: str,
+    default: bool,
+    hint: str = "",
+    show_value: bool = True,
+    present: bool = False,
+) -> bool:
+    """布尔项校验：缺键 ⇒ `default`；非布尔 ⇒ 响亮失败。
+
+    ⚠ 不用 `isinstance(value, int)` 之类的宽松判断：`0/1` 会被静默当成 `False/True`。
+    `show_value=False` 供那些历史消息里不带 `收到 …` 的键保留原文案；
+    `present=False` 表示"键可以缺"，显式 `null` 仍然算非法（与旧行为一致）。
+    """
+    if value is None:
+        if present:
+            detail = f"，收到 {value!r}" if show_value else ""
+            raise ConfigError(f"`{where}` 必须是布尔值{detail}")
+        return default
+    if not isinstance(value, bool):
+        detail = f"，收到 {value!r}" if show_value else ""
+        suffix = f"——{hint}" if hint else ""
+        raise ConfigError(f"`{where}` 必须是布尔值{detail}{suffix}")
+    return value
+
+
+def _read_yaml(path: Path, /) -> Mapping[str, Any]:
     if not path.exists():
-        if required:
-            raise ConfigError(
-                f"配置文件不存在：{path}。"
-                "阈值与模型名的家在这里（见 configs/CLAUDE.md）；"
-                f"换目录用 `{ENV_CONFIG_DIR}`。"
-            )
-        return {}
+        raise ConfigError(
+            f"配置文件不存在：{path}。"
+            "阈值与模型名的家在这里（见 configs/CLAUDE.md）；"
+            f"换目录用 `{ENV_CONFIG_DIR}`。"
+        )
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
@@ -239,12 +265,20 @@ def _retrieval(raw: object) -> RetrievalConfig:
         where="retrieval.grounded_planner",
         allowed={"enabled", "timeout_seconds", "max_output_tokens", "temperature", "prompt_version"},
     )
-    evidence = g.get("grounded_evidence", False)
-    if not isinstance(evidence, bool):
-        raise ConfigError("`retrieval.grounded_evidence` 必须是布尔值")
-    planner_enabled = p.get("enabled")
-    if planner_enabled is not None and not isinstance(planner_enabled, bool):
-        raise ConfigError("`retrieval.grounded_planner.enabled` 必须是布尔值")
+    evidence = _bool(
+        g.get("grounded_evidence"),
+        where="retrieval.grounded_evidence",
+        default=False,
+        show_value=False,
+        present="grounded_evidence" in g,
+    )
+    planner_enabled = _bool(
+        p.get("enabled"),
+        where="retrieval.grounded_planner.enabled",
+        default=False,
+        show_value=False,
+        present="enabled" in p and p["enabled"] is not None,
+    )
     return RetrievalConfig(
         prefetch_limit=_int(
             g.get("prefetch_limit"),
@@ -263,7 +297,7 @@ def _retrieval(raw: object) -> RetrievalConfig:
             g.get("fact_backfill_limit"), where="retrieval.fact_backfill_limit", default=1024
         ),
         grounded_planner=GroundedPlannerConfig(
-            enabled=False if planner_enabled is None else planner_enabled,
+            enabled=planner_enabled,
             timeout_seconds=_float(
                 p.get("timeout_seconds"),
                 where="retrieval.grounded_planner.timeout_seconds",
@@ -324,33 +358,37 @@ def _packaging(raw: object) -> PackagingConfig:
         where="packaging",
         allowed={"inject_abs_time", "annotate_relatives", "annotate_unit_totals"},
     )
-    inject = g.get("inject_abs_time")
-    if inject is not None and not isinstance(inject, bool):
-        raise ConfigError(
-            f"`packaging.inject_abs_time` 必须是布尔值，收到 {inject!r}——"
-            "它是「带 / 不带时间戳前缀」那个对照臂的开关，不是日期格式"
-        )
-    annotate = g.get("annotate_relatives")
-    if annotate is not None and not isinstance(annotate, bool):
-        raise ConfigError(
-            f"`packaging.annotate_relatives` 必须是布尔值，收到 {annotate!r}——"
-            "它是「正文里的相对时间要不要就地注解成绝对日期」那个开关"
-        )
-    unit_totals = g.get("annotate_unit_totals", False)
-    if not isinstance(unit_totals, bool):
-        raise ConfigError("`packaging.annotate_unit_totals` 必须是布尔值")
+    inject = _bool(
+        g.get("inject_abs_time"),
+        where="packaging.inject_abs_time",
+        default=True,
+        hint="它是「带 / 不带时间戳前缀」那个对照臂的开关，不是日期格式",
+    )
+    annotate = _bool(
+        g.get("annotate_relatives"),
+        where="packaging.annotate_relatives",
+        default=False,
+        hint="它是「正文里的相对时间要不要就地注解成绝对日期」那个开关",
+    )
+    # ⚠ **缺键取 `False`、dataclass 取 `True` 是有意的**（不是漏改）：D22 之前冻结的
+    #   快照按"无注解"跑。口径见 docs/config-reference.md §2；别把它"清理"成同值。
+    unit_totals = _bool(
+        g.get("annotate_unit_totals"),
+        where="packaging.annotate_unit_totals",
+        default=False,
+        show_value=False,
+        present="annotate_unit_totals" in g,
+    )
     return PackagingConfig(
-        inject_abs_time=True if inject is None else inject,
-        annotate_relatives=False if annotate is None else annotate,
+        inject_abs_time=inject,
+        annotate_relatives=annotate,
         annotate_unit_totals=unit_totals,
     )
 
 
 def _rerank(raw: object) -> RerankConfig:
     g = _group(raw, where="rerank", allowed={"enabled", "timeout_seconds", "envelope"})
-    enabled = g.get("enabled")
-    if enabled is not None and not isinstance(enabled, bool):
-        raise ConfigError(f"`rerank.enabled` 必须是布尔值，收到 {enabled!r}")
+    enabled = _bool(g.get("enabled"), where="rerank.enabled", default=True)
     envelope = _str(g.get("envelope"), where="rerank.envelope", default=DEFAULT_RERANK_ENVELOPE)
     # ⚠ **这一条必须是硬错误**（哪怕两个值都能让服务起来）：它是"对面那个网关说什么格式"
     #   的声明，而写错的表现是**每次检索都静默降级**——那种失败只在 §14 的计数里看得见，
@@ -364,7 +402,7 @@ def _rerank(raw: object) -> RerankConfig:
             "  ⚠ 它与 `TIANXIMEM_RERANKER_BASE_URL` 是同一件事的两半：**换网关要一起换**。"
         )
     return RerankConfig(
-        enabled=True if enabled is None else enabled,
+        enabled=enabled,
         timeout_seconds=_float(
             g.get("timeout_seconds"),
             where="rerank.timeout_seconds",
@@ -387,11 +425,9 @@ def _router(raw: object) -> RouterConfig:
             "prompt_version",
         },
     )
-    enabled = g.get("enabled")
-    if enabled is not None and not isinstance(enabled, bool):
-        raise ConfigError(f"`router.enabled` 必须是布尔值，收到 {enabled!r}")
+    enabled = _bool(g.get("enabled"), where="router.enabled", default=False)
     return RouterConfig(
-        enabled=False if enabled is None else enabled,
+        enabled=enabled,
         timeout_seconds=_float(
             g.get("timeout_seconds"),
             where="router.timeout_seconds",
@@ -440,10 +476,16 @@ def _agentic(raw: object) -> AgenticConfig:
             "plan_step_prompt_version",
         },
     )
-    for name in ("enabled", "force", "round_rerank_enabled"):
-        value = g.get(name)
-        if value is not None and not isinstance(value, bool):
-            raise ConfigError(f"`agentic.{name}` 必须是布尔值，收到 {value!r}")
+    for name in ("enabled", "force"):
+        _bool(g.get(name), where=f"agentic.{name}", default=False)
+    # 这一项**取返回值**（默认 True，与 model.py / config-reference 一致）；显式 null
+    # 也响亮失败——`bool(None)` 会把它静默当成 False。
+    round_rerank_enabled = _bool(
+        g.get("round_rerank_enabled"),
+        where="agentic.round_rerank_enabled",
+        default=True,
+        present="round_rerank_enabled" in g,
+    )
     mode = _str(g.get("mode"), where="agentic.mode", default=DEFAULT_AGENTIC_MODE)
     if mode not in AGENTIC_MODES:
         # 取值域在**这里**就挡住：一个拼错的模式会让执行器**静默退回 react**，
@@ -499,7 +541,7 @@ def _agentic(raw: object) -> AgenticConfig:
             default=DEFAULT_COQ_TIMEOUT_S,
         ),
         temperature=_float(g.get("temperature"), where="agentic.temperature", default=0.0),
-        round_rerank_enabled=bool(g.get("round_rerank_enabled", True)),
+        round_rerank_enabled=round_rerank_enabled,
         final_rerank_query_mode=rerank_query_mode,
         prompt_version=_str(
             g.get("prompt_version"),
@@ -522,11 +564,9 @@ def _agentic(raw: object) -> AgenticConfig:
 def _capture(raw: object) -> CaptureConfig:
     """诊断开关——**路径不在这里**（它归 env，由 `load_config` 覆盖）。"""
     g = _group(raw, where="capture", allowed={"enabled", "max_bytes"})
-    enabled = g.get("enabled")
-    if enabled is not None and not isinstance(enabled, bool):
-        raise ConfigError(f"`capture.enabled` 必须是布尔值，收到 {enabled!r}")
+    enabled = _bool(g.get("enabled"), where="capture.enabled", default=False)
     return CaptureConfig(
-        enabled=False if enabled is None else enabled,
+        enabled=enabled,
         max_bytes=_int(
             g.get("max_bytes"), where="capture.max_bytes", default=DEFAULT_CAPTURE_MAX_BYTES
         ),

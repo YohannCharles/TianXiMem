@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
 
-from tianximem.facts.evidence import EVIDENCE_VERSION, EvidenceFact, key, relation_key
+from tianximem.facts.evidence import EVIDENCE_VERSION, FIRST_PERSON, EvidenceFact, key, relation_key
 from tianximem.facts.query import FactPattern
 
 logger = logging.getLogger(__name__)
@@ -718,7 +718,7 @@ class SqliteStore:
                 ),
             )
 
-    def _owner_name(self, conn: sqlite3.Connection, user_id: str) -> str:
+    def owner_name(self, conn: sqlite3.Connection, user_id: str) -> str:
         """该 user 自我介绍写下的真名（`name` 事实的 subject_key），没有就空串。
 
         ⚠ **只查已落库的 `name` 事实**，不猜、不从别处推。它是读取期解析：
@@ -733,7 +733,7 @@ class SqliteStore:
         return row[0] if row else ""
 
     def _owner_display(self, conn: sqlite3.Connection, user_id: str) -> str:
-        """真名的**原始写法**（渲染用）；`_owner_name` 给的是规范化匹配键。"""
+        """真名的**原始写法**（渲染用）；`owner_name` 给的是规范化匹配键。"""
         row = conn.execute(
             "SELECT subject FROM memory_facts"
             " WHERE user_id=? AND version=? AND relation_key='name'"
@@ -770,7 +770,7 @@ class SqliteStore:
             else 0,
             deterministic=True,
         )
-        owner = self._owner_name(conn, user_id)
+        owner = self.owner_name(conn, user_id)
         owner_display = self._owner_display(conn, user_id)
         for pattern in patterns:
             clauses = []
@@ -787,7 +787,7 @@ class SqliteStore:
             for column, value in (("subject_key", pattern.subject), ("object_key", pattern.object)):
                 if not value:
                     continue
-                if column == "subject_key" and owner and value in {"i", "user", "用户"}:
+                if column == "subject_key" and owner and value in FIRST_PERSON:
                     # 题面问"我"⇒ 真名的事实也算。
                     clauses.append(f"(f.{column}=? OR f.{column}=?)")
                     params.extend([value, owner])
@@ -846,7 +846,7 @@ class SqliteStore:
                 # ⚠ 只改返回值，**不改库里的行**——写入侧仍与到达顺序无关（D28）。
                 subject=(
                     owner_display
-                    if owner_display and row["subject_key"] in {"i", "user", "用户"}
+                    if owner_display and row["subject_key"] in FIRST_PERSON
                     else row["subject"]
                 ),
                 relation=row["relation"],
@@ -973,11 +973,11 @@ def _rebind(text: str, subject_key: str, owner: str) -> str:
         return text
     marker = "\nSource quotation:"
     head, sep, tail = text.partition(marker)
-    for pronoun in ("I's", "I’s", "My", "my"):
-        if pronoun in head:
-            head = head.replace(pronoun, f"{owner}'s" if pronoun.endswith("s") else owner)
-            break
-    else:
-        if head.startswith("I "):
-            head = owner + head[1:]
+    # 所有格：`My case` / `I's case` 都要变成 `<owner>'s case`。
+    # ⚠ 用词边界，避免把 `economy` 里的 `my` 当成代词（`str.replace` 会）。
+    rebound = re.sub(r"\b(?:I['’]s|My|my)\b", f"{owner}'s", head, count=1)
+    if rebound != head:
+        return rebound + sep + tail
+    if head.startswith("I "):
+        head = owner + head[1:]
     return head + sep + tail

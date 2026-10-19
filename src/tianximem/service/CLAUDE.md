@@ -13,12 +13,13 @@ add_pipeline.py    Add 链的**编排**（`AddOutcome` / `AddPipeline`）——a
 search_pipeline.py Search 链的**编排**（`SearchPipeline` / `_SearchTrace` / `AgenticSearch`）——先试共同取证，不适用则回退原混合检索链
 pipeline.py   两条链共用的**薄 façade**：重新导出上面两个模块的名字，没有自己的逻辑（"为什么编排在本目录"写在它的模块 docstring）
 search_stages.py  共同事实快照、索引回填和证据选择 stage；不拥有 HTTP 或普通检索尾巴
+grounded_planner.py  可选的受限计划生成器（`retrieval.grounded_planner.*`）——确定性计划编译失败时才调用一次 LLM，只产出 `QueryPlan`，不参与事实生成、选择或来源审查
 errors.py     异常 → 保持"可重试"的边界处理
-capture.py    请求**原文**采集（诊断旁路，默认关）—— **S6** 的唯一直接观察口
+capture.py    请求**原文**采集（诊断旁路；`default.yaml` 默认开，代码内置缺省仍 `false`）—— **S6** 的唯一直接观察口
 ```
 
 > **`capture.py` 的边界**：它把官方发来的 `/add` / `/search` **原样**抄一份落盘
-> （`capture.enabled`，默认关），用来核验官方真实的请求形状——尤其 `request_id`。
+> （`capture.enabled`，`default.yaml` 默认开），用来核验官方真实的请求形状——尤其 `request_id`。
 > **四条纪律与文件格式一处声明在** [`capture.py`](./capture.py) 的模块 docstring
 > （在解析之前抄 / 不改下游 body / 不吞异常 / 写盘失败不影响响应），本文件不复制。
 > ⚠ 它是本层**唯一**允许"吞掉自己内部错误"的地方（只留 WARNING），理由见那条纪律 4：
@@ -29,8 +30,6 @@ capture.py    请求**原文**采集（诊断旁路，默认关）—— **S6** 
 > （`tests/test_config.py::test_only_config_reads_the_environment`）。
 >
 > ⇒ 本目录拿到的是一个 [`AppConfig`](../common/config/model.py) 对象；**它不知道那些值从哪来**。
-
-> **为什么编排在本目录**：本层"不做检索、不做配对、不碰存储"指的是**不重新实现**那些逻辑（全部往下调用）。而 Search 的链横跨 `facts/`、`retrieve/` 与 `rank/`、Add 的链横跨 `pairing/`、`facts/`、`store/`、`embed/`——**没有任何单个下层模块能拥有整条链**，所以"顺序"必须有人拥有，就在这里（路由仍然是薄的，`routes.py` 只有形状映射）。两条链各住一个文件：Add 链在 [`add_pipeline.py`](./add_pipeline.py)、Search 链在 [`search_pipeline.py`](./search_pipeline.py)；[`pipeline.py`](./pipeline.py) 是薄 façade，只重新导出它们的名字（`wiring.py` / `routes.py` / `__init__.py` 与多处文档照旧指着它）。
 
 ## 这一层只做两件事
 

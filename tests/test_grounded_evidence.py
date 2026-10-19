@@ -318,3 +318,70 @@ def test_replay_backfill_and_source_bounds_never_change_raw_memory(tmp_path):
 )
 def test_temporal_hypothetical_and_exclusion_queries_are_not_routed(query):
     assert compile_query(query) is None
+
+
+def test_first_person_plan_still_matches_after_the_name_is_known(tmp_path):
+    """D50 的读取期改名不能让**问 "I"** 的计划全部判否（2026-10-19 实测复现）。
+
+    `fetch_evidence` 会把第一人称事实的主语换成真名，而计划侧仍是字面 `"i"`。
+    没有 `owner` 等价规则时，同一个问题在"用户有自我介绍"之后静默回退原链。
+    """
+    query = "How many pencils do I have in my orange case?"
+    plan = compile_query(query)
+    assert plan is not None and plan.patterns[0].subject == "i"
+
+    def run(store):
+        service = pipeline(store)
+        return service.run(user_id="u", query=query, top_k=100).items
+
+    without_name = SqliteStore.open(tmp_path / "without.db")
+    apply_batch(
+        without_name,
+        batch("My orange case contains three pencils.", rid="r1"),
+        grounded_evidence=True,
+    )
+    baseline = run(without_name)
+    assert len(baseline) == 1 and "contains 3 pencils" in baseline[0].content
+
+    with_name = SqliteStore.open(tmp_path / "with.db")
+    apply_batch(
+        with_name,
+        batch("My name is Barbara Jones.", rid="r1"),
+        grounded_evidence=True,
+    )
+    apply_batch(
+        with_name,
+        batch("My orange case contains three pencils.", rid="r2"),
+        grounded_evidence=True,
+    )
+    renamed = run(with_name)
+    # 同一个问题、同一条事实：多了自我介绍之后证据不能消失，且主语归到真名。
+    assert len(renamed) == 1
+    assert "contains 3 pencils" in renamed[0].content
+    # 所有格必须保留：`My case` → `<name>'s case`（不是裸真名）。
+    assert "Statement: Barbara Jones's orange case contains 3 pencils." in renamed[0].content
+
+
+def test_first_person_plan_with_a_guard_literal_keeps_its_evidence(tmp_path):
+    """带 `guard_literal` 的计划也要传 `owner`（2026-10-19 复审发现的漏传）。
+
+    `sources_supported` 用 `matches(fact, owner)` 算"已解释的主体"；不传 `owner`
+    时，有自我介绍的用户会算成"没有主体"，来源审查随后把整题判回原链。
+    """
+    store = SqliteStore.open(tmp_path / "test.db")
+    apply_batch(
+        store,
+        batch("My name is Barbara Jones.", rid="r0"),
+        grounded_evidence=True,
+    )
+    apply_batch(
+        store,
+        batch("我的箱子里有三本书。", rid="r1"),
+        grounded_evidence=True,
+    )
+    service = pipeline(store)
+    hits = service.run(user_id="u", query="我的箱子里有多少本书？", top_k=100).items
+    assert len(hits) == 1
+    # 命中共同取证（而不是回退原链）：事实片段的固定首行 + 原文数量。
+    assert "Memory fact" in hits[0].content
+    assert "数量为3本" in hits[0].content

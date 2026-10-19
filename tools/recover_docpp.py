@@ -45,8 +45,8 @@ raw 前缀 `https://raw.githubusercontent.com/hwanchang00/doc-pp/a70798e0d1f3f38
     sha256 69d59adab5fd638a9181db49830aee651ba7de70b56280817cbe91f556b6c429
 
 仓内其余文件（README/assets/scripts/src/…）的 sha256 见
-[`fetch_benchmark_data.py`](./fetch_benchmark_data.py) 的 `_OFFICIAL_EXTRA_FILES`
-（清单只此一份，本文件不复制）。取数入口：`make fetch-data`。
+[`eval/datasets/manifest.py`](../eval/datasets/manifest.py) 的 `_OFFICIAL_EXTRA_FILES`
+（D35 起清单只此一份，本文件不复制）。取数入口：`make fetch-data`。
 
 ## 采集侧的对接口径
 

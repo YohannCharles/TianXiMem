@@ -73,8 +73,39 @@ _ALIASES = {
 }
 
 
+#: 第一人称在事实与计划里的四种写法。**唯一一份**：
+#: `facts/query.py`（计划匹配）、`retrieve/evidence.py`（walk 根实体）与
+#: `store/sqlite_store.py`（SQL 粗筛 + 读取期改名）都从这里取。
+#: ⚠ 两边各抄一份时，新加一种写法会只在一侧生效——表现为**静默匹配不到**。
+FIRST_PERSON = frozenset({"i", "user", "用户", "我"})
+
+
 #: 档案字段的同义写法 → 规范字段名（`my personality type` 与题面的 `MBTI personality
 #: type` 是同一件事）。只收**同一字段的不同叫法**，不收相邻但不同的字段。
+#: 档案字段白名单（**原文里真写、题面里能问**的那些）。抽取侧
+#: [`grammar.py`](./grammar.py) 与查询侧 [`paths.py`](./paths.py) 都从这里取，
+#: ⛔ 不要再各抄一份——两边对不上时，题会**静默匹配不到**（2026-10-18 实测）。
+#: ⚠ 增删必须同时确认 `_PROFILE_ALIASES` 的归一结果仍在白名单里。
+PROFILE_FIELDS = frozenset(
+    {
+        "highest education level",
+        "education level",
+        "major",
+        "personality type",
+        "mbti personality type",
+        "monthly income",
+        "job title",
+        "blood type",
+        "physical condition",
+        "mental health",
+        "middle name",
+        "life goal",
+        "life goal statement",
+        "weight",
+        "height",
+    }
+)
+
 _PROFILE_ALIASES = {
     "mbti personality type": "personality type",
     "myers-briggs personality type": "personality type",

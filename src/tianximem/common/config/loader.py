@@ -66,9 +66,9 @@ def load_config(
         config_dir if config_dir is not None else (src.get(ENV_CONFIG_DIR) or DEFAULT_CONFIG_DIR)
     )
 
-    data = _read_yaml(where / "default.yaml", required=True)
+    data = _read_yaml(where / "default.yaml")
     if profile != DEFAULT_PROFILE:
-        data = _deep_merge(data, _read_yaml(where / f"{profile}.yaml", required=True))
+        data = _deep_merge(data, _read_yaml(where / f"{profile}.yaml"))
 
     storage = _storage(data.get("storage"))
     storage = replace(
@@ -77,7 +77,7 @@ def load_config(
         qdrant=replace(storage.qdrant, url=src.get(ENV_QDRANT_URL) or storage.qdrant.url),
     )
     cache = CacheConfig(
-        embed=EmbedCacheConfig(dir=src.get(ENV_EMBED_CACHE_DIR) or "var/embed_cache")
+        embed=EmbedCacheConfig(dir=src.get(ENV_EMBED_CACHE_DIR) or EmbedCacheConfig().dir)
     )
 
     # 采集的**路径归 env**（与 SQLite / 向量缓存同一条规矩）；开不开在 yaml 的

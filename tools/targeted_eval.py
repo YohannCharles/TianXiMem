@@ -30,6 +30,7 @@ from eval.datasets.prepare import sha256_file  # noqa: E402
 from eval.harness import ServiceClient, pipeline_for, run_judge  # noqa: E402
 from eval.harness.api_config import ANSWER_MODEL, ENDPOINTS, JUDGE_MODEL  # noqa: E402
 from eval.harness.judge import EXTRA_DATASETS, render_memories  # noqa: E402
+from eval.jsonl_io import jsonl_line  # noqa: E402
 
 
 def read_rows(path: Path) -> list[dict]:
@@ -255,7 +256,7 @@ def main() -> int:
                     print(f"{group['group']} {qid}: worker 失败: {exc}", flush=True)
                     continue
                 with results_path.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    handle.write(jsonl_line(row))
                 results.append(row)
                 write_json(args.output / "summary.json", summarize(results))
     write_json(args.output / "summary.json", summarize(results))

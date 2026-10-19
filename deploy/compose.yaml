@@ -78,7 +78,7 @@ services:
       # ③ 路径固定成卷里的位置（Dockerfile 里已经把目录建好并 chown 给 app 用户）。
       TIANXIMEM_SQLITE_PATH: /data/tianxi.db
       TIANXIMEM_EMBED_CACHE_DIR: /data/embed_cache
-      # 请求**原文**采集的落点（`capture.enabled=true` 时才写，默认关）。
+      # 请求**原文**采集的落点（`capture.enabled=true` 时才写；`default.yaml` 基线即 true）。
       # 它在同一个卷里 ⇒ `docker cp <容器>:/data/capture/requests.jsonl .` 取得走。
       TIANXIMEM_CAPTURE_PATH: /data/capture/requests.jsonl
       # ④ 单进程（§15）。Dockerfile 里已有第二道，这里写出来是为了让它**在 compose 上可见**。

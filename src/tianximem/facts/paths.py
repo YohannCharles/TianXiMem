@@ -6,30 +6,11 @@ Search. This module does not extract source facts or call a model.
 
 import re
 
-from tianximem.facts.evidence import relation_key
+from tianximem.facts.evidence import PROFILE_FIELDS, relation_key
 
-#: 档案字段白名单——与抽取侧 [`grammar._PROFILE_FIELDS`](./grammar.py) 同一张表。
-#: ⚠ 两边必须同时改：抽取写下的关系名与这里认的字段名对不上，题就永远匹配不到。
-_PROFILE_FIELD_NAMES = frozenset(
-    relation_key(name)
-    for name in (
-        "highest education level",
-        "education level",
-        "major",
-        "personality type",
-        "mbti personality type",
-        "monthly income",
-        "job title",
-        "blood type",
-        "physical condition",
-        "mental health",
-        "middle name",
-        "life goal",
-        "life goal statement",
-        "weight",
-        "height",
-    )
-)
+#: 档案字段白名单——**唯一一份**在 [`evidence.PROFILE_FIELDS`](./evidence.py)。
+#: ⚠ 抽取侧与查询侧都从那里取：两边对不上时，题会**静默匹配不到**。
+_PROFILE_FIELD_NAMES = frozenset(relation_key(name) for name in PROFILE_FIELDS)
 
 RELATION_NAMES = {
     "author": ("author", "writer"),
@@ -777,7 +758,6 @@ def question_path(text: str) -> tuple[str, tuple[str, ...]] | None:
         # 内层仍是 `noun_path` 的通用嵌套——不新增业务分支。
         ("capital", r"(?:Which|What) city (?:serves as|acts as|is) the capital(?: city)? of (.+)"),
         (None, r"(?:Which|What) city (?:serves as|acts as) (.+)"),
-        ("continent", r"On which continent is (.+)"),
         ("continent", r"In which continent is (.+)"),
         ("continent", r"Which continent contains (.+)"),
         ("continent", r"Which continent is (.+)"),
@@ -905,7 +885,6 @@ def question_path(text: str) -> tuple[str, tuple[str, ...]] | None:
         ("work location", r"What city did (.+?) work in"),
         ("work location", r"What city was the workplace of (.+)"),
         ("work location", r"In (?:which|what) city was the workplace of (.+)"),
-        ("place of birth", r"What city was (.+?) born in"),
         ("place of birth", r"Where was the founder of (.+?) born"),
         ("educated at", r"In (?:which|what) city is the headquarters of the university located, that (.+?)"),
         # **外层属性在疑问词之后、内层从句在 "located," 之后**（官方 MQuAKE 的逗号变体）：
@@ -919,7 +898,6 @@ def question_path(text: str) -> tuple[str, tuple[str, ...]] | None:
             r"(?:associated with|played by|linked to) (.+)",
         ),        ("continent", r"Which continent houses the country of (.+)"),
         ("continent", r"Which continent houses (.+)"),
-        ("official language", r"What language is the official language of (.+)"),
         ("country of origin", r"Where does the sport associated with (.+?) originate"),
         ("country of origin", r"Where did the sport associated with (.+?) originate"),
         ("official language", r"What language is spoken in the country of the creator of (.+)"),
@@ -931,8 +909,6 @@ def question_path(text: str) -> tuple[str, tuple[str, ...]] | None:
         ("continent", r"What continent is the country located in where (.+)"),
         ("continent", r"What continent is the country located in that (.+)"),
         (("place of birth", "continent"), r"On (?:which|what) continent is the city situated, where (.+?) was born"),
-        (("place of birth", "continent"), r"On (?:which|what) continent is the city located, where (.+?) was born"),
-        (("place of birth", "continent"), r"What continent is the city located in, where (.+?) was born"),
         ("country of origin", r"In (?:which|what) country was the sport developed, that (.+)"),
         ("country of origin", r"In (?:which|what) country was the sport developed that (.+)"),
         ("country of origin", r"In (?:which|what) country was the sport associated with (.+?) created"),
@@ -943,11 +919,11 @@ def question_path(text: str) -> tuple[str, tuple[str, ...]] | None:
         ("language of work or name", r"What language was the work written in that (.+)"),
         ("language of work or name", r"In (?:which|what) language was the work written by (.+)"),
         ("headquarters location", r"Where is the headquarters of the university that (.+?) located"),
+        (("educated at", "headquarters location"), r"Where is the headquarters of the university that (.+?) (?:attended|was educated)(?: at)?"),
+        (("author", "educated at", "headquarters location"), r"Where is the headquarters of the university that the (?:author|creator|writer) of (.+?) attended"),
         ("headquarters location", r"Where is the headquarters of the university that (.+)"),
         (None, r"Where is (the headquarters of the university where .+?) located"),
         (None, r"Where is (the headquarters of the university where .+)"),
-        ("headquarters location", r"Where is the headquarters of the university that (.+?) (?:attended|was educated)"),
-        ("headquarters location", r"Where is the headquarters of the university that the (?:author|creator|writer) of (.+?) attended"),
         ("headquarters location", r"In (?:which|what) city is the university's headquarters located, which is the alma mater of (.+)"),
         (None, r"In (?:which|what) city is (the headquarters of the university located, where .+?)"),
         ("headquarters location", r"In (?:which|what) city is the headquarters of (the university located, that .+?)"),
@@ -975,31 +951,28 @@ def question_path(text: str) -> tuple[str, tuple[str, ...]] | None:
         ("official language", r"What is the main language spoken in (.+)"),
         ("official language", r"Which language is mainly spoken in (.+)"),
         ("official language", r"What language is predominantly spoken in (.+)"),
-        ("official language", r"Which language is predominantly spoken in (.+)"),
         ("official language", r"What language is primarily used in (.+)"),
         ("official language", r"What language is mainly used in (.+)"),
         ("place of birth", r"Which city is where (the founder of .+?) was born"),
         ("place of birth", r"Which city is where (.+?) was born"),
-        ("capital", r"Where is the headquarters of the university that (.+?) located"),
-        ("capital", r"Where is the headquarters of the university that (.+?)"),
         ("country of origin", r"What person founded the nation where (.+?) originated"),
         ("country of origin", r"Who founded the nation where (.+?) originated"),
         (None, r"Which city is home to (the headquarters of the university where .+)"),
         ("headquarters location", r"Which city is home to the headquarters of (.+)"),
-        ("headquarters location", r"Which city houses the headquarters of (.+)"),
-        ("headquarters location", r"Where is the headquarters of (.+?) located"),
-        ("country of citizenship", r"What is the official language of the country of which (.+)"),
-        ("country of citizenship", r"What is the official language spoken in the country where (.+)"),
-        ("country of citizenship", r"What is the name of the child of (.+)"),
+        (
+            ("country of citizenship", "official language"),
+            r"What is the official language of the country of which (.+?) (?:is a citizen|holds citizenship)",
+        ),
+        (
+            ("country of citizenship", "official language"),
+            r"What is the official language spoken in the country where (.+?) (?:is a citizen|holds citizenship)",
+        ),
         ("country of citizenship", r"What is the name of the director who worked with (.+)"),
         ("country of origin", r"What country (?:created|developed|originated) (.+)"),
         ("country of origin", r"Which country (?:created|developed|originated) (.+)"),
         ("country of origin", r"What country is the origin of (.+)"),
         ("genre", r"What genre of music is played by (.+)"),
-        ("genre", r"Which genre of music is played by (.+)"),
         ("genre", r"What (?:type|kind) of music is played by (.+)"),
-        ("capital", r"What is the capital city of (.+)"),
-        ("capital", r"Which city is the capital of (.+)"),
     )
     # Specific wrappers must precede every unconstrained wrapper: otherwise
     # "Where is ... located" binds "located" as part of the root entity.

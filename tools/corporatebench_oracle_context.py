@@ -26,7 +26,7 @@ from eval.datasets.prepare import sha256_file  # noqa: E402
 from eval.datasets.registry import benchmark_dir  # noqa: E402
 from eval.harness import extra_pipeline as ep  # noqa: E402
 from eval.harness.corporatebench_pipeline import score_corporatebench  # noqa: E402
-from eval.jsonl_io import read_jsonl  # noqa: E402
+from eval.jsonl_io import jsonl_line, read_jsonl  # noqa: E402
 
 IDS = (
     0,
@@ -73,7 +73,7 @@ def write_json(path: Path, value: object) -> None:
 
 def write_rows(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+    path.write_text("".join(jsonl_line(row) for row in rows), encoding="utf-8")
 
 
 def atom(raw: str) -> str:

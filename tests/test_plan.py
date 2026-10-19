@@ -1070,6 +1070,8 @@ def test_the_config_selects_the_plan_executor_end_to_end(tmp_path) -> None:
             "AML_BASE_URL": "http://llm.invalid",
             "AML_API_KEY": "k",
             "AML_MODEL": "m",
+            # ⚠ 隔离仓库的 var/capture（`default.yaml` 的 capture 默认开）
+            "TIANXIMEM_CAPTURE_PATH": str(tmp_path / "capture.jsonl"),
         }
     )
     config = replace(
@@ -1132,6 +1134,8 @@ def test_the_plan_output_budget_is_wired_from_its_own_key(tmp_path) -> None:
             "AML_BASE_URL": "http://llm.invalid",
             "AML_API_KEY": "k",
             "AML_MODEL": "m",
+            # ⚠ 隔离仓库的 var/capture（`default.yaml` 的 capture 默认开）
+            "TIANXIMEM_CAPTURE_PATH": str(tmp_path / "capture.jsonl"),
         }
     )
     config = replace(
@@ -1174,6 +1178,8 @@ def test_services_close_releases_the_plan_client(tmp_path) -> None:
             "AML_BASE_URL": "http://llm.invalid",
             "AML_API_KEY": "k",
             "AML_MODEL": "m",
+            # ⚠ 隔离仓库的 var/capture（`default.yaml` 的 capture 默认开）
+            "TIANXIMEM_CAPTURE_PATH": str(tmp_path / "capture.jsonl"),
         }
     )
     config = replace(
@@ -1502,3 +1508,18 @@ def test_plan_without_a_recovery_keeps_the_joint_rerank_query() -> None:
     )
     assert plain.rerank_query == "Where did the trip start?\nWho was born in Lisbon?"
     assert plain.recovery.rerank_query_mode == "joint"
+
+
+def test_every_step_and_the_recovery_call_are_isolated_by_user_id() -> None:
+    """用户隔离要带在**每一次**检索上——逐轮一次，恢复分支再一次（§7.3）。
+
+    React 侧有同型用例（`test_agent.py::test_every_round_is_isolated_by_user_id`）；
+    Plan 是提交口径，且多了一条恢复检索，两处都必须钉住。
+    """
+    retriever = _big_retriever()
+    _agent(llm=_unresolved_at(1), retriever=retriever).search(
+        user_id="alice", query="orig?", top_k=100
+    )
+    assert retriever.queries, "plan 至少检索过一次"
+    assert {call["user_id"] for call in retriever.calls} == {"alice"}
+    assert any(call["query"] == "orig?" for call in retriever.calls), "恢复分支必须在场"

@@ -101,7 +101,7 @@ D35 后官方脚本位于 `dataset/.upstream/aml/`，`parents[2]` 指向数据�
 
 **⚠ 不要在仓库外创建它。** 那份就是本目录里的 [`api_config.py`](./api_config.py)（AML 公开的那份是 520 字节、无凭据），由 `judge.run_judge()` 起 subprocess 时把**本目录**放进 `PYTHONPATH` 找到（`judge._subprocess_env`）——`sys.path.insert(0, <不存在路径>)` 只是塞进一个没有该模块的条目，**import 会继续往后找到 `PYTHONPATH` 里的那份**，于是归档保持只读、`parents[2]` 那条脆弱路径被绕开、配置只有 `.env` 一份。
 
-**两边的名字不一样**——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组：**适配器负责接上**（`JUDGE_*` 留空即回落**本进程所选**的对话端点——两个端点（`memory2` / `memory3`）是**同一个**对话模型）。**那七个名字里不含 embedding**：归档 pipeline 不向量化，Qwen3-Embedding-8B 只属于 `src/tianximem`。
+**两边的名字不一样**——上游读 `ANSWER_*` / `JUDGE_*`，而我们 `.env` 里是 `AML_*` 那一组：**适配器负责接上**（`JUDGE_*` 留空即回落**本进程所选**的对话端点——两个端点（`memory2` / `memory3`）是**同一个**对话模型）。**那七个名字里不含 embedding**：归档 pipeline 不向量化，Qwen3-Embedding 只属于 `src/tianximem`。
 
 ⚠ **端点是按进程选的**（**D39**）：`api_config` 读 `AML_ENDPOINT_INDEX`（由 `judge._run()` 注入），
 所以判分线程池能把不同 sample 派到不同端点；**没注入就是主端点**（父进程那条路——

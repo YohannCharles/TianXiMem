@@ -96,7 +96,7 @@ def truncation_note(
     if limit is not None:
         if spread:
             head = (
-                f"⚠ **截断跑（分层抽样）**：按 `question_type` 按比例取了约 {limit} 题"
+                f"⚠ **截断跑（分层抽样）**：按**该数据集声明的分层键**按比例取了约 {limit} 题"
                 "（**不是前 N 题**）——不可与全量比"
             )
         else:

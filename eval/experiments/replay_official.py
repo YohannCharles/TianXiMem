@@ -60,7 +60,7 @@ from eval.harness import ServiceClient, build_official_items, pipeline_for, run_
 from eval.harness.api_config import ANSWER_MODEL
 from eval.harness.plan_driver import send_event
 from eval.harness.run_record import build_record, write_record
-from eval.jsonl_io import read_jsonl
+from eval.jsonl_io import read_jsonl, write_line
 
 __all__ = ["main", "replay_user", "load_hits", "save_hits"]
 
@@ -221,8 +221,7 @@ def _record_skip(out_dir: Path, row: dict) -> None:
     """
     path = out_dir / "skipped.jsonl"
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-        handle.flush()
+        write_line(handle, row)
 
 
 def _results_from(rows: list[dict], user_dir: Path) -> list:

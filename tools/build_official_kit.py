@@ -300,6 +300,55 @@ def _public_gold_payload(public: dict, dataset: str) -> dict:
     return {"gold_answers": [], "gold_rubric": None}
 
 
+#: `official-gold-extra*.jsonl` 一行**必须**有的键。
+#: ⚠ 五个 `recover_*` 脚本各自手拼这份字典；少一个键时下游只会拿到 `None`
+#: 并让裁判走错分支——**不报错**。消费侧在这里统一响亮失败。
+GOLD_EXTRA_REQUIRED_KEYS: tuple[str, ...] = (
+    "seq",
+    "source_dataset",
+    "source_locator",
+    "gold_kind",
+    "gold_answers",
+    "gold_rubric",
+    "gold_native",
+    "gold_judging",
+)
+
+
+def validate_gold_extra_row(row: dict, *, where: str = "official-gold-extra") -> None:
+    """校验一行补金标产物：必填键 + 三种金标字段的类型。
+
+    错误信息带 `seq` 与键名，让"哪一族、哪一行"一眼可定位。
+    """
+    missing = [key for key in GOLD_EXTRA_REQUIRED_KEYS if key not in row]
+    if missing:
+        raise SystemExit(f"✗ {where} 行缺必填键 {missing}（seq={row.get('seq')!r}）")
+    seq = row.get("seq")
+    if not isinstance(row["gold_answers"], list):
+        raise SystemExit(
+            f"✗ {where} 的 `gold_answers` 必须是 list（seq={seq!r}），"
+            f"收到 {type(row['gold_answers']).__name__}"
+        )
+    native = row["gold_native"]
+    if native is not None and not isinstance(native, dict):
+        raise SystemExit(
+            f"✗ {where} 的 `gold_native` 必须是映射或 null（seq={seq!r}），"
+            f"收到 {type(native).__name__}"
+        )
+    rubric = row["gold_rubric"]
+    if rubric is not None and not isinstance(rubric, (str, list)):
+        raise SystemExit(
+            f"✗ {where} 的 `gold_rubric` 必须是字符串、列表或 null（seq={seq!r}），"
+            f"收到 {type(rubric).__name__}"
+        )
+    locator = row["source_locator"]
+    if locator is not None and not isinstance(locator, dict):
+        raise SystemExit(
+            f"✗ {where} 的 `source_locator` 必须是映射或 null（seq={seq!r}），"
+            f"收到 {type(locator).__name__}"
+        )
+
+
 def _extra_payload(extra: dict) -> dict:
     """`official-gold-extra.jsonl` 一行的金标载荷（`gold_kind` 是它自己的口径）。
 
@@ -307,6 +356,7 @@ def _extra_payload(extra: dict) -> dict:
     MemTrapBench 的 `gold_standard`、MedMemoryBench 的 `query_type`…）——只留
     `gold_answers` 会让裁判走错分支**且不报错**，所以原样搬过去。
     """
+    validate_gold_extra_row(extra)
     return {
         "gold_answers": list(extra.get("gold_answers") or []),
         "gold_rubric": extra.get("gold_rubric"),

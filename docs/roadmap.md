@@ -181,8 +181,12 @@
 - [ ] 切到 `text-embedding-v4` + `gpt-4o-mini`（§2.3）—— 🟡 **embedder 一侧已落地**（2026-09-28：
       [`../src/tianximem/embed/text_embedding_v4.py`](../src/tianximem/embed/text_embedding_v4.py) +
       [`../configs/submit.yaml`](../configs/submit.yaml) + 装配按模型名挑实现），**剩下的只是把
-      `AML_EMB_*` 指到真端点**（端点尚未到位）。⚠ **`gpt-4o-mini` 在 v1 里没有调用点**
-      （`Add` 侧不调用、`Search` 只在 `agent/` 里调用，而 v1 不做 agentic，D13）⇒ 无需接线。
+      `AML_EMB_*` 指到真端点**（端点尚未到位）。
+      ⚠ **`Search` 路径有三个默认开启的 LLM 消费者**：共同事实计划器（确定性计划失败时
+      ≤1 次）、查询路由器（≤1 次）、多跳执行器（每轮一次，`plan` 模式另有 ≤1 次拆解）；
+      **`Add` 侧仍零 LLM 调用**。切换本身只改 `.env` 的 `AML_MODEL` / `AML_BASE_URL` /
+      `AML_API_KEY`（客户端与模型无关，无代码切换）——但 **Step 5 必须对这三条路重测**，
+      并重标定提示词、超时与由模型派生的阈值（§12.1 R1 对冲 3）。
 - [ ] **按新维度重建向量集合**（§2.3 / §16）——embedding 缓存整体失效（§7.2）
 - [ ] **重标定全部阈值与权重**（§12.1 R1）
 - [ ] **重跑 T2**，确认切换没引入系统性偏移——**它对外部模型依赖最小（纯 BM25 检索 + 人工判读，不调用任何模型），先用它确认，再去信其他实验**（§12.1 R1 对冲 2）
@@ -193,7 +197,7 @@
 
 ## Step 6 — 对照实验 + Smoke + Full 定稿
 
-- [ ] 跑完 §13 全部对照（**B1 已跑**：agent 模式 3 段 346 题，我们领先 +29.5pt；**v1 还剩 A0/T2**——**A4 不在 v1**（**D26**）：它要 agent 真的存在，而 v1 不做 agentic（D13），arm 定义留在 [`experiments.md`](./experiments.md)）
+- [ ] 跑完 §13 全部对照（**B1 已跑**：agent 模式 3 段 346 题，我们领先 +29.5pt；**v1 还剩 A0/T2**——**A4 的前提已就位**（**D41**：`agent/` 已落地、`agentic.enabled` 可关），三臂（E0/E1/E2）尚未跑，arm 定义留在 [`experiments.md`](./experiments.md)）
 - [ ] **Smoke 验证契约合规**
 - [ ] **Smoke 跑通后第一件事：设计 S1 的判别实验**（§17.1）
 - [ ] **Full 定稿**——每 Key 每轨道 **2 次**，第二次隔 30 天；**一旦接受即版本冻结**

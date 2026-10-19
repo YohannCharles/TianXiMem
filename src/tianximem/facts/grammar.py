@@ -12,6 +12,7 @@ from tianximem.facts.assertions import interrogative
 from tianximem.facts.conversation import NAME, SPEAKER, named_utterances, sentences
 from tianximem.facts.entities import EntityExtractor, ExtractionCandidates, load_spacy_extractor
 from tianximem.facts.evidence import (
+    PROFILE_FIELDS,
     EvidenceFact,
     SourceSide,
     key,
@@ -171,25 +172,10 @@ _ORIENTATION = re.compile(
 #: 会把叙述句（"my journey is values like empathy"）也变成事实——那是推断，不是原文
 #: 字段。白名单只收**问句里能问、原文里真写**的档案字段（HaluMem 那批 + 通用档案）。
 #: 规范化交给 `relation_key`（与查询侧 `relation_key(字段名)` 对齐）。
-_PROFILE_FIELDS = frozenset(
-    {
-        "highest education level",
-        "education level",
-        "major",
-        "personality type",
-        "mbti personality type",
-        "monthly income",
-        "job title",
-        "blood type",
-        "physical condition",
-        "mental health",
-        "middle name",
-        "life goal",
-        "life goal statement",
-        "weight",
-        "height",
-    }
-)
+#: 档案字段白名单**唯一一份**在 [`evidence.PROFILE_FIELDS`](./evidence.py)；
+#: 这里只保留旧名字，抽取代码与测试都还按它引用。
+_PROFILE_FIELDS = PROFILE_FIELDS
+
 #: 自我介绍写下的名字本身也是**原文写明的字段**（`My name is X` ⇒ `X` 的 `name` 是 `X`）。
 #: 它是跨 Add 绑定第一人称的唯一可信来源——不抽它，后面那些块就没有可查的姓名事实。
 #: 本人明说的偏好（`contemporary is my top pick` / `my favorite style is X`）。
@@ -567,9 +553,8 @@ def extract_evidence(
             )
 
     # 显式边、显式月份限定或显式替换。只用于取回原文。
-    # ⚠ `"\n" not in question` 曾经把**多行记录**整条挡在外面；官方采集的 MQuAKE
-    # 更新句就是 `UPDATE: …\n{json}` 两行（2026-10-18 实测：1124 题 0 命中）。
-    # 放宽到"首行是标签/短前缀 + 余下是一条显式声明"，长度上限照旧。
+    # ⚠ **多行记录必须放行**：官方采集的 MQuAKE 更新句就是 `UPDATE: …\n{json}`
+    # 两行（D51）。判据是"首行是标签/短前缀 + 余下是一条显式声明"，长度上限照旧。
     if question and not answer and len(question) <= 2048:
         text = _LABEL.sub("", question.strip(), count=1)
         edited = bool(_REPLACEMENT.search(text))

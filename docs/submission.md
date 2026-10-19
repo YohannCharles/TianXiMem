@@ -117,7 +117,7 @@
 | --- | --- |
 | 切换日期 | |
 | 改动范围（**应只有模型 + 重标定阈值**） | |
-| embedder：`Qwen3-Embedding-8B` → `text-embedding-v4` | ☐ |
+| embedder：`Qwen/Qwen3-Embedding-4B` → `text-embedding-v4` | ☐ |
 | LLM：`qwen3.5-9b` → `gpt-4o-mini` | ☐ |
 | 向量集合按新维度**重建** | ☐ |
 | embedding 缓存**整体作废** | ☐ |
@@ -132,8 +132,10 @@
 > [`../configs/submit.yaml`](../configs/submit.yaml)、以及装配按模型名挑实现
 > （[`../src/tianximem/service/app.py`](../src/tianximem/service/app.py) 的 `build_embedder`）。
 > 真切换还差：**端点到位**（`AML_EMB_*` 指向 DashScope）、**集合重建**、**阈值重标定**。
-> ⚠ **"LLM：`qwen3.5-9b` → `gpt-4o-mini`"这一行在 v1 里没有要切的东西**——没有调用点（D13）。
-> 记录时写清"无调用点"，**别勾成一个看起来做过的 ☐**。
+> ⚠ **"LLM：`qwen3.5-9b` → `gpt-4o-mini`"这一行有真实调用点**：`Search` 路径有三个
+> 默认开启的消费者（共同事实计划器 / 查询路由器 / 多跳执行器；`Add` 侧仍零调用）。
+> 切换只改 `.env`（`AML_MODEL` / `AML_BASE_URL` / `AML_API_KEY`），但**必须重测这三条路**——
+> 记录时写清"三个调用点已重测"，**别勾成一个看起来做过的 ☐**。
 
 ---
 
@@ -148,7 +150,7 @@
 | 代码公开（不含 `benchmark_data/`——**整目录 gitignored**） | ☐ |
 | 配置文件公开 | ☐ |
 | **归属声明**：ReFind（MIT）作为 B1 基线被 Vendor 进 `eval/baselines/refind/` | ☐ |
-| **归属声明**：Qdrant / Qwen3-Embedding-8B / Qwen3-Reranker-4B / qwen3.5-9b / text-embedding-v4 / gpt-4o-mini 的各自许可 | ☐ |
+| **归属声明**：Qdrant / Qwen3-Embedding-4B / Qwen3-Reranker-4B / qwen3.5-9b / text-embedding-v4 / gpt-4o-mini 的各自许可 | ☐ |
 | 可复现材料：`configs/runs/` 快照 + Full 的 SQLite 归档 + `eval/reports/ledger.md` | ☐ |
 | **不声称**：任何 CC BY-NC 数据集上的评测结果可用于商业用途（§12.5） | ☐ |
 

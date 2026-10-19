@@ -28,6 +28,7 @@ from eval.harness.judge import DATE_MODES
 from eval.harness.judge_results import results_from_labels
 from eval.harness.plan_driver import compile_plan, execute_plan, freeze_run
 from eval.harness.run_record import build_record, config_fingerprint, write_record
+from eval.jsonl_io import write_line
 from eval.reports.official_comparison import compare_runs, coverage_report, write_summary
 
 
@@ -87,8 +88,7 @@ def _append_jsonl(path: Path, row: dict) -> None:
     """逐条追加并 flush——长跑被打断时，"已经跳过了哪一批"必须留在磁盘上。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-        handle.flush()
+        write_line(handle, row)
 
 
 def _count_lines(path: Path) -> int:

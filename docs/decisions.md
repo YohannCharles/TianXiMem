@@ -398,7 +398,7 @@ helper 自己 `commit()` 则让"半批"落库。**两种情况都不报错。**
 > ⚠ 新 host 上 reranker **可用**，但 **id 换了**（`qwen3-reranker-4b`），而且**不在 `/v1/models` 里**；
 > 同一天网关侧**又只改了一次 nginx.conf**（`/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`）
 > ⇒ **请求与响应两个信封都换了**（`queries: [...]` / `data[].score`）。
-> 三版信封与逐条实测见 [`../src/tianximem/rank/reranker.py`](../src/tianximem/rank/reranker.py) 顶部的表。
+> 三版信封与逐条实测见 [`../src/tianximem/rank/CLAUDE.md`](../src/tianximem/rank/CLAUDE.md) 的「线格式」表。
 
 > 📌 **2026-10-09 附记：主网关的 host 又搬回 `memory.021130.xyz`**（embedding + rerank 一起），
 > 而 `memory3.021130.xyz` 改为**第二个对话端点**（与 `memory2` 同一个 `Qwen/Qwen3.5-9B`，128K）。
@@ -412,12 +412,12 @@ helper 自己 `commit()` 则让"半批"落库。**两种情况都不报错。**
 > ⚠ 新 host 上 reranker **可用**，id 是 **`Qwen/Qwen3-Reranker-4B`**、**收 `query`**（响应 `results[].score`）；
 > 而**忽略 `model` 字段**（实测两种写法都 200）——"填错也不报错"与"404 ⇒ 每次检索都降级"
 > 是同一枚硬币的两面，**照端点声称的值填**。逐条实测见
-> [`../src/tianximem/rank/reranker.py`](../src/tianximem/rank/reranker.py) 顶部的表。
+> [`../src/tianximem/rank/CLAUDE.md`](../src/tianximem/rank/CLAUDE.md) 的「线格式」表。
 > 📌 **对话端点有两个**（两条附记各加一个）⇒ 判分怎么分派见 **D39**。
 
 | 变量 | 指向 | 谁读它 |
 | --- | --- | --- |
-| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` | **主网关** `memory.021130.xyz`（**Embedding**） | [`common/config.py`](../src/tianximem/common/config.py) 的 `load_config()`（**全包唯一读环境变量的地方**，③-d） |
+| `AML_EMB_BASE_URL` / `AML_EMB_API_KEY` | **主网关** `memory.021130.xyz`（**Embedding**） | [`common/config/`](../src/tianximem/common/config/) 的 `load_config()`（**全包唯一读环境变量的地方**，③-d） |
 | `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` | **memory2** `memory2.021130.xyz`（**LLM 对话**，主端点） | harness / 归档 pipeline（经 `api_config.py` 适配器） |
 | `AML_BASE_URL_2` / `AML_API_KEY_2` | **memory3** `memory3.021130.xyz`（**同一个 LLM 对话**，次端点，**另一把 key**） | 同上（**D39**：按 sample 轮转） |
 | `TIANXIMEM_RERANKER_BASE_URL` / `_API_KEY` / `_MODEL` | **主网关**（**Reranker**） | [`rank/reranker.py`](../src/tianximem/rank/reranker.py) 的 `RemoteReranker`（**已接线**，2026-09-24） |
@@ -1836,7 +1836,7 @@ v3 曾引入第 4 个输出值 `NONE`（"输入为空 / 无效 / 无法归类时
 
 **④ 提交口径的 `agentic.mode`**：`configs/default.yaml` 写 **`plan`**（提交 profile 的一部分）；
 代码内置缺省 `DEFAULT_AGENTIC_MODE` **仍是 `react`**——⚠ 这个"配置 ≠ 代码缺省"的落差是**刻意的**
-（同 `retrieval.grounded_evidence` 的先例，理由见 [`../src/tianximem/common/config.py`](../src/tianximem/common/config.py)），
+（同 `retrieval.grounded_evidence` 的先例，理由见 [`../src/tianximem/common/config/`](../src/tianximem/common/config/)），
 ⛔ 不要为了让两者看起来一致就把常量也翻掉。
 
 **落地点**：[`../src/tianximem/retrieve/router.py`](../src/tianximem/retrieve/router.py)（枚举 / 提示词 / 解析）·

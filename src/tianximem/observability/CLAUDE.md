@@ -24,7 +24,7 @@ metrics.py     ✅ 已实现——§14 指标的**聚合与导出**（出口 = �
 | 打包截断及返回片段数 | [`../service/`](../service/) 的打包出口 | ✅；区分槽位、token 与缺失来源 |
 | 路由的类别分布 · 三态（disabled/success/degraded）· 降级原因 · 回退原因 · 路由耗时 | [`../service/`](../service/) + [`../retrieve/router.py`](../retrieve/router.py) | ✅（**D40**）；⚠ **这是"路由到底有没有在跑"的唯一出口**——`routes.DEFAULT`（开着、分到默认路）与 `statuses.disabled`（根本没开）在响应上完全一样，只有这里分得开。`router.latency_ms` 的分母是 `router.calls` **不是** `searches` |
 | embedding 调用数 / 缓存命中率 | [`../embed/`](../embed/)——它是**缓存键**的探针，**不下降说明缓存键写错了** | ⬜ 还没发 |
-| Agent Trigger Rate · 平均轮数 · Rewrite 次数 | [`../agent/`](../agent/)——只有 agent 循环知道被触发了几次 | ⬜ v2（D13） |
+| Agent Trigger Rate · 平均轮数 · Rewrite 次数 | [`../agent/`](../agent/)——只有 agent 循环知道被触发了几次 | ✅（`agentic_status` / `agentic_rounds` / `agentic_llm_calls`） |
 
 **出口为什么是文件**：响应形状是契约（**一个字段都不能多**）、而 harness **禁 import `src/`**
 ⇒ 磁盘是两边唯一的公共面。服务把**已聚合的快照**写到 `TIANXIMEM_METRICS_PATH`（空 ⇒ 不写），

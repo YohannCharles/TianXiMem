@@ -10,7 +10,14 @@ from datetime import date
 from typing import Protocol
 
 from tianximem.facts.conversation import SPEAKER, named_utterances, sentences
-from tianximem.facts.evidence import EvidenceFact, Qualifier, key, relation_key, words_key
+from tianximem.facts.evidence import (
+    FIRST_PERSON,
+    EvidenceFact,
+    Qualifier,
+    key,
+    relation_key,
+    words_key,
+)
 from tianximem.facts.query import QueryPlan
 
 
@@ -124,12 +131,16 @@ def _resolve(
 
 
 def _walk(
-    facts: Sequence[EvidenceFact], plan: QueryPlan, hop_limit: int
+    facts: Sequence[EvidenceFact], plan: QueryPlan, hop_limit: int, *, owner: str = ""
 ) -> list[EvidenceFact] | None:
     if plan.walk_relations:
         if not plan.walk_root or len(plan.walk_relations) > hop_limit:
             return None
-        frontier = {plan.walk_root}
+        # 读取期已把第一人称事实的主语换成真名（D50）；walk 的根实体若仍是 `"i"`，
+        # 把它解析成 owner，否则整条路径在**有自我介绍的用户**上永远断在第一步。
+        frontier = {
+            owner if owner and plan.walk_root in FIRST_PERSON else plan.walk_root
+        }
         selected: dict[str, EvidenceFact] = {}
         for relation in plan.walk_relations:
             candidates = [
@@ -167,14 +178,16 @@ def _walk(
     return None
 
 
-def _interval(facts: Sequence[EvidenceFact], plan: QueryPlan) -> list[EvidenceFact] | None:
+def _interval(
+    facts: Sequence[EvidenceFact], plan: QueryPlan, *, owner: str = ""
+) -> list[EvidenceFact] | None:
     intervals: list[tuple[EvidenceFact, int, int]] = []
     for fact in facts:
         start, end = fact.get("start_month"), fact.get("end_month")
         if (
             isinstance(start, int)
             and isinstance(end, int)
-            and any(pattern.matches(fact) for pattern in plan.patterns)
+            and any(pattern.matches(fact, owner) for pattern in plan.patterns)
         ):
             intervals.append((fact, start, end))
     if plan.month is not None:
@@ -208,7 +221,11 @@ def _interval(facts: Sequence[EvidenceFact], plan: QueryPlan) -> list[EvidenceFa
 
 
 def sources_supported(
-    sources: Sequence[Source], facts: Sequence[EvidenceFact], plan: QueryPlan
+    sources: Sequence[Source],
+    facts: Sequence[EvidenceFact],
+    plan: QueryPlan,
+    *,
+    owner: str = "",
 ) -> bool:
     """物理扫描齐全不等于语义齐全；同范围的未知正向/变更声明继续交还原文。"""
     needle = plan.guard_literal
@@ -219,7 +236,7 @@ def sources_supported(
             residue = source.question or ""
             for fact in facts:
                 if fact.parent_memory_id == source.id and any(
-                    p.matches(fact) for p in plan.patterns
+                    p.matches(fact, owner) for p in plan.patterns
                 ):
                     residue = residue.replace(fact.source_quote, "")
             for _, utterance in named_utterances(residue):
@@ -230,7 +247,9 @@ def sources_supported(
                 if re.search(plan.guard_assertion_pattern, body, re.I):
                     return False
         return True
-    subjects = {key(f.subject) for f in facts if any(p.matches(f) for p in plan.patterns)}
+    subjects = {
+        key(f.subject) for f in facts if any(p.matches(f, owner) for p in plan.patterns)
+    }
     for source in sources:
         residue = (source.question or "") + "\n" + (source.answer or "")
         for fact in facts:
@@ -299,7 +318,11 @@ def sources_supported(
 
 
 def walk_subjects(
-    facts: Sequence[EvidenceFact], selection: EvidenceSelection, plan: QueryPlan
+    facts: Sequence[EvidenceFact],
+    selection: EvidenceSelection,
+    plan: QueryPlan,
+    *,
+    owner: str = "",
 ) -> tuple[str, ...]:
     """审查整条已选来源中的关系主体，避免原文投影去重掩盖另一主体。"""
     parents = {fact.parent_memory_id for fact in selection.facts}
@@ -310,7 +333,7 @@ def walk_subjects(
                 for fact in facts
                 if fact.parent_memory_id in parents
                 and not fact.get("unparsed")
-                and any(pattern.matches(fact) for pattern in plan.patterns)
+                and any(pattern.matches(fact, owner) for pattern in plan.patterns)
             }
         )
     )
@@ -383,19 +406,20 @@ def evaluate_evidence(
     hop_limit: int,
     sources: Sequence[Source] = (),
     audit_facts: Sequence[EvidenceFact] = (),
+    owner: str = "",
 ) -> EvidenceDecision:
     if plan.operator == "current":
         return EvidenceDecision(EvidenceSelection((), "fact"), "current_input")
     if plan.operator == "walk":
-        selected = _walk(facts, plan, hop_limit)
+        selected = _walk(facts, plan, hop_limit, owner=owner)
         if selected is None:
             return EvidenceDecision(None, "unsupported_walk")
     elif plan.operator == "interval":
-        selected = _interval(facts, plan)
+        selected = _interval(facts, plan, owner=owner)
         if selected is None:
             return EvidenceDecision(None, "unresolved_interval")
     else:
-        selected = [f for f in facts if any(p.matches(f) for p in plan.patterns)]
+        selected = [f for f in facts if any(p.matches(f, owner) for p in plan.patterns)]
         # 逐次取证的计数问题**不按窗口裁事实**：模型要看到带日期的每一次出现，
         # 才回答得了"这段时间里几次"（窗口内 0 次也是答案，裁掉就什么都看不见）。
         if plan.date_bounds and not plan.per_occurrence:
@@ -430,7 +454,9 @@ def evaluate_evidence(
             selected = _resolve(facts, selected)
             if selected is None:
                 return EvidenceDecision(None, "unresolved_reference")
-        if plan.guard_literal and not sources_supported(sources, audit_facts or facts, plan):
+        if plan.guard_literal and not sources_supported(
+            sources, audit_facts or facts, plan, owner=owner
+        ):
             return EvidenceDecision(None, "unsupported_source")
     if not selected:
         return EvidenceDecision(None, "no_match")
@@ -454,6 +480,7 @@ def select_evidence(
     hop_limit: int,
     sources: Sequence[Source] = (),
     audit_facts: Sequence[EvidenceFact] = (),
+    owner: str = "",
 ) -> EvidenceSelection | None:
     """兼容入口；诊断与执行共用同一次选择。"""
     return evaluate_evidence(
@@ -463,4 +490,5 @@ def select_evidence(
         hop_limit=hop_limit,
         sources=sources,
         audit_facts=audit_facts,
+        owner=owner,
     ).selection

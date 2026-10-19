@@ -26,6 +26,7 @@
 | --- | --- | --- |
 | [architecture.md](./architecture.md) | 数据怎么流、模块边界在哪、谁依赖谁、**七个评分维度各由谁回应** | 动手写任何模块之前 |
 | [contract.md](./contract.md) | Add/Search 的精确形状是什么、怎么自查合规 | 写 service 层、发 Smoke 之前 |
+| [api-usage.md](./api-usage.md) | 怎么手工/脚本调用 Add 与 Search（对接自测） | 第一次连服务、写冒烟脚本时 |
 | [config-reference.md](./config-reference.md) | 有哪些配置项、默认值多少、**哪些是常量哪些是阈值**、开关之间的依赖是什么（**开关的唯一声明处**） | 加任何阈值/权重/开关时 |
 | [experiments.md](./experiments.md) | 要做哪些对照、每个对照决定什么、现在什么状态 | 每跑完一组对照 |
 | [open-questions.md](./open-questions.md) | 还有哪些没清掉的未知、谁负责消除、什么时候会阻塞 | 每个 Step 开始前 |
@@ -33,12 +34,15 @@
 | [decisions.md](./decisions.md) | 哪些决策被推翻过、为什么、影响哪些节（**逐条 `Dn` + 待决事项**） | 想改一个"已锁定"的决定之前 |
 | [submission.md](./submission.md) | Smoke/Full 还剩几次、版本冻结在哪、S 未知清了没有 | 每次发 Smoke / Full 之前 |
 | [benchmark-data.md](./benchmark-data.md) | 归档里哪些文件是真数据、schema 落差在哪、许可证什么情况 | 写 harness / 加载器时 |
+| [active-spec/config-defaults.md](./active-spec/config-defaults.md) | **产品 profile 的默认行为**（`configs/default.yaml` 是事实源） | 想知道“默认值到底是什么”时 |
 | [active-spec/development.md](./active-spec/development.md) | Linux/Windows 共用的开发命令与路径规则 | 新机器初始化、运行检查、准备数据时 |
 | [capture-evaluation-pipeline.md](./capture-evaluation-pipeline.md) | 官方采集如何按数据集归类、固定题目评测、输出两版对比表 | 准备采集重放与版本对比时 |
 | [fixed-selection-suite.md](./fixed-selection-suite.md) | Memory600 与官方抽样如何合成共享 ID 题单、复用现有原生评测 | 多人协作与固定题单比较时 |
 | [reference-implementations.md](./reference-implementations.md) | ReFind / InvMem 候选 / MemMachine 的源码来源、许可与固定 commit | 研读外部实现时 |
 | [memmachine-reference.md](./memmachine-reference.md) | MemMachine 参考源码的获取方式、研读路径与改进方向 | 研读记忆机制、选择下一项改进时 |
 | [add-search-improvement-plan.md](./add-search-improvement-plan.md) | 如何在 Add/Search 内增加可查证的事实、条件检索及对象／事件证据选择（**已实施，2026-10-05**；正文为方案底稿，最终形态见共同取证整理） | 评估文档类列表与计数的改进时 |
+| [common-facts-gold-evaluation.md](./common-facts-gold-evaluation.md) | 共同事实金标标注文件的口径与评测入口 | 做事实抽取的人工金标时 |
+| [dataset-reports.md](./dataset-reports.md) | 四份数据集（HaluMem / HybridQA / MedMemoryBench / MemTrapBench）统计报告的**导航页**（正文按「数字只住 `eval/reports/`」并入主题卷） | 查这四个数据集的统计出处时 |
 
 > **[`benchmark-data.md`](./benchmark-data.md) 尤其要看**：材料目录 `dataset/` **仅 `CLAUDE.md` 入库**；下载内容与临时文件被忽略。准备流程与出处在那份文档里。
 

@@ -28,6 +28,7 @@ from eval.datasets.hybridqa import SCORER as HYBRIDQA_SCORER
 from eval.datasets.layout import archive_file
 from eval.datasets.registry import benchmark_dir
 from eval.harness.extra_pipeline import ANSWER_TIMEOUT, _chat, _config
+from eval.harness.pipeline_cli import build_pipeline_parser
 from eval.jsonl_io import read_jsonl, write_line
 
 _CONTRACTS = {
@@ -369,18 +370,20 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+def build_parser() -> argparse.ArgumentParser:
+    # 与其余适配器同一形状（`pipeline_cli` 的唯一实现）；`--max-tokens` 缺省 8192
+    # 是 AML Answer 阶段的官方输出预算。
+    return build_pipeline_parser(
+        __doc__.splitlines()[0],
+        default_max_tokens=8192,
+        max_tokens_help="answer / 裁判各自的输出上限（AML Answer 阶段官方预算 8192）",
+        answer_help="作答（追加模式，按 id 跳过已完成的题）",
+        evaluate_help="判分（覆盖模式，需 `--answers`）",
+    )
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("answer", "evaluate"):
-        child = sub.add_parser(command)
-        child.add_argument("--input", required=True)
-        child.add_argument("--output", required=True)
-        # AML Answer 阶段的官方输出预算：8,192 tokens。
-        child.add_argument("--max-tokens", type=int, default=8192)
-        if command == "evaluate":
-            child.add_argument("--answers", required=True)
-    args = parser.parse_args()
+    args = build_parser().parse_args()
     return cmd_answer(args) if args.command == "answer" else cmd_evaluate(args)
 
 

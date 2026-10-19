@@ -24,7 +24,7 @@
 
 ```bash
 # 打已在跑的服务（`make serve`），跑全量 LoCoMo-Refined
-uv run python eval/experiments/run.py --dataset locomo-refined --embedder Qwen/Qwen3-Embedding-8B
+uv run python eval/experiments/run.py --dataset locomo-refined --embedder Qwen/Qwen3-Embedding-4B
 
 # 冒烟：只跑 3 个 sample，且不重投已有语料
 uv run python eval/experiments/run.py --dataset longmemeval-s --limit 3 --skip-ingest
@@ -306,6 +306,12 @@ def _exit_for_error(error: Exception, *, base_url: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.limit is not None and args.limit < 0:
+        print("⚠ `--limit` 不能为负——负值会变成 Python 切片，取到的题数看起来正常但语义反了", file=sys.stderr)
+        return EXIT_PRECONDITION_FAILED
+    if args.max_questions is not None and args.max_questions < 0:
+        print("⚠ `--max-questions` 不能为负", file=sys.stderr)
+        return EXIT_PRECONDITION_FAILED
     try:
         if args.input_contract == INPUT_CONTRACT:
             validate_options(

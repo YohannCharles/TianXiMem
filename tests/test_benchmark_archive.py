@@ -13,7 +13,8 @@ async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="
 （`upstream_sha256` 记着那份的哈希）。
 
 ⇒ 处置是**就地修订 + 记成已声明的偏离**（见
-[`../tools/fetch_benchmark_data.py`](../tools/fetch_benchmark_data.py) 的 `local_patch` 一节）。
+[`../eval/datasets/manifest.py`](../eval/datasets/manifest.py) 的 `local_patch` 字段与
+[`../eval/datasets/prepare.py`](../eval/datasets/prepare.py) 的 `apply_local_patch`）。
 本文件把那条声明**钉住**：修了几处、只修了什么、以及它确实**没碰 prompt 与判分逻辑**。
 
 ⚠ **归档不在场时这些用例 skip**（与 `qdrant` 夹具同一条纪律）：测试不该依赖
@@ -22,7 +23,7 @@ async with httpx.AsyncClient(timeout=120) as client, output.open("a", encoding="
 
 ## 另一半：`official-extra` 那一档的清单形状
 
-它的文件表是**紧凑格式**（一行路径、一行 sha256，见 `tools/fetch_benchmark_data.py`），
+它的文件表是**紧凑格式**（一行路径、一行 sha256，见 `eval/datasets/manifest.py`），
 解析在 import 时就会对哈希格式断言。这里再钉住形状本身——**格式坏了要么响亮失败，要么别写**。
 """
 

@@ -65,9 +65,9 @@ runs/                 新跑批产物落点（默认 gitignored；旧实验已�
 | **§14 指标** | Agent Trigger Rate · 平均轮数 / Rewrite 次数 · latency/query · embedding API 调用数 | §14 |
 | **归档** | 该 run 的 SQLite 文件副本 | §15 |
 
-> **§14 那一行今天只填了一半**：latency/query 与 rerank 的计数已接线（服务写
-> `TIANXIMEM_METRICS_PATH` 的快照，runner 读进 `metrics=`）；embedding 调用数与
-> Agent Trigger Rate 的发射方还没接。**逐项状态见
+> **§14 那一行今天只填了一半**：latency/query、rerank 计数与 **agentic 指标
+> （status / rounds / llm_calls）** 已接线（服务写 `TIANXIMEM_METRICS_PATH` 的快照，
+> runner 读进 `metrics=`）；**embedding 调用数**的发射方还没接。**逐项状态见
 > [`../../src/tianximem/observability/CLAUDE.md`](../../src/tianximem/observability/CLAUDE.md)**——本文件不另列一份。
 
 ### ⚠ `breakdown.partial_credit`：**不进总分**的那一列（2026-10-03）
