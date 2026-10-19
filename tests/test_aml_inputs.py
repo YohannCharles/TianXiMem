@@ -112,14 +112,20 @@ def _client(log: list[dict], *, fail: dict | None = None) -> ServiceClient:
     )
 
 
-def test_search_failure_stops_future_add_and_resume_preserves_old_snapshot(tmp_path: Path):
+def test_search_failure_stops_future_add_and_resume_preserves_old_snapshot(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr("eval.harness.driver.SEARCH_RETRY_BACKOFF_S", 0.0)
+    from eval.harness.driver import SEARCH_RETRY_ATTEMPTS
+
     plan = compile_plan(_timeline(), namespace="resume")
     log: list[dict] = []
     failure = {"old?": True}
     client = _client(log, fail=failure)
     with pytest.raises(httpx.ReadError):
         execute_plan(plan, client=client, out_dir=tmp_path)
-    assert [r["path"] for r in log] == ["/add", "/search"]
+    # Search 只读 ⇒ 先有界重试，再抛；重试期间**不会**推进到后面的 Add。
+    assert [r["path"] for r in log] == ["/add"] + ["/search"] * SEARCH_RETRY_ATTEMPTS
     assert "FUTURE" not in json.dumps(log)
     failure.clear()
     failure["new?"] = True

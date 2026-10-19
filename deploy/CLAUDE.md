@@ -221,6 +221,43 @@ docker compose -f deploy/compose.yaml up -d   # 注意：不要带 --build，否
 > 里面的 `TIANXIMEM_SQLITE_PATH` / `TIANXIMEM_QDRANT_URL` 是开发机的值。
 > 服务器上的 `.env` **从 `.env.example` 起**，只填密钥。
 
+### 0.55 同机跑**两个版本**做官方采集对比
+
+[`compose.two-versions.yaml`](./compose.two-versions.yaml) 在 `app`（当前版本）之外再加一个
+`app-v10`，共用同一个 Qdrant、**各自的 SQLite 卷与集合**：
+
+```bash
+# ① v1.0 的镜像单独构建（它的代码不在当前工作树里）
+git worktree add /srv/tianximem-v1.0 v1.0
+docker build -f /srv/tianximem-v1.0/deploy/Dockerfile -t tianximem:v1.0 /srv/tianximem-v1.0
+
+# ② v1.0 的配置目录（换集合，不重建镜像；格式见 §0.5）
+mkdir -p /srv/tianximem-v1.0/configs-v10
+cp /srv/tianximem-v1.0/configs/default.yaml /srv/tianximem-v1.0/configs-v10/default.yaml
+printf 'storage:\n  qdrant:\n    collection: memories_v10\n' \
+  > /srv/tianximem-v1.0/configs-v10/v10.yaml
+
+# ③ 起两臂（当前版本 8000，v1.0 8001）
+TIANXIMEM_V10_IMAGE=tianximem:v1.0 \
+TIANXIMEM_V10_CONFIG_DIR=/srv/tianximem-v1.0/configs-v10 \
+TIANXIMEM_V10_PORT=8001 \
+docker compose -f deploy/compose.yaml -f deploy/compose.two-versions.yaml up -d --build
+
+# ④ 两臂都要过契约预检
+docker compose -f deploy/compose.yaml exec -T app python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
+docker compose -f deploy/compose.yaml exec -T app-v10 python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
+```
+
+⚠ **两臂的集合必须不同**：`local` profile 在两个版本里都写 `memories_dev`，两臂都用它会
+写进同一个集合（V9：旧 point 静默留着、污染检索）。上面的 `v10.yaml` 就是为这个。
+
+⚠ **判分口径必须一致**：答案/裁判模型、端点、输出预算、`--memory-date`、`--annotate-mark`
+两臂要完全相同，否则 `run_official_eval.py compare` 会拒绝比较。产品版本与配置**可以**
+不同——那正是要比较的东西。
+
+⚠ **两臂不要同时跑**：官方采集重放会抢同一份网关与重试预算（`eval/experiments/CLAUDE.md`
+的执行纪律）。先跑完一臂，再跑另一臂。
+
 ### 0.6 打开**请求原文采集**（S6）—— 服务器上照着做
 
 **目的**：把官方发来的 `/add` / `/search` **原样**记下来，用来核验**官方真实的请求形状**

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -226,11 +227,20 @@ def execute_plan(
     out_dir: Path,
     top_k: int = 100,
     add_workers: int = 1,
+    on_add_error: Callable[[AddEvent, Exception], None] | None = None,
 ) -> dict[str, list[SearchHit]]:
     """每个成功 Search 先落盘才允许执行后续 Add，保证历史检索可续跑。
 
     Add 先成功、后保存游标；响应丢失时同 payload/ID 重投。Search 失败直接抛，
     后续 Add 不执行。与原请求回放的跳过策略分别记录。
+
+    `on_add_error` 是**长跑专用的旁路**（缺省 `None` = 保持原语义：Add 失败直接抛）。
+    传了它以后，**只对服务端/网络层失败**调用该回调并把该批 Add 当作"线上也丢了"
+    跳过、游标继续前进；回调自己决定要不要再抛（例如 4xx 应当抛，因为那是我方 bug）。
+    ⚠ 跳过 **不重投**——重跑同一 run 时游标已经越过它；这正是"线上那一批也丢了"的
+    忠实复现。逐条留痕由调用方负责。
+    ⚠ 传了回调就**不并发发 Add**（`add_workers` 失效）：跳过是逐条决策，
+    并发会把"哪一批失败"的语义搅乱。官方采集重放本来就是串行。
     """
     plan.validate()
     if top_k != 100:
@@ -290,7 +300,7 @@ def execute_plan(
         while stop < len(plan.events) and isinstance(plan.events[stop], AddEvent):
             stop += 1
         batch = plan.events[index:stop]
-        if add_workers > 1 and len(batch) > 1:
+        if add_workers > 1 and len(batch) > 1 and on_add_error is None:
             with ThreadPoolExecutor(max_workers=add_workers) as pool:
                 list(
                     pool.map(
@@ -300,7 +310,14 @@ def execute_plan(
                 )
         else:
             for item in batch:
-                send_event(client, plan.sample.user_id, item, top_k=top_k)
+                try:
+                    send_event(client, plan.sample.user_id, item, top_k=top_k)
+                except Exception as error:
+                    if on_add_error is None:
+                        raise
+                    # 回调**可以再抛**（4xx 就走这条路）；抛了就保持游标不动，
+                    # 让外层把该用户标成"待续跑"，而不是把整轮打死。
+                    on_add_error(item, error)
         index = stop
         state["next_event"] = index
         _write_atomic(path, state)

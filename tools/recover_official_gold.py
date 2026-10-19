@@ -320,7 +320,21 @@ def load_beam(root: Path) -> dict[str, dict]:
 
 
 def load_personamem(root: Path) -> dict[str, dict]:
-    """隐式 persona。`user_query` 列是 Python dict 的 repr 串，取里面的 `content`。"""
+    """隐式 persona。`user_query` 列是 Python dict 的 repr 串，取里面的 `content`。
+
+    ## 金标按**官方 narrow 口径**（2026-10-19 改）
+
+    采集里的 PersonaMem 题是**开放题**（不是它题库里的 MCQ）⇒ 官方 AML 那份
+    `pipeline_v2_personamem.py` 走 `evaluate-narrow`：把 `preference` 元数据与
+    模型回答交给 `JUDGE_PROMPT_NARROW_POSITIVE` / `_NEGATIVE`（`preference` 以
+    `do not` 开头时用后者），裁判回 `\\boxed{score}` 的 0–1 连续分。
+
+    ⚠ 本行**必须带 `preference`**：缺了它上游那份裁判 prompt 就填不满。
+    当初（D34）判定"采集里没有 preference"——**实测不成立**：114 条采集题
+    **全部**能按 query 逐字匹配回 `benchmark.csv` 的某一行，且 `preference` 均非空。
+    ⇒ `gold_native` 里带 `preference`，`gold_answers` 仍保留 `correct_answer`
+    （它只是参考回答，narrow 裁判**不用**它）。
+    """
     table: dict[str, dict] = {}
     path = root / "personamem-v2" / "benchmark" / "text" / "benchmark.csv"
     if not path.exists():
@@ -334,6 +348,7 @@ def load_personamem(root: Path) -> dict[str, dict]:
                 content = ""
             if not content:
                 continue
+            preference = str(row.get("preference") or "").strip()
             table.setdefault(
                 norm(content),
                 {
@@ -342,11 +357,23 @@ def load_personamem(root: Path) -> dict[str, dict]:
                         "file": "text/benchmark.csv",
                         "persona_id": row.get("persona_id"),
                     },
-                    "gold_kind": "exact",
+                    "gold_kind": "narrow",
                     "gold_answers": [row.get("correct_answer") or ""],
                     "gold_rubric": None,
-                    "gold_judging": "PersonaMem-v2：上游 pipeline 对 correct_answer 做"
-                    "**精确文本匹配**（另有 incorrect_answers 做干扰项）",
+                    #: 官方 narrow 裁判要的原生载荷——`preference` 缺了 prompt 就填不满。
+                    "gold_native": {
+                        "preference": preference,
+                        "persona_id": row.get("persona_id"),
+                        "pref_type": row.get("pref_type"),
+                    },
+                    "gold_judging": (
+                        "PersonaMem-v2（官方 narrow 口径）：采集题是开放题，"
+                        "上游 `pipeline_v2_personamem.py` 的 `evaluate-narrow` 用 "
+                        "`JUDGE_PROMPT_NARROW_POSITIVE` / `_NEGATIVE`（`preference` 以 "
+                        "`do not` 开头时用后者）把 `preference` 与模型回答交给裁判，"
+                        "裁判回 `\\boxed{score}`（0–1 连续分）。"
+                        "`correct_answer` 只作参考回答，narrow 裁判不用它。"
+                    ),
                 },
             )
     return table

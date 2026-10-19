@@ -5,9 +5,11 @@
 ## 要写什么
 
 ```text
-driver.py                  喂 Add、调 Search（**走 HTTP**）、收集返回
+driver.py                  喂 Add、调 Search（**走 HTTP**）、收集返回；Add / Search 都是
+                           **有界重试**（5xx/网络层；4xx 一次都不重试）
 scheduling.py              独立用户的投喂/检索与判分双线程池；用户内有序、在飞上下文有界
-plan_driver.py             AML 事件编译、HTTP 分派与逐事件检查点；历史 Search 落盘后才继续 Add
+plan_driver.py             AML 事件编译、HTTP 分派与逐事件检查点；历史 Search 落盘后才继续 Add；
+                           `on_add_error` 旁路供长跑把"注定 500 的一批"记下并跳过
 batching.py                模拟 AML 切批（20 条消息 + 2,000 词的**空白分词近似**）
 add_shape.py               模拟 AML **正文形态**（`<标签>: …` 前缀 + `system` 折叠 + 单条 8,000 字符切分）——线上就是这么发的
 judge.py                   包住 pipeline 的裁判（`run_judge` 跑 `answer`→`evaluate` 两步）＋
@@ -166,6 +168,14 @@ python pipeline_locomo-refined.py evaluate --input ... --answers ... --output ..
 `--max-tokens` 控制实际答案输出预算；答案记录保存预算与 `finish_reason`，
 续跑发现预算、答案模型或端点变化时拒绝复用旧答案。没有预算记录的旧答案也须换 run-id。
 验证与复现见 [`../reports/personamem-20261009.md`](../reports/personamem-20261009.md)。
+
+**官方采集那一批（`official-capture`）走的是另一条路**：题是开放题，判分走官方
+`evaluate-narrow`（`JUDGE_PROMPT_NARROW_POSITIVE` / `_NEGATIVE` + `preference` 元数据
++ `extract_boxed_score` 的 0–1 分），实现见
+[`official_capture_pipeline.py`](./official_capture_pipeline.py) 的 `_narrow_judge`。
+`preference` 由 [`../../tools/recover_official_gold.py`](../../tools/recover_official_gold.py)
+从 `benchmark.csv` 按 query 逐字匹配补进 `gold_native`（114/114 命中）；
+**0–1 分 → `is_correct` 的阈值 0.5 是我们定的**，原始分留在 `partial`。
 
 ### HybridQA / FEVEROUS 的本地文本检索适配
 

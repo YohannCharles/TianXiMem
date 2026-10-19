@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from eval.datasets.official_capture import replay_plan
 from eval.datasets.official_groups import (
@@ -165,6 +166,83 @@ def test_search_failure_blocks_future_add_and_resume_keeps_historical_hits(captu
     assert "hello" not in json.dumps(plan.wire())  # reference answers never enter HTTP
 
 
+class FailingAddService(FakeService):
+    """第一条 add 稳定 500（模拟官方采集里那条"单块超过 embedding 上限"）。"""
+
+    def __init__(self, _base: str = ""):
+        super().__init__(_base)
+        self.failed = False
+
+    def add(self, *, user_id, messages, **kwargs):
+        if not self.failed and messages[0]["content"] == "  early  ":
+            self.failed = True
+            raise httpx.HTTPStatusError(
+                "server error",
+                request=httpx.Request("POST", "http://service/add"),
+                response=httpx.Response(500, text="boom"),
+            )
+        super().add(user_id=user_id, messages=messages, **kwargs)
+
+
+def test_add_error_handler_skips_the_batch_and_advances_cursor(capture: Path) -> None:
+    """官方采集的长跑不能死在一条注定 500 的 add 上——跳过并记账，游标继续前进。
+
+    跳过后重跑**不得重投**它（游标已经越过）；这正是"线上那一批也丢了"的复现。
+    """
+    source = replay_plan(capture, only_seqs={1, 3})[0]
+    plan = pipeline.checkpoint_plan(source, "skip-run")
+    output = capture / "run-skip"
+    freeze_run(output, [plan], execution={"top_k": 100})
+    service = FailingAddService()
+    skipped: list[tuple[str, str]] = []
+
+    hits = execute_plan(
+        plan,
+        client=service,
+        out_dir=output / plan.sample.user_id,
+        on_add_error=lambda event, error: skipped.append((event.request_id, type(error).__name__)),
+    )
+    assert skipped == [("r0", "HTTPStatusError")]
+    assert hits["1"][0].content == ""  # 那一批确实没进库
+    assert hits["3"][0].content == "future"
+    n_calls = len(service.calls)
+    assert (
+        execute_plan(
+            plan,
+            client=service,
+            out_dir=output / plan.sample.user_id,
+            on_add_error=lambda event, error: skipped.append(
+                (event.request_id, type(error).__name__)
+            ),
+        )
+        == hits
+    )
+    assert len(service.calls) == n_calls
+    assert len(skipped) == 1  # 续跑没有重投，也没有重复记账
+
+
+def test_results_from_labels_reads_the_dispatch_shape(tmp_path: Path) -> None:
+    """续跑时 run record 必须从磁盘读回**所有**用户，而不是只统计本轮返回值。"""
+    from eval.harness.judge_results import results_from_labels
+
+    write_rows(
+        tmp_path / "answers.jsonl",
+        [{"id": "1", "generated_answer": "alpha"}, {"id": "3", "generated_answer": "beta"}],
+    )
+    write_rows(
+        tmp_path / "labels.jsonl",
+        [
+            {"id": "1", "is_correct": True, "label": "CORRECT", "judge_response": "ok"},
+            {"id": "3", "is_correct": False, "label": "WRONG", "judge_response": "no"},
+        ],
+    )
+    results = results_from_labels(tmp_path)
+    assert [(r.qid, r.is_correct, r.generated_answer) for r in results] == [
+        ("1", True, "alpha"),
+        ("3", False, "beta"),
+    ]
+
+
 def fake_run(root: Path, name: str, manifest: dict, labels: list[dict]) -> Path:
     run = root / name
     write_json(run / "selection-manifest.json", manifest)
@@ -232,6 +310,53 @@ def test_comparison_rejects_different_inputs_or_models(capture: Path) -> None:
         summarize_run(right)
 
 
+def test_runtime_drift_allows_code_changes_but_not_scoring_changes() -> None:
+    """长跑期间改代码/配置只记账；改模型/端点/预算/服务版本必须换 run-id。"""
+    import copy
+
+    base = {
+        "data_identity": "x",
+        "users": {"u": "wire-u"},
+        "top_k": 100,
+        "service_revision": "v1",
+        "service_base": "http://127.0.0.1:8000",
+        "evaluation": {
+            "answer_model": "m",
+            "judge_model": "j",
+            "answer_base": "a",
+            "judge_base": "b",
+            "max_tokens": 1024,
+            "memory_date": "none",
+            "annotate_mark": "paren",
+            "code_sha256": {"a.py": "1"},
+            "upstream_sha256": {"p.py": "1"},
+        },
+        "config_fingerprint": {"snapshot_hashes": {"default.yaml": "h1"}},
+    }
+    changed = copy.deepcopy(base)
+    changed["evaluation"]["code_sha256"] = {"a.py": "2"}
+    changed["config_fingerprint"]["snapshot_hashes"]["default.yaml"] = "h2"
+    assert pipeline._runtime_drift(base, changed) == (
+        [],
+        ["config_fingerprint", "evaluation.code_sha256"],
+    )
+
+    for path in (
+        ("evaluation", "answer_model"),
+        ("evaluation", "max_tokens"),
+        ("service_revision",),
+        ("data_identity",),
+        ("users",),
+    ):
+        changed = copy.deepcopy(base)
+        cursor = changed
+        for key in path[:-1]:
+            cursor = cursor[key]
+        cursor[path[-1]] = "changed"
+        fatal, _ = pipeline._runtime_drift(base, changed)
+        assert ".".join(path) in fatal, path
+
+
 def test_full_runner_uses_checkpoint_driver_and_refuses_changed_version(
     capture: Path, monkeypatch
 ) -> None:
@@ -286,3 +411,112 @@ def test_full_runner_uses_checkpoint_driver_and_refuses_changed_version(
     assert len(service.calls) == n_calls
     argv[argv.index("v1")] = "v2"
     assert pipeline.main(argv) == 2
+
+
+def test_full_runner_records_user_failure_and_continues(capture: Path, monkeypatch) -> None:
+    """一个用户的裁判失败**不能打死整轮**：记账、继续下一个用户，重跑同 run-id 续。
+
+    这是官方采集全量（8,783 题 / 1,374 用户 / 40,463 条 add）能跑完的前提——
+    任何一次子进程失败都让整个跑批归零，就永远跑不完。
+    """
+    prepare_groups(capture, capture / "grouped")
+    service = FakeService()
+    monkeypatch.setattr(pipeline, "ServiceClient", lambda _: service)
+    monkeypatch.setattr(pipeline, "ensure_dataset", lambda *a, **kw: None)
+    for key in (
+        "ANSWER_API_BASE",
+        "ANSWER_API_KEY",
+        "ANSWER_MODEL",
+        "JUDGE_API_BASE",
+        "JUDGE_API_KEY",
+        "JUDGE_MODEL",
+    ):
+        monkeypatch.setattr(pipeline.api_config, key, "configured")
+
+    calls: list[str] = []
+
+    def flaky_judge(_path, items, output, **kwargs):
+        calls.append(output.name)
+        if len(calls) == 1:
+            raise RuntimeError("judge subprocess died")
+        labels = [
+            {"id": i["id"], "is_correct": True, "label": "CORRECT", "judge_response": "ok"}
+            for i in items
+        ]
+        write_rows(output / "labels.jsonl", labels)
+        return [
+            JudgeResult(
+                qid=row["id"],
+                is_correct=True,
+                label="CORRECT",
+                judge_response="ok",
+                generated_answer="ok",
+            )
+            for row in labels
+        ]
+
+    monkeypatch.setattr(pipeline, "run_judge", flaky_judge)
+    argv = [
+        "run",
+        "--manifest",
+        str(capture / "grouped/manifest.json"),
+        "--run-id",
+        "resilient",
+        "--service-revision",
+        "v1",
+        "--reports-dir",
+        str(capture / "reports"),
+    ]
+    assert pipeline.main(argv) == 0
+    run_dir = capture / "reports/runs/resilient"
+    assert (run_dir / "errors.jsonl").is_file()
+    assert len(read_jsonl(run_dir / "errors.jsonl")) == 1
+    summary = summarize_run(run_dir)
+    # a（2 题）失败、b（1 题）成功 ⇒ 分母仍是 3，缺 2，不冒充完成。
+    assert (summary["expected"], summary["completed"], summary["missing"]) == (3, 1, 2)
+    assert summary["accuracy"] is None
+
+
+def test_add_4xx_is_fatal_not_skipped(capture: Path, monkeypatch) -> None:
+    """4xx（尤其 409）是系统性我方 bug——**不能**记进 skipped 后继续跑完。"""
+    prepare_groups(capture, capture / "grouped")
+    monkeypatch.setattr(pipeline, "ensure_dataset", lambda *a, **kw: None)
+    for key in (
+        "ANSWER_API_BASE",
+        "ANSWER_API_KEY",
+        "ANSWER_MODEL",
+        "JUDGE_API_BASE",
+        "JUDGE_API_KEY",
+        "JUDGE_MODEL",
+    ):
+        monkeypatch.setattr(pipeline.api_config, key, "configured")
+
+    class RejectingService:
+        def __init__(self, _base: str = ""):
+            pass
+
+        def add(self, **_kwargs):
+            raise httpx.HTTPStatusError(
+                "conflict",
+                request=httpx.Request("POST", "http://service/add"),
+                response=httpx.Response(409, text="request_id conflict"),
+            )
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pipeline, "ServiceClient", lambda _: RejectingService())
+    argv = [
+        "run",
+        "--manifest",
+        str(capture / "grouped/manifest.json"),
+        "--run-id",
+        "fatal",
+        "--service-revision",
+        "v1",
+        "--reports-dir",
+        str(capture / "reports"),
+    ]
+    assert pipeline.main(argv) == 2
+    run_dir = capture / "reports/runs/fatal"
+    assert not (run_dir / "skipped.jsonl").exists()

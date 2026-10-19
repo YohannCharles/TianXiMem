@@ -1145,8 +1145,9 @@ def _client(base_url, *, status, body=None):
     )
 
 
-def test_search_falls_back_only_on_server_errors():
+def test_search_falls_back_only_on_server_errors(monkeypatch):
     """5xx ⇒ 兜底到第二个实例；**4xx 不兜底**（那是我们自己的 bug，兜底会把 bug 藏起来）。"""
+    monkeypatch.setattr("eval.harness.driver.SEARCH_RETRY_BACKOFF_S", 0.0)
 
     hit = {"id": "x", "content": "c", "created_at": "", "score": 1.0}
     ok = _client("http://main", status=200, body={"data": [hit]})
@@ -1165,6 +1166,77 @@ def test_search_falls_back_only_on_server_errors():
     no_fallback = _client("http://main", status=500)
     with pytest.raises(httpx.HTTPStatusError):
         no_fallback.search_raw(user_id="u", query="q", top_k=1)  # 没配兜底 ⇒ 照旧抛
+
+
+def test_search_retries_server_and_network_errors(monkeypatch):
+    """Search 是只读的 ⇒ 瞬时 5xx / 网络层失败**有界重试**。
+
+    官方采集全量要发 8,783 次 search；一次抖动打死整轮（旧版实测过）不值得。
+    重试的 body 必须逐字相同（虽然 Search 无副作用，但语义要可复现）。
+    """
+    monkeypatch.setattr("eval.harness.driver.SEARCH_RETRY_BACKOFF_S", 0.0)
+    from eval.harness import ServiceClient
+
+    hit = {"id": "x", "content": "c", "created_at": "", "score": 1.0}
+    bodies = []
+
+    def flaky(request):
+        bodies.append(request.content)
+        if len(bodies) < 3:
+            return httpx.Response(503, json={"detail": "boom"})
+        return httpx.Response(200, json={"data": [hit]})
+
+    client = ServiceClient("http://main", client=httpx.Client(transport=httpx.MockTransport(flaky)))
+    assert client.search_raw(user_id="u", query="q", top_k=1)["data"][0]["id"] == "x"
+    assert len(bodies) == 3
+    assert bodies[0] == bodies[1] == bodies[2]
+
+    network_calls = []
+
+    def broken(request):
+        network_calls.append(request.content)
+        if len(network_calls) == 1:
+            raise httpx.RemoteProtocolError("peer closed connection")
+        return httpx.Response(200, json={"data": []})
+
+    network = ServiceClient(
+        "http://main", client=httpx.Client(transport=httpx.MockTransport(broken))
+    )
+    assert network.search_raw(user_id="u", query="q", top_k=1)["data"] == []
+    assert len(network_calls) == 2
+
+
+def test_search_does_not_retry_client_errors_and_retries_are_bounded(monkeypatch):
+    """4xx 是我方 bug，一次都不重试；一直 5xx 则**有界**地抛出去。"""
+    monkeypatch.setattr("eval.harness.driver.SEARCH_RETRY_BACKOFF_S", 0.0)
+    from eval.harness import ServiceClient
+    from eval.harness.driver import SEARCH_RETRY_ATTEMPTS
+
+    calls = []
+
+    def always(request):
+        calls.append(request.content)
+        return httpx.Response(503, json={"detail": "boom"})
+
+    client = ServiceClient(
+        "http://main", client=httpx.Client(transport=httpx.MockTransport(always))
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        client.search_raw(user_id="u", query="q", top_k=1)
+    assert len(calls) == SEARCH_RETRY_ATTEMPTS
+
+    rejected = []
+
+    def always_422(request):
+        rejected.append(request.content)
+        return httpx.Response(422, json={"detail": "bad request"})
+
+    client_4xx = ServiceClient(
+        "http://main", client=httpx.Client(transport=httpx.MockTransport(always_422))
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        client_4xx.search_raw(user_id="u", query="q", top_k=1)
+    assert len(rejected) == 1  # ← 4xx 一次都不重试
 
 
 def test_injection_is_capped_at_the_platform_prefix(monkeypatch):

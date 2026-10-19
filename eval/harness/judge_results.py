@@ -44,6 +44,56 @@ class JudgeResult:
     metrics: dict[str, float] | None = None
 
 
+def results_from_labels(user_dir: Path) -> list[JudgeResult]:
+    """把**分派层**（`official_capture_pipeline.py`）已经落盘的逐题结果读回来。
+
+    它解决的是长跑续跑的一个具体问题：`run_judge` 只返回**本次调用**处理过的题，
+    而一条被中断过的 run 重新启动后，前几个用户的 `labels.jsonl` 已经躺在磁盘上。
+    ⇒ run record 若只看本次返回值，`overall` 会**只统计最后一轮**——分数看起来正常，
+    分母却悄悄变了。
+
+    ⚠ **只适用于分派层的统一行形状**（`id` / `is_correct` / `label` / `judge_response`）。
+    归档那几份 pipeline 的原生产物（BEAM 的 `llm_judge_score`、CL-Bench 的
+    `rubric_clbench_score`）不是这个形状，它们由 `judge_results` 里的
+    `_read_beam_labels` / `_read_clbench_labels` 负责。
+    """
+    labels_path = user_dir / "labels.jsonl"
+    if not labels_path.is_file():
+        return []
+    generated: dict[str, str] = {}
+    answers_path = user_dir / "answers.jsonl"
+    if answers_path.is_file():
+        for line in answers_path.read_text(encoding="utf-8").split("\n"):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # 末尾半行：`run_judge` 下次启动前会清掉
+            key = str(row.get("id", row.get("idx", "")))
+            generated[key] = str(row.get("generated_answer") or row.get("model_output") or "")
+    results: list[JudgeResult] = []
+    for line in labels_path.read_text(encoding="utf-8").split("\n"):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        qid = str(row.get("id", row.get("idx", "")))
+        results.append(
+            JudgeResult(
+                qid=qid,
+                is_correct=bool(row.get("is_correct")),
+                label=str(row.get("label") or ""),
+                judge_response=str(row.get("judge_response") or ""),
+                generated_answer=generated.get(qid, ""),
+                partial=row.get("partial"),
+            )
+        )
+    return results
+
+
 def _sanitize_jsonl(path: Path) -> int:
     """把 `answers.jsonl` 修成**归档读得下去**的样子；返回改动了几行。
 
