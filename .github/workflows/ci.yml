@@ -16,6 +16,8 @@ jobs:
         #    ——而 `requires-python` 写的是 ">=3.11,<3.14"（pyproject.toml）。
         python: ["3.11", "3.12"]
     runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

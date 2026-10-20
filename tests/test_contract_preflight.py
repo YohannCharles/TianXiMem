@@ -164,10 +164,17 @@ def test_preconditions_fail_loudly_when_the_service_cannot_start(tmp_path: Path)
 
     **怎么做到不依赖机器状态**：把 `TIANXIMEM_ENV_FILE` 指到一个不存在的路径
     ⇒ 连 `.env` 也不会被读到 ⇒ 密钥必然为空 ⇒ 服务启动即失败。
+    只隔离 Qdrant 可达性探测，保留真实服务启动和配置错误转述。
     （配置校验由服务自己负责，见 `preflight._launch_service` 的说明。）
     """
     result = subprocess.run(
-        [sys.executable, str(_PREFLIGHT_PATH)],
+        [
+            sys.executable,
+            "-c",
+            "from eval.smoke import preflight\n"
+            "preflight._check_qdrant = lambda env: None\n"
+            "raise SystemExit(preflight.main())\n",
+        ],
         capture_output=True,
         # ⚠ 同上：必须显式给 UTF-8，否则读线程按**本机 locale**（这里 GBK）解码而死。
         encoding="utf-8",

@@ -548,7 +548,19 @@ def test_generic_exact_alias_is_diagnostic_only(monkeypatch) -> None:
     assert row["diagnostics"]["alias_contains"] is True
 
 
-def test_personamem_capture_uses_official_generative_prompt() -> None:
+@pytest.fixture
+def personamem_archive():
+    from eval.datasets.layout import upstream_aml_dir
+    from eval.datasets.registry import benchmark_dir
+    from eval.harness.official_capture_pipeline import _archived
+
+    name = "pipeline_v2_personamem.py"
+    if not (upstream_aml_dir(benchmark_dir(), name) / name).is_file():
+        pytest.skip("PersonaMem 上游 pipeline 未准备（见 docs/benchmark-data.md）")
+    return _archived("personamem-v2")
+
+
+def test_personamem_capture_uses_official_generative_prompt(personamem_archive) -> None:
     """采集里的 PersonaMem 是开放题，必须复用官方 generative 消息构造。"""
     from eval.harness import extra_pipeline as extra
     from eval.harness.official_capture_pipeline import _answer_prompt
@@ -571,7 +583,9 @@ def test_personamem_capture_uses_official_generative_prompt() -> None:
     )
 
 
-def test_personamem_narrow_judge_uses_official_prompt_and_preference(monkeypatch) -> None:
+def test_personamem_narrow_judge_uses_official_prompt_and_preference(
+    monkeypatch, personamem_archive
+) -> None:
     """PersonaMem 走**官方 narrow 口径**：`preference` + 官方 prompt → 0–1 分。
 
     ⚠ 三件事一起钉住（少任何一条，口径都会**静默**漂回自写裁判）：
@@ -582,7 +596,7 @@ def test_personamem_narrow_judge_uses_official_prompt_and_preference(monkeypatch
     from eval.harness import extra_pipeline as extra
     from eval.harness import official_capture_pipeline as capture
 
-    module = capture._archived("personamem-v2")
+    module = personamem_archive
     seen: list[str] = []
 
     def fake_chat(_base, _key, _model, prompt, **_kwargs):
