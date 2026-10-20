@@ -579,6 +579,9 @@ def run(args: argparse.Namespace) -> int:
         else:
             iterator = run_user_tasks(items, **replay_args, workers=ingest_workers)
         for _index in iterator:
+            if replay_only:
+                print(f"Add/Search 用户进度 {replay_completed}/{len(plans)}", flush=True)
+                continue
             try:
                 summary = streaming.refresh_summary() if streaming else write_summary(output)
                 print(
