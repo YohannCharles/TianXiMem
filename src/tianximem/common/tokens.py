@@ -24,6 +24,7 @@ PRD §6.4 明确"应补上"：**Step 5 切换后必须重新量一次单请求�
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import lru_cache
 from typing import Final, Protocol
 
@@ -56,6 +57,9 @@ MAX_INPUT_TOKENS: Final[int] = 117_760
 #: ⇒ **"一个记忆块不能超这个数"这条线只能由本仓自己守**。它由打包预算
 #: （`eval/harness/batching.py` 的 20 条 / 2,000 词）间接保证，而
 #: `tests/test_datasets.py` 有一条**跑真数据**的用例把它钉住。
+#: 2026-10-20 起它有运行时消费方：`embed/truncate.py` 在**查询侧发送之前**
+#: 按这个窗口截断超长 query（官方采集里 CL-Bench 有一组 query 远超它；
+#: 数字见 `eval/reports/embedding-20261020.md`）。
 EMBED_MAX_TOKENS: Final[int] = 8_192
 
 
@@ -111,7 +115,21 @@ class O200kCounter:
     def count(self, text: str) -> int:
         if not text:
             return 0
-        return len(self._encoding.encode(text, disallowed_special=()))
+        return len(self.encode_ids(text))
+
+    def encode_ids(self, text: str) -> list[int]:
+        """把文本编成 token id 序列。
+
+        ⚠ 这是给**输入适配**用的底层能力（[`../embed/truncate.py`](../embed/truncate.py)
+        在发送前把超长查询压进模型窗口），**不是**预算决策——"截谁"仍归 `rank/`。
+        """
+        if not text:
+            return []
+        return self._encoding.encode(text, disallowed_special=())
+
+    def decode_ids(self, ids: Sequence[int]) -> str:
+        """把 token id 序列还原成文本。切点落在 UTF-8 多字节中间时会出现替换字符。"""
+        return self._encoding.decode(list(ids))
 
 
 @lru_cache(maxsize=4)

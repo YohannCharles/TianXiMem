@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -11,6 +12,55 @@ T = TypeVar("T")
 P = TypeVar("P")
 R = TypeVar("R")
 DEFAULT_INGEST_WORKERS = 4
+
+
+def rerank_user_group(source_user_id: str) -> str:
+    """Stable across run namespaces and service versions; never inspect questions."""
+    return "local" if int(hashlib.sha256(source_user_id.encode()).hexdigest(), 16) % 3 == 0 else "memory3"
+
+
+def run_grouped_user_tasks(items, *, user_id, run, group_of, group_workers, cancel):
+    """Independent bounded user pools; a busy group cannot consume another's slots."""
+    identities = [user_id(item) for item in items]
+    if len(identities) != len(set(identities)):
+        raise ValueError("Concurrent evaluation requires unique user_id tasks")
+    if not group_workers or any(type(n) is not int or n < 1 for n in group_workers.values()):
+        raise ValueError("Group worker counts must be positive")
+    grouped = {key: [] for key in group_workers}
+    for index, item in enumerate(items):
+        grouped[group_of(item)].append((index, item))
+    remaining = {key: iter(values) for key, values in grouped.items()}
+    pools = {key: ThreadPoolExecutor(max_workers=n, thread_name_prefix=f"replay-{key}")
+             for key, n in group_workers.items()}
+    pending = {}
+    normal = False
+
+    def refill(key):
+        try:
+            index, item = next(remaining[key])
+        except StopIteration:
+            return
+        pending[pools[key].submit(run, index, item)] = (key, index)
+
+    try:
+        for key, count in group_workers.items():
+            for _ in range(count):
+                refill(key)
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                key, index = pending.pop(future)
+                future.result()
+                refill(key)
+                yield index
+        normal = True
+    finally:
+        if not normal:
+            cancel()
+        for future in pending:
+            future.cancel()
+        for pool in pools.values():
+            pool.shutdown(wait=True, cancel_futures=True)
 
 
 def worker_counts(ingest: int, judge: int, *, users: int, endpoints: int) -> tuple[int, int]:
@@ -82,3 +132,56 @@ def run_pipeline(  # noqa: UP047 - the package also supports Python 3.11
             future.cancel()
         preparation_pool.shutdown(wait=True, cancel_futures=True)
         judgment_pool.shutdown(wait=True, cancel_futures=True)
+
+
+def run_user_tasks(  # noqa: UP047 - the package also supports Python 3.11
+    items: Sequence[T],
+    *,
+    user_id: Callable[[T], str],
+    run: Callable[[int, T], None],
+    workers: int,
+    cancel: Callable[[], None],
+) -> Iterator[int]:
+    """One ordered replay per user; keep at most workers users in flight.
+
+    Signal cooperative cancellation before joining active HTTP tasks on failure
+    or interruption. The caller closes its per-thread clients only after return.
+    """
+    identities = [user_id(item) for item in items]
+    if len(set(identities)) != len(identities):
+        raise ValueError("Concurrent evaluation requires unique user_id tasks")
+    if workers < 1:
+        raise ValueError("User replay workers must be positive")
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="official-replay")
+    pending: dict[Future, int] = {}
+    remaining = iter(enumerate(items))
+    completed_normally = False
+    try:
+        while True:
+            while len(pending) < workers:
+                try:
+                    index, item = next(remaining)
+                except StopIteration:
+                    break
+                pending[pool.submit(run, index, item)] = index
+            if not pending:
+                break
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                index = pending.pop(future)
+                future.result()
+                # Refill before reporting: summary I/O must not leave a user slot idle.
+                try:
+                    next_index, item = next(remaining)
+                except StopIteration:
+                    pass
+                else:
+                    pending[pool.submit(run, next_index, item)] = next_index
+                yield index
+        completed_normally = True
+    finally:
+        if not completed_normally:
+            cancel()
+        for future in pending:
+            future.cancel()
+        pool.shutdown(wait=True, cancel_futures=True)

@@ -185,6 +185,7 @@ def _run(
             return
         last = RuntimeError(
             f"{pipeline.name} {' '.join(argv[:1])} 失败（exit {completed.returncode}）\n"
+            f"{(completed.stderr or '').strip().split(chr(10))[-1][:1600]}\n"
             f"--- stdout ---\n{(completed.stdout or '')[-4000:]}\n"
             f"--- stderr ---\n{(completed.stderr or '')[-4000:]}"
         )

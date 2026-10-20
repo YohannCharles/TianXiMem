@@ -32,6 +32,52 @@ add/search 按真实时间交错（全量 41% 的题在"该 user 最后一条 ad
 
 长跑韧性（2026-10-19 加）：
 
+`run --replay-only` 只执行 Add/Search，不创建答案/裁判任务，且不要求预先准备裁判
+依赖和答案端点。每次成功 Search 的有序 `id` / `content` / `created_at` / `score`
+保存在 `<run>/<user>/checkpoint.json` 的 `hits[seq]`，先原子落盘再执行后续事件。
+退出时 `retrieval-status.json` 记录已保存题数和用户游标完整度。
+`--judge-scheduling after-replay` 会在重放后自动开始旧版作答，不能替代此开关。
+已有检索完整时可直接复用快照；仅修改 answer/judge 提示词或评分规则无需重放服务。
+新口径须使用独立的答案/标签输出目录，保留检索来源和新评分指纹，不能静默复用旧答案。
+
+`run` 可加 `--judge-workers N`（正数）启用逐题流水线：每个用户原时间线的 Add/Search
+保持串行，每题 Search 先写检查点，再将该题冻结输入交给后台作答/判分；
+下一题及下一用户的检索无需等待答案。`0` 保留原用户整批执行方式。
+worker 同时处理的题数有界，待办只在内存保存路径，正文保存在
+`<run>/<user>/questions/<seq>/`。每题仍调用相同的 answer/evaluate 分派，
+模型、提示词、上下文预算和评分规则保持原口径。
+
+每题独立目录防止裁判子进程相互覆盖，用户级 `input.jsonl`、`answers.jsonl`
+与 `labels.jsonl` 在同一锁内按 ID 去重聚合。续跑用检查点中的历史 Search 快照
+补齐待办，不重问历史；原整批模式留下的答案会先复制到对应任务中直接复用。
+后台题目失败写 `errors.jsonl` 并保留任务文件；`--retry-errors` 同时重新打开
+对应的技术错误任务缓存。后台汇总会定期刷新，`judging-progress.json` 记录队列状态。
+两臂须使用相同的 `--judge-workers`，该调度方式会进入 `evaluation.scheduling` 指纹。
+
+共享 GPU 时可使用 `--judge-scheduling after-replay --judge-workers N`：Search 仍逐题保存，
+先按原始用户时间线完成本轮 Add/Search，再启动磁盘中的答案/判分任务。不会先灌完全部
+Add 再 Search，也不会让历史问题看到未来内容。`overlap` 保持默认重叠行为。
+`OFFICIAL_LLM_INFLIGHT_PER_SLOT` 可限制每个 LLM 端点槽位同时运行的题数；重复端点槽位
+表示容量权重，限制为正时等待不消耗模型请求超时，策略冻结到评测执行指纹。
+
+`--ingest-workers N` 启用跨用户 Add/Search 重放，缺省为串行。一个任务独占一个用户，
+线程独享 HTTP 客户端；同时在飞用户数有界，用户完成后直接补下一个，日志与状态
+文件写入串行化。Search 失败仍阻断该用户的未来 Add，其他用户可继续；致命错误
+先通知在飞用户在请求边界停下，再关闭客户端。服务保持单进程。
+
+若长跑已完成一段串行重放，切换并发时用 `--serial-prefix <json>` 保存有序的
+`[{"source_user_id": "…", "next_event": …}]`。前缀只约束列出的用户：这些用户按边界
+逐阶段复现；不在前缀中的用户立即进入 `--ingest-workers` 主并发池，不等待前缀完成。
+前缀用户越过最后一个冻结边界后再进入主池。同一用户始终只有一个任务持有其时间线。
+前缀内容与并发数冻结进评测指纹，调度迁移另行记账。跨用户并发的实际到达顺序仍会
+变化，可能影响共享索引统计；这不是对逐题 Search 排名必然与串行一致的保证。
+`ingest-progress.json` 记录当前在飞用户、调度阶段与本轮完成用户数。
+
+多次调整并发时，前缀也接受 `{"stages": [{"workers": N, "users": [边界记录]}]}`：
+前缀用户依次重放各阶段，保留当时的并发度；其他用户同时走主池；各用户事件边界只能向前移动。
+Add 失败时还保存未经截断的完整 HTTP 请求到 `failed-adds/`，由 `skipped.jsonl`
+的 `payload_file` 指向；原始采集正文不修改，后续处理可按请求 ID 溯源。
+
 | 失败 | 处置 |
 | --- | --- |
 | `/add` 5xx / 网络层（已重试 3 次） | **跳过该批并记 `skipped.jsonl`**，游标继续——线上那一批同样会丢；4xx 仍响亮失败 |

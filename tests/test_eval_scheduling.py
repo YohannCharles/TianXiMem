@@ -17,7 +17,102 @@ from eval.experiments import run as runner
 from eval.experiments import runner as runner_impl
 from eval.harness import ServiceClient
 from eval.harness.judge import JudgeResult
-from eval.harness.scheduling import run_pipeline, worker_counts
+from eval.harness.scheduling import run_pipeline, run_user_tasks, worker_counts
+
+
+def test_independent_rerank_user_pools_reach_16_and_32_without_borrowing_slots():
+    from eval.harness.scheduling import run_grouped_user_tasks
+    limits = {"local": 16, "memory3": 32}
+    barrier, lock = Barrier(48), Lock()
+    active = dict.fromkeys(limits, 0)
+    peak = dict(active)
+    events = defaultdict(list)
+    users = [(group, i) for group, count in limits.items() for i in range(2 * count)]
+
+    def run(_index, user):
+        group, index = user
+        with lock:
+            active[group] += 1
+            peak[group] = max(peak[group], active[group])
+        try:
+            if index < limits[group]:
+                barrier.wait(timeout=10)
+            for event in ("add", "search", "add", "search"):
+                events[user].append(event)
+        finally:
+            with lock:
+                active[group] -= 1
+
+    completed = list(run_grouped_user_tasks(
+        users, user_id=str, run=run, group_of=lambda x: x[0],
+        group_workers=limits, cancel=lambda: None,
+    ))
+    assert sorted(completed) == list(range(len(users)))
+    assert peak == limits
+    assert all(events[user] == ["add", "search", "add", "search"] for user in users)
+
+
+def test_group_failure_cancels_and_joins_other_group():
+    from eval.harness.scheduling import run_grouped_user_tasks
+    stop, joined = Event(), Event()
+    barrier = Barrier(2)
+    def run(_index, group):
+        barrier.wait(timeout=5)
+        if group == "bad":
+            raise RuntimeError("failed")
+        assert stop.wait(timeout=5)
+        joined.set()
+    with pytest.raises(RuntimeError, match="failed"):
+        list(run_grouped_user_tasks(["bad", "slow"], user_id=str, run=run,
+             group_of=str, group_workers={"bad": 1, "slow": 1}, cancel=stop.set))
+    assert joined.is_set()
+
+
+def test_user_tasks_cancel_before_joining_other_replays():
+    stop = Event()
+    joined = Event()
+    barrier = Barrier(2)
+
+    def run(_index, user):
+        barrier.wait(timeout=5)
+        if user == "bad":
+            raise RuntimeError("fatal HTTP failure")
+        assert stop.wait(timeout=5), "cancellation was not signalled before join"
+        joined.set()
+
+    with pytest.raises(RuntimeError, match="fatal HTTP"):
+        list(run_user_tasks(["bad", "other"], user_id=lambda x: x, run=run,
+                            workers=2, cancel=stop.set))
+    assert joined.is_set()
+
+
+def test_duplicate_replay_users_are_rejected_before_http():
+    calls = []
+    with pytest.raises(ValueError, match="unique user_id"):
+        list(run_user_tasks(["same", "same"], user_id=lambda x: x,
+                            run=lambda *args: calls.append(args), workers=2, cancel=lambda: None))
+    assert not calls
+
+
+@pytest.mark.parametrize('workers', [6, 16])
+def test_user_tasks_can_run_simultaneously(workers):
+    barrier = Barrier(workers)
+    lock = Lock()
+    active = maximum = 0
+
+    def run(_index, _user):
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+        barrier.wait(timeout=5)
+        with lock:
+            active -= 1
+
+    done = list(run_user_tasks(
+        list(range(workers)), user_id=str, run=run, workers=workers, cancel=lambda: None
+    ))
+    assert maximum == workers and sorted(done) == list(range(workers))
 
 
 def test_parallel_users_preserve_batches_search_barrier_and_result_order(tmp_path, monkeypatch):

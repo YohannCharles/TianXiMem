@@ -201,9 +201,18 @@ def _chat(base: str, key: str, model: str, prompt: str, *, max_tokens: int, time
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"]
         except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500:
-                raise
-            if attempt + 1 == _CHAT_RETRY_ATTEMPTS:
+            terminal = (
+                isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500
+            ) or attempt + 1 == _CHAT_RETRY_ATTEMPTS
+            if terminal and isinstance(exc, httpx.HTTPStatusError):
+                response = exc.response
+                raise httpx.HTTPStatusError(
+                    f"LLM HTTP {response.status_code} at {response.request.url}: "
+                    f"{response.text[:1200]}",
+                    request=response.request,
+                    response=response,
+                ) from None
+            if terminal:
                 raise
             time.sleep(_CHAT_RETRY_BACKOFF)
     raise AssertionError("chat retry attempts must be positive")

@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from tianximem.embed.base import CachingEmbedder, DiskVectorCache, EmbeddingCoordinate
+from tianximem.embed.base import (
+    QUERY_CACHE_PREFIX,
+    CachingEmbedder,
+    DiskVectorCache,
+    EmbeddingCoordinate,
+)
 from tianximem.embed.query_instruction import (
     DEFAULT_TASK,
     DEFAULT_TEMPLATE,
@@ -90,8 +95,10 @@ def test_prefix_lands_above_the_cache(tmp_path) -> None:
 
     assert second == first
     assert len(inner.seen) == calls_after_miss, "缓存命中时不该再调用内层"
-    assert cache.get(apply_query_instruction("q", DEFAULT_TASK)) is not None
+    # 查询侧缓存身份 = 角色前缀 + 带 instruction 的文本（见 `base.QUERY_CACHE_PREFIX`）
+    assert cache.get(QUERY_CACHE_PREFIX + apply_query_instruction("q", DEFAULT_TASK)) is not None
     assert cache.get("q") is None, "裸查询不该进缓存——否则前缀等于没加"
+    assert cache.get(QUERY_CACHE_PREFIX + "q") is None, "没加前缀的查询身份也不该有"
 
 
 def test_changing_the_instruction_changes_the_cache_entry(tmp_path) -> None:

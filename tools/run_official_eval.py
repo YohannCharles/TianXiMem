@@ -222,14 +222,15 @@ def preflight(args: argparse.Namespace) -> tuple[dict, Path]:
         )
     counts = Counter((row["dataset"], str(row.get("judge_kind") or "")) for row in scorable)
     unsupported = sorted({(d, k) for (d, k) in counts if not supports(d, k)})
-    if unsupported:
+    replay_only = getattr(args, "replay_only", False)
+    if unsupported and not replay_only:
         raise SystemExit(
             "✗ 以下家族 / judge_kind 没有判分实现（会全部落成 JUDGE_ERROR）：\n  "
             + "\n  ".join(f"{d} / {k}" for d, k in unsupported)
         )
 
     family_errors = []
-    for family in sorted({row["dataset"] for row in scorable}):
+    for family in ([] if replay_only else sorted({row["dataset"] for row in scorable})):
         try:
             ensure_dataset(
                 _ARCHIVE_SLUG.get(family, family),
@@ -246,9 +247,9 @@ def preflight(args: argparse.Namespace) -> tuple[dict, Path]:
         )
 
     pipeline = pipeline_for(benchmark_dir(), "official-capture")
-    if not pipeline.is_file():
+    if not replay_only and not pipeline.is_file():
         raise SystemExit(f"✗ 分派 pipeline 缺失：{pipeline}")
-    if missing := _check_endpoints():
+    if not replay_only and (missing := _check_endpoints()):
         raise SystemExit(
             "✗ 答案/裁判端点未配置："
             + ", ".join(missing)
@@ -297,7 +298,20 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--configs-dir", default="configs")
     run.add_argument("--profile", default="local")
     run.add_argument("--max-tokens", type=int, default=1024)
+    run.add_argument(
+        "--replay-only", action="store_true",
+        help="只执行 Add/Search 并落盘；等提示词和评分标准确定后再作答、判分",
+    )
+    run.add_argument("--ingest-workers", type=int, default=1, help="跨用户 Add/Search 并发数")
+    run.add_argument("--rerank-local-workers", type=int, default=0)
+    run.add_argument("--rerank-memory3-workers", type=int, default=0)
+    run.add_argument("--serial-prefix", default=None, help="两臂复用的串行前缀边界 JSON")
+    run.add_argument(
+        "--judge-workers", type=int, default=0,
+        help="正数启用逐题作答/判分与有序 Search 重叠；两臂使用相同值",
+    )
     run.add_argument("--memory-date", default="none")
+    run.add_argument("--judge-scheduling", choices=("overlap", "after-replay"), default="overlap")
     run.add_argument("--annotate-mark", default="paren")
     run.add_argument("--on-add-error", choices=("skip", "abort"), default="skip")
     run.add_argument("--stop-on-error", action="store_true")
@@ -414,6 +428,12 @@ def main(argv: list[str] | None = None) -> int:
         args.profile,
         "--max-tokens",
         str(args.max_tokens),
+        "--judge-workers",
+        str(args.judge_workers),
+        "--judge-scheduling",
+        args.judge_scheduling,
+        "--ingest-workers",
+        str(args.ingest_workers),
         "--memory-date",
         args.memory_date,
         "--annotate-mark",
@@ -423,6 +443,13 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if not args.allow_download:
         argv_out.append("--offline")
+    if args.replay_only:
+        argv_out.append("--replay-only")
+    if args.serial_prefix:
+        argv_out.extend(["--serial-prefix", args.serial_prefix])
+    if args.rerank_local_workers or args.rerank_memory3_workers:
+        argv_out.extend(["--rerank-local-workers", str(args.rerank_local_workers),
+                         "--rerank-memory3-workers", str(args.rerank_memory3_workers)])
     if args.stop_on_error:
         argv_out.append("--stop-on-error")
 

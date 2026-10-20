@@ -27,6 +27,19 @@ def write_rows(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
 
+def test_failure_progress_distinguishes_duplicate_history_and_recovered_work(tmp_path):
+    write_rows(tmp_path / 'skipped.jsonl', [{'request_id': 'a'}, {'request_id': 'a'}, {'request_id': 'b'}])
+    write_rows(tmp_path / 'recovered-adds.jsonl', [{'request_id': 'a', 'status': 'recovered'}])
+    write_rows(tmp_path / 'errors.jsonl', [{'wire_user_id': 'u', 'n_questions': 2, 'question_id': None}])
+    write_rows(tmp_path / 'u/labels.jsonl', [{'id': 'q1', 'label': 'WRONG'}, {'id': 'q2', 'label': 'CORRECT'}])
+    status = pipeline._failure_status(tmp_path)
+    assert '历史 3 次/2 批' in status
+    assert '已恢复 1 批，待处理 1 批' in status
+    assert '错误历史 1 次，待处理 0 项' in status
+    write_rows(tmp_path / 'u/labels.jsonl', [{'id': 'q1', 'label': 'WRONG'}, {'id': 'q2', 'label': 'JUDGE_ERROR'}])
+    assert '错误历史 1 次，待处理 1 项' in pipeline._failure_status(tmp_path)
+
+
 @pytest.fixture
 def capture(tmp_path: Path) -> Path:
     root = tmp_path / "capture"
@@ -146,6 +159,230 @@ class FakeService:
         pass
 
 
+def configure_official_runner(capture, monkeypatch):
+    """Common offline setup for scheduler integration cases."""
+    from eval.harness import official_judging
+
+    prepare_groups(capture, capture / "grouped")
+    monkeypatch.setattr(pipeline, "ensure_dataset", lambda *a, **kw: None)
+    for key in (
+        "ANSWER_API_BASE", "ANSWER_API_KEY", "ANSWER_MODEL",
+        "JUDGE_API_BASE", "JUDGE_API_KEY", "JUDGE_MODEL",
+    ):
+        monkeypatch.setattr(pipeline.api_config, key, "configured")
+    observed = {}
+
+    def judge(_path, items, output, **kwargs):
+        for item in items:
+            observed[item["id"]] = item["retrieved_context"]
+        write_rows(output / "answers.jsonl", [
+            {"id": item["id"], "generated_answer": "hello"} for item in items
+        ])
+        write_rows(output / "labels.jsonl", [
+            {"id": item["id"], "is_correct": True, "label": "CORRECT", "judge_response": "ok"}
+            for item in items
+        ])
+
+    monkeypatch.setattr(pipeline, "run_judge", judge)
+    monkeypatch.setattr(official_judging, "run_judge", judge)
+    return observed, [
+        "run", "--manifest", str(capture / "grouped/manifest.json"),
+        "--run-id", "parallel", "--service-revision", "v1",
+        "--reports-dir", str(capture / "reports"),
+        "--ingest-workers", "2", "--judge-workers", "2",
+    ]
+
+
+def test_cross_user_http_overlaps_with_isolated_clients_and_ordered_history(capture, monkeypatch):
+    import threading
+
+    observed, argv = configure_official_runner(capture, monkeypatch)
+    barrier = threading.Barrier(2)
+    shared_history = {}
+    instances = []
+    first_adds = set()
+    lock = threading.Lock()
+
+    class Client(FakeService):
+        def __init__(self, _base):
+            super().__init__()
+            self.history = shared_history
+            self.closed = False
+            self.owner = threading.get_ident()
+            instances.append(self)
+
+        def add(self, **kwargs):
+            assert not self.closed and threading.get_ident() == self.owner
+            with lock:
+                first = kwargs["user_id"] not in first_adds
+                first_adds.add(kwargs["user_id"])
+            if first:
+                barrier.wait(timeout=5)  # A serial replay would fail this barrier.
+            super().add(**kwargs)
+
+        def search(self, **kwargs):
+            assert not self.closed and threading.get_ident() == self.owner
+            return super().search(**kwargs)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(pipeline, "ServiceClient", Client)
+    assert pipeline.main(argv) == 0
+    assert len(instances) == 2 and all(c.closed for c in instances)
+    assert sorted([[kind for kind, _ in c.calls] for c in instances], key=len) == [
+        ["add", "search"], ["add", "search", "add", "search"]
+    ]
+    assert "future" not in observed["1"] and "other user" not in observed["1"]
+    assert "future" in observed["3"] and "other user" not in observed["3"]
+    assert "other user" in observed["6"] and "early" not in observed["6"]
+    summary = summarize_run(capture / "reports/runs/parallel")
+    assert summary["completed"] == 3 and not summary["errors"]
+
+
+def test_after_replay_starts_models_after_last_search_and_resumes_without_http(capture, monkeypatch):
+    from eval.harness import official_judging
+
+    observed, argv = configure_official_runner(capture, monkeypatch)
+    service = FakeService()
+    monkeypatch.setattr(pipeline, "ServiceClient", lambda _: service)
+    original_judge = official_judging.run_judge
+
+    def judge(*args, **kwargs):
+        assert sum(kind == "search" for kind, _ in service.calls) == 3
+        return original_judge(*args, **kwargs)
+
+    monkeypatch.setattr(official_judging, "run_judge", judge)
+    argv += ["--judge-scheduling", "after-replay"]
+    assert pipeline.main(argv) == 0
+    assert "future" not in observed["1"] and "future" in observed["3"]
+    before = list(service.calls)
+    assert pipeline.main(argv) == 0
+    assert service.calls == before
+
+
+def test_replay_only_saves_historical_hits_without_models_and_resumes_offline(capture, monkeypatch):
+    observed, argv = configure_official_runner(capture, monkeypatch)
+    service = FakeService()
+    monkeypatch.setattr(pipeline, "ServiceClient", lambda _: service)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Replay-only must not prepare or call answer/judge")
+
+    monkeypatch.setattr(pipeline, "ensure_dataset", forbidden)
+    monkeypatch.setattr(pipeline, "run_judge", forbidden)
+    monkeypatch.setattr(pipeline, "StreamingOfficialJudge", forbidden)
+    monkeypatch.setattr(pipeline.api_config, "ANSWER_API_KEY", "")
+    argv += ["--replay-only", "--judge-scheduling", "after-replay"]
+    assert pipeline.main(argv) == 0
+    output = capture / "reports/runs/parallel"
+    hits = {}
+    for path in output.glob("*/checkpoint.json"):
+        hits.update(json.loads(path.read_text(encoding="utf-8"))["hits"])
+    assert set(hits) == {"1", "3", "6"}
+    assert "future" not in hits["1"][0]["content"]
+    assert "future" in hits["3"][0]["content"]
+    assert not list(output.rglob("answers.jsonl"))
+    assert not list(output.rglob("labels.jsonl"))
+    assert not observed
+    assert json.loads((output / "retrieval-status.json").read_text(encoding="utf-8"))["complete"] is True
+    before = list(service.calls)
+    assert pipeline.main(argv) == 0
+    assert service.calls == before
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_non_prefix_user_finishes_while_prefix_user_waits(capture, monkeypatch, grouped):
+    import threading
+
+    observed, argv = configure_official_runner(capture, monkeypatch)
+    prefix = capture / "prefix.json"
+    write_json(prefix, [{"source_user_id": "a", "next_event": 2}])
+    argv += ["--serial-prefix", str(prefix), "--judge-scheduling", "after-replay"]
+    if grouped:
+        argv += ["--rerank-local-workers", "1", "--rerank-memory3-workers", "1"]
+    other_done = threading.Event()
+
+    class Client(FakeService):
+        def add(self, **kwargs):
+            if kwargs["messages"][0]["content"] == "  early  ":
+                assert other_done.wait(timeout=5), "Non-prefix user blocked by prefix"
+            return super().add(**kwargs)
+
+        def search(self, **kwargs):
+            result = super().search(**kwargs)
+            if any(m["content"] == "other user" for m in self.history[kwargs["user_id"]]):
+                other_done.set()
+            return result
+
+    service = Client()
+    monkeypatch.setattr(pipeline, "ServiceClient", lambda _: service)
+    assert pipeline.main(argv) == 0
+    assert other_done.is_set()
+    assert "future" not in observed["1"] and "future" in observed["3"]
+    assert observed["6"] == "other user"
+
+
+@pytest.mark.parametrize("staged", [False, True])
+@pytest.mark.parametrize("grouped", [False, True])
+def test_cold_arms_reproduce_same_serial_prefix_and_resume_without_http(capture, monkeypatch, staged, grouped):
+    observed, argv = configure_official_runner(capture, monkeypatch)
+    prefix = capture / "prefix.json"
+    payload = [{"source_user_id": "a", "next_event": 2}]
+    if staged:
+        payload = {"stages": [
+            {"workers": 1, "users": payload},
+            {"workers": 2, "users": [
+                {"source_user_id": "a", "next_event": 3},
+                {"source_user_id": "b", "next_event": 1},
+            ]},
+        ]}
+        argv[argv.index("--ingest-workers") + 1] = "6"
+    write_json(prefix, payload)
+    argv += ["--serial-prefix", str(prefix)]
+    if grouped:
+        argv[argv.index("--ingest-workers") + 1] = "48"
+        argv += ["--rerank-local-workers", "16", "--rerank-memory3-workers", "32"]
+    calls_by_user = {}
+
+    class Client(FakeService):
+        def add(self, **kwargs):
+            calls_by_user.setdefault(kwargs["user_id"], []).append("add")
+            return super().add(**kwargs)
+
+        def search(self, **kwargs):
+            calls_by_user.setdefault(kwargs["user_id"], []).append("search")
+            return super().search(**kwargs)
+
+    service = Client()
+    monkeypatch.setattr(pipeline, "ServiceClient", lambda _: service)
+    for run_name in ("left", "right"):
+        argv[argv.index("--run-id") + 1] = run_name
+        before = len(service.calls)
+        assert pipeline.main(argv) == 0
+        runtime = json.loads((capture / "reports/runs" / run_name / "run-manifest.json").read_text(encoding="utf-8"))
+        assert calls_by_user[runtime["users"]["a"]] == ["add", "search", "add", "search"]
+        assert calls_by_user[runtime["users"]["b"]] == ["add", "search"]
+        assert len(service.calls) - before == 6
+        assert "future" not in observed["1"]
+        calls = list(service.calls)
+        assert pipeline.main(argv) == 0
+        assert service.calls == calls
+    comparison = compare_runs(
+        capture / "reports/runs/left", capture / "reports/runs/right",
+        capture / "comparison", "left", "right"
+    )
+    assert comparison["left"]["evaluation"]["serial_prefix"] == payload
+    if grouped:
+        mappings = []
+        for run_name in ("left", "right"):
+            directory = capture / "reports/runs" / run_name
+            groups = json.loads((directory / "rerank-user-groups.json").read_text(encoding="utf-8"))
+            runtime = json.loads((directory / "run-manifest.json").read_text(encoding="utf-8"))
+            mappings.append({source: groups["users"][wire] for source, wire in runtime["users"].items()})
+        assert mappings[0] == mappings[1]
+
+
 def test_search_failure_blocks_future_add_and_resume_keeps_historical_hits(capture: Path) -> None:
     source = replay_plan(capture, only_seqs={1, 3})[0]
     plan = pipeline.checkpoint_plan(source, "test-run")
@@ -164,6 +401,57 @@ def test_search_failure_blocks_future_add_and_resume_keeps_historical_hits(captu
     assert execute_plan(plan, client=service, out_dir=output / plan.sample.user_id) == hits
     assert len(service.calls) == n_calls
     assert "hello" not in json.dumps(plan.wire())  # reference answers never enter HTTP
+
+
+def test_search_callback_only_publishes_durable_history_and_replays_without_http(capture):
+    source = replay_plan(capture, only_seqs={1, 3})[0]
+    plan = pipeline.checkpoint_plan(source, "streaming-test")
+    output = capture / "streaming-run"
+    freeze_run(output, [plan], execution={"top_k": 100})
+    user_dir = output / plan.sample.user_id
+    service = FakeService()
+    published = []
+
+    def publish(qid, hits):
+        checkpoint = json.loads((user_dir / "checkpoint.json").read_text(encoding="utf-8"))
+        assert checkpoint["hits"][qid][0]["content"] == hits[0].content
+        published.append((qid, hits[0].content, list(service.calls)))
+
+    execute_plan(plan, client=service, out_dir=user_dir, on_search=publish)
+    assert [r[:2] for r in published] == [
+        ("1", "  early  "), ("3", "  early  \nfuture")
+    ]
+    assert ("add", "future") not in published[0][2]
+    calls = list(service.calls)
+    published.clear()
+    execute_plan(plan, client=service, out_dir=user_dir, on_search=publish)
+    assert service.calls == calls
+    assert [r[:2] for r in published] == [
+        ("1", "  early  "), ("3", "  early  \nfuture")
+    ]
+
+
+def test_serial_prefix_boundary_and_cooperative_cancel_keep_history(capture):
+    import threading
+
+    source = replay_plan(capture, only_seqs={1, 3})[0]
+    plan = pipeline.checkpoint_plan(source, "prefix-test")
+    output = capture / "prefix-run"
+    freeze_run(output, [plan], execution={"top_k": 100})
+    service = FakeService()
+    user_dir = output / plan.sample.user_id
+    hits = execute_plan(plan, client=service, out_dir=user_dir, stop_at_event=2)
+    assert list(hits) == ["1"]
+    assert service.calls == [("add", "  early  "), ("search", "q?")]
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(InterruptedError):
+        execute_plan(plan, client=service, out_dir=user_dir, stop_requested=stop.is_set)
+    assert len(service.calls) == 2
+    hits = execute_plan(plan, client=service, out_dir=user_dir)
+    assert hits["1"][0].content == "  early  "
+    assert hits["3"][0].content == "  early  \nfuture"
+    assert service.calls[2:] == [("add", "future"), ("search", "q?")]
 
 
 class FailingAddService(FakeService):
@@ -299,7 +587,7 @@ def test_comparison_rejects_different_inputs_or_models(capture: Path) -> None:
     left = fake_run(capture, "left", manifest, [])
     right = fake_run(capture, "right", manifest, [])
     path = right / "run-manifest.json"
-    runtime = json.loads(path.read_text())
+    runtime = json.loads(path.read_text(encoding="utf-8"))
     runtime["evaluation"] = {"model": "changed"}
     write_json(path, runtime)
     with pytest.raises(ValueError, match="模型"):
@@ -413,6 +701,60 @@ def test_full_runner_uses_checkpoint_driver_and_refuses_changed_version(
     assert pipeline.main(argv) == 2
 
 
+def test_streaming_runner_answers_historical_search_while_http_advances(capture, monkeypatch):
+    import threading
+
+    from eval.harness import official_judging
+
+    prepare_groups(capture, capture / "grouped")
+    answering = threading.Event()
+    searched_future = threading.Event()
+
+    class OverlappingService(FakeService):
+        def search(self, **kwargs):
+            if len([c for c in self.calls if c[0] == "search"]) == 1:
+                assert answering.wait(timeout=5), "answer did not start during replay"
+                searched_future.set()
+            return super().search(**kwargs)
+
+    service = OverlappingService()
+    monkeypatch.setattr(pipeline, "ServiceClient", lambda _: service)
+    monkeypatch.setattr(pipeline, "ensure_dataset", lambda *a, **kw: None)
+    for key in (
+        "ANSWER_API_BASE", "ANSWER_API_KEY", "ANSWER_MODEL",
+        "JUDGE_API_BASE", "JUDGE_API_KEY", "JUDGE_MODEL",
+    ):
+        monkeypatch.setattr(pipeline.api_config, key, "configured")
+    judged = []
+
+    def fake_judge(_path, items, output, **kwargs):
+        item = items[0]
+        if item["id"] == "1":
+            answering.set()
+            assert searched_future.wait(timeout=5)
+            assert "future" not in item["retrieved_context"]
+        judged.append(item["id"])
+        write_rows(output / "answers.jsonl", [{"id": item["id"], "generated_answer": "hello"}])
+        write_rows(output / "labels.jsonl", [
+            {"id": item["id"], "is_correct": True, "label": "CORRECT", "judge_response": "ok"}
+        ])
+
+    monkeypatch.setattr(official_judging, "run_judge", fake_judge)
+    argv = [
+        "run", "--manifest", str(capture / "grouped/manifest.json"),
+        "--run-id", "streaming", "--service-revision", "v1",
+        "--reports-dir", str(capture / "reports"), "--judge-workers", "2",
+    ]
+    assert pipeline.main(argv) == 0
+    run_dir = capture / "reports/runs/streaming"
+    assert summarize_run(run_dir)["completed"] == 3
+    assert sorted(judged) == ["1", "3", "6"]
+    calls = list(service.calls)
+    assert pipeline.main(argv) == 0
+    assert service.calls == calls
+    assert len(judged) == 3
+
+
 def test_full_runner_records_user_failure_and_continues(capture: Path, monkeypatch) -> None:
     """一个用户的裁判失败**不能打死整轮**：记账、继续下一个用户，重跑同 run-id 续。
 
@@ -491,6 +833,34 @@ def test_metric_totals_keep_exact_and_f1_separate() -> None:
     assert totals["f1"] == {"sum": 0.75, "n": 2, "mean": 0.375}
     # 缺席时不写 0.0（那会被读成"全错"）。
     assert _metric_totals([{"metrics": {}}])["f1"] == {"sum": 0, "n": 0, "mean": None}
+def test_failed_add_preserves_full_payload_without_truncation(capture, monkeypatch):
+    messages = [{"role": "user", "content": "  原文 " * 10000}]
+    adds = read_jsonl(capture / "official-adds.jsonl")
+    adds[0]["messages"] = messages
+    write_rows(capture / "official-adds.jsonl", adds)
+    _, argv = configure_official_runner(capture, monkeypatch)
+
+    class Client(FakeService):
+        def add(self, *, messages, **kwargs):
+            if kwargs["request_id"] == "r0":
+                raise httpx.HTTPStatusError(
+                    "embedding context exceeded", request=httpx.Request("POST", "http://service/add"),
+                    response=httpx.Response(500),
+                )
+            super().add(messages=messages, **kwargs)
+
+    monkeypatch.setattr(pipeline, "ServiceClient", Client)
+    assert pipeline.main(argv) == 0
+    run_dir = capture / "reports/runs/parallel"
+    failures = read_jsonl(run_dir / "skipped.jsonl")
+    assert len(failures) == 1
+    payload = json.loads((run_dir / failures[0]["payload_file"]).read_text(encoding="utf-8"))
+    assert payload["messages"] == messages
+    assert payload["request_id"] == "r0"
+    manifest = json.loads((run_dir / "run-manifest.json").read_text(encoding="utf-8"))
+    assert payload["user_id"] == manifest["users"]["a"]
+    assert pipeline.main(argv) == 0
+    assert len(read_jsonl(run_dir / "skipped.jsonl")) == 1
 
 
 def test_add_4xx_is_fatal_not_skipped(capture: Path, monkeypatch) -> None:

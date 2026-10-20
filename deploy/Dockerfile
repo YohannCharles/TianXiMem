@@ -44,6 +44,10 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
 
+# server-only: PyPI is slow here; use a domestic mirror (uncommitted)
+ARG UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX}
+
 WORKDIR /app
 
 # ① 先只装依赖（**不含本仓库**）：这一层的缓存键只有 pyproject.toml + uv.lock
