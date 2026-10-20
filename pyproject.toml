@@ -86,3 +86,8 @@ asyncio_mode = "auto"
 python_version = "3.12"
 strict = false
 warn_unused_ignores = true
+
+# spaCy is loaded only by the optional fact extraction sidecar.
+[[tool.mypy.overrides]]
+module = ["spacy", "spacy.*"]
+ignore_missing_imports = true
