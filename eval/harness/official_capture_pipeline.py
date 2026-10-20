@@ -48,6 +48,7 @@ import argparse
 import contextlib
 import functools
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -60,7 +61,7 @@ for _candidate in (str(_REPO_ROOT), str(Path(__file__).resolve().parent)):
         sys.path.insert(0, _candidate)
 
 from eval.harness.pipeline_cli import build_pipeline_parser  # noqa: E402
-from eval.jsonl_io import read_jsonl, write_line  # noqa: E402
+from eval.jsonl_io import jsonl_line, read_jsonl, write_line  # noqa: E402
 
 #: 走 `extra_pipeline` 的六个家族（它自己那套 prompt 与判分）。
 _EXTRA_FAMILIES = frozenset(
@@ -709,6 +710,21 @@ def cmd_answer(args: argparse.Namespace) -> int:
         for item in items:
             if str(item["id"]) in done:
                 continue
+            policy_path = os.environ.get("OFFICIAL_ANSWER_CONTEXT_POLICY")
+            if policy_path:
+                from eval.datasets.official_groups import write_json
+                from eval.harness.model_context import fit_retrieved_context
+
+                policy = json.loads(Path(policy_path).read_text(encoding="utf-8"))
+                if model != policy["model"]:
+                    raise ValueError("Answer context policy model differs from selected model")
+                item, audit = fit_retrieved_context(
+                    item, _answer_prompt, policy, max_tokens=args.max_tokens
+                )
+                actual_path = output.parent / "answer-context-input.jsonl"
+                actual_path.write_text(jsonl_line(item), encoding="utf-8")
+                audit.update(original_input=str(args.input), actual_input=str(actual_path))
+                write_json(output.parent / "answer-context-audit.json", audit)
             generated = extra.chat(
                 base,
                 key,

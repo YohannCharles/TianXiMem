@@ -297,7 +297,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--configs-dir", default="configs")
     run.add_argument("--profile", default="local")
     run.add_argument("--max-tokens", type=int, default=1024)
+    run.add_argument("--ingest-workers", type=int, default=1, help="跨用户 Add/Search 并发数")
+    run.add_argument("--rerank-local-workers", type=int, default=0)
+    run.add_argument("--rerank-memory3-workers", type=int, default=0)
+    run.add_argument("--serial-prefix", default=None, help="两臂复用的串行前缀边界 JSON")
+    run.add_argument(
+        "--judge-workers", type=int, default=0,
+        help="正数启用逐题作答/判分与有序 Search 重叠；两臂使用相同值",
+    )
     run.add_argument("--memory-date", default="none")
+    run.add_argument("--judge-scheduling", choices=("overlap", "after-replay"), default="overlap")
     run.add_argument("--annotate-mark", default="paren")
     run.add_argument("--on-add-error", choices=("skip", "abort"), default="skip")
     run.add_argument("--stop-on-error", action="store_true")
@@ -414,6 +423,12 @@ def main(argv: list[str] | None = None) -> int:
         args.profile,
         "--max-tokens",
         str(args.max_tokens),
+        "--judge-workers",
+        str(args.judge_workers),
+        "--judge-scheduling",
+        args.judge_scheduling,
+        "--ingest-workers",
+        str(args.ingest_workers),
         "--memory-date",
         args.memory_date,
         "--annotate-mark",
@@ -423,6 +438,11 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if not args.allow_download:
         argv_out.append("--offline")
+    if args.serial_prefix:
+        argv_out.extend(["--serial-prefix", args.serial_prefix])
+    if args.rerank_local_workers or args.rerank_memory3_workers:
+        argv_out.extend(["--rerank-local-workers", str(args.rerank_local_workers),
+                         "--rerank-memory3-workers", str(args.rerank_memory3_workers)])
     if args.stop_on_error:
         argv_out.append("--stop-on-error")
 

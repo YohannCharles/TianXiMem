@@ -1,4 +1,7 @@
-from eval.harness.model_context import fit_beam_context
+from types import SimpleNamespace
+
+import pytest
+from eval.harness.model_context import fit_beam_context, fit_retrieved_context
 
 
 class ByteTokenizer:
@@ -46,3 +49,50 @@ def test_context_inside_model_limit_is_not_changed(tmp_path):
     }
     adjusted, audit = fit_beam_context(pipeline, original, config, tokenizer=ByteTokenizer())
     assert adjusted == original and audit["truncated"] is False
+
+
+class LocalByteTokenizer:
+    def encode(self, text, *, add_special_tokens):
+        assert add_special_tokens is False
+        return SimpleNamespace(ids=list(text.encode()))
+
+
+def context_policy(limit=20):
+    return {
+        "policy": "test-prefix", "model": "stub", "tokenizer_sha256": "fixed",
+        "max_context_tokens": limit, "overhead_margin_tokens": 2,
+    }
+
+
+def test_retrieved_prefix_reserves_full_prompt_output_and_overhead():
+    original = {"id": "q", "retrieved_context": "甲乙丙丁", "question": "Q", "gold": "keep"}
+    def render(item):
+        return "BEGIN|" + item["retrieved_context"] + "|" + item["question"]
+
+    adjusted, audit = fit_retrieved_context(
+        original, render, context_policy(), max_tokens=4, tokenizer=LocalByteTokenizer()
+    )
+    assert original["retrieved_context"] == "甲乙丙丁"
+    assert adjusted == {**original, "retrieved_context": "甲乙"}
+    assert audit["actual_prompt_tokens"] + 4 + 2 == 20
+    assert audit["removed_context_characters"] == 2
+    assert audit["removed_prompt_tokens"] == 6
+    assert audit["truncated"] is True
+
+
+def test_retrieved_context_within_budget_is_unchanged():
+    item = {"id": "q", "retrieved_context": "short", "question": "Q"}
+    adjusted, audit = fit_retrieved_context(
+        item, lambda row: row["retrieved_context"] + row["question"], context_policy(),
+        max_tokens=4, tokenizer=LocalByteTokenizer(),
+    )
+    assert adjusted == item and not audit["truncated"]
+
+
+def test_oversized_question_is_not_silently_truncated():
+    item = {"id": "q", "retrieved_context": "memories", "question": "Q" * 30}
+    with pytest.raises(ValueError, match="Question and prompt alone"):
+        fit_retrieved_context(
+            item, lambda row: row["retrieved_context"] + row["question"], context_policy(),
+            max_tokens=4, tokenizer=LocalByteTokenizer(),
+        )

@@ -27,6 +27,22 @@ a3_rerank.py          A3 Rerank 开/关                            ✅（首组�
 a4_agent.py           A4a 门控 / A4b always-on                    ⛔ **不在 v1**（**D26**；arm 定义留在 [`../../docs/experiments.md`](../../docs/experiments.md)）
 ```
 
+官方采集入口支持 `--judge-workers N`（正数）：每个用户的 Add/Search 仍按原时间线串行，
+每题 Search 快照落盘后即可后台作答/判分；用户之间也允许与判分重叠。
+`0` 保留原用户整批模式。此参数会冻结到评测指纹，两臂必须一致。
+逐题目录与聚合文件、旧答案迁移及续跑说明见 `docs/capture-evaluation-pipeline.md`。
+共享模型资源时可用 `--judge-scheduling after-replay`，冻结历史 Search 后再统一作答；
+每用户 Add/Search 时间线不变。LLM 槽位限流同见上述文档。
+`--ingest-workers N` 控制跨用户 HTTP 重放并发（缺省串行），每个线程独享客户端；
+可同时指定 `--rerank-local-workers` / `--rerank-memory3-workers` 建立独立用户池，
+两者必须为正且相加等于 `--ingest-workers`；按源用户哈希固定分组，两臂同用户同后端。
+此模式需要评测专用传输标记适配器与精排代理，见各 run 旁的运行清单；标准服务不会自行分流。
+不增加服务进程或改变同一用户的事件次序。运行中从串行切换时，可用两臂共用的
+`--serial-prefix <json>` 冻结已完成的前缀；前缀用户按边界复现，其他用户同时进入相同
+并发池，前缀用户越过最后边界后再加入主池。
+支持原串行列表或带 `stages` 的多阶段并发历史，格式见上述流水线文档。
+失败 Add 的完整原始请求另存 `failed-adds/`，由 `skipped.jsonl` 引用；不截断正文。
+
 ## 运行共享固定题单
 
 多人协作的固定清单入口是 `python -m eval.experiments.selection_suite`；

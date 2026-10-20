@@ -1,4 +1,4 @@
-"""Fit BEAM's answer context prefix to the local model's token envelope.
+"""Fit retrieved answer context prefixes to the local model's token envelope.
 
 This is an explicit local input adaptation, separate from Search and from the
 platform's o200k prefix. The original item is never modified.
@@ -9,11 +9,79 @@ from __future__ import annotations
 import ast
 import hashlib
 import re
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 
 _TOKENIZER_LOCK = Lock()
+
+
+@lru_cache(maxsize=2)
+def _load_local_tokenizer(path: str, expected_sha256: str):
+    from tokenizers import Tokenizer
+
+    if hashlib.sha256(Path(path).read_bytes()).hexdigest() != expected_sha256:
+        raise ValueError("Local answer tokenizer fingerprint changed")
+    tokenizer = Tokenizer.from_file(path)
+    tokenizer.no_truncation()
+    tokenizer.no_padding()
+    return tokenizer
+
+
+def fit_retrieved_context(
+    item: dict, render: Callable[[dict], str], config: dict, *, max_tokens: int,
+    tokenizer=None,
+) -> tuple[dict, dict]:
+    """Keep an exact text prefix; count the complete family-specific prompt."""
+    if tokenizer is None:
+        tokenizer = _load_local_tokenizer(config["tokenizer_file"], config["tokenizer_sha256"])
+    context = item.get("retrieved_context") or ""
+    if not isinstance(context, str):
+        raise ValueError("Retrieved context must be text")
+    budget = config["max_context_tokens"] - max_tokens - config["overhead_margin_tokens"]
+    if budget < 1:
+        raise ValueError("No input budget after reserving output and chat overhead")
+
+    def count(candidate):
+        encoded = tokenizer.encode(render(candidate), add_special_tokens=False)
+        return len(encoded.ids)
+
+    original_tokens = count(item)
+    adjusted = dict(item)
+    if original_tokens > budget:
+        adjusted["retrieved_context"] = ""
+        if count(adjusted) > budget:
+            raise ValueError("Question and prompt alone exceed the model input budget")
+        low, high = 0, len(context)
+        while low < high:
+            middle = (low + high + 1) // 2
+            adjusted["retrieved_context"] = context[:middle]
+            if count(adjusted) <= budget:
+                low = middle
+            else:
+                high = middle - 1
+        adjusted["retrieved_context"] = context[:low]
+    kept = adjusted.get("retrieved_context") or ""
+    actual_tokens = count(adjusted)
+    if actual_tokens > budget or not context.startswith(kept):
+        raise ValueError("Context prefix failed its token budget invariant")
+    audit = {
+        "policy": config["policy"], "id": str(item["id"]), "dataset": item.get("dataset"),
+        "model": config["model"], "tokenizer_sha256": config["tokenizer_sha256"],
+        "max_context_tokens": config["max_context_tokens"], "answer_max_tokens": max_tokens,
+        "overhead_margin_tokens": config["overhead_margin_tokens"],
+        "prompt_budget_tokens": budget, "original_prompt_tokens": original_tokens,
+        "actual_prompt_tokens": actual_tokens,
+        "original_context_characters": len(context), "actual_context_characters": len(kept),
+        "removed_context_characters": len(context) - len(kept),
+        "removed_prompt_tokens": original_tokens - actual_tokens,
+        "truncation_character_offset": len(kept),
+        "original_context_sha256": hashlib.sha256(context.encode()).hexdigest(),
+        "actual_context_sha256": hashlib.sha256(kept.encode()).hexdigest(),
+        "truncated": kept != context,
+    }
+    return adjusted, audit
 
 
 @lru_cache(maxsize=2)

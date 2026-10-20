@@ -10,6 +10,8 @@ driver.py                  喂 Add、调 Search（**走 HTTP**）、收集返回
 scheduling.py              独立用户的投喂/检索与判分双线程池；用户内有序、在飞上下文有界
 plan_driver.py             AML 事件编译、HTTP 分派与逐事件检查点；历史 Search 落盘后才继续 Add；
                            `on_add_error` 旁路供长跑把"注定 500 的一批"记下并跳过
+official_judging.py        官方采集的逐题作答/判分队列：消费已落盘的 Search；任务目录隔离，
+                           worker 数有界、待办上下文存磁盘、用户聚合文件由同一锁串行写入
 batching.py                模拟 AML 切批（20 条消息 + 2,000 词的**空白分词近似**）
 add_shape.py               模拟 AML **正文形态**（`<标签>: …` 前缀 + `system` 折叠 + 单条 8,000 字符切分）——线上就是这么发的
 judge.py                   包住 pipeline 的裁判（`run_judge` 跑 `answer`→`evaluate` 两步）＋

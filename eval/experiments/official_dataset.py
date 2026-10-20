@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import shutil
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -26,8 +30,10 @@ from eval.harness import ServiceClient, api_config, build_official_items, pipeli
 from eval.harness.annotate import MARKS
 from eval.harness.judge import DATE_MODES
 from eval.harness.judge_results import results_from_labels
+from eval.harness.official_judging import StreamingOfficialJudge
 from eval.harness.plan_driver import compile_plan, execute_plan, freeze_run
 from eval.harness.run_record import build_record, config_fingerprint, write_record
+from eval.harness.scheduling import rerank_user_group, run_grouped_user_tasks, run_user_tasks
 from eval.jsonl_io import write_line
 from eval.reports.official_comparison import compare_runs, coverage_report, write_summary
 
@@ -62,6 +68,47 @@ def checkpoint_plan(plan: UserPlan, namespace: str) -> InputPlan:
     )
 
 
+def serial_prefix(args: argparse.Namespace) -> list[dict] | dict:
+    """两臂共用已执行前缀，兼容单个串行前缀及多阶段并发历史。"""
+    path = getattr(args, "serial_prefix", None)
+    if not path:
+        return []
+    prefix = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(prefix, (list, dict)) or (
+        isinstance(prefix, dict)
+        and (set(prefix) != {"stages"} or not isinstance(prefix["stages"], list))
+    ):
+        raise ValueError("serial-prefix 必须是用户边界列表或带 stages 的阶段列表")
+    prior = {}
+    for stage in prefix_stages(prefix):
+        if (
+            not isinstance(stage, dict)
+            or not {"workers", "users"} <= set(stage) <= {"workers", "users", "rerank_routing"}
+            or stage.get("rerank_routing", "historical") not in {"historical", "query-bucket"}
+            or type(stage["workers"]) is not int or stage["workers"] < 1
+            or not isinstance(stage["users"], list)
+        ):
+            raise ValueError("serial-prefix 含无效阶段")
+        seen = set()
+        for row in stage["users"]:
+            if (
+                not isinstance(row, dict)
+                or set(row) != {"source_user_id", "next_event"}
+                or not isinstance(row["source_user_id"], str)
+                or row["source_user_id"] in seen
+                or type(row["next_event"]) is not int
+                or row["next_event"] < prior.get(row["source_user_id"], 0)
+            ):
+                raise ValueError("serial-prefix 含重复用户或倒退的事件边界")
+            seen.add(row["source_user_id"])
+            prior[row["source_user_id"]] = row["next_event"]
+    return prefix
+
+
+def prefix_stages(prefix: list[dict] | dict) -> list[dict]:
+    return prefix["stages"] if isinstance(prefix, dict) else [{"workers": 1, "users": prefix}]
+
+
 def evaluation_fingerprint(args: argparse.Namespace) -> dict:
     """冻结答案/裁判口径；不保存 API 密钥。产品版本与配置允许在两臂间不同。"""
     root = Path(__file__).resolve().parents[2]
@@ -69,6 +116,23 @@ def evaluation_fingerprint(args: argparse.Namespace) -> dict:
     code += [Path(__file__), root / "eval" / "datasets" / "official_capture.py"]
     archive = benchmark_dir()
     upstream = sorted((archive / ".upstream").rglob("*.py"))
+    scheduling = (
+        f"serial Add/Search; saved-search judging overlap; workers={args.judge_workers}"
+        if getattr(args, "judge_workers", 0)
+        else "serial users; ordered checkpoints"
+    )
+    if getattr(args, "ingest_workers", 1) > 1:
+        scheduling = (
+            f"users={args.ingest_workers}; ordered per-user Add/Search; "
+            f"saved-search judge workers={args.judge_workers}"
+        )
+    if getattr(args, "rerank_local_workers", 0):
+        scheduling += (f"; fixed user pools local={args.rerank_local_workers}"
+                       f",memory3={args.rerank_memory3_workers}; source-user sha256 modulo 3")
+    if getattr(args, "judge_scheduling", "overlap") == "after-replay":
+        scheduling += "; answer/judge begins after all Add/Search workers finish"
+    if getattr(args, "serial_prefix", None):
+        scheduling += "; non-prefix users overlap staged prefix replay"
     return {
         "answer_model": api_config.ANSWER_MODEL,
         "judge_model": api_config.JUDGE_MODEL,
@@ -78,7 +142,13 @@ def evaluation_fingerprint(args: argparse.Namespace) -> dict:
         "top_k": 100,
         "memory_date": args.memory_date,
         "annotate_mark": args.annotate_mark,
-        "scheduling": "serial users; ordered checkpoints",
+        "answer_context_policy": (
+            json.loads(Path(os.environ["OFFICIAL_ANSWER_CONTEXT_POLICY"]).read_text(encoding="utf-8"))
+            if os.environ.get("OFFICIAL_ANSWER_CONTEXT_POLICY") else None
+        ),
+        "llm_inflight_per_slot": int(os.environ.get("OFFICIAL_LLM_INFLIGHT_PER_SLOT", "0")),
+        "scheduling": scheduling,
+        "serial_prefix": serial_prefix(args),
         "code_sha256": {str(p.relative_to(root)): sha256(p) for p in code},
         "upstream_sha256": {str(p.relative_to(archive)): sha256(p) for p in upstream},
     }
@@ -95,6 +165,31 @@ def _count_lines(path: Path) -> int:
     if not path.is_file():
         return 0
     return sum(1 for line in path.read_text(encoding="utf-8").split("\n") if line.strip())
+
+
+def _failure_status(output: Path) -> str:
+    """Audit events are cumulative; report current unresolved work separately."""
+    def rows(name):
+        path = output / name
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()] if path.is_file() else []
+    skipped = rows("skipped.jsonl")
+    failed_adds = {r["request_id"] for r in skipped}
+    recovered = {r["request_id"] for r in rows("recovered-adds.jsonl")
+                 if r.get("status") == "recovered"}
+    errors = rows("errors.jsonl")
+    unresolved = set()
+    for error in errors:
+        user = error.get("wire_user_id")
+        qid = error.get("question_id")
+        labels = rows(f"{user}/labels.jsonl") if user else []
+        done = {str(r["id"]) for r in labels if not str(r.get("label", "")).endswith("_ERROR")}
+        resolved = str(qid) in done if qid is not None else len(done) >= error.get("n_questions", 1)
+        if not resolved:
+            unresolved.add((user, qid))
+    return (f"Add 失败历史 {len(skipped)} 次/{len(failed_adds)} 批"
+            f"，已恢复 {len(failed_adds & recovered)} 批，待处理 {len(failed_adds - recovered)} 批"
+            f"；用户/题目错误历史 {len(errors)} 次，待处理 {len(unresolved)} 项")
 
 
 def _results_from_disk(output: Path, compiled: list[InputPlan]) -> list:
@@ -179,6 +274,13 @@ def run(args: argparse.Namespace) -> int:
     if {int(r["seq"]) for p in plans for r in p.questions} != set(questions):
         raise ValueError("timeline 未覆盖所选全部题目")
     compiled = [checkpoint_plan(p, namespace=f"{args.run_id}:{identity}") for p in plans]
+    prefix = serial_prefix(args)
+    by_source = {s.user_id: (i, s, w) for i, (s, w) in enumerate(zip(plans, compiled, strict=True))}
+    for stage in prefix_stages(prefix):
+        for row in stage["users"]:
+            entry = by_source.get(row["source_user_id"])
+            if entry is None or row["next_event"] > len(entry[2].events):
+                raise ValueError("serial-prefix 的用户/事件边界不在固定题单中")
     for family in sorted({row["dataset"] for row in questions.values()}):
         ensure_dataset(
             "doc-pp" if family == "docpp" else family,
@@ -245,9 +347,79 @@ def run(args: argparse.Namespace) -> int:
             shutil.copyfile(Path(args.configs_dir) / name, target)
     results = []
     samples = [p.sample for p in compiled]
-    client = ServiceClient(args.base_url)
+    file_lock = threading.RLock()
+    thread_state = threading.local()
+    clients = []
+    stop = threading.Event()
+    active_users = {}
+    replay_completed = 0
+    ingest_workers = getattr(args, "ingest_workers", 1)
+    group_workers = {}
+    if getattr(args, "rerank_local_workers", 0):
+        group_workers = {"local": args.rerank_local_workers, "memory3": args.rerank_memory3_workers}
+        write_json(output / "rerank-user-groups.json", {
+            "policy": "source-user sha256 modulo 3; local=0, memory3=1/2",
+            "workers": group_workers,
+            "users": {wire.sample.user_id: rerank_user_group(source.user_id)
+                      for source, wire in zip(plans, compiled, strict=True)},
+        })
+    replay_phase = {"kind": "initializing"}
+    prefix_user_ids = {
+        row["source_user_id"]
+        for stage in prefix_stages(prefix)
+        for row in stage["users"]
+    }
+
+    def get_client():
+        if not hasattr(thread_state, "client"):
+            thread_state.client = ServiceClient(args.base_url)
+            with file_lock:
+                clients.append(thread_state.client)
+        return thread_state.client
+
+    def replay_progress():
+        write_json(output / "ingest-progress.json", {
+            "workers": ingest_workers,
+            "phase": dict(replay_phase),
+            "active_users": dict(active_users),
+            "users_replayed_this_pass": replay_completed,
+            "users_total": len(plans),
+        })
     skipped_path = output / "skipped.jsonl"
     errors_path = output / "errors.jsonl"
+    streaming = None
+    sources_by_wire = {w.sample.user_id: s for s, w in zip(plans, compiled, strict=True)}
+
+    def record_error(wire_user: str, error: Exception, qid: str | None = None) -> None:
+        source = sources_by_wire[wire_user]
+        with file_lock:
+            _append_jsonl(
+                errors_path,
+                {
+                    "user_id": source.user_id,
+                    "wire_user_id": wire_user,
+                    "n_questions": 1 if qid is not None else len(source.questions),
+                    "question_id": qid,
+                    "error": type(error).__name__,
+                    "detail": (str(error) or "")[:12000],
+                },
+            )
+        print(
+            f"    ✗ {'题目 ' + qid if qid else '用户'}失败"
+            f"（{type(error).__name__}: {str(error)[:180]}）"
+            "⇒ 记入 errors.jsonl，保留检查点供续跑",
+            flush=True,
+        )
+
+    if getattr(args, "judge_workers", 0):
+        streaming = StreamingOfficialJudge(
+            output,
+            pipeline,
+            workers=args.judge_workers,
+            max_tokens=args.max_tokens,
+            on_error=lambda user, qid, error: record_error(user, error, qid),
+            deferred=getattr(args, "judge_scheduling", "overlap") == "after-replay",
+        )
 
     def make_on_add_error(user_id: str, seq_by_request: dict[str, int]):
         """服务端/网络层失败 ⇒ **像线上那样跳过这一批并记账**；4xx 立刻抛。
@@ -266,20 +438,31 @@ def run(args: argparse.Namespace) -> int:
                     f"/add 返回 {error.response.status_code}（4xx）——这是我方 bug，"
                     "不能当作'线上也丢了'跳过"
                 ) from error
-            _append_jsonl(
-                skipped_path,
-                {
-                    "kind": "add",
-                    "user_id": user_id,
-                    "seq": seq_by_request.get(event.request_id),
+            with file_lock:
+                wire_user = runtime["users"][user_id]
+                payload_name = hashlib.sha256(event.request_id.encode()).hexdigest() + ".json"
+                payload_file = Path("failed-adds") / wire_user / payload_name
+                write_json(output / payload_file, {
                     "request_id": event.request_id,
+                    "user_id": wire_user,
                     "session_id": event.session_id,
-                    "n_messages": len(event.messages),
-                    "chars": sum(len(m.get("content") or "") for m in event.messages),
-                    "error": type(error).__name__,
-                    "detail": (str(error) or "")[:300],
-                },
-            )
+                    "messages": list(event.messages),
+                })
+                _append_jsonl(
+                    skipped_path,
+                    {
+                        "kind": "add",
+                        "user_id": user_id,
+                        "seq": seq_by_request.get(event.request_id),
+                        "request_id": event.request_id,
+                        "session_id": event.session_id,
+                        "n_messages": len(event.messages),
+                        "chars": sum(len(m.get("content") or "") for m in event.messages),
+                        "payload_file": str(payload_file),
+                        "error": type(error).__name__,
+                        "detail": (str(error) or "")[:300],
+                    },
+                )
             print(
                 f"    ⚠ /add 失败（{type(error).__name__}）⇒ **跳过这一批**"
                 f"（request_id={event.request_id}）并继续——见 skipped.jsonl",
@@ -288,72 +471,200 @@ def run(args: argparse.Namespace) -> int:
 
         return on_add_error
 
-    print(f"{args.run_id}：固定 {len(questions)} 题 / {len(plans)} 个用户 → {output}", flush=True)
-    try:
-        for index, (source, wire) in enumerate(zip(plans, compiled, strict=True), 1):
+    def replay_user(
+        index, source, wire, *, boundary=None, prefix_index=None, prefix_routing=None
+    ):
+        nonlocal replay_completed
+        if stop.is_set():
+            raise InterruptedError("User replay cancelled")
+        with file_lock:
+            active_users[wire.sample.user_id] = {
+                "source_index": index,
+                "questions": len(source.questions),
+                "stage": "serial-prefix" if boundary is not None else "replay",
+                **({"prefix_index": prefix_index} if boundary is not None else {}),
+                **({"prefix_routing": prefix_routing} if boundary is not None else {}),
+                **({"rerank_backend": rerank_user_group(source.user_id)}
+                   if group_workers and boundary is None else {}),
+            }
+            replay_progress()
+        try:
             print(f"[{index}/{len(plans)}] {len(source.questions)} 题", flush=True)
             user_dir = output / wire.sample.user_id
             add_seq = {
                 event.request_id: event.seq for event in source.events if event.kind == "add"
             }
             try:
+                on_search = None
+                if streaming is not None:
+                    by_qid = {str(row["seq"]): row for row in source.questions}
+
+                    def on_search(qid, rows):
+                        item = build_official_items(
+                            [by_qid[qid]],
+                            {qid: rows},
+                            date_mode=args.memory_date,
+                            annotate_mark=args.annotate_mark,
+                        )[0]
+                        streaming.submit(wire.sample.user_id, item)
+                        if args.stop_on_error:
+                            streaming.raise_if_failed()
+
                 hits = execute_plan(
                     wire,
-                    client=client,
+                    client=get_client(),
                     out_dir=user_dir,
                     on_add_error=(
                         make_on_add_error(source.user_id, add_seq)
                         if args.on_add_error == "skip"
                         else None
                     ),
+                    **({"on_search": on_search} if on_search is not None else {}),
+                    stop_requested=stop.is_set,
+                    stop_at_event=boundary,
                 )
-                items = build_official_items(
-                    source.questions,
-                    hits,
-                    date_mode=args.memory_date,
-                    annotate_mark=args.annotate_mark,
-                )
-                run_judge(
-                    pipeline,
-                    items,
-                    user_dir,
-                    dataset="official-capture",
-                    max_tokens=args.max_tokens,
-                )
+                if streaming is None and boundary is None:
+                    items = build_official_items(
+                        source.questions,
+                        hits,
+                        date_mode=args.memory_date,
+                        annotate_mark=args.annotate_mark,
+                    )
+                    run_judge(
+                        pipeline,
+                        items,
+                        user_dir,
+                        dataset="official-capture",
+                        max_tokens=args.max_tokens,
+                    )
             except Exception as error:
                 # ⚠ 长跑不能因为一个用户的一步失败就打死整轮。该用户的检查点仍然
                 #   停在失败处 ⇒ 同一个 run-id 重跑会**从这里续**；其余用户先跑完。
                 # ⛔ 4xx（`FatalAddError`）是系统性我方 bug，必须整轮停。
-                if args.stop_on_error or isinstance(error, FatalAddError):
+                if stop.is_set() or args.stop_on_error or isinstance(error, FatalAddError):
+                    stop.set()
                     raise
-                _append_jsonl(
-                    errors_path,
-                    {
-                        "user_id": source.user_id,
-                        "wire_user_id": wire.sample.user_id,
-                        "n_questions": len(source.questions),
-                        "error": type(error).__name__,
-                        "detail": (str(error) or "")[:1000],
-                    },
-                )
-                print(
-                    f"    ✗ 用户失败（{type(error).__name__}: {str(error)[:180]}）"
-                    "⇒ 记入 errors.jsonl，继续下一个用户",
-                    flush=True,
-                )
+                record_error(wire.sample.user_id, error)
+        finally:
+            with file_lock:
+                active_users.pop(wire.sample.user_id, None)
+                if boundary is None:
+                    replay_completed += 1
+                replay_progress()
+
+    print(
+        f"{args.run_id}：固定 {len(questions)} 题 / {len(plans)} 个用户；"
+        f"跨用户重放并发 {ingest_workers} → {output}", flush=True,
+    )
+    main_executor = None
+    main_future = None
+
+    def replay_items(items):
+        """Run independent users and print progress as each user finishes."""
+        replay_args = dict(
+            user_id=lambda pair: pair[1].sample.user_id,
+            run=lambda _, pair: replay_user(by_source[pair[0].user_id][0] + 1, *pair),
+            cancel=stop.set,
+        )
+        if group_workers:
+            iterator = run_grouped_user_tasks(
+                items,
+                **replay_args,
+                group_of=lambda pair: rerank_user_group(pair[0].user_id),
+                group_workers=group_workers,
+            )
+        else:
+            iterator = run_user_tasks(items, **replay_args, workers=ingest_workers)
+        for _index in iterator:
             try:
-                summary = write_summary(output)
+                summary = streaming.refresh_summary() if streaming else write_summary(output)
                 print(
                     f"已判 {summary['completed']}/{summary['expected']}"
-                    f"；跳过 add 批 {_count_lines(skipped_path)}"
-                    f"；用户错误 {_count_lines(errors_path)}",
+                    f"；{_failure_status(output)}",
                     flush=True,
                 )
             except (ValueError, OSError) as error:
-                # 汇总失败不该反过来打死正在跑的 Add/Search——留下一行，继续。
                 print(f"    ⚠ 刷新 summary 失败：{error}", flush=True)
+
+    try:
+        all_pairs = list(zip(plans, compiled, strict=True))
+        prefix_pairs = [
+            pair for pair in all_pairs if pair[0].user_id in prefix_user_ids
+        ]
+        main_pairs = [
+            pair for pair in all_pairs if pair[0].user_id not in prefix_user_ids
+        ]
+
+        # 前缀只约束前缀清单中的用户；其余用户立即进入主并发池。
+        if main_pairs:
+            replay_phase = {"kind": "main", "workers": ingest_workers}
+            if group_workers:
+                replay_phase.update(rerank_routing="user-groups", group_workers=group_workers)
+            with file_lock:
+                replay_progress()
+            main_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="official-main")
+            main_future = main_executor.submit(replay_items, main_pairs)
+            print(
+                f"前缀阶段并行主重放：{len(main_pairs)} 个非前缀用户已进入 "
+                f"{ingest_workers} 路并发；前缀用户 {len(prefix_pairs)} 个按边界回放",
+                flush=True,
+            )
+
+        # 每个前缀用户按冻结边界推进；无关用户已在独立的主池运行。
+        for stage_index, stage in enumerate(prefix_stages(prefix)):
+            replay_phase = {"kind": "prefix", "index": stage_index, "workers": stage["workers"]}
+            if "rerank_routing" in stage:
+                replay_phase["rerank_routing"] = stage["rerank_routing"]
+            with file_lock:
+                replay_progress()
+            ready = []
+            for row in stage["users"]:
+                index, source, wire = by_source[row["source_user_id"]]
+                cp = output / wire.sample.user_id / "checkpoint.json"
+                cursor = json.loads(cp.read_text(encoding="utf-8"))["next_event"]
+                if cursor < row["next_event"]:
+                    ready.append((index, source, wire, row["next_event"]))
+            if ready:
+                print(f"复现前缀阶段：并发 {stage['workers']} / {len(ready)} 用户", flush=True)
+            for _ in run_user_tasks(
+                ready,
+                user_id=lambda item: item[2].sample.user_id,
+                run=lambda _, item, stage_index=stage_index, stage=stage: replay_user(
+                    item[0] + 1, item[1], item[2],
+                    boundary=item[3], prefix_index=stage_index,
+                    prefix_routing=stage.get("rerank_routing"),
+                ),
+                workers=stage["workers"], cancel=stop.set,
+            ):
+                pass
+
+        if main_future is not None:
+            main_future.result()
+            main_executor.shutdown(wait=True)
+            main_executor = None
+            main_future = None
+
+        # 前缀用户完成冻结边界后，继续回放它们尚未处理的事件。
+        replay_phase = {"kind": "main", "workers": ingest_workers}
+        if group_workers:
+            replay_phase.update(rerank_routing="user-groups", group_workers=group_workers)
+        with file_lock:
+            replay_progress()
+        replay_items(prefix_pairs)
+        if streaming is not None and streaming.deferred:
+            replay_phase = {"kind": "answer-judge", "workers": 0}
+            replay_progress()
+            print("Add/Search 本轮已结束；开始处理已冻结的答案/判分队列……", flush=True)
+            streaming.start()
     finally:
-        client.close()
+        stop.set()
+        if main_executor is not None:
+            main_executor.shutdown(wait=True, cancel_futures=True)
+        if streaming is not None:
+            print("等待后台逐题作答/判分队列结束……", flush=True)
+            streaming.close(drain=sys.exc_info()[0] is None)
+        for client in clients:
+            client.close()
         try:
             write_summary(output)
         except (ValueError, OSError) as error:
@@ -384,6 +695,8 @@ def run(args: argparse.Namespace) -> int:
             notes=notes,
         )
         write_record(record, Path(args.reports_dir))
+    if streaming and args.stop_on_error:
+        streaming.raise_if_failed()
     return 0
 
 
@@ -405,6 +718,15 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--configs-dir", default="configs")
     execute.add_argument("--profile", default="local")
     execute.add_argument("--max-tokens", type=int, default=1024)
+    execute.add_argument("--ingest-workers", type=int, default=1, help="跨用户 Add/Search 并发数")
+    execute.add_argument("--rerank-local-workers", type=int, default=0)
+    execute.add_argument("--rerank-memory3-workers", type=int, default=0)
+    execute.add_argument("--serial-prefix", default=None, help="两臂共用的串行前缀边界 JSON")
+    execute.add_argument(
+        "--judge-workers", type=int, default=0,
+        help="正数启用 Search 落盘后逐题后台作答/判分；0 保留用户整批串行模式",
+    )
+    execute.add_argument("--judge-scheduling", choices=("overlap", "after-replay"), default="overlap")
     execute.add_argument("--memory-date", default="none", choices=DATE_MODES)
     execute.add_argument("--annotate-mark", default="paren", choices=MARKS)
     execute.add_argument("--offline", action="store_true")
@@ -446,12 +768,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"分类文件 → {output / 'searches'}\n固定清单 → {output / 'manifest.json'}")
             print(f"分类统计 → {Path(args.report_dir) / 'coverage.md'}")
         elif args.command == "run":
+            if ((args.rerank_local_workers or args.rerank_memory3_workers)
+                and (args.rerank_local_workers < 1 or args.rerank_memory3_workers < 1
+                     or args.rerank_local_workers + args.rerank_memory3_workers != args.ingest_workers)):
+                raise ValueError("两组并发必须均为正且相加等于 ingest-workers")
             if (
                 args.max_tokens < 1
+                or args.ingest_workers < 1
+                or args.judge_workers < 0
+                or (args.judge_scheduling == "after-replay" and args.judge_workers == 0)
                 or args.run_id in ("", ".", "..")
                 or Path(args.run_id).name != args.run_id
             ):
-                raise ValueError("max-tokens 必须为正，run-id 必须是单层目录名")
+                raise ValueError(
+                    "max-tokens/ingest-workers 必须为正，judge-workers 非负，"
+                    "run-id 必须是单层目录名"
+                )
             return run(args)
         elif args.command == "summarize":
             summary = write_summary(Path(args.run_dir))

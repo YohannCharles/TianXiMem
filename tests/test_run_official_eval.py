@@ -8,6 +8,25 @@ from pathlib import Path
 from tools.run_official_eval import _clear_technical_errors
 
 
+def test_run_forwards_streaming_workers_without_changing_answer_budget(tmp_path, monkeypatch):
+    from eval.experiments import official_dataset
+    from tools import run_official_eval as tool
+
+    monkeypatch.setattr(tool, "preflight", lambda args: ({"questions": [{}]}, tmp_path))
+    forwarded = []
+    monkeypatch.setattr(official_dataset, "main", lambda argv: forwarded.extend(argv) or 0)
+    assert tool.main([
+        "run", "--run-id", "streaming", "--service-revision", "v1", "--judge-workers", "4",
+        "--ingest-workers", "2", "--serial-prefix", "schedule.json",
+        "--judge-scheduling", "after-replay"
+    ]) == 0
+    assert forwarded[forwarded.index("--judge-workers") + 1] == "4"
+    assert forwarded[forwarded.index("--max-tokens") + 1] == "1024"
+    assert forwarded[forwarded.index("--ingest-workers") + 1] == "2"
+    assert forwarded[forwarded.index("--serial-prefix") + 1] == "schedule.json"
+    assert forwarded[forwarded.index("--judge-scheduling") + 1] == "after-replay"
+
+
 def _write(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

@@ -228,6 +228,9 @@ def execute_plan(
     top_k: int = 100,
     add_workers: int = 1,
     on_add_error: Callable[[AddEvent, Exception], None] | None = None,
+    on_search: Callable[[str, list[SearchHit]], None] | None = None,
+    stop_requested: Callable[[], bool] | None = None,
+    stop_at_event: int | None = None,
 ) -> dict[str, list[SearchHit]]:
     """每个成功 Search 先落盘才允许执行后续 Add，保证历史检索可续跑。
 
@@ -243,6 +246,14 @@ def execute_plan(
     并发会把"哪一批失败"的语义搅乱。官方采集重放本来就是串行。
     """
     plan.validate()
+    limit = len(plan.events) if stop_at_event is None else stop_at_event
+    if type(limit) is not int or not 0 <= limit <= len(plan.events):
+        raise ValueError("Invalid serial replay prefix event boundary")
+
+    def check_cancelled() -> None:
+        if stop_requested is not None and stop_requested():
+            raise InterruptedError("User replay cancelled at its checkpoint")
+
     if top_k != 100:
         raise ValueError("AML input contract requires top_k=100")
     if any(
@@ -271,8 +282,15 @@ def execute_plan(
             "AML checkpoint is missing historical Search snapshots; use a fresh namespace"
         )
     hits = {qid: [SearchHit(**h) for h in rows] for qid, rows in state["hits"].items()}
+    # 续跑也发布历史快照，供后台作答；绝不重新查询已经有后续 Add 的历史时点。
+    if on_search is not None:
+        for event in plan.events[:cursor]:
+            check_cancelled()
+            if isinstance(event, SearchEvent):
+                on_search(event.qid, hits[event.qid])
     index = cursor
-    while index < len(plan.events):
+    while index < limit:
+        check_cancelled()
         event = plan.events[index]
         if isinstance(event, SearchEvent):
             # Search：**一个一个来**、成功即落盘（历史检索可续跑的事实来源）。
@@ -290,6 +308,9 @@ def execute_plan(
             index += 1
             state["next_event"] = index
             _write_atomic(path, state)
+            # 只有持久化成功才发布，后台作答不会读到未冻结或未来的检索结果。
+            if on_search is not None:
+                on_search(event.qid, result)
             continue
         # Add 段：把「到下一个 Search 为止」的所有 Add **并发**发出去（≤ `add_workers`）。
         # ⚠ 安全：每个 Add 有自己的 `request_id`，位置是**请求的纯函数**（D28）⇒ 并发不发号、
@@ -297,7 +318,7 @@ def execute_plan(
         #   边界由「整段 Add 跑完才把游标推过它」保证；崩在中间 ⇒ 游标仍停在段首 ⇒ 重投整段
         #   （同 `request_id`/payload ⇒ 幂等，服务按 `applied_batches` 去重）。
         stop = index
-        while stop < len(plan.events) and isinstance(plan.events[stop], AddEvent):
+        while stop < limit and isinstance(plan.events[stop], AddEvent):
             stop += 1
         batch = plan.events[index:stop]
         if add_workers > 1 and len(batch) > 1 and on_add_error is None:
@@ -310,6 +331,7 @@ def execute_plan(
                 )
         else:
             for item in batch:
+                check_cancelled()
                 try:
                     send_event(client, plan.sample.user_id, item, top_k=top_k)
                 except Exception as error:
