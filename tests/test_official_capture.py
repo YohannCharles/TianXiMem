@@ -371,6 +371,183 @@ def test_dispatcher_answer_prompt_falls_back_for_unknown_family() -> None:
     assert "ctx" in prompt and "Where does she live?" in prompt
 
 
+def test_official_items_use_each_dataset_contract_and_category() -> None:
+    """每个数据集自己的答案契约/题类必须进入输入项——缺了就会退回通用 prompt。"""
+    from eval.harness.judge_items import build_official_items
+
+    rows = [
+        {
+            "seq": 1,
+            "dataset": "musique",
+            "judge_kind": "exact",
+            "query": "q1",
+            "question": "q1",
+            "gold_native": {"answerable": True, "answer": "x", "answer_aliases": []},
+        },
+        {
+            "seq": 2,
+            "dataset": "hybridqa",
+            "judge_kind": "exact",
+            "query": "q2",
+            "question": "q2",
+            "gold_native": {"answer-text": "y"},
+        },
+        {
+            "seq": 3,
+            "dataset": "feverous",
+            "judge_kind": "exact",
+            "query": "q3",
+            "question": "q3",
+            "gold_native": {"label": "SUPPORTS", "evidence": []},
+        },
+        {
+            "seq": 4,
+            "dataset": "medmemorybench",
+            "judge_kind": "exact",
+            "query": "q4",
+            "question": "q4",
+            "gold_native": {"query_type": "multi_hop_clinical_deduction"},
+        },
+    ]
+    items = build_official_items(rows, {})
+    contracts = {item["dataset"]: item.get("answer_contract") for item in items}
+    assert contracts["musique"] == "musique-local-qa-v1"
+    assert contracts["hybridqa"] == "hybridqa-table-passages-v1"
+    assert contracts["feverous"] == "feverous-claim-pages-evidence-v3"
+    assert items[3]["category"] == "multi_hop_clinical_deduction"
+
+
+def test_answer_prompt_uses_corpusqa_for_hybridqa() -> None:
+    """HybridQA 必须用官方作答 prompt，不能退回通用那一份。"""
+    from eval.harness.official_capture_pipeline import _answer_prompt
+
+    hybrid = _answer_prompt(
+        {
+            "dataset": "hybridqa",
+            "question": "Q",
+            "retrieved_context": "CTX",
+            "answer_contract": "hybridqa-table-passages-v1",
+        }
+    )
+    assert "Return only the short answer" in hybrid
+    assert "CTX" in hybrid
+
+
+def test_feverous_capture_prompt_asks_only_for_a_label() -> None:
+    """采集路径只评标签 ⇒ prompt 只要标签，不再要证据 ID（判分也不用它们）。"""
+    from eval.harness.official_capture_pipeline import _answer_prompt
+
+    prompt = _answer_prompt(
+        {
+            "dataset": "feverous",
+            "question": (
+                "Verify the following claim using only the supplied corpus. "
+                "Return one label: SUPPORTS, REFUTES, or NOT ENOUGH INFO. "
+                "Also return the native evidence IDs for a sufficient evidence set.\n\n"
+                "Claim: The radio station KBQL is in Las Vegas, New Mexico."
+            ),
+            "retrieved_context": "CTX",
+            "answer_contract": "feverous-claim-pages-evidence-v3",
+        }
+    )
+    assert "SUPPORTS, REFUTES, or NOT ENOUGH INFO" in prompt
+    assert "Claim: The radio station KBQL is in Las Vegas, New Mexico." in prompt
+    assert "CTX" in prompt
+    assert "native evidence IDs" not in prompt
+    assert "Cannot determine from the memories" not in prompt
+
+
+def test_answer_prompt_uses_native_musique_contract() -> None:
+    """采集行没有 category ⇒ 一律原生 MuSiQue-Full（含拒答出口），不推断链式档。"""
+    from eval.harness.official_capture_pipeline import _answer_prompt
+
+    prompt = _answer_prompt(
+        {
+            "dataset": "musique",
+            "question": "Q",
+            "retrieved_context": "CTX",
+            "answer_contract": "musique-local-qa-v1",
+        }
+    )
+    assert "INSUFFICIENT_EVIDENCE" in prompt
+    assert "Cannot determine from the memories" not in prompt
+
+
+def test_dispatcher_routes_hybridqa_to_official_em(monkeypatch) -> None:
+    """HybridQA 的正式分走 `corpusqa_pipeline.score_answer`（EM + F1 指标）。"""
+    from eval.harness import corpusqa_pipeline
+    from eval.harness.official_capture_pipeline import _judge
+
+    seen: dict = {}
+
+    def fake_score(item, generated):
+        seen["item"] = item
+        return {
+            "id": item["id"],
+            "is_correct": True,
+            "label": "CORRECT",
+            "judge_response": "upstream answer EM=1, token F1=1",
+            "metrics": {"exact_match": 1.0, "f1": 1.0},
+        }
+
+    monkeypatch.setattr(corpusqa_pipeline, "score_answer", fake_score)
+    row = _judge(
+        {
+            "id": "7",
+            "dataset": "hybridqa",
+            "judge_kind": "exact",
+            "gold_answer": {"answer-text": "1991-92"},
+        },
+        "1991-92",
+        max_tokens=8,
+    )
+    assert row["is_correct"] is True
+    assert row["metrics"] == {"exact_match": 1.0, "f1": 1.0}
+    assert seen["item"]["id"] == "7"
+
+
+def test_dispatcher_routes_musique_to_its_own_judge(monkeypatch) -> None:
+    """MuSiQue 走 `extra_pipeline.judge_one` 的规则判分，不借 TempReason 别名判分。"""
+    from eval.harness import extra_pipeline as extra
+    from eval.harness.official_capture_pipeline import _judge
+
+    seen: dict = {}
+
+    def fake_judge(dataset, qid, item, generated, **_kwargs):
+        seen["args"] = (dataset, qid, generated)
+        return {"id": qid, "is_correct": True, "label": "CORRECT", "judge_response": "rule"}
+
+    monkeypatch.setattr(extra, "judge_one", fake_judge)
+    row = _judge(
+        {
+            "id": "9",
+            "dataset": "musique",
+            "judge_kind": "exact",
+            "gold_answer": {"answerable": True, "answer": "x"},
+        },
+        "x",
+        max_tokens=8,
+    )
+    assert row["is_correct"] is True
+    assert seen["args"] == ("musique", "9", "x")
+
+
+def test_generic_exact_alias_is_diagnostic_only(monkeypatch) -> None:
+    """没有专属分支的家族**不能**用 TempReason 别名包含进正式分数。"""
+    from eval.harness import extra_pipeline as extra
+    from eval.harness.official_capture_pipeline import _judge
+
+    monkeypatch.setattr(extra, "judge_tempreason", lambda generated, gold: (True, "命中别名"))
+    row = _judge(
+        {"id": "1", "dataset": "some-new-set", "judge_kind": "exact", "gold_answers": ["x"]},
+        "x",
+        max_tokens=8,
+    )
+    assert row["label"] == "JUDGE_ERROR"
+    assert row["is_correct"] is False
+    assert row["diagnostics"]["alias_contains"] is True
+
+
 def test_personamem_capture_uses_official_generative_prompt() -> None:
     """采集里的 PersonaMem 是开放题，必须复用官方 generative 消息构造。"""
     from eval.harness import extra_pipeline as extra

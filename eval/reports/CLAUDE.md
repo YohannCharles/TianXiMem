@@ -85,6 +85,9 @@ HybridQA / FEVEROUS 的逐题指标也汇总到 `scores.dataset_score`，
 分别记录上游 EM/F1、标签准确率与严格证据组分，以及证据宏平均 precision/recall
 的调和 F1。其语料候选范围和指标定义见 [接入报告](datasets-20261006.md)。
 `overall` 分别对应二值 EM 或严格证据组正确率；候选池范围必须随结果一起引用。
+**官方采集的 `summary.json` / `summary.md` 同样分开汇总**：HybridQA 的
+`exact_match` 与 `f1` 各有一列（`sum / n / mean`），`is_correct` 只取 EM；
+F1 不设过线阈值，不能自行转成正确/错误。
 
 **为什么需要它**：CL-Bench 的官方分是**全有全无**的 LLM rubric 判分
 （[`../../dataset/.upstream/aml/clb_pipeline.py`](../../dataset/.upstream/aml/clb_pipeline.py) 的判分 prompt 原文：

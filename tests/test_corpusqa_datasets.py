@@ -456,6 +456,16 @@ def test_upstream_hybridqa_token_f1_is_separate_from_exact_match(
     assert exact["is_correct"] and exact["metrics"]["f1"] == 1
 
 
+def test_upstream_hybridqa_accepts_capture_answer_text_field(
+    hybrid_root: Path, scoring_sources
+) -> None:
+    scoring_sources(hybrid_root)
+    item = build_input_items(hybridqa.load_hybridqa(hybrid_root, limit=1)[0], {})[0]
+    item["gold_answer"] = {"answer-text": "Ada"}
+    score = pipeline.score_answer(item, "ada")
+    assert score["is_correct"] and score["metrics"]["exact_match"] == 1
+
+
 def test_feverous_f1_aggregates_macro_precision_recall_and_handles_zero() -> None:
     rows = [
         JudgeResult(

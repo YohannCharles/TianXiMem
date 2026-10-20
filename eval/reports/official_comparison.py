@@ -54,6 +54,29 @@ def coverage_report(manifest: dict, output: Path) -> None:
     write_json(output / "coverage.json", {"counts": counts, "totals": totals})
 
 
+def _metric_totals(rows: list[dict]) -> dict[str, dict[str, float | int | None]]:
+    """逐题 `metrics` 的合计——**exact_match 与 f1 分别汇总**，不互相替代。
+
+    HybridQA 的 `is_correct` 用官方归一化 EM；token-F1 只是指标（上游没有过线阈值，
+    不能自行设阈值把它转成正确/错误）。两个键都可能缺席（其它数据集没有逐题 metrics），
+    缺席时 `n=0`、`mean=None`，不写 0.0。
+    """
+    totals: dict[str, dict[str, float | int | None]] = {}
+    for key in ("exact_match", "f1"):
+        values = [
+            float(row["metrics"][key])
+            for row in rows
+            if isinstance(row.get("metrics"), dict)
+            and type(row["metrics"].get(key)) in (int, float)
+        ]
+        totals[key] = {
+            "sum": sum(values),
+            "n": len(values),
+            "mean": (sum(values) / len(values)) if values else None,
+        }
+    return totals
+
+
 def summarize_run(run_dir: Path) -> dict:
     runtime = json.loads((run_dir / "run-manifest.json").read_text(encoding="utf-8"))
     manifest = json.loads((run_dir / "selection-manifest.json").read_text(encoding="utf-8"))
@@ -92,6 +115,7 @@ def summarize_run(run_dir: Path) -> dict:
             "correct": correct,
             "errors": dict(errors),
             "accuracy": correct / len(ids) if ids and len(found) == len(ids) else None,
+            "metrics": _metric_totals(found),
         }
     expected = len(wanted)
     completed = len(labels)
@@ -112,6 +136,7 @@ def summarize_run(run_dir: Path) -> dict:
         "correct": correct,
         "errors": dict(errors),
         "accuracy": correct / expected if expected and completed == expected else None,
+        "metrics": _metric_totals(list(labels.values())),
         "datasets": groups,
     }
 
@@ -122,6 +147,12 @@ def _cell(row: dict) -> str:
     if row["accuracy"] is None:
         return f"{row['correct']}/{row['expected']}（已判 {row['completed']}，待完成）"
     return f"{row['correct']}/{row['expected']}（{row['accuracy'] * 100:.2f}%）"
+
+
+def _metric_cell(row: dict) -> str:
+    if not row["n"]:
+        return "—"
+    return f"{row['sum']:.4f}/{row['n']}（均值 {row['mean']:.4f}）"
 
 
 def write_summary(run_dir: Path) -> dict:
@@ -142,6 +173,27 @@ def write_summary(run_dir: Path) -> dict:
     lines.append(
         f"| 合计 | {_cell(summary)} | {summary['missing']} | {sum(summary['errors'].values())} |"
     )
+    metric_rows = [
+        (dataset, row["metrics"])
+        for dataset, row in sorted(summary["datasets"].items())
+        if any(entry["n"] for entry in row["metrics"].values())
+    ]
+    if metric_rows:
+        lines += [
+            "",
+            "| 数据集 | exact_match 合计 | f1 合计 |",
+            "|---|---:|---:|",
+        ]
+        for dataset, metrics in metric_rows:
+            lines.append(
+                f"| {DISPLAY_NAMES.get(dataset, dataset)} | "
+                f"{_metric_cell(metrics['exact_match'])} | {_metric_cell(metrics['f1'])} |"
+            )
+        lines.append(
+            f"| 合计 | {_metric_cell(summary['metrics']['exact_match'])} | "
+            f"{_metric_cell(summary['metrics']['f1'])} |"
+        )
+        lines += ["", "HybridQA 的 `is_correct` 用官方归一化 EM；token-F1 单列汇总，不设过线阈值。"]
     lines += [
         "",
         f"完成 {summary['completed']}/{summary['expected']}；other 无金标，不参与准确率。",

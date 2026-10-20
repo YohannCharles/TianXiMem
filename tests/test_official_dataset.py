@@ -477,6 +477,22 @@ def test_full_runner_records_user_failure_and_continues(capture: Path, monkeypat
     assert summary["accuracy"] is None
 
 
+def test_metric_totals_keep_exact_and_f1_separate() -> None:
+    """EM 决定 is_correct，F1 只作指标——两者分别汇总，不能互相替代。"""
+    from eval.reports.official_comparison import _metric_totals
+
+    totals = _metric_totals(
+        [
+            {"metrics": {"exact_match": 1.0, "f1": 0.5}},
+            {"metrics": {"exact_match": 0.0, "f1": 0.25}},
+        ]
+    )
+    assert totals["exact_match"] == {"sum": 1.0, "n": 2, "mean": 0.5}
+    assert totals["f1"] == {"sum": 0.75, "n": 2, "mean": 0.375}
+    # 缺席时不写 0.0（那会被读成"全错"）。
+    assert _metric_totals([{"metrics": {}}])["f1"] == {"sum": 0, "n": 0, "mean": None}
+
+
 def test_add_4xx_is_fatal_not_skipped(capture: Path, monkeypatch) -> None:
     """4xx（尤其 409）是系统性我方 bug——**不能**记进 skipped 后继续跑完。"""
     prepare_groups(capture, capture / "grouped")

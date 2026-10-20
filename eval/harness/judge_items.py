@@ -22,8 +22,11 @@ from typing import Final
 from eval.datasets import Sample
 from eval.datasets.beam import PIPELINE as BEAM_PIPELINE
 from eval.datasets.clbench import PIPELINE as CLB_PIPELINE
+from eval.datasets.feverous import ANSWER_CONTRACT as FEVEROUS_ANSWER_CONTRACT
+from eval.datasets.hybridqa import ANSWER_CONTRACT as HYBRIDQA_ANSWER_CONTRACT
 from eval.datasets.locomo import PIPELINE as LOCOMO_PIPELINE
 from eval.datasets.longmemeval import PIPELINE as LME_PIPELINE
+from eval.datasets.musique import ANSWER_CONTRACT as MUSIQUE_ANSWER_CONTRACT
 
 from .annotate import annotate
 from .driver import SearchHit
@@ -395,6 +398,17 @@ def _warn_truncated(qid: str) -> None:
     print(f"  ⚠ {qid}：注入被截到平台前缀（{PLATFORM_TOKEN_PREFIX:,} token）", flush=True)
 
 
+#: 官方采集行 → 该数据集自己的答案契约（缺省 = 走通用 prompt）。
+#: 判分侧按 `item["dataset"]` 分派；答案侧靠这个字段选中**同一份实现**。
+#: ⚠ MuSiQue 采集行没有 `category` ⇒ 一律按原生 MuSiQue-Full（`ANSWER_CONTRACT`，
+#: 含拒答出口）处理，不推断成链式档。
+_OFFICIAL_ANSWER_CONTRACTS = {
+    "musique": MUSIQUE_ANSWER_CONTRACT,
+    "hybridqa": HYBRIDQA_ANSWER_CONTRACT,
+    "feverous": FEVEROUS_ANSWER_CONTRACT,
+}
+
+
 def build_official_items(
     questions: list[dict],
     hits_by_qid: dict[str, list[SearchHit]],
@@ -423,26 +437,31 @@ def build_official_items(
         if cut:
             _warn_truncated(qid)
         gold = row.get("gold_native")
-        items.append(
-            {
-                "id": qid,
-                "seq": row["seq"],
-                "dataset": row["dataset"],
-                "judge_kind": row["judge_kind"],
-                "task": row.get("task"),
-                # **原样**是采集里那一串（含选项与尾指令）——线上检索用的就是它，
-                # 改动会让检索侧的输入与线上不一致。
-                "question": row.get("query"),
-                "question_text": row.get("question"),
-                "options": row.get("options") or [],
-                "instruction": row.get("instruction"),
-                "gold_answer": gold if gold is not None else (row.get("gold_answers") or []),
-                "gold_answers": row.get("gold_answers") or [],
-                "gold_rubric": row.get("gold_rubric"),
-                "gold_judging": row.get("gold_judging") or "",
-                "retrieved_context": text,
-            }
-        )
+        item = {
+            "id": qid,
+            "seq": row["seq"],
+            "dataset": row["dataset"],
+            "judge_kind": row["judge_kind"],
+            "task": row.get("task"),
+            # **原样**是采集里那一串（含选项与尾指令）——线上检索用的就是它，
+            # 改动会让检索侧的输入与线上不一致。
+            "question": row.get("query"),
+            "question_text": row.get("question"),
+            "options": row.get("options") or [],
+            "instruction": row.get("instruction"),
+            "gold_answer": gold if gold is not None else (row.get("gold_answers") or []),
+            "gold_answers": row.get("gold_answers") or [],
+            "gold_rubric": row.get("gold_rubric"),
+            "gold_judging": row.get("gold_judging") or "",
+            "retrieved_context": text,
+        }
+        contract = _OFFICIAL_ANSWER_CONTRACTS.get(row["dataset"])
+        if contract:
+            item["answer_contract"] = contract
+        if row["dataset"] == "medmemorybench" and isinstance(gold, dict) and gold.get("query_type"):
+            # 该数据集自己的题类字段；临床多跳的专用答案 prompt 靠它分派。
+            item["category"] = str(gold["query_type"])
+        items.append(item)
     return items
 
 

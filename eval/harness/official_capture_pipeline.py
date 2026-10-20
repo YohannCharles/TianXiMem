@@ -5,9 +5,10 @@
 
 其余每个数据集都是"一个数据集一套 prompt + 一套判分"，所以 harness 的
 `run_judge` 按 `dataset` 选一份 pipeline 就够了。官方采集这份**不是**：
-一个 run 里的题**混着 8 个数据集**（locomo / scriptmem / personamem / beam /
-mquake / corporatebench / medmemorybench / memtrapbench），每题该用哪套 prompt
-由 **题自己的归属**决定（[`build_official_items`](./judge.py) 把它放在 `item["dataset"]`）。
+一个 run 里的题**混着十几个数据集**（locomo / scriptmem / personamem / beam /
+clbench / mquake / corporatebench / medmemorybench / memtrapbench / docpp /
+musique / hybridqa / feverous / halumem），每题该用哪套 prompt 由**题自己的归属**决定
+（[`build_official_items`](./judge_items.py) 把它放在 `item["dataset"]`）。
 
 ⇒ 本文件是**分派层**，不是第二份实现：
 
@@ -18,7 +19,14 @@ mquake / corporatebench / medmemorybench / memtrapbench），每题该用哪套 
 | `beam` | `pipeline_beam.py#render_answer_prompt` | 同文件的 rubric 批量裁判（三点制均分） |
 | `clbench` | `clb_pipeline.py#build_answer_prompt` | 同文件 rubric 裁判（全有全无 + 比例分） |
 | `personamem-v2` | `pipeline_v2_personamem.py#official_generative_messages` | **官方 `evaluate_narrow`**（`JUDGE_PROMPT_NARROW_POSITIVE` / `_NEGATIVE`，见下） |
+| `hybridqa` | `corpusqa_pipeline.py#render_answer_prompt` | 同文件 `score_answer`（**官方归一化 EM + token-F1**，`is_correct = EM`） |
+| `feverous` | 本文件 `_FEVEROUS_LABEL_PROMPT`（**只要标签**） | 本文件 `_feverous_judge`（**label-only**，理由见该函数） |
+| `musique` | `extra_pipeline.py#render_answer_prompt`（原生 Full 契约） | `extra_pipeline.py#judge_one`（规则：归一化精确匹配） |
 | 上表之外的 6 个 | `extra_pipeline.py#render_answer_prompt` | `extra_pipeline.py#judge_one` |
+
+**每个数据集用自己的 prompt 与判分**：`judge_kind` 只是套件里的语义声明，
+**不再是**"没有专属分支时借别的家族判分"的兜底开关。`supports()` 与 `_judge()`
+共用 [`_JUDGE_KINDS`](#) 一张表——预检说"能判"的组合，运行时一定走对应分支。
 
 **prompt 与判分逻辑一行都不重写**：归档那几份用 `sys.path` + `import` 直接调
 （文件名带连字符的用 `importlib`），`official-extra` 那六个走 `extra_pipeline` 的公开入口。
@@ -79,25 +87,42 @@ _EXTRA_FAMILIES = frozenset(
 _LOCAL_JUDGE_FAMILIES = frozenset({"personamem-v2", "halumem", "feverous"})
 
 
+#: 家族 → **真正接线的**判分语义。`supports()` 只认这张表。
+#:
+#: ⚠ 这是一张**分派镜像**，不是"允许的取值域"：`_judge()` 里没有对应分支的家族
+#: 绝不能出现在这里。历史实现按 `judge_kind ∈ {exact, llm}` 兜底，于是
+#: `musique` / `hybridqa` 在预检里"能判"、运行时却落到 `judge_tempreason` 的别名包含
+#: （2026-10-20 审计）。新增家族时**两边一起改**，测试逐组合钉住。
+_JUDGE_KINDS: dict[str, frozenset[str]] = {
+    "locomo-refined": frozenset({"llm"}),
+    "scriptmem": frozenset({"letters"}),
+    "beam": frozenset({"rubric"}),
+    "clbench": frozenset({"rubric"}),
+    "personamem-v2": frozenset({"narrow"}),
+    "halumem": frozenset({"llm"}),
+    "feverous": frozenset({"exact"}),
+    "hybridqa": frozenset({"exact"}),
+    "musique": frozenset({"exact"}),
+    "mquake-remastered": frozenset({"exact"}),
+    "corporatebench": frozenset({"exact"}),
+    "medmemorybench": frozenset({"exact"}),
+    "tempreason": frozenset({"exact"}),
+    "docpp": frozenset({"rubric"}),
+    "memtrapbench": frozenset({"rubric"}),
+}
+
+
 def supports(dataset: str | None, judge_kind: str | None) -> bool:
     """这个家族 + 判分语义**会不会真的被判**（而不是落到 `JUDGE_ERROR`）。
 
     它是 `_judge()` 分派表的**纯函数镜像**——给跑批前的预检用，避免"跑了 8,783 题、
-    最后一天才发现某族全是 `JUDGE_ERROR`"。实现必须与 `_judge()` 的分支保持一致：
-
-    * 显式分支：归档五份 + `official-extra` 六份 + 本地三份；
-    * 其余家族走 `_generic_judge`，只有 `exact` / `llm` 两种 `judge_kind` 有实现。
+    最后一天才发现某族全是 `JUDGE_ERROR`"。实现直接查 `_JUDGE_KINDS`，
+    与 `_judge()` 的显式分支一一对应（**没有**与家族无关的兜底）。
 
     ⚠ 新增一个家族时**两边都要改**；`tests/test_official_capture.py` 里有一个
     逐家族对照用例（拿套件里真实出现过的组合逐个断言）。
     """
-    family = str(dataset or "")
-    return (
-        family in _ARCHIVED
-        or family in _EXTRA_FAMILIES
-        or family in _LOCAL_JUDGE_FAMILIES
-        or (str(judge_kind or "") in {"exact", "llm"})
-    )
+    return str(judge_kind or "") in _JUDGE_KINDS.get(str(dataset or ""), frozenset())
 
 
 #: FEVEROUS 的三分类词表。**不能用别名包含判**——`SUPPORTS` 会命中任何含 "supports"
@@ -115,8 +140,9 @@ def _feverous_judge(item: dict, generated: str) -> dict:
     口径：金标是 dev challenge 那一行的 `label`；判分取模型输出里**最先出现**的那个
     标签词（顺序敏感：先查 NOT ENOUGH INFO，再 REFUTES，最后 SUPPORTS——
     否则 "does not support" 会被读成 SUPPORTS）。
-    ⚠ **证据 id 的 F1 不在这里算**（上游有 `feverous_scorer`）——那要模型的证据引用，
-    而我们的答案 prompt 不要求它输出证据 id。**这条写在这里，免得被当成"全口径"**。
+    ⚠ **采集重放仍是 label-only**：作答 prompt（`_FEVEROUS_LABEL_PROMPT`）只要一个标签。
+    本地 `corpusqa_pipeline` 那条路才要求证据 id 并评严格证据组——采集正文里没有可解析的
+    原生元素 id（实测 0/53027 个方括号片段是合法 id），那里评证据必然全 0。
     """
     extra = _extra()
     qid = str(item["id"])
@@ -277,6 +303,32 @@ def _archived(family: str):
     return importlib.import_module(module_name)
 
 
+#: FEVEROUS 采集重放的作答 prompt：**只要标签**。
+#:
+#: 本地 `corpusqa_pipeline` 那份要求 label + 原生证据 ID（那是 FEVEROUS 自己的评分标准），
+#: 但采集正文里没有可解析的原生元素 ID（实测 0/53027 个方括号片段合法），
+#: `_feverous_judge` 也只看标签 ⇒ 在采集路径上要 ID 是**无效复杂度**（模型多写一串没人评）。
+_FEVEROUS_LABEL_PROMPT = """\
+Verify the following claim using only the retrieved evidence below.
+Return exactly one label and nothing else: SUPPORTS, REFUTES, or NOT ENOUGH INFO.
+
+Retrieved evidence:
+{memories}
+
+Claim: {claim}
+
+Label:"""
+
+
+def _feverous_claim(item: dict) -> str:
+    """取采集 query 里的 claim 本体——**去掉前面那段"返回证据 ID"的指令**。"""
+    text = str(item.get("question") or "")
+    marker = "Claim:"
+    if marker in text:
+        return text.split(marker, 1)[1].strip()
+    return text.strip()
+
+
 def _answer_prompt(item: dict) -> str:
     """按家族给答案 prompt——**每一支都指回它的实现**（本文件不复制任何 prompt 正文）。"""
     family = item.get("dataset")
@@ -294,6 +346,18 @@ def _answer_prompt(item: dict) -> str:
                 "speaker_1_memories": item.get("retrieved_context") or "",
                 "speaker_2_memories": "",
             }
+        )
+    if family == "hybridqa":
+        # HybridQA 的作答 prompt 来自 `corpusqa_pipeline.py`（"只回短答案"），
+        # **不能**退回通用 ANSWER_PROMPT（那一份允许 `Cannot determine from the memories.`）。
+        from eval.harness import corpusqa_pipeline
+
+        return corpusqa_pipeline.render_answer_prompt(item)
+    if family == "feverous":
+        # 采集路径只评标签 ⇒ 只要求标签；本地 `corpusqa_pipeline` 那条路仍要证据 ID。
+        return _FEVEROUS_LABEL_PROMPT.format(
+            memories=item.get("retrieved_context") or "(no memories)",
+            claim=_feverous_claim(item),
         )
     if family == "clbench":
         # ⚠ **不能直接把我们的 item 丢给官方那份 `build_answer_prompt`**（2026-10-06 实测）：
@@ -410,40 +474,30 @@ def _narrow_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
     }
 
 
-def _parse_label(raw: str) -> str | None:
-    """从裁判响应里取 `CORRECT` / `WRONG`（JSON 里的 `label`，取不到就整段扫）。"""
-    text = raw or ""
-    decoder = json.JSONDecoder()
-    for start, char in enumerate(text):
-        if char != "{":
-            continue
-        try:
-            payload, _end = decoder.raw_decode(text[start:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            label = str(payload.get("label", "")).upper()
-            if label in {"CORRECT", "WRONG"}:
-                return label
-    upper = text.upper()
-    if "CORRECT" in upper and "WRONG" not in upper:
-        return "CORRECT"
-    if "WRONG" in upper and "CORRECT" not in upper:
-        return "WRONG"
-    return None
-
-
 def _judge(item: dict, generated: str, *, max_tokens: int) -> dict:
     """一题的判分——**按家族分派**，每个分支的口径出处写在下面。"""
     family = item.get("dataset")
     qid = str(item["id"])
     extra = _extra()
+    if family == "musique":
+        # 原生 MuSiQue-Full（采集行没有 category，不推断链式档）：规则判分，
+        # 可答题归一化精确匹配别名表，不可答题严格匹配拒答标记。
+        return extra.judge_one(
+            "musique", qid, item, generated, judge=extra.config("judge"), max_tokens=max_tokens
+        )
+    if family == "hybridqa":
+        from eval.harness import corpusqa_pipeline
+
+        # 官方归一化 EM + token-F1；is_correct = EM，F1 只作指标（上游没有过线阈值）。
+        return corpusqa_pipeline.score_answer(item, generated)
     if family in _EXTRA_FAMILIES or family in _LOCAL_JUDGE_FAMILIES:
         if family == "personamem-v2":
             return _narrow_judge(item, generated, max_tokens=max_tokens)
         if family == "halumem":
             return _halumem_judge(item, generated, max_tokens=max_tokens)
         if family == "feverous":
+            # 采集正文里没有可解析的原生元素 ID（实测 0/53027 个方括号片段是合法 ID），
+            # 严格证据组判分在这条路上必然全 0 ⇒ 保留已声明的 label-only 口径。
             return _feverous_judge(item, generated)
         return extra.judge_one(
             family, qid, item, generated, judge=extra.config("judge"), max_tokens=max_tokens
@@ -620,81 +674,30 @@ def _clbench_judge(item: dict, generated: str) -> dict:
     }
 
 
-#: `judge_kind == "llm"` 的**通用**裁判：拿参考回答当标准，判"意思对不对"。
-#: ⚠ 与 PersonaMem 的官方 narrow 裁判**不是一回事**——后者要 `preference` 元数据。
-#: 这一份给「补一族金标、套件里写 `judge_kind: llm`」那条路径用。
-_REFERENCE_LLM_PROMPT = """\
-You are grading whether a model's answer to a user's question is correct.
-
-Grade CORRECT if the answer conveys the same key information as the reference answer \
-(it does not need the same wording). Grade WRONG if it misses the key information, \
-contradicts the reference, or refuses while the reference contains the answer.
-
-Question: {question}
-
-Reference answer: {gold}
-
-Model answer: {generated}
-
-Reply with a single JSON object: {{"label": "CORRECT" or "WRONG", "why": "<one short sentence>"}}"""
-
-
-def _reference_llm_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
-    """`judge_kind == "llm"` 的通用实现（见 `_REFERENCE_LLM_PROMPT`）。"""
-    extra = _extra()
-    gold = [str(g) for g in (item.get("gold_answers") or [])]
-    qid = str(item["id"])
-    if not gold:
-        return extra.verdict(qid, False, "无金标")
-    if not (generated or "").strip():
-        return extra.verdict(qid, False, "模型输出为空")
-    prompt = _REFERENCE_LLM_PROMPT.format(
-        question=item["question"], gold=gold[0], generated=generated
-    )
-    raw = extra.chat(
-        *extra.config("judge"), prompt, max_tokens=max_tokens, timeout=extra.JUDGE_TIMEOUT
-    )
-    label = _parse_label(raw)
-    if label is None:
-        return {
-            "id": qid,
-            "is_correct": False,
-            "label": "JUDGE_ERROR",
-            "judge_response": f"裁判响应里没有 CORRECT/WRONG｜{raw[:2000]}",
-        }
-    return {"id": qid, "is_correct": label == "CORRECT", "label": label, "judge_response": raw}
-
-
 def _generic_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
-    """**没有专属判分的家族**——按套件里那一个语义字段 `judge_kind` 二选一。
+    """**没有专属判分的家族**——响亮报 `JUDGE_ERROR`，绝不借别的家族的判分顶替。
 
-    这样后面再补一族金标（HaluMem / HybridQA / MuSiQue / FEVEROUS …）时，
-    **接线只需要在套件里写对 `judge_kind`**，不需要改本文件：
+    历史实现按 `judge_kind` 兜底：`exact` 直接借 `judge_tempreason` 的别名包含、
+    `llm` 借一份通用参考回答裁判。前者是**接线错误**——MuSiQue / HybridQA 因此
+    被 TempReason 口径静默判分（2026-10-20 审计）。⇒ 现在：
 
-    | `judge_kind` | 怎么判 |
-    | --- | --- |
-    | `exact` | 别名包含（`extra_pipeline.judge_tempreason` 的那套归一化）——短答案串 |
-    | `llm` | 拿参考回答当标准的 LLM 裁判（`_reference_llm_judge`）——整段参考回答 |
-    | 其它 | `JUDGE_ERROR`（**说出来**，别静默判 0） |
-
-    ⚠ PersonaMem 的 `narrow` **不走这里**——它在 `_judge()` 里有显式分支
-    （要 `preference` 元数据，通用 LLM 裁判没有那个输入）。
+    * 没有显式分支 ⇒ `JUDGE_ERROR`（`supports()` 也会在预检阶段判 False）；
+    * `exact` 的别名包含只写进 `diagnostics`，**不参与 `is_correct`**。
     """
-    extra = _extra()
     kind = str(item.get("judge_kind") or "")
+    diagnostics: dict[str, object] = {}
     if kind == "exact":
-        ok, why = extra.judge_tempreason(generated, item.get("gold_answers") or [])
-        return extra.verdict(str(item["id"]), ok, why)
-    if kind == "llm":
-        return _reference_llm_judge(item, generated, max_tokens=max_tokens)
+        ok, why = _extra().judge_tempreason(generated, item.get("gold_answers") or [])
+        diagnostics = {"alias_contains": ok, "alias_reason": why}
     return {
         "id": str(item["id"]),
         "is_correct": False,
         "label": "JUDGE_ERROR",
         "judge_response": (
-            f"{item.get('dataset')!r} / judge_kind={kind!r} 没有对应的判分"
-            "（见 _generic_judge 的表）"
+            f"{item.get('dataset')!r} / judge_kind={kind!r} 没有接线的专属判分；"
+            "别名包含只作诊断，不进入正式分数"
         ),
+        "diagnostics": diagnostics,
     }
 
 

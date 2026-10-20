@@ -271,9 +271,11 @@ def _judge_key(dataset: str) -> str:
         # HaluMem：金标是短答串，但**上游只发布一份 LLM 裁判**（Correct/Hallucination/
         # Omission）——`llm` 那一档就是它（见 `official_capture_pipeline._halumem_judge`）。
         "halumem": "llm",
-        # 三个 `Corpus:` 族（见 `tools/recover_corpusqa.py`）：HybridQA / MuSiQue 的答案
-        # 是短串（别名包含即对）；**FEVEROUS 是三分类的 claim 标签**，判分在
-        # `official_capture_pipeline._feverous_judge` 里单独写（别名包含会假阳性）。
+        # 三个 `Corpus:` 族（见 `tools/recover_corpusqa.py`）：判分语义都是"精确"，
+        # 但**实现各不相同**、都在 `official_capture_pipeline._judge()` 里有显式分支：
+        #   * HybridQA —— 官方归一化 EM（`is_correct`）+ token-F1（指标）；**不是**别名包含；
+        #   * MuSiQue  —— 原生 Full 规则判分（归一化精确匹配；拒答走严格匹配）；
+        #   * FEVEROUS —— 三分类 label（`_feverous_judge`），别名包含会假阳性。
         "hybridqa": "exact",
         "musique": "exact",
         "feverous": "exact",

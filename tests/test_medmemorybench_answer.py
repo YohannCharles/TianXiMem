@@ -154,7 +154,6 @@ def test_clinical_evaluate_uses_recorded_answer_budget_not_the_judge_budget(
     "category",
     [
         "entity_exact_match",
-        "multiple_choice",
         "inference_generation",
         "state_update",
         "temporal_localization",
@@ -166,6 +165,18 @@ def test_other_medical_qa_formats_remain_unchanged(category: str) -> None:
         memories=item["retrieved_context"], question=item["question"]
     )
     assert ep.render_answer_prompt(item) == expected
+
+
+def test_multiple_choice_answer_prompt_asks_only_for_option_letters() -> None:
+    """judge 只解析选项字母 ⇒ MCQ 的 prompt 也只要字母（不再用通用那一份）。"""
+    item = {**_item(), "category": "multiple_choice"}
+    prompt = ep.render_answer_prompt(item)
+    assert "Return only the letters of all selected options" in prompt
+    assert "Do not include explanations" in prompt
+    assert item["retrieved_context"] in prompt and item["question"] in prompt
+    assert prompt != ep.ANSWER_PROMPT.format(
+        memories=item["retrieved_context"], question=item["question"]
+    )
 
 
 def test_captured_medical_query_does_not_infer_answer_format_from_gold() -> None:
