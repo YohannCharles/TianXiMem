@@ -291,3 +291,14 @@ Question: {question}
 
 Answer:"""
 )
+
+#: `multiple_choice` 的作答格式：judge 只解析选项字母，prompt 就必须只要字母。
+MMB_MCQ_ANSWER_PROMPT = (
+    "You are an assistant answering from the patient's retrieved visit history.\n"
+    "Rules:\n"
+    "1. Use only information in the memories. Do not use outside knowledge.\n"
+    "2. Return only the letters of all selected options (for example: A, or A,C).\n"
+    "   Do not include explanations or the option text.\n"
+    "3. If the history provides no answer, reply exactly: Cannot determine from the memories.\n\n"
+    "Memories:\n{memories}\n\nQuestion: {question}\n\nAnswer:"
+)

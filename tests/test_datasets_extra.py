@@ -1019,6 +1019,7 @@ def test_mmb_mcd_judge_gets_its_own_token_budget(monkeypatch: pytest.MonkeyPatch
         return '{"is_correct": true, "reason": "ok"}'
 
     monkeypatch.setattr(ep, "_call_judge", fake_call)
+    monkeypatch.setattr(ep, "build_mmb_judge_prompt", lambda *args: "JUDGE-PROMPT")
     judge = ("base", "key", "model")
     item = {"question": "?", "gold_answer": {"query_type": "multi_hop_clinical_deduction"}}
     ep._judge_medmemorybench("q1", item, "模型答案", judge=judge, max_tokens=1024)

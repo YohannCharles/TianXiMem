@@ -95,6 +95,7 @@ from eval.harness.extra_medmemorybench import (  # noqa: E402, F401
     MMB_MCD_ANSWER_CONTRACT,
     MMB_MCD_ANSWER_PROMPT,
     MMB_MCD_MAX_TOKENS,
+    MMB_MCQ_ANSWER_PROMPT,
     MMB_PROMPTS,
     _mmb_mcd_params,
     _mmb_metadata_info,
@@ -178,6 +179,9 @@ def render_answer_prompt(item: dict) -> str:
         return build_corporatebench_answer_prompt(item, scalar_template=ANSWER_PROMPT)
     if _is_mmb_clinical(item):
         template = MMB_MCD_ANSWER_PROMPT
+    elif item.get("dataset") == "medmemorybench" and item.get("category") == "multiple_choice":
+        # judge 只解析选项字母 ⇒ prompt 也只要求字母（MedMemoryBench 的 MCQ 题类）。
+        template = MMB_MCQ_ANSWER_PROMPT
     return template.format(
         memories=item.get("retrieved_context") or "(no memories)",
         question=item["question"],

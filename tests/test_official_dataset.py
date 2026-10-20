@@ -278,14 +278,14 @@ def test_replay_only_saves_historical_hits_without_models_and_resumes_offline(ca
     output = capture / "reports/runs/parallel"
     hits = {}
     for path in output.glob("*/checkpoint.json"):
-        hits.update(json.loads(path.read_text())["hits"])
+        hits.update(json.loads(path.read_text(encoding="utf-8"))["hits"])
     assert set(hits) == {"1", "3", "6"}
     assert "future" not in hits["1"][0]["content"]
     assert "future" in hits["3"][0]["content"]
     assert not list(output.rglob("answers.jsonl"))
     assert not list(output.rglob("labels.jsonl"))
     assert not observed
-    assert json.loads((output / "retrieval-status.json").read_text())["complete"] is True
+    assert json.loads((output / "retrieval-status.json").read_text(encoding="utf-8"))["complete"] is True
     before = list(service.calls)
     assert pipeline.main(argv) == 0
     assert service.calls == before
@@ -360,7 +360,7 @@ def test_cold_arms_reproduce_same_serial_prefix_and_resume_without_http(capture,
         argv[argv.index("--run-id") + 1] = run_name
         before = len(service.calls)
         assert pipeline.main(argv) == 0
-        runtime = json.loads((capture / "reports/runs" / run_name / "run-manifest.json").read_text())
+        runtime = json.loads((capture / "reports/runs" / run_name / "run-manifest.json").read_text(encoding="utf-8"))
         assert calls_by_user[runtime["users"]["a"]] == ["add", "search", "add", "search"]
         assert calls_by_user[runtime["users"]["b"]] == ["add", "search"]
         assert len(service.calls) - before == 6
@@ -377,8 +377,8 @@ def test_cold_arms_reproduce_same_serial_prefix_and_resume_without_http(capture,
         mappings = []
         for run_name in ("left", "right"):
             directory = capture / "reports/runs" / run_name
-            groups = json.loads((directory / "rerank-user-groups.json").read_text())
-            runtime = json.loads((directory / "run-manifest.json").read_text())
+            groups = json.loads((directory / "rerank-user-groups.json").read_text(encoding="utf-8"))
+            runtime = json.loads((directory / "run-manifest.json").read_text(encoding="utf-8"))
             mappings.append({source: groups["users"][wire] for source, wire in runtime["users"].items()})
         assert mappings[0] == mappings[1]
 
@@ -413,7 +413,7 @@ def test_search_callback_only_publishes_durable_history_and_replays_without_http
     published = []
 
     def publish(qid, hits):
-        checkpoint = json.loads((user_dir / "checkpoint.json").read_text())
+        checkpoint = json.loads((user_dir / "checkpoint.json").read_text(encoding="utf-8"))
         assert checkpoint["hits"][qid][0]["content"] == hits[0].content
         published.append((qid, hits[0].content, list(service.calls)))
 
@@ -587,7 +587,7 @@ def test_comparison_rejects_different_inputs_or_models(capture: Path) -> None:
     left = fake_run(capture, "left", manifest, [])
     right = fake_run(capture, "right", manifest, [])
     path = right / "run-manifest.json"
-    runtime = json.loads(path.read_text())
+    runtime = json.loads(path.read_text(encoding="utf-8"))
     runtime["evaluation"] = {"model": "changed"}
     write_json(path, runtime)
     with pytest.raises(ValueError, match="模型"):
@@ -819,6 +819,20 @@ def test_full_runner_records_user_failure_and_continues(capture: Path, monkeypat
     assert summary["accuracy"] is None
 
 
+def test_metric_totals_keep_exact_and_f1_separate() -> None:
+    """EM 决定 is_correct，F1 只作指标——两者分别汇总，不能互相替代。"""
+    from eval.reports.official_comparison import _metric_totals
+
+    totals = _metric_totals(
+        [
+            {"metrics": {"exact_match": 1.0, "f1": 0.5}},
+            {"metrics": {"exact_match": 0.0, "f1": 0.25}},
+        ]
+    )
+    assert totals["exact_match"] == {"sum": 1.0, "n": 2, "mean": 0.5}
+    assert totals["f1"] == {"sum": 0.75, "n": 2, "mean": 0.375}
+    # 缺席时不写 0.0（那会被读成"全错"）。
+    assert _metric_totals([{"metrics": {}}])["f1"] == {"sum": 0, "n": 0, "mean": None}
 def test_failed_add_preserves_full_payload_without_truncation(capture, monkeypatch):
     messages = [{"role": "user", "content": "  原文 " * 10000}]
     adds = read_jsonl(capture / "official-adds.jsonl")
@@ -840,10 +854,10 @@ def test_failed_add_preserves_full_payload_without_truncation(capture, monkeypat
     run_dir = capture / "reports/runs/parallel"
     failures = read_jsonl(run_dir / "skipped.jsonl")
     assert len(failures) == 1
-    payload = json.loads((run_dir / failures[0]["payload_file"]).read_text())
+    payload = json.loads((run_dir / failures[0]["payload_file"]).read_text(encoding="utf-8"))
     assert payload["messages"] == messages
     assert payload["request_id"] == "r0"
-    manifest = json.loads((run_dir / "run-manifest.json").read_text())
+    manifest = json.loads((run_dir / "run-manifest.json").read_text(encoding="utf-8"))
     assert payload["user_id"] == manifest["users"]["a"]
     assert pipeline.main(argv) == 0
     assert len(read_jsonl(run_dir / "skipped.jsonl")) == 1

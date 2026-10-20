@@ -164,7 +164,10 @@ def score_answer(item: dict, generated: str) -> dict:
     dataset = item["dataset"]
     scorer = _scorer(dataset)
     if dataset == "hybridqa":
-        answer = item["gold_answer"]["answer"]
+        gold = item["gold_answer"]
+        answer = gold.get("answer", gold.get("answer-text"))
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError("HybridQA gold answer is missing")
         exact = float(scorer["compute_exact"](answer, generated))
         f1 = float(scorer["compute_f1"](answer, generated))
         metrics = {"exact_match": exact, "f1": f1}

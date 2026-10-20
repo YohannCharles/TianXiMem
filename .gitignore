@@ -62,9 +62,13 @@ build/
 .idea/
 .DS_Store
 
-# Claude Code 的本地权限配置：内容是**本机绝对路径**（/home/buptc/project/**），
-# 换台机器就失效，且不该进公开历史。团队共享的 .claude/settings.json 不受影响。
-.claude/settings.local.json
+# Claude Code 的本地状态：权限配置（本机绝对路径）、调度器（scheduled_tasks.*）、
+# worktree、检查点、邮箱等。它们机器相关、可重建，**不进版本库**。
+# ⚠ Claude Code 会把这些写进 `.git/info/exclude`，但那份**不随仓库走**——换台机器
+#   就没有了 ⇒ 仓库层必须自己留一份。
+# 团队共享的 .claude/settings.json 是唯一例外，用否定规则放行。
+.claude/*
+!.claude/settings.json
 
 # ── 开发用数据集（eval/datasets/）───────────────────────────────────────
 # 第三方数据集以 **git clone** 形式放在这里（目录内有嵌套 .git）。**一律不入库**：

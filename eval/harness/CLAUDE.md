@@ -48,8 +48,13 @@ corpusqa_pipeline.py       HybridQA / FEVEROUS：Search-only 作答，固定上�
 personamem_pipeline.py     PersonaMem-v2 适配器——Search 片段替代原始历史，选项与 MCQ 判分复用归档
 scriptmem_pipeline.py      ScriptMem 适配器——**到不了裁判**（加载层与 pipeline 表里都没有它），保留作参考
 corporatebench_pipeline.py CorporateBench 的答案 prompt 与纯函数判分——被 `extra_pipeline.py` 调用
-official_capture_pipeline.py 官方采集重放的逐题分派层（D34）；HaluMem 独立 QA 也复用其
-                        上游三分类裁判与通用作答入口。评分范围见对应加载器与验证报告
+official_capture_pipeline.py 官方采集重放的逐题分派层（D34）；**每个家族用各自的答案 prompt
+                         与判分**，`supports()` 与 `_judge()` 共用 `_JUDGE_KINDS` 一张表：
+                         HybridQA 走 `corpusqa_pipeline` 的官方归一化 EM（`is_correct`）+
+                         token-F1（指标）；MuSiQue 一律按原生 Full（规则判分）；
+                         FEVEROUS 在采集路径上只要标签（本地 `corpusqa_pipeline` 那条路
+                         才要证据 ID 并评严格证据组）；未知家族响亮 `JUDGE_ERROR`，
+                         别名包含只作诊断字段。HaluMem 独立 QA 也复用其上游三分类裁判与通用作答入口。
 api_config.py              归档 pipeline 要 `import` 的端点配置——`run_judge` 经 `PYTHONPATH` 注入本目录这份（见下文）
 annotate.py                相对时间就地注解——`--memory-date annotate` 那一档的 harness 侧实现
 run_record.py              每次 run 的配置指纹 + 数据指纹 + 结果
@@ -203,7 +208,8 @@ FEVEROUS 的严格分包含完整证据组要求，采集重放仍按其原有 l
 ### MedMemoryBench native 临床多跳作答
 
 `extra_medmemorybench.py` 对输入 `category=multi_hop_clinical_deduction` 使用病史依据与
-推理格式，仍只将问题和 Search 文本放入提示词（分派仍在 `extra_pipeline.py` 的
+推理格式，对 `multiple_choice` 使用"只返回选项字母"的格式（judge 只解析字母），
+仍只将问题和 Search 文本放入提示词（分派仍在 `extra_pipeline.py` 的
 `render_answer_prompt` / `_is_mmb_clinical`）。格式路由不读 gold；没有该公开
 分类字段的采集请求保留原有入口。诊断、适用范围和原始就诊对照见
 [临床多跳报告](../reports/optimization-20261007.md)。

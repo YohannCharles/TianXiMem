@@ -835,7 +835,11 @@ def test_missing_capture_pool_fails_before_download(
 def test_frozen_aml_recipe_yields_declared_questions_when_sources_available(dataset: str):
     root = benchmark_dir({})
     for dependency in required_datasets(dataset):
-        if any(not path.is_file() for path in _sources(root, dependency)):
+        try:
+            sources = _sources(root, dependency)
+        except FileNotFoundError:
+            sources = []
+        if not sources or any(not path.is_file() for path in sources):
             pytest.skip(
                 f"{dependency} public sources not prepared; synthetic AML tests run separately"
             )
