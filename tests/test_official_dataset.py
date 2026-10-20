@@ -383,6 +383,73 @@ def test_cold_arms_reproduce_same_serial_prefix_and_resume_without_http(capture,
         assert mappings[0] == mappings[1]
 
 
+@pytest.mark.parametrize("grouped", [False, True])
+def test_independent_prefix_users_overlap_stages_keep_routing_and_resume(capture, monkeypatch, grouped):
+    import threading
+
+    observed, argv = configure_official_runner(capture, monkeypatch)
+    prefix = capture / "prefix.json"
+    write_json(prefix, {"stages": [
+        {"workers": 1, "users": [{"source_user_id": "a", "next_event": 2}]},
+        {"workers": 1, "rerank_routing": "query-bucket", "users": [
+            {"source_user_id": "a", "next_event": 3},
+            {"source_user_id": "b", "next_event": 2},
+        ]},
+    ]})
+    argv += ["--serial-prefix", str(prefix), "--prefix-scheduling", "independent"]
+    if grouped:
+        argv[argv.index("--ingest-workers") + 1] = "4"
+        argv += ["--rerank-local-workers", "2", "--rerank-memory3-workers", "2"]
+    other_done = threading.Event()
+    output = capture / "reports/runs/parallel"
+
+    class Client(FakeService):
+        def search(self, **kwargs):
+            history = self.history[kwargs["user_id"]]
+            if history[0]["content"] == "  early  ":
+                assert other_done.wait(timeout=5), "Prefix users blocked across stages"
+            else:
+                active = json.loads((output / "ingest-progress.json").read_text())["active_users"]
+                assert active[kwargs["user_id"]]["prefix_index"] == 1
+                assert active[kwargs["user_id"]]["prefix_routing"] == "query-bucket"
+                other_done.set()
+            return super().search(**kwargs)
+
+    service = Client()
+    monkeypatch.setattr(pipeline, "ServiceClient", lambda _: service)
+    assert pipeline.main(argv) == 0
+    assert "future" not in observed["1"] and "future" in observed["3"]
+    assert observed["6"] == "other user"
+    assert not (output / "errors.jsonl").exists()
+    before = list(service.calls)
+    assert pipeline.main(argv) == 0
+    assert service.calls == before
+
+
+def test_independent_prefix_failure_does_not_advance_to_later_stages(capture, monkeypatch):
+    _, argv = configure_official_runner(capture, monkeypatch)
+    prefix = capture / "prefix.json"
+    write_json(prefix, {"stages": [
+        {"workers": 1, "users": [{"source_user_id": "a", "next_event": 2}]},
+        {"workers": 1, "users": [{"source_user_id": "a", "next_event": 3}]},
+    ]})
+    argv += ["--serial-prefix", str(prefix), "--prefix-scheduling", "independent", "--replay-only"]
+    service = FakeService()
+    service.fail = True
+    monkeypatch.setattr(pipeline, "ServiceClient", lambda _: service)
+    assert pipeline.main(argv) == 0
+    assert ("add", "future") not in service.calls
+    assert service.calls.count(("add", "  early  ")) == 1
+    assert service.calls.count(("search", "q?")) == 2
+    output = capture / "reports/runs/parallel"
+    assert json.loads((output / "retrieval-status.json").read_text())["complete"] is False
+    service.fail = False
+    assert pipeline.main(argv) == 0
+    assert json.loads((output / "retrieval-status.json").read_text())["complete"] is True
+    assert service.calls.count(("add", "  early  ")) == 1
+    assert service.calls.count(("add", "future")) == 1
+
+
 def test_search_failure_blocks_future_add_and_resume_keeps_historical_hits(capture: Path) -> None:
     source = replay_plan(capture, only_seqs={1, 3})[0]
     plan = pipeline.checkpoint_plan(source, "test-run")

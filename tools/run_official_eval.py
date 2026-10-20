@@ -306,6 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--rerank-local-workers", type=int, default=0)
     run.add_argument("--rerank-memory3-workers", type=int, default=0)
     run.add_argument("--serial-prefix", default=None, help="两臂复用的串行前缀边界 JSON")
+    run.add_argument("--prefix-scheduling", choices=("staged", "independent"), default="staged")
     run.add_argument(
         "--judge-workers", type=int, default=0,
         help="正数启用逐题作答/判分与有序 Search 重叠；两臂使用相同值",
@@ -447,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
         argv_out.append("--replay-only")
     if args.serial_prefix:
         argv_out.extend(["--serial-prefix", args.serial_prefix])
+    argv_out.extend(["--prefix-scheduling", args.prefix_scheduling])
     if args.rerank_local_workers or args.rerank_memory3_workers:
         argv_out.extend(["--rerank-local-workers", str(args.rerank_local_workers),
                          "--rerank-memory3-workers", str(args.rerank_memory3_workers)])

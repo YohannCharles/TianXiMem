@@ -18,7 +18,8 @@ def test_run_forwards_streaming_workers_without_changing_answer_budget(tmp_path,
     assert tool.main([
         "run", "--run-id", "streaming", "--service-revision", "v1", "--judge-workers", "4",
         "--ingest-workers", "2", "--serial-prefix", "schedule.json",
-        "--judge-scheduling", "after-replay", "--replay-only"
+        "--judge-scheduling", "after-replay", "--replay-only",
+        "--prefix-scheduling", "independent",
     ]) == 0
     assert forwarded[forwarded.index("--judge-workers") + 1] == "4"
     assert forwarded[forwarded.index("--max-tokens") + 1] == "1024"
@@ -26,6 +27,7 @@ def test_run_forwards_streaming_workers_without_changing_answer_budget(tmp_path,
     assert forwarded[forwarded.index("--serial-prefix") + 1] == "schedule.json"
     assert forwarded[forwarded.index("--judge-scheduling") + 1] == "after-replay"
     assert "--replay-only" in forwarded
+    assert forwarded[forwarded.index("--prefix-scheduling") + 1] == "independent"
 
 
 def _write(path: Path, rows: list[dict]) -> None:

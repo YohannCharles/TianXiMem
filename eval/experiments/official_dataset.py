@@ -133,6 +133,8 @@ def evaluation_fingerprint(args: argparse.Namespace) -> dict:
         scheduling += "; answer/judge begins after all Add/Search workers finish"
     if getattr(args, "serial_prefix", None):
         scheduling += "; non-prefix users overlap staged prefix replay"
+        if getattr(args, "prefix_scheduling", "staged") == "independent":
+            scheduling += "; independent per-user prefix stages in shared user pools"
     return {
         "answer_model": api_config.ANSWER_MODEL,
         "judge_model": api_config.JUDGE_MODEL,
@@ -562,11 +564,29 @@ def run(args: argparse.Namespace) -> int:
     main_executor = None
     main_future = None
 
-    def replay_items(items):
+    def replay_independent_user(index, source, wire):
+        # Each pool task owns one user's full timeline, including its historical routing.
+        cp = output / wire.sample.user_id / "checkpoint.json"
+        for stage_index, stage in enumerate(prefix_stages(prefix)):
+            for row in stage["users"]:
+                if row["source_user_id"] != source.user_id:
+                    continue
+                cursor = json.loads(cp.read_text(encoding="utf-8"))["next_event"]
+                if cursor < row["next_event"]:
+                    replay_user(
+                        index, source, wire, boundary=row["next_event"],
+                        prefix_index=stage_index, prefix_routing=stage.get("rerank_routing"),
+                    )
+                    if json.loads(cp.read_text(encoding="utf-8"))["next_event"] < row["next_event"]:
+                        return
+        replay_user(index, source, wire)
+
+    def replay_items(items, *, independent=False):
         """Run independent users and print progress as each user finishes."""
+        run_user = replay_independent_user if independent else replay_user
         replay_args = dict(
             user_id=lambda pair: pair[1].sample.user_id,
-            run=lambda _, pair: replay_user(by_source[pair[0].user_id][0] + 1, *pair),
+            run=lambda _, pair: run_user(by_source[pair[0].user_id][0] + 1, *pair),
             cancel=stop.set,
         )
         if group_workers:
@@ -602,7 +622,17 @@ def run(args: argparse.Namespace) -> int:
         ]
 
         # 前缀只约束前缀清单中的用户；其余用户立即进入主并发池。
-        if main_pairs:
+        independent_prefix = getattr(args, "prefix_scheduling", "staged") == "independent"
+        if independent_prefix:
+            replay_phase = {"kind": "main", "workers": ingest_workers,
+                            "prefix_scheduling": "independent"}
+            if group_workers:
+                replay_phase.update(rerank_routing="user-groups", group_workers=group_workers)
+            with file_lock:
+                replay_progress()
+            print(f"用户独立前缀：全部用户共用 {ingest_workers} 路并发，无跨用户阶段等待", flush=True)
+            replay_items(all_pairs, independent=True)
+        elif main_pairs:
             replay_phase = {"kind": "main", "workers": ingest_workers}
             if group_workers:
                 replay_phase.update(rerank_routing="user-groups", group_workers=group_workers)
@@ -617,7 +647,7 @@ def run(args: argparse.Namespace) -> int:
             )
 
         # 每个前缀用户按冻结边界推进；无关用户已在独立的主池运行。
-        for stage_index, stage in enumerate(prefix_stages(prefix)):
+        for stage_index, stage in enumerate([] if independent_prefix else prefix_stages(prefix)):
             replay_phase = {"kind": "prefix", "index": stage_index, "workers": stage["workers"]}
             if "rerank_routing" in stage:
                 replay_phase["rerank_routing"] = stage["rerank_routing"]
@@ -651,12 +681,13 @@ def run(args: argparse.Namespace) -> int:
             main_future = None
 
         # 前缀用户完成冻结边界后，继续回放它们尚未处理的事件。
-        replay_phase = {"kind": "main", "workers": ingest_workers}
-        if group_workers:
-            replay_phase.update(rerank_routing="user-groups", group_workers=group_workers)
-        with file_lock:
-            replay_progress()
-        replay_items(prefix_pairs)
+        if not independent_prefix:
+            replay_phase = {"kind": "main", "workers": ingest_workers}
+            if group_workers:
+                replay_phase.update(rerank_routing="user-groups", group_workers=group_workers)
+            with file_lock:
+                replay_progress()
+            replay_items(prefix_pairs)
         if streaming is not None and streaming.deferred:
             replay_phase = {"kind": "answer-judge", "workers": 0}
             replay_progress()
@@ -754,6 +785,10 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--rerank-local-workers", type=int, default=0)
     execute.add_argument("--rerank-memory3-workers", type=int, default=0)
     execute.add_argument("--serial-prefix", default=None, help="两臂共用的串行前缀边界 JSON")
+    execute.add_argument(
+        "--prefix-scheduling", choices=("staged", "independent"), default="staged",
+        help="staged 保留跨用户阶段等待；independent 在用户池内独立推进各用户前缀",
+    )
     execute.add_argument(
         "--judge-workers", type=int, default=0,
         help="正数启用 Search 落盘后逐题后台作答/判分；0 保留用户整批串行模式",
