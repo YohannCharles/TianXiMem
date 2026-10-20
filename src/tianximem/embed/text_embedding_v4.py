@@ -13,7 +13,7 @@
 （开发期 = 自建主网关，提交期 = DashScope）。
 
 > ⛔ **别拿开发网关跑提交 profile**：它与 reranker 那台一样**忽略 `model` 字段**，而开发期的
-> Qwen3-Embedding-8B 与本模型**同为 1024 维** ⇒ 向量会挂到 `text-embedding-v4` 这个**缓存坐标**下，
+> Qwen3-Embedding-4B 与本模型**同为 1024 维** ⇒ 向量会挂到 `text-embedding-v4` 这个**缓存坐标**下，
 > **不报错**，之后真的换端点时会**全部命中缓存**。机制与处置见 `docs/decisions.md` **D27**。
 
 ⚠ **本实现只产出 Dense 向量**（v4 也不提供 sparse / ColBERT）：词法那一路走 Qdrant 原生

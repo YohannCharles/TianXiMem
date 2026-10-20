@@ -42,13 +42,6 @@ def normalize_gold(value: Any) -> Any:
     return value
 
 
-def compact(value: Any, limit: int = 2500) -> Any:
-    if isinstance(value, str):
-        return value[:limit]
-    text = json.dumps(value, ensure_ascii=False)
-    return text[:limit]
-
-
 def load_arm(root: Path, arm: str) -> dict[str, dict[str, Any]]:
     labels = read_json(root / f"{arm}-labels.json")
     rows: dict[str, dict[str, Any]] = {}

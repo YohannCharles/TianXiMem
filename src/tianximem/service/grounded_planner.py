@@ -13,19 +13,14 @@ from tianximem.common.config.constants import (
 )
 from tianximem.facts.evidence import key, relation_key
 from tianximem.facts.paths import RELATION_NAMES
-from tianximem.facts.query import FactPattern, QueryPlan, time_bounds
+from tianximem.facts.query import MULTISET_RELATIONS, FactPattern, QueryPlan, time_bounds
 from tianximem.llm import LlmClient, LlmUnavailable
 
 GROUNDED_PLANNER_PROMPT_VERSION = DEFAULT_GROUNDED_PLANNER_PROMPT_VERSION
 _LLM_ATTEMPTS = 3
-#: 这些关系是"同一条事实在多个来源里各出现一次"的清单类证据（"哪几次""谁在场"），
-#: 执行器不得按三元组去重——去重会把"几次"压成"一次"。
-_MULTISET_RELATIONS = frozenset(
-    {
-        "document title", "meeting topic", "meeting type", "attendee", "organizer",
-        "absent from meeting", "meeting frequency",
-    }
-)
+#: 「逐次取证」的关系集合**只有一份**，住在 [`../facts/query.py`](../facts/query.py)。
+#: 本地别名只为保持调用点可读；⛔ 不要再抄一份字面表。
+_MULTISET_RELATIONS = MULTISET_RELATIONS
 _RELATIONS = frozenset(
     relation_key(r)
     for r in (

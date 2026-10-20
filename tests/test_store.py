@@ -577,3 +577,29 @@ def test_migration_is_idempotent(tmp_path) -> None:
 
     after = [(p.id, p.request_id, p.local_index) for p in rd(second_open, second_open.iter_pairs)]
     assert after == before
+
+
+def test_rebind_keeps_the_possessive_for_first_person_statements() -> None:
+    """读取期改名（D50）必须把 `My` → `<name>'s`，而不是裸真名。
+
+    同一类事实有两条路径：写入期的 `bind_first_person` 产出 `Rosa Quinn's orange case`，
+    读取期的 `_rebind` 若不补 `'s`，正文会变成 `Barbara Jones orange case`。
+    """
+    from tianximem.store.sqlite_store import _rebind
+
+    text = (
+        "Memory fact\nStatement: My orange case contains 3 pencils.\n"
+        "Source quotation: My orange case contains 3 pencils."
+    )
+    rebound = _rebind(text, "i", "Barbara Jones")
+    assert "Statement: Barbara Jones's orange case contains 3 pencils." in rebound
+    # 原文逐字那一行一个字节都不改。
+    assert "Source quotation: My orange case contains 3 pencils." in rebound
+    # `I's` 分支同样保留所有格。
+    assert "Barbara Jones's highest" in _rebind(
+        "Statement: I's highest education level is PhD.", "i", "Barbara Jones"
+    )
+    # 词边界：`economy` 里的 `my` 不能被当成代词。
+    assert _rebind("Statement: The economy is fine.", "i", "Barbara Jones") == (
+        "Statement: The economy is fine."
+    )

@@ -88,15 +88,6 @@ def _scopes(source: str) -> tuple[str, ...]:
     return tuple(sentences) if sentences else (text,)
 
 
-def _profile_scope(source: str, subject: str, object_: str) -> bool:
-    if "USER PROFILE:" not in source:
-        return False
-    folded = source.casefold()
-    # A profession field is not employment.  This blocks the most common
-    # profile hallucination while retaining the schema-specific profession fact.
-    return subject.casefold() in folded and object_.casefold() in folded
-
-
 def _same_scope(source: str, subject: str, object_: str) -> str | None:
     sf = subject.casefold()
     of = object_.casefold()

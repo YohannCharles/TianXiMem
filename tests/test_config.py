@@ -74,6 +74,18 @@ def _load(config_dir: Path, **env: str) -> AppConfig:
     return load_config({**_MIN_ENV, **env}, config_dir=config_dir)
 
 
+def test_missing_cache_dir_uses_the_dataclass_default(tmp_path: Path) -> None:
+    """缺 `TIANXIMEM_EMBED_CACHE_DIR` 时，加载器与 `EmbedCacheConfig` 必须同值。
+
+    ⚠ 这条挡的是"同一个缺省值写两份"：loader 曾把 `var/embed_cache` 又写了一遍，
+    改 dataclass 默认值在生产路径上**静默不生效**。
+    """
+    from tianximem.common.config.model import EmbedCacheConfig
+
+    (tmp_path / "default.yaml").write_text("", encoding="utf-8")
+    assert _load(tmp_path).cache.embed.dir == EmbedCacheConfig().dir
+
+
 # ── 1. 唯一入口：**结构性质，不是约定** ────────────────────────────────
 
 #: 配置入口是**一个包**（2026-10-15 拆的：`config.py` → `config/`）。
@@ -896,3 +908,16 @@ def test_env_file_location_is_overridable(config_dir: Path, tmp_path: Path, monk
     cfg = load_config(config_dir=_REPO / "configs")
 
     assert cfg.embed_base_url == "https://custom/v1"
+
+
+def test_agentic_round_rerank_null_is_a_loud_failure(tmp_path: Path) -> None:
+    (tmp_path / "default.yaml").write_text(
+        "agentic:\n  round_rerank_enabled: null\n", encoding="utf-8"
+    )
+    with pytest.raises(ConfigError, match="agentic.round_rerank_enabled"):
+        _load(tmp_path)
+
+
+def test_agentic_round_rerank_defaults_to_true_when_missing(tmp_path: Path) -> None:
+    (tmp_path / "default.yaml").write_text("agentic:\n  mode: plan\n", encoding="utf-8")
+    assert _load(tmp_path).agentic.round_rerank_enabled is True

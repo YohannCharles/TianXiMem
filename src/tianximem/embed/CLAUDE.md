@@ -34,7 +34,7 @@ class Embedder(Protocol):
 
 ## 为什么这个抽象是硬要求，不是好品味
 
-**架构必须 embedder-agnostic**——§2.3 的规定（原文见根 `CLAUDE.md`）推出的设计约束：开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供 sparse 或 ColBERT 输出**，**任何依赖多向量能力的代码都是死重**。若代码里渗入了多向量能力，Step 5 就不是"换一个实现"，而是"删掉一批代码并重写调用方"（§12.1 R1）。
+**架构必须 embedder-agnostic**——§2.3 的规定（原文见根 `CLAUDE.md`）推出的设计约束：开发期的 Qwen3-Embedding-4B 与提交期的 `text-embedding-v4` **都不提供 sparse 或 ColBERT 输出**，**任何依赖多向量能力的代码都是死重**。若代码里渗入了多向量能力，Step 5 就不是"换一个实现"，而是"删掉一批代码并重写调用方"（§12.1 R1）。
 
 **同理**：词法那一路**不要用任何学出来的稀疏权重**——理由与替代方案见 [`../retrieve/CLAUDE.md`](../retrieve/CLAUDE.md)（§7.1）。
 

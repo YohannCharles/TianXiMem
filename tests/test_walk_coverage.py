@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -387,3 +388,62 @@ def test_dated_replacement_cannot_suppress_a_claim_with_unknown_source_time(ordi
     )
     assert result.selection is not None
     assert {f.parent_memory_id for f in result.selection.facts} == parents
+
+
+def test_a_first_person_walk_root_is_resolved_to_the_owners_name() -> None:
+    """D50：读取期把 `"I"` 改写成真名，walk 的根实体也必须做同样的等价。
+
+    否则 `Where do I work?` 在**有自我介绍的用户**上永远断在第一步——而抽取层
+    当前恰好能产出主语为 `I` 的事实（`Corpus: I — works for — …`）。
+    """
+    facts = list(
+        extract_evidence(
+            parent_memory_id="p",
+            user_id="u",
+            question="Corpus: I — works for — North Labs",
+            answer=None,
+            event_time=None,
+        )
+    )
+    plan = compile_query("Where do I work?")
+    assert plan is not None and plan.walk_root == "i"
+
+    renamed = [replace(fact, subject="Barbara Jones") for fact in facts]
+    decision = evaluate_evidence(
+        renamed, plan, source_limit=12, hop_limit=4, owner="barbara jones"
+    )
+    assert decision.selection is not None
+    assert [fact.object for fact in decision.selection.facts] == ["North Labs"]
+
+
+def test_nested_official_language_questions_compile_to_the_full_chain() -> None:
+    """三跳问法：`child` → `country of citizenship` → `official language`。
+
+    两个外壳（`of the country where` / `spoken in the country where`）共用同一条链；
+    内层只取人名，动词短语不能漏进 `walk_root`。
+    """
+    for query in (
+        "What is the official language of the country where the child of Carlos Sainz holds citizenship?",
+        "What is the official language spoken in the country where the child of Carlos Sainz holds citizenship?",
+        "What is the official language of the country of which the child of Carlos Sainz is a citizen?",
+    ):
+        plan = compile_query(query)
+        assert plan is not None, query
+        assert plan.walk_root == "carlos sainz", query
+        assert plan.walk_relations == ("child", "country of citizenship", "official language"), query
+
+
+def test_education_wrapper_keeps_the_educated_step() -> None:
+    """`the university that Alice was educated` 必须走 `educated → headquarters location`。
+
+    `noun_path` 只认 `attended`；`was educated` 由外壳补上 `educated` 这一步，
+    否则根会停在一句动词短语上。
+    """
+    for query in (
+        "Where is the headquarters of the university that Alice was educated?",
+        "Where is the headquarters of the university that Alice was educated at?",
+    ):
+        plan = compile_query(query)
+        assert plan is not None, query
+        assert plan.walk_root == "alice", query
+        assert plan.walk_relations == ("educated", "headquarters location"), query

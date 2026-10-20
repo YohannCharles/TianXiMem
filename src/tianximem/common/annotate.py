@@ -8,40 +8,27 @@ I've taught for 7 years →  I've taught for 7 years (since 2016)
 
 ## 它在哪里被调用（**只有一处**）
 
-[`../rank/neighbor.py`](../rank/neighbor.py) 的 `_build_segment._text()` ——
-**`content` 的生产路径**。
-索引侧与精排输入走的是 `render_pair`，**一个字都不改**。
+[`../rank/neighbor.py`](../rank/neighbor.py) 的 `_build_segment._text()`——`content`
+的生产路径。索引侧与精排输入走 `render_pair`，**一个字都不改**。
 
-⇒ 于是它与 **T1 的 `packaging.inject_abs_time`** 有一处**根本区别**：
-那个开关改的是 `content` **也**是 embedding 的输入（改它要重建索引）；
-**本模块只改 `content`**——所以它可以随时开关，**不需要重建索引、不需要换集合**。
+⇒ 与 T1 的 `packaging.inject_abs_time` 有根本区别：那个开关改的是 `content`
+**也**是 embedding 输入（改它要重建索引）；**本模块只改 `content`** ⇒ 随时可开关。
 
 ## 为什么是"注解"而不是"替换"
 
-两者都能让模型**不用做日历算术**（`t1-dated` 的 temporal 79 道里 27 道卡在这一步），但注解多三件事：
-
-| | 替换 | **注解** |
-| --- | --- | --- |
-| 相对形式还在吗 | ❌ 没了 ⇒ 纯相对 gold 必错、BEAM（规则相反）反向 | ✅ 在，模型按 gold 选形式 |
-| 与 **D21** 的关系 | 跨过它（"原文保留、日期是额外锚点"） | **就是 D21**，从段级挪到短语级 |
-| 失败可逆吗 | 错日期顶替了原文，看不出来 | 原文在，错了能看出是哪条推错 |
+替换会让**纯相对 gold 必错**（相对形式没了），且 BEAM 的规则正好相反。
+注解则原文保留、日期是额外锚点（**就是 D21 从段级挪到短语级**），推错时也看得出是哪条。
 
 ## 一条硬纪律：**推不出就不动**
 
-`a few years ago` / `several weeks ago` 这类量词**没有数字**——换算它等于编一个日期，
-而编错的日期比不换算更糟：**模型会自信地照抄**，而裁判是精确比值的。
-⇒ 查不到数字的一律原样保留（`_quantifier` 返回 `None`）。
+`a few years ago` 这类量词**没有数字**——换算它等于编一个日期，而编错的日期比不换算更糟：
+**模型会自信地照抄**。⇒ 查不到数字的一律原样保留。
 
 ## ⚠ 与 [`eval/harness/annotate.py`](../../../eval/harness/annotate.py) 是**两份实现**
 
-harness **不许 import `src/`**（[`../../../eval/CLAUDE.md`](../../../eval/CLAUDE.md) 的边界），
-而注解实验是在 harness 侧先做的（用 `--memory-date annotate` 跑出的那条 run record）——
-**两份都要留着**：一份是生产路径，一份是那次实验的可复现工具。
-
-⇒ 重复的是**逻辑**不是常量，所以由
-[`../../../tests/test_annotate.py`](../../../tests/test_annotate.py)
-的一条**逐例等价断言**钉住（同一张用例表喂给两份实现，输出必须逐字相同）。
-**改任何一份都要同时改另一份**，那条测试会立刻红。
+harness 不许 import `src/`，而注解实验是在 harness 侧先做的。重复的是**逻辑**不是常量，
+由 [`tests/test_annotate.py`](../../../tests/test_annotate.py) 的**逐例等价断言**钉住——
+**改任何一份都要同时改另一份**。
 """
 
 from __future__ import annotations

@@ -67,6 +67,26 @@ test_router.py          二分类查询路由器（**D40**）：严格解析（`
                         HTTP 层的十种坏形状、**降级绝不 500**、路由真的决定走哪条分支、
                         `MULTI_HOP` 无执行器时的响亮降级、`②–⑦` 与混合链**共用同一个尾巴**、
                         §13 的开关纯度（**关掉时零 LLM 调用**）、装配与配置校验
+test_agent.py           `react` 执行器（D41）：多轮状态机、每轮 `user_id` 隔离、停止判据（**不发真请求**）
+test_plan.py            `plan` 执行器（D41）：拆解/逐轮回答/恢复分支、`user_id` 隔离、两套提示词互不引用
+test_grounded_planner.py 可选受限计划器：严格字面校验、时间片段、`per_occurrence` 与回退
+test_ordered_evidence.py 证据路径保留依赖、方向与来源身份
+test_walk_coverage.py   不完整字面路径必须交回混合检索
+test_sale_evidence.py   已完成交易的来源、事件保留、回退与注解纯度
+test_fact_entities.py   spaCy 实体/关系候选器的守卫（不改变来源校验）
+test_fact_candidate_rank.py 事实候选排序：明确自述优先、引用先于独立支持事实
+test_fact_llm_verify.py 实验性 LLM 事实校验器的离线守卫
+test_musique_haystack.py MuSiQue 链式依赖 haystack 的加载与题单口径
+test_selection_suite.py `selection_suite` 的固定选题、来源隔离与续跑安全
+test_official_dataset.py 官方采集分类、固定分母、版本可比性与历史 Search 续跑
+test_run_official_eval.py `tools/run_official_eval.py` 的纯函数（技术错误重判清理）
+test_verify_official_gold.py `tools/verify_official_gold.py` 的金标来源与搬运审计
+test_coq_eval_tool.py   `tools/coq_eval.py` 的纯函数（不发请求、不读数据集）
+test_plan_decompose_tool.py `tools/plan_decompose_eval.py` 的纯函数（不发请求、不读数据集）
+test_dev_cli.py         `tianximem.dev` 的命令注册与参数下传
+test_model_context.py   `eval/harness/model_context.py` 的 BEAM 上下文预算
+test_eval_scheduling.py 并发用户的 payload/history、有界队列与失败屏障
+test_beam_judge.py      BEAM 逐条 rubric 判分的解析与二值化
 ```
 
 > ⚠ **§13 的开关纯度没有独立文件**。断言住在**各自开关所在的模块**里：

@@ -149,7 +149,7 @@ meeting type 3）、planner 提示词 v2。
 
 ## 八、KB 侧核对：gold 是怎么算出来的（2026-10-16 补测）
 
-数据集自己的 [README](../dataset/corporatebench/README.md) 写明：**先建一张时间知识库**
+数据集自己的 README（`dataset/corporatebench/README.md`；数据目录不进 git）写明：**先建一张时间知识库**
 （`.kb` 里的 `graph.nq`），文档是"**围绕图里的证据串**生成的"（*Generate corporate
 documents around graph-derived evidence strings*），gold 则是"**手工核验的 SPARQL**"
 （*Derive QA answers through manually verified SPARQL queries*）。官方评测本身就有两条臂：

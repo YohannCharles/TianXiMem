@@ -81,13 +81,14 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
                                  ▼
                         ≤ Top-K（精确计数）
 
-        ═══ 以下整块为 v2，v1 不实现（见 docs/decisions.md D13）═══
-          Evidence Weak → Agentic Search
-            - 关键词重写（Agent 每轮自产）
+        ═══ 共同取证不齐时（D40 / D41，默认开）═══
+          Evidence Weak → Agentic Search（agent/ 的 react / plan 两种执行器）
+            - 每轮自产的检索关键词
             - Multi-round Search / Temporal Search / Evidence Note
 ```
 
-> **v1 是直通的**：Evidence Checker 恒返回「证据充足」，因此**没有证据补充路径**——正确的 QA 对不在初始候选里就永久丢了。这把 v1 的全部重量压在**排序 + token 预算分配**上（§4 / §8）。共同取证链是一条**短路**：只在问题被共同计划覆盖、且当前用户来源扫描齐全时命中；不覆盖的问题仍走上面这条链。
+> **Checker 仍是直通的**：Evidence Checker 恒返回「证据充足」（D13 / D26），
+> 所以**没有基于名次一致性的证据补充路径**——正确的 QA 对不在初始候选里就永久丢了。这把 v1 的全部重量压在**排序 + token 预算分配**上（§4 / §8）。共同取证链是一条**短路**：只在问题被共同计划覆盖、且当前用户来源扫描齐全时命中；不覆盖的问题仍走上面这条链。
 >
 > v1 的 Checker 是**恒返回「充足」的空实现**（D13），判定结果被丢弃；**A4 已移出 v1**（D26）⇒ 那份反事实分布现在不攒（要补它得先给 `store/` 加一个单路查询——已登记、未实现）。
 
@@ -109,7 +110,7 @@ Search → 共同查询计划 → 条件筛选 / 有限连接 / 显式区间比�
 | [`AML Agentic Memory 增强框架 PRD.md`](./AML%20Agentic%20Memory%20增强框架%20PRD.md) | **权威实现规格** | 全部 |
 | [`docs/`](./docs/) | 架构与七维映射、契约、配置项、实验登记、悬而未决清单、提交台账、决策日志 | — |
 | [`dataset/`](./dataset/CLAUDE.md) | 按数据集组织的本地材料；评测前按需下载，数据与上游源码 gitignored | §12 / D35 |
-| [`configs/`](./configs/) | 运行时配置：三个 profile + 完整开关清单 + 开关依赖图 | §15 |
+| [`configs/`](./configs/) | 运行时配置：profile 清单 + 完整开关清单 + 开关依赖图 | §15 |
 | [`deploy/`](./deploy/) | Qdrant server（**版本钉死**）、Step 5 重建 runbook | §6.3、§7.3 |
 | [`src/tianximem/`](./src/tianximem/) | 检索服务本体 | §6–§11、§14、§15 |
 | [`eval/`](./eval/) | 代理评测：`datasets/` `harness/` `experiments/` `baselines/` `smoke/` `reports/` | §12、§13 |
@@ -214,28 +215,10 @@ HybridQA / FEVEROUS 的语料下载、输入范围与评分见
 运行需要公开数据集、已有 `.env` 模型配置和正在运行的 Add/Search 服务。
 协作者直接使用固定题单；原官方采集和 Memory600 压缩包只在重建题单或核验出处时需要。
 
-```bash
-# 先准备题单所需数据，缺哪份就用 make fetch-data DATASET=<名称>
-uv run --env-file .env python -m eval.experiments.selection_suite verify
-
-# 服务已启动后执行；下列 run-id、服务 Git SHA、地址和 profile 按实际环境填写
-uv run --env-file .env python -m eval.experiments.selection_suite run \
-  --run-id shared-v1 \
-  --service-revision <服务实际Git-SHA> \
-  --base-url http://127.0.0.1:8000 \
-  --configs-dir configs --profile local --offline
-
-uv run python -m eval.experiments.selection_suite summarize \
-  --run-dir eval/reports/runs/shared-v1
-```
-
-`verify` 为离线校验；`run` 会投喂语料、检索并调用配置的答案/裁判模型。
-同条件中断后可用原命令续跑，模型、配置或服务存储变化时使用新的 run-id。
-结果位于 `eval/reports/runs/<run-id>/summary.md`；Git 只保存两列题号和必要审计注释，
-详细 JSON、输入指纹及逐题运行产物在本地生成并忽略提交。
-
-完整操作说明、版本比较和**可复制的 AI 运行提示词**见
-[共享固定题单说明](docs/fixed-selection-suite.md#交给-ai-运行的简要提示词)。
+**命令、参数与续跑规则见 [共享固定题单说明](docs/fixed-selection-suite.md)**——
+那里是唯一声明处，本文件不复制命令（抄一遍就多一处会漂移的家）。
+一句话：`verify` 离线校验 → `run` 投喂并检索 → `summarize` 汇总；
+完整操作、版本比较和**可复制的 AI 运行提示词**也在那份文档里。
 这里使用 `selection_suite`，单数据集的 `run.py --frozen` 是另一个入口（PRD §13）。
 
 ### 部署到服务器
@@ -245,7 +228,7 @@ uv run python -m eval.experiments.selection_suite summarize \
 ```bash
 cp deploy/.env.example deploy/.env   # 填 AML_EMB_*（reranker 可选）
 make up                              # 起整栈（容器形态）
-make deploy-check                    # 在容器里跑契约预检（14 条，真 HTTP）
+make deploy-check                    # 在容器里跑契约预检（真 HTTP）
 ```
 
 细节（单进程约束、真源卷、服务器要满足什么）见 [`deploy/CLAUDE.md`](./deploy/CLAUDE.md) §0。

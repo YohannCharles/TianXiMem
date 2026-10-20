@@ -1,7 +1,7 @@
 # agent/ — 多跳检索执行器（`MULTI_HOP` 那条路）
 
 **PRD**：§9（Conditional Agentic Search）—— ⚠ **本目录只实现其中一小块，见下**
-**决策**：**D41**（2026-10-10）· 键与口径：[`../../docs/config-reference.md`](../../docs/config-reference.md) **§5**
+**决策**：**D41**（2026-10-10）· 键与口径：[`../../../docs/config-reference.md`](../../../docs/config-reference.md) **§5**
 
 ## 两种模式（`agentic.mode`，2026-10-12 起）
 
@@ -13,7 +13,7 @@
 ⚠ **两者故意不同**（2026-10-14 起）：`configs/default.yaml` 写的是 `plan`，代码常量
 `DEFAULT_AGENTIC_MODE` 仍是 `react`——后者是给**不填这个键的旧配置**留的"逐字不变"出口。
 ⛔ 不要为了让两者看起来一致就把常量也翻掉。口径见
-[`../../docs/config-reference.md`](../../docs/config-reference.md) **§5**。
+[`../../../docs/config-reference.md`](../../../docs/config-reference.md) **§5**。
 
 ⚠ **两套提示词、两套解析、两张停止原因表**——**互不引用、互不改写**：
 `coq_prompt.py` 的原版提示词是**冻结**的，⛔ 绝不把 Plan 的提示词塞进去（或反过来）。
@@ -139,7 +139,7 @@ plan.py            `plan` 的状态机：拆解 → 逐题检索 → 一次 LLM�
 ## 配置与开关
 
 ⚠ **`agentic.enabled`（执行器在不在）与 `router.enabled`（选不选这条路）是两条
-独立的开关**，**两个都开**多跳才真的跑起来。见 [§5](../../docs/config-reference.md)。
+独立的开关**，**两个都开**多跳才真的跑起来。见 [§5](../../../docs/config-reference.md)。
 ⚠ 第三条是 **`agentic.mode`（装哪一种执行器）**——它既不选路、也不开关，
 只是"装上的是哪一套机制"。
 
@@ -154,8 +154,8 @@ plan.py            `plan` 的状态机：拆解 → 逐题检索 → 一次 LLM�
 
 ## 测试
 
-[`../../tests/test_agent.py`](../../tests/test_agent.py)（`react`）与
-[`../../tests/test_plan.py`](../../tests/test_plan.py)（`plan`）——**都不发任何真请求**：
+[`../../../tests/test_agent.py`](../../../tests/test_agent.py)（`react`）与
+[`../../../tests/test_plan.py`](../../../tests/test_plan.py)（`plan`）——**都不发任何真请求**：
 假 LLM（协议级替身）、假 retriever、假 Reranker、鸭子类型的假 store。
 ⚠ 假 store **只实现执行器真正用到的那两样**（`read()` + `fetch_pairs_by_ids`）——
 用到第三样就说明本目录越界了。

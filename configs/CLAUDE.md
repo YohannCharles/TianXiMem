@@ -28,7 +28,7 @@
 
 ---
 
-## 三个 profile
+## profile 清单
 
 **profile 清单（文件 / 用途 / 模型 / 状态）在 [`../docs/config-reference.md`](../docs/config-reference.md) §1**，本文件不复制。**`runs/<arm>/` 不是 profile**，用于新对照臂的冻结快照（目录状态见下节）。
 
@@ -39,8 +39,10 @@
 > **`local.yaml` 覆盖两项**：`storage.qdrant.collection`（开发期用单独的集合，避免 §6.3 的 upsert
 > 把上一套实验的 point **静默留给下一套**，V9）与 `rerank.enabled: false`（开发期不花那份墙钟——
 > 基线里是 `true`，那是提交口径）。**`submit.yaml` 现在只覆盖一项**：`models.embedder`。
+> `v1.0.yaml` / `probe-nocapture.yaml` / `probe-react.yaml` 是**对照与诊断** profile
+> （各自只覆盖让它成立的那几个键），清单见 `config-reference.md` §1。
 
-**两个 profile 之外的加载细节**（实现在 [`../src/tianximem/common/config/`](../src/tianximem/common/config/)）：
+**profile 之外的加载细节**（实现在 [`../src/tianximem/common/config/`](../src/tianximem/common/config/)）：
 
 | 变量 | 作用 |
 | --- | --- |

@@ -1,17 +1,14 @@
 # v1.0 流程对照 profile —— 用当前代码复现 v1.0 的 Search 链
 # （hybrid search + 精排 + 打包；不取证、不路由、不多跳、不扩窗）
 #
-# 与 default.yaml 的差别只有四处，全部是"关掉 v1.0 之后才加的东西"。
+# 与 default.yaml 的差别只有四个键（三个段），全部是"关掉 v1.0 之后才加的东西"。
+# （精排不用覆盖：`default.yaml` 本来就是 `true`。）
 # 不动 default.yaml（提交口径）和 local.yaml（开发口径）。
 
 storage:
   qdrant:
-    # 用独立集合（旧 memories_dev 是 4096 维的 Qwen3-Embedding-8B 遗留，维度不符）。
+    # 用独立集合（旧 memories_dev 是 4096 维的旧 embedding 遗留，维度不符）。
     collection: memories_v1flow
-
-rerank:
-  # v1.0 默认开精排；local.yaml 关它是开发期提速，这里翻回。
-  enabled: true
 
 retrieval:
   # 关掉共同取证（v1.0 无此功能）。

@@ -272,3 +272,79 @@ def test_runner_warns_loudly_when_rerank_degraded(capsys) -> None:
 def test_runner_is_quiet_when_rerank_ran_clean(capsys) -> None:
     runner._warn_about_rerank({"searches": 346, "rerank": {"degraded": 0, "disabled": 0}})
     assert capsys.readouterr().out == ""
+
+
+# ── 字段转发：新增一个 §14 字段时，漏接线必须响 ──────────────────────────
+
+
+def test_search_observation_forwarding_is_complete() -> None:
+    """`_SearchTrace → SearchObservation` 的逐字段转发必须**穷尽**。
+
+    两个 dataclass 之间没有编译期关联：给 `_SearchTrace` 加字段、忘了在
+    `SearchPipeline.run` 里写进 `SearchObservation(...)`，发射就会**静默少一个量**
+    （V12 类失败）。这里用 AST 读源码里的关键字实参，断言：
+    (a) 每个请求局部 trace 字段都被显式转发；
+    (b) 每个 `SearchObservation` 字段都被显式接线。
+    """
+    import ast
+    from dataclasses import fields
+
+    import tianximem.service.search_pipeline as search_pipeline_module
+    from tianximem.service.search_pipeline import _SearchTrace
+
+    tree = ast.parse(
+        Path(search_pipeline_module.__file__).read_text(encoding="utf-8"),
+        filename=search_pipeline_module.__file__,
+    )
+    forwarded: set[str] | None = None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "SearchObservation"
+        ):
+            forwarded = {kw.arg for kw in node.keywords if kw.arg}
+            break
+    assert forwarded is not None, "SearchPipeline.run 里找不到 SearchObservation(...) 构造"
+
+    trace_fields = {f.name for f in fields(_SearchTrace)}
+    observation_fields = {f.name for f in fields(SearchObservation)}
+    assert trace_fields <= forwarded, f"未转发的 trace 字段：{sorted(trace_fields - forwarded)}"
+    assert forwarded == observation_fields, (
+        f"漏接线：{sorted(observation_fields - forwarded)}；"
+        f"多出来：{sorted(forwarded - observation_fields)}"
+    )
+
+
+def test_agentic_snapshot_exports_every_aggregated_counter(tmp_path: Path) -> None:
+    """§14 的 agentic 出口：聚合到的量必须**全部**出现在 snapshot 里。
+
+    只聚合不导出 = 量算出来了但 run record 里看不见，且**不会报错**。
+    """
+    sink = SnapshotMetricsSink(tmp_path / "metrics.json")
+    observation = SearchObservation(
+        latency_ms=1.0,
+        rerank_calls=0,
+        rerank_disabled=True,
+        rerank_degraded=False,
+        agentic_status="success",
+        agentic_rounds=3,
+        agentic_stop_reason="sufficient",
+        agentic_llm_calls=3,
+        agentic_rerank_calls=3,
+        agentic_selected_evidence=7,
+        agentic_candidates=20,
+        agentic_joint_queries=2,
+        agentic_latency_ms=12.5,
+    )
+    sink.record(observation)
+    agentic = sink.snapshot()["agentic"]
+    assert agentic["statuses"] == {"success": 1}
+    assert agentic["stops"] == {"sufficient": 1}
+    assert agentic["rounds"] == 3
+    assert agentic["llm_calls"] == 3
+    assert agentic["rerank_calls"] == 3
+    assert agentic["selected_evidence"] == 7
+    assert agentic["candidates"] == 20
+    assert agentic["joint_queries"] == 2
+    assert agentic["latency_ms"]["count"] == 1

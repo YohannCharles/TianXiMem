@@ -1,52 +1,33 @@
 """`Add` 链的**编排**（`AddOutcome` / `AddPipeline`）。
 
-> **两条链各住一个文件**：本文件是 Add 链的家，Search 链在
-> [`search_pipeline.py`](search_pipeline.py)；[`pipeline.py`](pipeline.py) 是薄 façade——只重新
-> 导出两边的名字，“为什么编排在本目录”那条理由写在它的模块 docstring。
-
-## `Add` 的链，以及那个**必须专门处理**的失败窗口
-
 ```text
 canonical AddRequest
-  → apply_batch：payload 指纹 → 幂等守卫 → compose_memory_blocks → link_blocks（Add 内邻接）
+  → apply_batch：payload 指纹 → 幂等守卫 → compose_memory_blocks → link_blocks
                  → SQLite 事务提交（真源，位置 = (request_id, local_index)）
-  → 取出本批写下的行（按 id）
-  → render → dense embedding → Qdrant upsert(wait=True)
+  → 取出本批写下的行（按 id）→ render → dense embedding → Qdrant upsert(wait=True)
   → 响应
 ```
 
-**D24 起组合只看本批**（`compose_memory_blocks` 是纯函数、无跨 Add 状态），
-**D28 起邻接也只看本批**（`link_blocks`），所以这一段没有"跨批续接"带来的额外分支：
-本批触碰的行**恰好**是它自己新写的那几行。
+**没有 session 锁**：位置由请求派生 ⇒ 同 `(user_id, session_id)` 的 Add 可以并发，
+它们在 `store.transaction()` 的 `BEGIN IMMEDIATE` 处排队（数据库级写者串行）。
 
-**没有 session 锁**：位置由请求派生（不是 `MAX+1`）⇒ **同 `(user_id, session_id)`
-的 Add 可以并发**，它们在 `store.transaction()` 的 `BEGIN IMMEDIATE` 处排队（数据库级
-写者串行），而不是在应用层互斥。**D28 之后连"顺序"这个概念都不再存在**——
-不同 Add 之间既不比较先后，也不建立邻接。
+## 那个**必须专门处理**的失败窗口
 
-**失败窗口**：SQLite 事务**已提交** → Qdrant 的 embedding/upsert **失败** → 客户端重试
-**同一个 `request_id`**。此时 `applied_batches` 里**已经有这一批**，幂等守卫会命中 ⇒
-`apply_batch` 直接返回、**不写任何东西**。若这里跟着返回 200，就会留下
-**SQLite 有真源、Qdrant 永久缺索引** ⇒ 那些记忆**永远检索不到，且没有任何报错**。
+SQLite 事务**已提交** → Qdrant 的 embedding/upsert **失败** → 客户端重试**同一个
+`request_id`**。此时 `applied_batches` 已有这一批 ⇒ 幂等守卫命中 ⇒ `apply_batch`
+直接返回、**不写任何东西**。若这里跟着返回 200，就会留下 **SQLite 有真源、Qdrant
+永久缺索引** ⇒ 那些记忆**永远检索不到，且没有任何报错**。
 
-### 修复路径：按 **request_id** 幂等重建（不动 `pairing/`）
+### 修复路径：按 **request_id** 幂等重建
 
-`ApplyBatchResult.applied` 在**守卫命中时是 `False`**（`apply_batch` 里那行早返回），
-所以重放时拿不到"本批写了哪些行"。**但修复不需要那个列表**：`user_id` / `session_id` /
-`request_id` 都在请求里，`fetch_by_request(...)` 能拿到**那一次 Add**写下的全部块
-（**D28 起作用域就是这一次 Add**），于是：
+`ApplyBatchResult.applied` 在守卫命中时是 `False`，但修复不需要那个列表：
+`fetch_by_request(...)` 能拿到**那一次 Add** 写下的全部块（D28 的作用域）。于是：
 
 * `point_id` 是位置派生的纯函数 ⇒ 同一对永远是同一个 point
 * `upsert` 幂等 ⇒ 已经写对的会被原样覆盖
-* embedding 缓存按内容哈希 ⇒ 之前成功索引过的对**必然已在缓存里**，重放几乎不产生远程调用
+* embedding 缓存按内容哈希 ⇒ 之前成功索引过的对**必然已在缓存里**
 
-⇒ **净效果**：不变量"该 Add 的每个 SQLite 行都在 Qdrant 里"被恢复，
-且**没有让 SQLite 去迁就 Qdrant**（真源不变，派生索引被修复）。
-
-> **代价（D28 之前）**：旧口径下重放要 upsert 该 session 的**全部**对，因为
-> `applied_batches` 没记"本批碰了哪些行"。现在位置里带着 `request_id`，
-> 按它一查就是本批——**代价没有了**，而且顺带把"修复会不会碰到别的 Add 的行"
-> 这个问题取消掉了（它碰不到）。
+⇒ 不变量"该 Add 的每个 SQLite 行都在 Qdrant 里"被恢复，且**真源不变**。
 """
 
 from __future__ import annotations

@@ -92,6 +92,9 @@ class GroundedEvidenceStage:
             )
             if len(evidence) > fetch_limit:
                 return EvidenceDecision(None, "fetch_limit")
+            # 读取期已把第一人称事实的主语换成真名（D50），计划侧仍是字面 `"i"`。
+            # 同一个读快照里取一次真名键，交给 `matches` 做等价比较。
+            owner = self._store.owner_name(conn, user_id)
             sources: list[QaPair] = []
             audit: list = []
             if plan.guard_literal:
@@ -127,6 +130,7 @@ class GroundedEvidenceStage:
                 hop_limit=self._evidence_hop_limit,
                 sources=sources,
                 audit_facts=audit,
+                owner=owner,
             )
             if (
                 plan.operator != "walk"
@@ -134,7 +138,7 @@ class GroundedEvidenceStage:
                 or decision.selection is None
             ):
                 return decision
-            subjects = walk_subjects(evidence, decision.selection, plan)
+            subjects = walk_subjects(evidence, decision.selection, plan, owner=owner)
             related: dict[str, QaPair] = {}
             for literal in walk_source_literals(subjects):
                 for source in self._store.fetch_evidence_sources(

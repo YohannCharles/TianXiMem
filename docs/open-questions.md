@@ -122,8 +122,9 @@ D20 当年把连续 user 并进同一个 `question` 来兜这件事，**D32（20
 > ⛔ **别再去解析 `request_id`**——D28 已定它是 opaque string，看官方发的是什么就
 > 直接读采集文件里的原文（见下）。
 
-**最直接的一条路：把官方发来的请求原文记下来**（`capture.enabled`，2026-09-29 落地）。
-打开它跑一轮，`/add` 与 `/search` 的**原始请求体**就落在
+**最直接的一条路：把官方发来的请求原文记下来**（`capture.enabled`，2026-09-29 落地；
+`default.yaml` 自 2026-10-19 起**默认开**）。
+跑一轮，`/add` 与 `/search` 的**原始请求体**就落在
 `var/capture/requests.jsonl`（容器里是 `/data/capture/requests.jsonl`，在卷里可 `docker cp`）——
 每一行都有**官方原样发来的 `request_id` 字符串**——这是唯一一手证据。
 配置项与四条纪律见

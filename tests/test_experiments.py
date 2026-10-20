@@ -1187,3 +1187,20 @@ def test_missing_pipeline_reports_the_archive_one_when_absent(tmp_path):
     absent = runner.missing_pipeline("locomo-refined", tmp_path)
     assert absent is not None and absent.name == "pipeline_locomo-refined.py"
     assert runner.missing_pipeline("beam", tmp_path).name == "pipeline_beam.py"
+
+
+def test_truncation_note_does_not_claim_one_stratification_key() -> None:
+    """分层抽样只写"按该数据集声明的分层键"——**不能写死 `question_type`**。
+
+    冻结口径里 `spread=True` 的数据集分层键各不相同（table/passage、label/challenge、
+    uuid、跳数…），写死一个键会让 run record 的 note 与实际的抽样方式不符。
+    """
+    note = runner.truncation_note(10, spread=True)
+    assert "question_type" not in note
+    assert "分层" in note
+
+
+def test_a_negative_limit_is_refused_before_any_loading(capsys):
+    """负的 `--limit` 会变成 Python 切片——取到的题数看起来正常、语义却反了。"""
+    assert runner.main(["--dataset", "clbench", "--limit", "-1"]) == runner.EXIT_PRECONDITION_FAILED
+    assert "不能为负" in capsys.readouterr().err

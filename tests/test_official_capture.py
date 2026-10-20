@@ -605,3 +605,23 @@ def test_support_mirror_matches_every_real_kit_combination():
     assert not supports("unknown", "none")
     assert not supports("hybridqa", "rubric")
     assert not supports("musique", "letters")
+
+
+def test_kit_rejects_a_malformed_extra_row(capture: Path) -> None:
+    """补金标行缺键/类型错时，**构建期**响亮失败——不能让它静默变成 `None`。"""
+    from tools.build_official_kit import build
+
+    extra_path = capture / "official-gold-extra.jsonl"
+    rows = [json.loads(line) for line in extra_path.open(encoding="utf-8")]
+
+    broken = dict(rows[0])
+    broken.pop("gold_native")
+    _write(extra_path, [broken])
+    with pytest.raises(SystemExit, match="gold_native"):
+        build(capture)
+
+    broken = dict(rows[0])
+    broken["gold_answers"] = "1789"  # 键名写成单数时的典型形状
+    _write(extra_path, [broken])
+    with pytest.raises(SystemExit, match="gold_answers"):
+        build(capture)

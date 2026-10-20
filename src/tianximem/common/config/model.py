@@ -239,11 +239,13 @@ class RerankConfig:
 
 @dataclass(frozen=True, slots=True)
 class CaptureConfig:
-    """`Add` / `Search` 的**原文采集**（诊断旁路，**默认关**）。
+    """`Add` / `Search` 的**原文采集**（诊断旁路，**代码内置缺省关**）。
 
     ⚠ **它不属于 A / B / C 任何一类**：那三类说的都是"影响结果的量"，而本项
     只把官方发来的请求抄一份落盘（[`../service/capture.py`](../service/capture.py)）。
-    默认关是因为它按设计**只在"要看清官方发了什么"时打开**（S6），其余时间是净开销。
+    ⚠ **两处口径**：`configs/default.yaml` 取 `true`（2026-10-19 起为基线口径，
+    S6/S7 要官方真实请求原文）；这里的 `False` 只给**缺这个键的旧快照**用——
+    与 `agentic.enabled` / `router.enabled` 同一个形状。
 
     实现与四条纪律（在解析之前抄 / 不改下游 body / 不吞异常 / 写失败不影响响应）见那个模块。
     """

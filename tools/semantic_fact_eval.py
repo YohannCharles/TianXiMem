@@ -50,7 +50,7 @@ def _parse_json(text: str) -> Any:
 
 def _read_qwen_cache(path: Path) -> dict[str, list[tuple[str, str, str]]]:
     result: dict[str, list[tuple[str, str, str]]] = {}
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
         if not line.strip():
             continue
         row = json.loads(line)

@@ -21,7 +21,7 @@ Add 把有逐字来源的独立事实写进 `memory_facts`；Search 把受支持
 解析失败或证据不完整时整体回退原混合检索。`retrieval.grounded_planner.timeout_seconds`、
 `retrieval.grounded_planner.max_output_tokens`、
 `retrieval.grounded_planner.temperature` 和
-`retrieval.grounded_planner.prompt_version`（当前 `v2`，**改提示词必须升版本**）分别控制
+`retrieval.grounded_planner.prompt_version`（当前 `v3`，**改提示词必须升版本**）分别控制
 该步骤的请求超时、输出上限、温度和提示词版本。
 Add、幂等重放和旧库补索引共用一个抽取器与版本覆盖表 `evidence_coverage`。
 没有事实的来源也记扫描覆盖；版本变化后重新扫描。当前用户尚未扫描完、范围超限、
@@ -53,19 +53,22 @@ Add、幂等重放和旧库补索引共用一个抽取器与版本覆盖表 `evi
 
 §12.1 风险 R1 的第 3 条对冲：**"所有阈值必须是配置项、不得硬编码，否则切换等于重写代码。"**
 
-R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B + qwen3.5-9b，提交前才换回 `text-embedding-v4` + `gpt-4o-mini`。代价是**本地标定出的所有阈值、权重、排序策略在切换后都不保证成立**。因此本清单不是"配置文档"，是**切换可行性**的前提：凡是这里漏掉的量，Step 5 都会变成改代码。
+R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-4B + qwen3.5-9b，提交前才换回 `text-embedding-v4` + `gpt-4o-mini`。代价是**本地标定出的所有阈值、权重、排序策略在切换后都不保证成立**。因此本清单不是"配置文档"，是**切换可行性**的前提：凡是这里漏掉的量，Step 5 都会变成改代码。
 
 同理 §15：**所有消融项必须是配置项**，否则 §13 的对照实验无法执行。
 
 ---
 
-## 1. 三个 profile
+## 1. profile 清单
 
 | 文件 | 用途 | 模型 | 状态 |
 | --- | --- | --- | --- |
-| `configs/default.yaml` | 基线值，所有 profile 的父级 | Qwen3-Embedding-8B（**开发期唯一有活端点的**） | ✅ |
+| `configs/default.yaml` | 基线值，所有 profile 的父级 | `Qwen/Qwen3-Embedding-4B`（**现役网关 `memory2` 的模型 id**） | ✅ |
 | `configs/local.yaml` | **开发期**：代理评测、迭代、消融 | 同上 | ✅（**覆盖集合名 + `rerank.enabled`**） |
 | `configs/submit.yaml` | **提交期**：Full 定稿 | `text-embedding-v4` + `gpt-4o-mini` | 🟡 **已建**（2026-09-28，**只换了模型名**；由模型派生的阈值待 Step 5 重标定） |
+| `configs/v1.0.yaml` | **v1.0 流程对照**：用当前代码复现 v1.0 的 Search 链 | 继承 `default.yaml` | ✅（覆盖集合名 + 关取证/路由/多跳） |
+| `configs/probe-nocapture.yaml` | 定向重跑的**诊断 profile**：`default.yaml` 减去请求采集 | 继承 `default.yaml` | ✅（只关 `capture.enabled`，避免自测流量污染 S6 采集） |
+| `configs/probe-react.yaml` | 定向重跑的**诊断 profile**：换 `agentic.mode=react` 并关采集 | 继承 `default.yaml` | ✅ |
 
 `local.yaml` 与 `submit.yaml` 只覆盖**模型与由模型派生的量**（向量维度、token 预算实测量、全部标定阈值），其余继承 `default.yaml`。
 
@@ -192,6 +195,11 @@ R1 是团队**主动接受**的一次偏离——开发期用 Qwen3-Embedding-8B
 ---
 
 ## 3. 检索（§7）—— ✅ **已落地**
+
+> ⚠ **表里的点分名是"追踪用的名字"，不都是 yaml 键**：能写进 `configs/*.yaml` 的只有
+> `retrieval.prefetch_limit` / `query_instruction` / `grounded_evidence` / `evidence_*` /
+> `fact_backfill_limit` / `grounded_planner.*` / `rrf.*`；**A 类常量**
+> （`bm25.model` / `dense.rewrite` / `query_top_k`）是**规格**，写进 yaml 会被拒绝。
 
 | 配置项 | 初值 | 类 | 说明 | 出处 |
 | --- | --- | --- | --- | --- |
@@ -426,6 +434,12 @@ v1 的 Search 路径实际不调用 LLM"。**查询路由器是第一个消费�
 
 ## 7. Rerank 与打包（§11）—— ✅ **已落地**
 
+> ⚠ **不是所有点分名都是 yaml 键**：`packaging.created_at_granularity` / `score_mode` /
+> `render_template` / `role_prefix` 是 **§11.2/§11.3 的规格**（住在 `common/render.py` 与
+> `rank/neighbor.py`），写进 yaml 会被拒绝；真正可配的是本表里的
+> `rerank.enabled` / `rerank.timeout_seconds` / `rerank.envelope` /
+> `packaging.inject_abs_time` / `annotate_relatives` / `annotate_unit_totals`。
+
 | 配置项 | 初值 | 说明 |
 | --- | --- | --- |
 | `rerank.enabled` | **`true`** | ✅ §15 的消融开关。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。**`true` 是提交口径**（2026-09-28）：D8 把排序定为主线，默认关着等于放弃它（A3 在 conv-26 上 +4.3pt）。⚠ 开发期在 `configs/local.yaml` 里**显式关掉**（墙钟约 3×，直接决定迭代速度）——**那是覆盖，不是默认值**。**它值不值是 A3 要回答的**（旧 A3 快照已清理；结论见台账），**别拿默认值当结论** |
@@ -472,18 +486,26 @@ v1 的 Search 路径实际不调用 LLM"。**查询路由器是第一个消费�
 
 ## 8. 存储（§6）—— ✅ **已落地**
 
-| 配置项 | 值 | 理由 |
-| --- | --- | --- |
-| `storage.qdrant.mode` | **`server`** | **local 模式会静默丢弃 payload 索引**，而 `user_id` / `session_id` / `event_time` 三个筛选全依赖它——机制与出处见 [`deploy/CLAUDE.md`](../deploy/CLAUDE.md) §1 |
-| `storage.qdrant.image` | **钉死 ≥ v1.17.0** | §7.3 的版本门槛 |
-| `storage.qdrant.shard_number` | **1** | 根级融合跨分片合并，**分片数变化会改变排名**——为可复现必须单分片 |
-| `storage.qdrant.named_vectors` | `dense` + `bm25` | 稀疏向量的距离固定为 Dot |
-| `storage.qdrant.payload_indexes` | `user_id`(**keyword** + `is_tenant`) / `session_id`(keyword) / `event_time`(integer) | **必须在写入数据前建**，否则 HNSW 需要重建才有过滤感知 |
-| `storage.qdrant.payload_fields` | `memory_id` / `user_id` / `session_id` / `local_index` / `event_time` | **不含正文**。⚠ **D28** 起 `chunk_ordinal` 已从 payload 里删掉（那个列本身也没了）——payload 里这些都**没有消费方**，只是溯源；过滤只按 `user_id`，扩窗读 SQLite |
-| `storage.qdrant.wait` | **`true`** | 契约要求"响应前立即可搜"；默认异步不保证 |
-| `storage.sqlite.path` | `var/tianxi.db`（`.env`） | 真源，文件随 run 归档。⚠ 是 `var/` 不是 `data/`——后者与评测材料 `dataset/` 容易混（见 [`../var/CLAUDE.md`](../var/CLAUDE.md)） |
-| `cache.embed.dir` | `var/embed_cache`（`.env`） | **必须落盘** |
-| `cache.embed.key` | **渲染文本哈希** | **不能用 `id`** |
+> ⚠ **本表混了三类东西，别把它们都当 yaml 键**（加载器只接受标了 ✅ 的那两个）：
+> **yaml 键** = `storage.qdrant.collection`、`storage.sqlite.busy_timeout_ms`；
+> **env** = `storage.sqlite.path`（`TIANXIMEM_SQLITE_PATH`）、`cache.embed.dir`（`TIANXIMEM_EMBED_CACHE_DIR`）；
+> **部署/代码常量** = Qdrant 的 mode / image / shard / named_vectors / payload_* / wait 与
+> `cache.embed.key`——它们在 `deploy/compose.yaml`、`store/qdrant_store.py` 或
+> `embed/base.py` 里，**写进 `configs/*.yaml` 会被拒绝**（`不认识的键`）。
+> 下面用「住哪」列标出来。
+
+| 配置项 | 值 | 住哪 | 理由 |
+| --- | --- | --- | --- |
+| `storage.qdrant.mode` | **`server`** | 部署 | **local 模式会静默丢弃 payload 索引**，而 `user_id` / `session_id` / `event_time` 三个筛选全依赖它——机制与出处见 [`deploy/CLAUDE.md`](../deploy/CLAUDE.md) §1 |
+| `storage.qdrant.image` | **钉死 ≥ v1.17.0** | 部署 | §7.3 的版本门槛 |
+| `storage.qdrant.shard_number` | **1** | 部署 | 根级融合跨分片合并，**分片数变化会改变排名**——为可复现必须单分片 |
+| `storage.qdrant.named_vectors` | `dense` + `bm25` | 部署 | 稀疏向量的距离固定为 Dot |
+| `storage.qdrant.payload_indexes` | `user_id`(**keyword** + `is_tenant`) / `session_id`(keyword) / `event_time`(integer) | 部署 | **必须在写入数据前建**，否则 HNSW 需要重建才有过滤感知 |
+| `storage.qdrant.payload_fields` | `memory_id` / `user_id` / `session_id` / `local_index` / `event_time` | 部署 | **不含正文**。⚠ **D28** 起 `chunk_ordinal` 已从 payload 里删掉（那个列本身也没了）——payload 里这些都**没有消费方**，只是溯源；过滤只按 `user_id`，扩窗读 SQLite |
+| `storage.qdrant.wait` | **`true`** | 部署 | 契约要求"响应前立即可搜"；默认异步不保证 |
+| `storage.sqlite.path` | `var/tianxi.db`（`.env`） | **env** | 真源，文件随 run 归档。⚠ 是 `var/` 不是 `data/`——后者与评测材料 `dataset/` 容易混（见 [`../var/CLAUDE.md`](../var/CLAUDE.md)） |
+| `cache.embed.dir` | `var/embed_cache`（`.env`） | **env** | **必须落盘** |
+| `cache.embed.key` | **渲染文本哈希** | 代码 | **不能用 `id`** |
 
 > **`is_tenant` 只支持 keyword / uuid 两种类型**——别把 `user_id` 建成 integer（§6.3）。
 
@@ -495,7 +517,7 @@ v1 的 Search 路径实际不调用 LLM"。**查询路由器是第一个消费�
 
 | 配置项 | 提交期 | 开发期 | 住哪 | 说明 |
 | --- | --- | --- | --- | --- |
-| `models.embedder` | `text-embedding-v4` | **`Qwen/Qwen3-Embedding-8B`** | **yaml** | **只能用前者**（§2.3）。⚠ 值是**服务端 id**（端点 `/v1/models` 声称的那个），随网关而变；**现役网关忽略 `model`**，所以填错不报错，但它**进缓存坐标系** ⇒ 改它就换缓存文件 |
+| `models.embedder` | `text-embedding-v4` | **`Qwen/Qwen3-Embedding-4B`** | **yaml** | **只能用前者**（§2.3）。⚠ 值是**服务端 id**（端点 `/v1/models` 声称的那个），随网关而变；**现役 `memory2` 网关会校验且大小写敏感**（`...-4b` ⇒ 404），填错可能不报错，但它**进缓存坐标系** ⇒ 改它就换缓存文件 |
 | `models.llm` | `gpt-4o-mini` | qwen3.5-9b | **env**（`AML_MODEL`） | **只能用前者**（§2.3）。⚠ 开发期**有两个对话端点**（`memory2` + `memory3`，同一个模型、两把 key）——见下面「对话端点」一条 |
 | `TIANXIMEM_RERANKER_MODEL` | **`Qwen/Qwen3-Reranker-4B`** | 同左 | **env** | 整份规则里**唯一不限模型**的组件。**提交时不得更换**（D12）。⚠ 网关**可能校验**它、也可能**忽略**它（现役主网关忽略）⇒ **照端点声称的值填** |
 | `models.embed_dim` | **1024** | **1024** | **yaml** | **期望维度**——它是**断言，不是赋值**：维度仍由 §7.4 的接口提供（`dim` 是只读属性，来自真实响应），这一项只回答"这个部署接受多大的向量"，不符就响亮失败。⚠ 它**进缓存坐标系**（换维度 ⇒ 换缓存文件）**也进** `ensure_collection` 的维度自检 |
@@ -519,7 +541,8 @@ v1 的 Search 路径实际不调用 LLM"。**查询路由器是第一个消费�
 >
 > | 部署 | embedding id | reranker id | 请求字段 | embedding 默认维度 |
 > | --- | --- | --- | --- | --- |
-> | **现役**：`memory.021130.xyz`（自研封装） | **`Qwen/Qwen3-Embedding-8B`** | **`Qwen/Qwen3-Reranker-4B`** | **`query`** → `results[].score` | **1024**（原生 4096，MRL） |
+> | **现役 embedding**：`memory2.021130.xyz`（自研封装） | **`Qwen/Qwen3-Embedding-4B`** | —— | OpenAI `/embeddings`：`input` → `data[].embedding` | **1024** |
+> | **现役 reranker**：`memory.021130.xyz`（自研封装，D18） | —— | **`Qwen/Qwen3-Reranker-4B`** | **`query`** → `results[].score` | —— |
 > | 2026-09-28～10-09：`memory3.021130.xyz`（vLLM 直服） | `qwen3-embedding-8b` | `qwen3-reranker-4b` | `queries` → `data[].score` | 4096 |
 > | 本机自托管（容器 → 宿主机 `127.0.0.1:8082`） | —— | `Qwen/Qwen3-Reranker-4B` | `query` | —— |
 >
@@ -542,7 +565,7 @@ v1 的 Search 路径实际不调用 LLM"。**查询路由器是第一个消费�
 > 能被 diff 出来）；而 LLM 与 reranker 的模型名在开发期与提交期**是同一套网关地址上的
 > 不同部署**，属于"端点身份"，所以跟 base_url / key 一起住在 `.env`。
 
-**架构必须 embedder-agnostic**（§2.3）：开发期的 Qwen3-Embedding-8B 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。集合的向量维度**由 §7.4 的接口提供**（`dim` 只读、来自真实响应，代码里不写死）；`models.embed_dim` **只是断言**它——不是赋值。Step 5 换模型时按新维度改这一项并**重建集合**。
+**架构必须 embedder-agnostic**（§2.3）：开发期的 Qwen3-Embedding 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。集合的向量维度**由 §7.4 的接口提供**（`dim` 只读、来自真实响应，代码里不写死）；`models.embed_dim` **只是断言**它——不是赋值。Step 5 换模型时按新维度改这一项并**重建集合**。
 
 **为什么 reranker 是唯一能加码的地方**（§11.1）：§2.3 把 embedding 与 LLM 两处都钉死了，**只有 Reranker 不作规定**——所以这是唯一能自己投入算力的环节，也是 §4 认定"排序是最大杠杆"之后唯一还能加码的地方。
 
@@ -573,16 +596,20 @@ v1 的 Search 路径实际不调用 LLM"。**查询路由器是第一个消费�
 ## 12. 诊断：请求**原文**采集（**S6**）—— ✅ **已落地**（2026-09-29）
 
 **它全是诊断，不是功能**：把官方发来的 `/add` / `/search` **原样**抄一份落盘，
-用来核验**官方真实请求的形状**。默认关。
+用来核验**官方真实请求的形状**。**`default.yaml` 里默认开**（2026-10-19 起）。
 
 | 配置项 | 初值 | 类 | 说明 |
 | --- | --- | --- | --- |
-| `capture.enabled` | `false` | **—** | 开关。`false` ⇒ **连中间件都不装**（零开销、零行为差异） |
+| `capture.enabled` | `true`（`default.yaml`；代码内置缺省仍 `false`） | **—** | 开关。`false` ⇒ **连中间件都不装**（零开销、零行为差异） |
 | `capture.max_bytes` | `52428800` | **—** | **每份文件**的上限（50 MiB）：写满就换下一份（`<name>.part2.jsonl`…）。⚠ 它是**切分粒度，不是总量上限** |
 
 > ⚠ **`—` 不是漏标**：§1.5 的 A / B / C 三类说的都是**影响结果的量**，而本项不改任何行为
 > （它的"关"分支与"没有这个功能"逐字等价）。所以它既不是契约常量、也不是阈值、
-> 更不需要 ablation 数据——**它是观测**。默认关只是因为其余时间它是净开销。
+> 更不需要 ablation 数据——**它是观测**。
+>
+> ⚠ **开关两处口径**：`configs/default.yaml` 取 `true`（S6/S7 要官方真实请求原文，
+> 且团队已确认磁盘够用）；`common/config/model.py` 的代码内置缺省仍是 `false`——
+> 缺这个键的旧快照就按"采集关闭"跑。与 `agentic.enabled` / `router.enabled` 同一个形状。
 >
 > **路径在 `.env` 的 `TIANXIMEM_CAPTURE_PATH`**（路径归 env，开关归 yaml）——与
 > `rerank.enabled` + `TIANXIMEM_RERANKER_*` 同一个拆法。容器形态是
@@ -591,7 +618,7 @@ v1 的 Search 路径实际不调用 LLM"。**查询路由器是第一个消费�
 **为什么会有多个文件**：一轮 Full 的请求原文按 **~1.5 GB** 估（§2.2 的 0.5–2 天），
 而**单个 1.5 GB 的 JSONL 打不开**——诊断产物打不开就等于没记 ⇒ 按 `capture.max_bytes`
 切成 ~30 份（每份 50 MiB，`requests.jsonl` / `requests.part2.jsonl` / …，每份的 `meta` 里带
-`file_seq`）。**没有总量上限**：忘了关就是把盘记满，跑完记得关回去。
+`file_seq`）。**没有总量上限**：磁盘容量由部署侧保证，长期开启时按需清理。
 
 **为什么要有它**：**S6** —— 平台的 `request_id` 到底长什么样、批序号语义是什么，
 我们**没有一手文档**（[`open-questions.md`](./open-questions.md) 的 S6 记着"来源是团队告知"）。

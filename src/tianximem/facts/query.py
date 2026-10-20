@@ -8,11 +8,28 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Literal
 
-from tianximem.facts.evidence import EvidenceFact, key, relation_key
+from tianximem.facts.evidence import FIRST_PERSON, EvidenceFact, key, relation_key
 from tianximem.facts.grammar import MONTH, NAME, month_index
 from tianximem.facts.input import input_complete
 from tianximem.facts.paths import question_path
 from tianximem.facts.sales import SALE_ASSERTION
+
+#: 「逐次取证」的关系集合：同一条事实在**不同来源**里的每一次出现各自算证据
+#: （"哪几次""谁在场"）。执行器不得按三元组去重——去重会把"几次"压成"一次"。
+#: ⚠ **这是唯一一份**：[`../service/grounded_planner.py`](../service/grounded_planner.py)
+#: 从本模块导入它；⛔ 不要在 planner 里再抄一份——新增关系时两侧会**静默不同步**，
+#: 表现为"出现几次"类题少算。
+MULTISET_RELATIONS = frozenset(
+    {
+        "document title",
+        "meeting topic",
+        "meeting type",
+        "attendee",
+        "organizer",
+        "absent from meeting",
+        "meeting frequency",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,11 +45,22 @@ class FactPattern:
     def __post_init__(self) -> None:
         object.__setattr__(self, "relations", tuple(relation_key(r) for r in self.relations))
 
-    def matches(self, fact: EvidenceFact) -> bool:
+    def matches(self, fact: EvidenceFact, owner: str = "") -> bool:
+        """`owner` 是该 user 的真名键（读取期解析，D50）。
+
+        ⚠ **为什么需要它**：`store.fetch_evidence` 在**读取时**把第一人称事实的
+        `subject` 换成真名（D50），而计划里的 `subject` 仍是字面 `"i"`。
+        不带 `owner` 比较会让「问 I」的计划在**有自我介绍的用户**上全部判否
+        ——静默回退原链，且只在部分用户上发生（2026-10-19 实测复现）。
+        """
         return (
             (not self.source_ids or fact.parent_memory_id in self.source_ids)
             and (not self.relations or relation_key(fact.relation) in self.relations)
-            and (not self.subject or key(fact.subject) == self.subject)
+            and (
+                not self.subject
+                or key(fact.subject) == self.subject
+                or (bool(owner) and self.subject in FIRST_PERSON and key(fact.subject) == owner)
+            )
             and (not self.object or key(str(fact.get("match_object", fact.object))) == self.object)
             and all(
                 key(str(fact.get(name, ""))) == key(str(value)) for name, value in self.qualifiers

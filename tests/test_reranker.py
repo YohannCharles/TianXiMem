@@ -582,6 +582,8 @@ def _app_config(tmp_path, *, reranker: bool, rerank_env: dict | None = None):  #
         "TIANXIMEM_SQLITE_PATH": str(tmp_path / "tianxi.db"),
         "TIANXIMEM_QDRANT_URL": "http://unused",
         "TIANXIMEM_EMBED_CACHE_DIR": str(tmp_path / "cache"),
+        # ⚠ `default.yaml` 的 capture 默认开 ⇒ 不隔离就会往仓库的 var/capture 写 meta 行
+        "TIANXIMEM_CAPTURE_PATH": str(tmp_path / "capture.jsonl"),
     }
     if reranker:
         env.update(

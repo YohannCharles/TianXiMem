@@ -17,7 +17,7 @@ Dockerfile      检索服务的镜像（多阶段；**上下文是仓库根**）
 >
 > `configs/submit.yaml` **已建**（2026-09-28，只换了模型名 `text-embedding-v4`），
 > 但它的取值要靠 `TIANXIMEM_PROFILE=submit` 才生效；`.env.example` 里默认写的仍是 `default`
-> ——那一份的 `models.embedder` 是开发期的 `Qwen/Qwen3-Embedding-8B`。
+> ——那一份的 `models.embedder` 是开发期的 `Qwen/Qwen3-Embedding-4B`。
 > ⇒ **镜像本身两种口径都能跑**，差别只在 profile 与 `AML_EMB_*` 指向哪。
 > ⬜ **Step 5 尚未完成**：由模型派生的阈值**还没重标定**，换模型后**整个集合要重建**
 > （§4 的 runbook），届时**同一份 compose 不用改**——变的是 `configs/`、`.env` 与集合。
@@ -94,7 +94,7 @@ curl -s http://10.193.135.28:28088/health                      # 期望 {"status
 | 从别的机器 connection refused，**日志里什么都没有** | `TIANXIMEM_BIND` 还是 `127.0.0.1` | 设 `0.0.0.0` |
 | `sqlite3.OperationalError: unable to open database file`，容器**启动即退** | 用了**绑定挂载**（`-v /宿主/路径:/data`）——容器以 `app`（**uid 10001**）运行，而那个目录属于宿主用户 | `chown -R 10001:10001 /宿主/路径`（或 `chmod 777`）。⚠ **命名卷不会有这个问题**——Docker 首次挂载时会继承镜像里 `/data` 的属主，所以 compose 默认那条路是好的 |
 | `Bind for 0.0.0.0:6333 failed: port is already allocated` | 老版本 compose 起的 Qdrant 容器还占着 0.0.0.0 | 先 `docker rm -f tianxi-qdrant`，或用 `TIANXIMEM_QDRANT_PORT` 换端口 |
-| Add 报 4xx 且信息里有模型名 | `configs/default.yaml` 的 `models.embedder`（现在是 `Qwen/Qwen3-Embedding-8B`）与本机网关服务的不一致 | ⚠ 有的部署（vLLM 直服那一档）**会校验** `model`：必须与 `/v1/models` 列出的 id 逐字相同，否则 404；现役主网关**忽略**它（不报错）。**照 `/v1/models` 声称的值填**，两边都对（改 config 后重建镜像，或挂配置目录，见 §0.5） |
+| Add 报 4xx 且信息里有模型名 | `configs/default.yaml` 的 `models.embedder`（现在是 `Qwen/Qwen3-Embedding-4B`）与本机网关服务的不一致 | ⚠ 有的部署（vLLM 直服那一档、以及现役 `memory2`）**会校验** `model`：必须与 `/v1/models` 列出的 id 逐字相同（**大小写敏感**，`...-4b` ⇒ 404）；旧的 `memory.021130.xyz` **忽略**它（不报错）。**照 `/v1/models` 声称的值填**，两边都对（改 config 后重建镜像，或挂配置目录，见 §0.5） |
 | 服务起不来、日志说缺 `embed.base_url` | `deploy/.env` 没建或键名写错 | 见上面 ① |
 | 服务起不来、日志说缺 `AML_BASE_URL`（或点名 `router.enabled`） | `router.enabled` **默认开**，但 `.env` 没填对话端点 | 补 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（见上面 ①）；或把 `router.enabled` 关回 `false`（§0.5） |
 
@@ -273,13 +273,13 @@ docker compose -f deploy/compose.yaml exec -T app-v10 python eval/smoke/prefligh
 | 步 | 做什么 | 命令 / 判据 |
 | --- | --- | --- |
 | **①** | 拿到带这一层的代码 | **路 A**（服务器能出网）：`git pull` 到含 `src/tianximem/service/capture.py` 的 commit（`git log --oneline -- src/tianximem/service/capture.py` 查得到）· **路 B**（内网）：本地 `make image-build` → `docker save` → `scp` → `docker load`（见上一节） |
-| **②** | **确认开关**（⚠ **仓库里提交的就是 `enabled: true`**——2026-09-29 起，见 `configs/default.yaml` 的注释；这一步通常是空操作） | 要**改**它：**路 A**：在**服务器**的仓库里就地改 `configs/default.yaml`（或按 §0.5 挂一份配置目录——`TIANXIMEM_CONFIG_DIR` 能覆盖它，不必重建镜像）；**路 B**：改**本地**那份再 `make image-build`（yaml 烘进镜像）。⚠ **提交状态已是 `true`**，所以"别提交它"那条不再适用——改完它会显示为一次改动 |
+| **②** | **确认开关**（⚠ **仓库里提交的就是 `enabled: true`**——2026-10-19 起为基线口径，见 `configs/default.yaml` 的注释；这一步通常是空操作） | 要**改**它：**路 A**：在**服务器**的仓库里就地改 `configs/default.yaml`（或按 §0.5 挂一份配置目录——`TIANXIMEM_CONFIG_DIR` 能覆盖它，不必重建镜像）；**路 B**：改**本地**那份再 `make image-build`（yaml 烘进镜像）。⚠ **提交状态已是 `true`**，所以"别提交它"那条不再适用——改完它会显示为一次改动 |
 | **③** | 重建 + 起 | **路 A**：`docker compose -f deploy/compose.yaml up -d --build` · **路 B**：`docker load` 新镜像后 `up -d`（**不要带 `--build`**）。`ps` 期望 `app (healthy)` |
 | **④** | **核对采集真的开了** | `docker compose -f deploy/compose.yaml logs app \| grep 请求采集` ⇒ 期望 `请求采集已开启：…/data/capture/requests.jsonl（每份 … 字节，写满自动换下一份）`。⚠ 若看到 **ERROR「打不开文件」**：采集已**自动关闭**，服务照常跑——去查 `TIANXIMEM_CAPTURE_PATH` 与 `/data` 卷属主（坑表里那条 `chown 10001:10001`） |
 | **⑤** | 跑你要跑的（冒烟一次 / 一轮 Smoke） | 见 [`../docs/submission.md`](../docs/submission.md) §1 |
 | **⑥** | 取文件 | **可能有好几份**（每 50 MiB 一份）：`docker compose -f deploy/compose.yaml exec -T app sh -c 'ls -la /data/capture/'`，再逐份 `docker compose -f deploy/compose.yaml cp app:/data/capture/requests.jsonl ./`、`…/requests.part2.jsonl ./` … |
 | **⑦** | 读它（下表） | |
-| **⑧** | **关回去** | 把 `configs/default.yaml` 的 `capture.enabled` 改回 `false`。**路 A**（服务器有仓库）：就地改 → `up -d --build`。**路 B**：改**本地**那份 → `make image-build` → `docker load` → `up -d`（**不带 `--build`**）。⚠ **`git checkout -- configs/default.yaml` 关不掉它**（提交状态就是 `true`，checkout 只是恢复成 `true`）。⛔ **别用 `down -v`**：那个卷同时装着唯一不可重建的 `tianxi.db` |
+| **⑧** | **需要时临时关掉**（⚠ 基线就是 `true`，通常**不必**关） | 只有在"采集产物会污染 / 磁盘告急"时才关：把 `configs/default.yaml` 的 `capture.enabled` 改 `false`。**路 A**（服务器有仓库）：就地改 → `up -d --build`。**路 B**：改**本地**那份 → `make image-build` → `docker load` → `up -d`（**不带 `--build`**）。⚠ **`git checkout -- configs/default.yaml` 关不掉它**（提交状态就是 `true`，checkout 只是恢复成 `true`）。⛔ **别用 `down -v`**：那个卷同时装着唯一不可重建的 `tianxi.db` |
 
 **⑦ 怎么读**——一行一次请求，看的是**官方原样发来的那个字符串**：
 

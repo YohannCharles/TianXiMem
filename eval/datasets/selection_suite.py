@@ -15,7 +15,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from tools.build_official_kit import PROMPT_REFS
+from tools.build_official_kit import PROMPT_REFS, validate_gold_extra_row
 
 from eval.datasets.aml.plan import digest
 from eval.datasets.frozen_bundle import file_sha256 as sha256
@@ -124,6 +124,7 @@ def capture_links(capture: Path) -> tuple[dict, dict]:
     extras = {}
     for path in sorted(capture.glob("official-gold-extra*.jsonl")):
         for row in read_jsonl(path):
+            validate_gold_extra_row(row, where=path.name)
             extras.setdefault(int(row["seq"]), row)
     public = {
         int(r["seq"]): r.get("public_gold") or {}
