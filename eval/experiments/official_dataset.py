@@ -254,6 +254,7 @@ def _runtime_drift(saved: dict, current: dict) -> tuple[list[str], list[str]]:
 
 
 def run(args: argparse.Namespace) -> int:
+    replay_only = getattr(args, "replay_only", False)
     manifest_path = Path(args.manifest)
     manifest = load_manifest(manifest_path, verify_sources=True)
     if not manifest["questions"]:
@@ -281,13 +282,14 @@ def run(args: argparse.Namespace) -> int:
             entry = by_source.get(row["source_user_id"])
             if entry is None or row["next_event"] > len(entry[2].events):
                 raise ValueError("serial-prefix 的用户/事件边界不在固定题单中")
-    for family in sorted({row["dataset"] for row in questions.values()}):
-        ensure_dataset(
-            "doc-pp" if family == "docpp" else family,
-            benchmark_dir(),
-            offline=args.offline,
-            purpose="judge",
-        )
+    if not replay_only:
+        for family in sorted({row["dataset"] for row in questions.values()}):
+            ensure_dataset(
+                "doc-pp" if family == "docpp" else family,
+                benchmark_dir(),
+                offline=args.offline,
+                purpose="judge",
+            )
     required = {
         "AML_BASE_URL": api_config.ANSWER_API_BASE,
         "AML_API_KEY": api_config.ANSWER_API_KEY,
@@ -296,10 +298,10 @@ def run(args: argparse.Namespace) -> int:
         "JUDGE_API_KEY": api_config.JUDGE_API_KEY,
         "JUDGE_MODEL": api_config.JUDGE_MODEL,
     }
-    if missing := [key for key, value in required.items() if not value]:
+    if not replay_only and (missing := [key for key, value in required.items() if not value]):
         raise ValueError(f"未配置答案/裁判端点：{missing}；使用 uv run --env-file .env")
     pipeline = pipeline_for(benchmark_dir(), "official-capture")
-    if not pipeline.is_file():
+    if not replay_only and not pipeline.is_file():
         raise ValueError(f"评分 pipeline 缺失：{pipeline}")
     output = Path(args.reports_dir) / "runs" / args.run_id
     runtime = {
@@ -308,6 +310,7 @@ def run(args: argparse.Namespace) -> int:
         "service_revision_note": "caller-declared; verify against the running service checkout",
         "service_base": args.base_url,
         "top_k": 100,
+        "replay_only": replay_only,
         "data_identity": identity,
         "evaluation": evaluation_fingerprint(args),
         "config_fingerprint": config_fingerprint(args.profile, configs_dir=Path(args.configs_dir)),
@@ -411,7 +414,7 @@ def run(args: argparse.Namespace) -> int:
             flush=True,
         )
 
-    if getattr(args, "judge_workers", 0):
+    if not replay_only and getattr(args, "judge_workers", 0):
         streaming = StreamingOfficialJudge(
             output,
             pipeline,
@@ -523,7 +526,7 @@ def run(args: argparse.Namespace) -> int:
                     stop_requested=stop.is_set,
                     stop_at_event=boundary,
                 )
-                if streaming is None and boundary is None:
+                if streaming is None and boundary is None and not replay_only:
                     items = build_official_items(
                         source.questions,
                         hits,
@@ -665,6 +668,28 @@ def run(args: argparse.Namespace) -> int:
             streaming.close(drain=sys.exc_info()[0] is None)
         for client in clients:
             client.close()
+        if replay_only:
+            search_count = 0
+            completed_users = 0
+            for wire in compiled:
+                state = json.loads(
+                    (output / wire.sample.user_id / "checkpoint.json").read_text(encoding="utf-8")
+                )
+                search_count += len(state["hits"])
+                completed_users += state["next_event"] == len(wire.events)
+            write_json(output / "retrieval-status.json", {
+                "stage": "replay-only",
+                "expected_searches": len(questions),
+                "saved_searches": search_count,
+                "completed_users": completed_users,
+                "expected_users": len(compiled),
+                "complete": search_count == len(questions) and completed_users == len(compiled),
+                "answer_judge_started": False,
+            })
+            print(
+                f"Search 已落盘 {search_count}/{len(questions)}；本轮不执行 answer/judge",
+                flush=True,
+            )
         try:
             write_summary(output)
         except (ValueError, OSError) as error:
@@ -718,6 +743,10 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--configs-dir", default="configs")
     execute.add_argument("--profile", default="local")
     execute.add_argument("--max-tokens", type=int, default=1024)
+    execute.add_argument(
+        "--replay-only", action="store_true",
+        help="只按原时间线执行 Add/Search 并保存 checkpoint；不启动答案或裁判",
+    )
     execute.add_argument("--ingest-workers", type=int, default=1, help="跨用户 Add/Search 并发数")
     execute.add_argument("--rerank-local-workers", type=int, default=0)
     execute.add_argument("--rerank-memory3-workers", type=int, default=0)

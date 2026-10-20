@@ -261,6 +261,36 @@ def test_after_replay_starts_models_after_last_search_and_resumes_without_http(c
     assert service.calls == before
 
 
+def test_replay_only_saves_historical_hits_without_models_and_resumes_offline(capture, monkeypatch):
+    observed, argv = configure_official_runner(capture, monkeypatch)
+    service = FakeService()
+    monkeypatch.setattr(pipeline, "ServiceClient", lambda _: service)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Replay-only must not prepare or call answer/judge")
+
+    monkeypatch.setattr(pipeline, "ensure_dataset", forbidden)
+    monkeypatch.setattr(pipeline, "run_judge", forbidden)
+    monkeypatch.setattr(pipeline, "StreamingOfficialJudge", forbidden)
+    monkeypatch.setattr(pipeline.api_config, "ANSWER_API_KEY", "")
+    argv += ["--replay-only", "--judge-scheduling", "after-replay"]
+    assert pipeline.main(argv) == 0
+    output = capture / "reports/runs/parallel"
+    hits = {}
+    for path in output.glob("*/checkpoint.json"):
+        hits.update(json.loads(path.read_text())["hits"])
+    assert set(hits) == {"1", "3", "6"}
+    assert "future" not in hits["1"][0]["content"]
+    assert "future" in hits["3"][0]["content"]
+    assert not list(output.rglob("answers.jsonl"))
+    assert not list(output.rglob("labels.jsonl"))
+    assert not observed
+    assert json.loads((output / "retrieval-status.json").read_text())["complete"] is True
+    before = list(service.calls)
+    assert pipeline.main(argv) == 0
+    assert service.calls == before
+
+
 @pytest.mark.parametrize("grouped", [False, True])
 def test_non_prefix_user_finishes_while_prefix_user_waits(capture, monkeypatch, grouped):
     import threading

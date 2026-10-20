@@ -32,6 +32,14 @@ add/search 按真实时间交错（全量 41% 的题在"该 user 最后一条 ad
 
 长跑韧性（2026-10-19 加）：
 
+`run --replay-only` 只执行 Add/Search，不创建答案/裁判任务，且不要求预先准备裁判
+依赖和答案端点。每次成功 Search 的有序 `id` / `content` / `created_at` / `score`
+保存在 `<run>/<user>/checkpoint.json` 的 `hits[seq]`，先原子落盘再执行后续事件。
+退出时 `retrieval-status.json` 记录已保存题数和用户游标完整度。
+`--judge-scheduling after-replay` 会在重放后自动开始旧版作答，不能替代此开关。
+已有检索完整时可直接复用快照；仅修改 answer/judge 提示词或评分规则无需重放服务。
+新口径须使用独立的答案/标签输出目录，保留检索来源和新评分指纹，不能静默复用旧答案。
+
 `run` 可加 `--judge-workers N`（正数）启用逐题流水线：每个用户原时间线的 Add/Search
 保持串行，每题 Search 先写检查点，再将该题冻结输入交给后台作答/判分；
 下一题及下一用户的检索无需等待答案。`0` 保留原用户整批执行方式。
