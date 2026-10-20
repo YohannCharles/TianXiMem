@@ -18,7 +18,7 @@ from eval.datasets.musique import ANSWER_CONTRACT, REFUSAL
 from eval.datasets.prepare import entries_for
 from eval.experiments import run as runner
 
-#: run_round 与它调用的协作者住在 runner.py（2026-10-16 拆的）。
+#: run_round 与它调用的协作者住在 runner.py。
 #: ⚠ 补丁必须打在「调用点解析的那个模块」上：打在 runner（= run.py）上的是名字快照，
 #: 而真调用发生在 runner.py 里 ⇒ 补丁静默失效（表现是真去加载数据、真发请求，不是报错）。
 from eval.experiments import runner as runner_impl
@@ -156,12 +156,12 @@ def test_musique_local_answer_contract_does_not_change_capture_prompt(bench: Pat
 def test_only_the_chain_lane_drops_the_refusal_exit(bench: Path):
     """⭐ **拒答出口只从"链式多跳"那一档拿掉**，别处的口径一个字不动。
 
-    ⚠ 用户口径（2026-10-12）：**整体大数据评测确实要考拒答**，那条链必须留着出口；
+    ⚠ 用户口径：**整体大数据评测确实要考拒答**，那条链必须留着出口；
     而多跳这一档**没有拒答题** ⇒ 那句子在那里只有一个作用——邀请模型弃答
-    （实测链式 25 题里 **10 道**是模型自己回的 `INSUFFICIENT_EVIDENCE`）。
+    （链式 25 题里 **10 道**是模型自己回的 `INSUFFICIENT_EVIDENCE`）。
 
     ⇒ 判据是**是不是链式那一档**（`…-hop/chain`），**不是**题目可不可答：
-    MuSiQue 原生的 `answerable` / `unanswerable` 两档**都照旧**走 v1（含拒答出口）。
+    MuSiQue 原生的 `answerable` / `unanswerable` 两档**都走 v1**（含拒答出口）。
     """
     from eval.datasets.musique import CHAIN_CATEGORY, DIRECT_ANSWER_CONTRACT, answer_contract_for
 
@@ -216,7 +216,7 @@ def test_the_chain_lane_answer_prompt_has_no_refusal_exit(tmp_path: Path) -> Non
     assert REFUSAL not in prompt  # ⛔ 出口拿掉了
     assert "Do not use outside knowledge" in prompt  # ✅ 别的规则原样
     assert item["question"] in prompt and "(no memories)" in prompt  # 占位符照常填上
-    # ⚠ 判分口径**不变**：拒答在这一档照样算错，只是不再被提示词邀请
+    # ⚠ 判分口径保持一致：拒答在这一档照样算错，只是提示词不会邀请它
     gold = sample.questions[0].gold
     assert extra.judge_musique(REFUSAL, gold, contract=DIRECT_ANSWER_CONTRACT)[0] is False
     assert extra.judge_musique("Final Answer", gold, contract=DIRECT_ANSWER_CONTRACT)[0] is True
@@ -349,7 +349,7 @@ def test_http_round_reaches_real_answer_and_judge_functions(bench, tmp_path, mon
         )
 
     def run_real_functions(pipeline, items, out_dir, *, dataset, endpoint_index=None):
-        # `endpoint_index` 是 D39 的端点轮转（`run_round` 一定传）——本用例关心的是
+        # `endpoint_index` 是端点轮转（`run_round` 一定传）——本用例关心的是
         # 答案/裁判两个函数真的被调到，端点选哪一号与它无关，所以收下不用。
         del endpoint_index
         module = capture_pipeline if dataset == "halumem" else extra
@@ -543,7 +543,7 @@ def test_actual_pipeline_subprocesses_send_retrieval_to_a_local_model(
         assert len(judges) == 1
         assert "JUDGE-ONLY-EVIDENCE" in judges[0]["messages"][0]["content"]
     else:
-        # ⭐ 默认 MuSiQue 判分走规则：答案阶段调用模型，evaluate 阶段不再调用模型裁判。
+        # ⭐ 默认 MuSiQue 判分走规则：答案阶段调用模型，evaluate 阶段不调用模型裁判。
         judges = [r for r in requests if r["model"] == "judge-test"]
         assert len(answers) == len(items) == 2
         assert not judges, "默认 rule 模式不得触发 MuSiQue 模型裁判"

@@ -4,16 +4,15 @@
 ## 它补的是什么口子
 
 [`build_eval_set.py`](../build_eval_set.py)（它生成 `official-eval-questions.jsonl`）只从
-**3 个**数据集捞金标：ScriptMem / LoCoMo-Refined / PersonaMem-v2。官方流量里还出现过别的数据集
-（[`../official-dataset-2026-09-29/README.md`](../official-dataset-2026-09-29/README.md) §4.2.3），
-它们的题库现在都在 `dataset/`（tier = `official-extra`）。
+**3 个**数据集捞金标：ScriptMem / LoCoMo-Refined / PersonaMem-v2。官方流量里还出现过
+其他数据集，它们的题库现在都在 `dataset/`（tier = `official-extra`）。
 
 本脚本按**同一套归一化**（NFKC + 小写 + 空白折叠）逐字匹配题面，把它们也接上。
 
 ## 输出
 
 `<数据集目录>/official-gold-extra.jsonl`，一行一条被匹配上的 search。**按 `seq` 与
-`official-eval-questions.jsonl` join**（两份文件的行序一致，实测过）。
+`official-eval-questions.jsonl` join**（两份文件的行序一致，过）。
 
 | 字段 | 说明 |
 | --- | --- |
@@ -28,7 +27,7 @@
 
 * **MQuAKE-Remastered**：一份 case 同时有 `answer`（更新**前**）与 `new_answer`（更新**后**）。
   官方流量注入的是 `Corpus: {…}` / `Corpus: UPDATE:` 那类更新，**所以金标取 `new_answer`**——
-  实测抽样核对：命中用户的记忆里有 `new_answer` 那一侧的事实。
+  抽样核对：命中用户的记忆里有 `new_answer` 那一侧的事实。
 * **CorporateBench**：`answer` + `answer_type`（int / str），照抄。
 * **MedMemoryBench**：`answers` 是 JSON 串，只取 `is_correct: true` 的那些。
 * **MemTrapBench**：`gold_standard` 是一段**判分要点**（不是答案串），配 `test_type`
@@ -42,8 +41,8 @@
 
     uv run python tools/recover_official_gold.py
 
-题库目录默认取 `TIANXIMEM_BENCHMARK_DIR`（D16：路径不在代码里硬编码）；
-数据集目录默认 `official-dataset-2026-09-29`，输出写在它下面。
+题库目录默认取 `TIANXIMEM_BENCHMARK_DIR`；
+数据集目录默认 `official-dataset-`，输出写在它下面。
 """
 
 from __future__ import annotations
@@ -77,7 +76,7 @@ SOURCES = (
     "personamem-v2",
 )
 
-#: BEAM 各 probing 组的答案字段**不统一**（实测 10 组里有 4 种名字，有的组一个都没有）。
+#: BEAM 各 probing 组的答案字段**不统一**（ 10 组里有 4 种名字，有的组一个都没有）。
 _BEAM_ANSWER_KEYS = ("answer", "ideal_answer", "ideal_response", "ideal_summary")
 
 MQUAKE_JUDGING = (
@@ -111,7 +110,7 @@ def load_mquake(root: Path) -> dict[str, dict]:
 
     逐条定夺见 `resolve_mquake`。
 
-    ⚠ **同一句题面在四个 parquet 里可能各有一个 case，而且答案不同**（实测抽 200 个重名题面，
+    ⚠ **同一句题面在四个 parquet 里可能各有一个 case，而且答案不同**（抽 200 个重名题面，
     199 个的答案真的不一样）。所以**不能"先到先得"**：这里把每个候选都留着，等 `--adds`
     拿到记忆之后，按"该 case 的改写/原始事实有没有被注入"选定那一个。
 
@@ -322,7 +321,7 @@ def load_beam(root: Path) -> dict[str, dict]:
 def load_personamem(root: Path) -> dict[str, dict]:
     """隐式 persona。`user_query` 列是 Python dict 的 repr 串，取里面的 `content`。
 
-    ## 金标按**官方 narrow 口径**（2026-10-19 改）
+    ## 金标按**官方 narrow 口径**
 
     采集里的 PersonaMem 题是**开放题**（不是它题库里的 MCQ）⇒ 官方 AML 那份
     `pipeline_v2_personamem.py` 走 `evaluate-narrow`：把 `preference` 元数据与
@@ -330,7 +329,7 @@ def load_personamem(root: Path) -> dict[str, dict]:
     `do not` 开头时用后者），裁判回 `\\boxed{score}` 的 0–1 连续分。
 
     ⚠ 本行**必须带 `preference`**：缺了它上游那份裁判 prompt 就填不满。
-    当初（D34）判定"采集里没有 preference"——**实测不成立**：114 条采集题
+    当初判定"采集里没有 preference"——**不成立**：114 条采集题
     **全部**能按 query 逐字匹配回 `benchmark.csv` 的某一行，且 `preference` 均非空。
     ⇒ `gold_native` 里带 `preference`，`gold_answers` 仍保留 `correct_answer`
     （它只是参考回答，narrow 裁判**不用**它）。
@@ -396,7 +395,7 @@ def _corpus_index(
 
     只留 `users` 里那些人的——采集原文 300+ MB，没必要全留在内存里；坏行一律跳过。
 
-    ⚠ **不能要求正文以 `Corpus:` 开头**（2026-10-19）：官方 add 的正文可能带
+    ⚠ **不能要求正文以 `Corpus:` 开头**：官方 add 的正文可能带
     `[dataset][session][Dx:y][text] ` 前缀，而事实行的正文就是 `Corpus: {json}`
     ——只取第一行会拿到带前缀的整串，`json.loads` 必然失败。这里统一**按
     `Corpus:` 的位置切**：它后面若是 `UPDATE:`，JSON 在第二行；否则 JSON 就在同一行。
@@ -435,7 +434,7 @@ def _corpus_index(
 def resolve_mquake(row: dict, index: dict[str, dict[str, list[tuple[str, tuple]]]]) -> None:
     """就地定夺这一条 MQuAKE：**先选定是哪个 case，再定夺答案取新旧哪一侧**。
 
-    1. **选题面撞车的那一个 case**（重名题面的答案实测多不相同）：谁的 `edit_triples`
+    1. **选题面撞车的那一个 case**（重名题面的答案多不相同）：谁的 `edit_triples`
        在该 user 提问前的 `Corpus: UPDATE` 里出现过，就选谁；没有的话退一步——谁的主体
        出现在提问前的原始事实里，就选谁；再不行才退回第一个候选。
     2. **定答案**：该 case 的改写在提问前注入过 ⇒ 记忆支持 `new_answer`（`updated`）；

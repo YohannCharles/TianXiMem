@@ -2,7 +2,7 @@
 
 ## 为什么这个文件值当
 
-§13 的那条纪律（**开关必须只影响它命名的那一件事**）在这里有一个具体的落点：
+**开关必须只影响它命名的那一件事**在这里有一个具体的落点：
 四臂的配置是**从一份基线 `replace` 出来的**。多改一个字段（比如顺手把
 `retrieval.grounded_evidence` 也关了），对照就不成立——
 **而结果看起来完全正常，只是结论错了**。
@@ -79,13 +79,13 @@ def test_every_arm_only_flips_its_own_switches(tmp_path) -> None:
 
 
 def test_the_four_isolation_fixes_are_always_applied(tmp_path) -> None:
-    """四处"不是开关但必须改"的东西：**路径 / 采集 / 指标出口 / 精排口径**。
+    """四处"不是开关但必须固定"的东西：**路径 / 采集 / 指标出口 / 精排口径**。
 
-    ⚠ 每一条都对应一次**踩过的坑或一次不可逆的污染**，见 `_arm_config` 的 docstring：
-    · 路径不对 ⇒ 写进开发库；· 采集不关 ⇒ 自测流量混进 S6 的官方原文；
-    · 指标出口不设 ⇒ §14 整段空着且不报错；
+    ⚠ 每一条都对应一种**失败模式或不可逆污染**，见 `_arm_config` 的 docstring：
+    · 路径不对 ⇒ 写进开发库；· 采集不关 ⇒ 自测流量混进官方采集原文；
+    · 指标出口不设 ⇒ 指标段整段空着且不报错；
     · **精排不显式打开 ⇒ 四个臂都没有精排**（`.env` 的 `local` profile 关着它）
-      ⇒ §12.4 那对对照**两个臂一模一样**，但分数照样出得来。
+      ⇒ 那对对照**两个臂一模一样**，但分数照样出得来。
     """
     base = _config(tmp_path)
     config = _arm_config(
@@ -132,7 +132,7 @@ def test_the_paths_are_isolated_from_the_development_store(tmp_path) -> None:
 
 
 def test_the_baseline_arm_is_the_shipped_default_behaviour(tmp_path) -> None:
-    """E0 = **今天装出来的那份配置**（两条开关都关）⇒ 它才配当基线。
+    """E0 = **当前装配出的那份配置**（两条开关都关）⇒ 它才配当基线。
 
     ⚠ 这一条挡的是"基线臂被顺手改了一下"——那样四条臂的对比全部失去参照点。
     """
@@ -151,7 +151,7 @@ def test_the_baseline_arm_is_the_shipped_default_behaviour(tmp_path) -> None:
 
 
 def test_the_forced_arm_really_bypasses_the_router(tmp_path) -> None:
-    """E1 的**全部意义**是"绕过路由器"（§12.3）⇒ `force` 开着、`router` 关着。"""
+    """E1 的**全部意义**是"绕过路由器" ⇒ `force` 开着、`router` 关着。"""
     arm = _arms()["e1"]
     assert arm.force is True and arm.router is False
     config = _arm_config(
@@ -168,7 +168,7 @@ def test_the_forced_arm_really_bypasses_the_router(tmp_path) -> None:
 
 
 def test_the_ablation_arm_differs_from_e1_in_exactly_one_switch(tmp_path) -> None:
-    """§12.4 的对照成立条件：A 与 B(=E1) **只差"每轮精不精排"**这一件事。
+    """对照成立条件：A 与 B(=E1) **只差"每轮精不精排"**这一件事。
 
     ⚠ 差第二处 ⇒ 那个对照回答不了它要回答的问题，**而分数看起来照样有差**。
     """
@@ -218,7 +218,7 @@ def test_an_empty_manifest_is_a_hard_failure(tmp_path) -> None:
 
 
 def test_the_shipped_manifest_lists_only_multi_hop_questions() -> None:
-    """清单里的每一行都必须是 `category == "1"`——**只存 id，不存原文**（§12.5）。"""
+    """清单里的每一行都必须是 `category == "1"`——**只存 id，不存原文**。"""
     rows = [
         json.loads(line)
         for line in Path("eval/coq-multihop.jsonl").read_text(encoding="utf-8").split("\n")
@@ -299,13 +299,11 @@ def test_source_integrity_rejects_nonempty_but_incomplete_or_changed_corpus(
         _require_source_rows([sample], path)
 
 
-# ── `--reuse-hits`：旧格式必须**响亮拒绝** ─────────────────────────────
+# ── `--reuse-hits`：缺少正文的产物必须**响亮拒绝** ─────────────────────
 #
-# ⚠ 这一条是踩出来的：答案步挂了（实测一次 OpenRouter 402）想续跑时，才发现
-#   `<臂>-hits.json` **只存了 `{id, created_at}`、没存正文**——而答案步要用正文拼
-#   `retrieved_context`。⇒ 要么重跑 Search（17 分钟），要么从 SQLite 反推一份
-#   "**看起来一样**"的正文。后者正是本项目最不能接受的失败类型，所以产生产物时
-#   就把正文一起存，并且**拒绝复用旧格式**。
+# ⚠ 答案步要用正文拼 `retrieved_context`。复用产物若只含 `{id, created_at}`，就必须
+#   重跑 Search，不能从 SQLite 反推一份"**看起来一样**"的正文。因此命中文件会保存正文，
+#   并拒绝复用缺少正文的产物。
 
 
 def _hits_row(**extra) -> dict:
@@ -313,7 +311,7 @@ def _hits_row(**extra) -> dict:
 
 
 def test_reuse_hits_refuses_the_old_format_instead_of_guessing_content(tmp_path: Path) -> None:
-    """旧产物（缺正文）**不能复用**：报错并点名，不许从库里反推。"""
+    """缺少正文的复用产物**不能复用**：报错并点名，不许从库里反推。"""
     (tmp_path / "e1-hits.json").write_text(
         json.dumps({"q1": [_hits_row()]}),
         encoding="utf-8",  # 没有 content
@@ -339,9 +337,8 @@ def test_reuse_hits_without_a_file_falls_back_to_searching(tmp_path: Path) -> No
 
 
 def test_a_degraded_arm_is_reported_as_degraded() -> None:
-    """⭐ 实测踩过：`gpt-4o-mini` 那轮 **45/50 题**的 CoQ 第一轮就 `llm_unavailable`
-    ⇒ 那些题返回的是**普通混合检索**的结果（D12 的"绝不 500"把失败兜住了），
-    而**汇总表照样给出一个看起来正常的准确率**。
+    """⭐ `gpt-4o-mini` 在首轮 `llm_unavailable` 时会退回**普通混合检索**，
+    而**汇总表仍会给出一个看起来正常的准确率**。
 
     这一条钉的是"降级能被点名出来"——否则"降级后的 E1"会被读成"E1"，
     而那是个**不会报错的错结论**。
@@ -400,14 +397,13 @@ def test_the_single_hop_manifest_is_a_non_multi_hop_control() -> None:
         assert "question" not in row and "answer" not in row
 
 
-# ── Plan 模式在本工具里的接线（2026-10-12）────────────────────────────────
+# ── Plan 模式在本工具里的接线────────────────────────────────
 
 
 def test_react_mode_keeps_the_historical_arm_keys() -> None:
-    """⭐ **默认模式不带后缀**：`react` 的产物键与本次改动之前**逐字相同**。
+    """⭐ **默认模式不带后缀**：`react` 的产物键就是臂键。
 
-    ⛔ 加了后缀会让所有已归档的 `report.json` 键对不上（`e1` → `e1-react`），
-    而那种破坏**不会报错**——只是以后回看老产物时找不到对应的臂。
+    ⛔ 加后缀会把 `e1` 变成 `e1-react`，破坏既有 `report.json` 的读取契约。
     """
     from tools.coq_eval import _arm_identity
 
@@ -422,7 +418,7 @@ def test_the_plan_arm_only_ever_gets_its_execution_record() -> None:
     """⭐ **只有真跑过 Plan 的那些请求**才有执行记录可前置。
 
     ⛔ React 的调用记录**没有** `mode: plan` ⇒ 它拿到的字典是空的 ⇒
-    `build_input_items` 走的是与本参数存在之前**逐字相同**的那条路。
+    `build_input_items` 不附加执行记录。
     """
     from tools.coq_eval import _plan_record_texts
 
@@ -542,7 +538,7 @@ def test_the_mode_is_recorded_in_the_run_switches(tmp_path) -> None:
         mode="plan",
     )
     assert plan.agentic.mode == "plan"
-    # ⛔ 不传 `mode` ⇒ **不覆盖**（旧配置逐字跑 React）
+    # ⛔ 不传 `mode` ⇒ **不覆盖**（无 mode 的配置逐字跑 React）
     keep = _arm_config(
         base,
         _arms()["e1"],
@@ -554,7 +550,7 @@ def test_the_mode_is_recorded_in_the_run_switches(tmp_path) -> None:
     assert keep.agentic.mode == AgenticConfig().mode == "react"
 
 
-# ── 恢复分支的答案输入（2026-10-13）────────────────────────────────────
+# ── 恢复分支的答案输入────────────────────────────────────
 
 
 def _plan_call(qid: str, *, entered: bool, status: str = "success") -> dict:
@@ -592,9 +588,9 @@ def _plan_call(qid: str, *, entered: bool, status: str = "success") -> dict:
 
 
 def test_the_records_guard_excludes_recovery_questions_from_its_denominator() -> None:
-    """⭐ 执行记录守卫的分母**不含恢复分支的题**（2026-10-13 踩过一次）。
+    """⭐ 执行记录守卫的分母**不含恢复分支的题**。
 
-    ⚠ 实测：LoCoMo 那 25 题里有 9 题 `unresolved` ⇒ 守卫报 `16/25` 并**中止整轮**
+    ⚠ ：LoCoMo 那 25 题里有 9 题 `unresolved` ⇒ 守卫报 `16/25` 并**中止整轮**
     （判分都没跑）。那是一条**假的**回归——那 9 题的答题输入**按设计**就不带执行记录。
     """
     from tools.coq_eval import _require_plan_records
@@ -615,8 +611,8 @@ def test_the_records_guard_still_fires_when_a_record_is_really_missing() -> None
 def test_a_recovery_question_gets_no_execution_record_in_its_answer_input() -> None:
     """⭐ 进了恢复分支的题：**最终答题输入不折执行记录**（原题 ＋ 精排后的原文）。
 
-    ⚠ 记录**没有丢**：它照旧完整躺在 `<臂>-rounds.json` 里（`_execution_record_text`
-    只是不再被**前置**到答案输入）。
+    ⚠ 记录**没有丢**：它完整保存在 `<臂>-rounds.json` 里（`_execution_record_text`
+    只是不会被**前置**到答案输入）。
     """
     from tools.coq_eval import _plan_record_texts, _recovery_calls
 
@@ -659,11 +655,11 @@ def test_the_plan_summary_separates_the_four_recovery_states() -> None:
 
 
 def test_the_recorder_really_writes_the_recovery_fields() -> None:
-    """⭐ **recorder 必须真的把 `recovery` 写进逐题记录**（2026-10-13 踩过）。
+    """⭐ **recorder 必须真的把 `recovery` 写进逐题记录**。
 
-    ⚠ 那处替换的**锚点当时已经不存在**（上一轮删过一行），脚本于是**静默什么都没做**，
-    而下游的汇总对缺失字段**有默认值** ⇒ 报告里打印出 `recovery_statuses: {not_triggered: 50}`
-    ——**看起来像"一次都没触发"**。⇒ 这条用例把"字段在不在"变成断言。
+    ⚠ 下游汇总对缺失字段**有默认值**。字段未写入时会打印
+    `recovery_statuses: {not_triggered: 50}`，**看起来像"一次都没触发"**。
+    ⇒ 这条用例把"字段在不在"变成断言。
     """
     from dataclasses import replace
 

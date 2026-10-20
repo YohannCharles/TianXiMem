@@ -1,177 +1,79 @@
-# retrieve/ — 检索与判据（rerank 之前的那一半）
+# retrieve
 
-**PRD**：§7.1（BM25）、§7.2（Dense）、§7.3（Weighted RRF）、§8（Evidence Checker）
+`retrieve/` owns retrieval policy and executes grounded-evidence plans. It stops before reranking and neighbor expansion.
 
-## 要写什么
+## Files
 
 ```text
-bm25.py      词法那一路：查询侧原样送（不含改写）
-dense.py     语义那一路：Embedder 调用（**每查询恰好 1 次**）
-fusion.py    **检索策略与参数所有权**（prefetch_limit / weights / k / top_k）
-checker.py   §8 名次一致性判据
-evidence.py  共同证据执行器：执行 facts/query 的共同计划（筛选/连接/区间/当前输入）+ 来源覆盖审查
-router.py    **二分类查询路由器**（MULTI_HOP / DEFAULT）——共同取证未完成后的策略选择，**默认开**（D40；代码内置缺省仍 `false`）
+bm25.py       BM25 query construction
+dense.py      dense query execution
+fusion.py     hybrid parameters, stable deduplication, and final candidate ordering
+checker.py    rank-consistency evidence checker
+evidence.py   grounded QueryPlan execution and source review
+router.py     MULTI_HOP / DEFAULT classification
 ```
 
-> ### ⚠ `router.py` 是本目录唯一**调用 LLM** 的东西
->
-> 它只做一件事：**把一个字符串映射成两个枚举值之一**（走 [`../llm/`](../llm/) 的协议）。
-> ⛔ 它**不查库、不取事实、不产出绑定字段**（`subject_key` 之类）——让模型吐绑定键
-> 只有两种结局：静默匹配不上，或**带着逐字引句静默选错事实**。
-> 选出来的路怎么走在 [`../service/pipeline.py`](../service/pipeline.py)。
-> 键与口径见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) **§5.7**。
-> ⚠ **它不是 Search 的第一站**（2026-10-14 起）：共同事实取证（本目录的 `evidence.py`，
-> 确定性、不调 LLM）无条件先试，只有它没给出**完整**证据时才轮到这里。
-> ⚠ **它不改写问题**（§7.2 的"查询原样送"照旧）：路由只决定走哪条路。
-> ⚠ **提示词只有一版**（`ROUTER_PROMPT`，`ROUTER_PROMPT_VERSION = "v5"`，**二分类**：`MULTI_HOP` / `DEFAULT`）——
-> 2026-10-10 按要求把 v1/v2/v3 删掉了；v5（2026-10-14）去掉了 `COUNT` 那一支。**代价记在那份报告里**：
-> "换提示词值不值"的基线**从此不能再原样重跑**。历史与实测见
-> [`../../../eval/reports/router-v4-20261010.md`](../../../eval/reports/router-v4-20261010.md)。
-> ⛔ **提示词里没有 `NONE`**：空 / 无效输入归**入口**（HTTP 边界 + `SearchPipeline`
-> 的 `blank_query` 短路），**不外包给 LLM**——它既多花一次调用，又要靠模型
-> 执行一条它没有强制力的规矩。
+## Hybrid Retrieval
 
-> ### ⚠ 分工：**参数归本目录，执行归 `store/`**
->
-> | | 谁 | 内容 |
-> | --- | --- | --- |
-> | **策略与参数** | **本目录** | `prefetch_limit` / `weights` / `k` / `top_k` 的**取值、校验、标定**；两路怎么组、权重多少 |
-> | **请求构造与执行** | [`../store/qdrant_store.py`](../store/qdrant_store.py) | 把参数翻成 `prefetch` + `rrf` 的 Qdrant 调用，结果还原成领域对象 |
->
-> **为什么这样切**：`k=61` / `prefetch` 每路带 `using` / 根级 `limit` 的**写法**是 Qdrant 的语法知识，而"用哪个模型、权重要不要调"是检索策略——策略**要能被配置驱动、能被 ablation 检验**，所以所有权上移到本目录（执行代码不搬）。
->
-> ⚠ 因此 **`k=61` 的校验写在本目录**：它是正确性常量，配错要**拒绝启动**，不是"顺手调"（D5）。
+```text
+BM25 -----+
+           +-> weighted RRF -> stable ordering -> candidate list
+Dense ----+
+```
 
-**本目录只负责"拿到候选 + 判断够不够"。** 混合链的候选与共同取证链的证据都在这里产生；共同取证不适用或不齐全时，由 `service` 回落到混合链（见下文「共同取证」）。rerank 之后的链路（**Neighbor Expansion、Context Packaging**）在 [`../rank/`](../rank/)——§10 明确它的顺序是"**排序 → 扩窗 → 打包**"，扩窗跑在 rerank **之后**。
+- BM25 uses Qdrant `qdrant/bm25` with IDF.
+- Dense uses the configured embedding backend.
+- Every prefetch names a vector with `using`.
+- Weighted RRF uses `k=61`.
+- The root fusion limit covers the prefetch pool; final `top_k` truncation happens after deterministic ordering.
+- Candidate IDs are deduplicated deterministically.
+- `user_id` is the only isolation filter.
+- `session_id` is never a Search filter.
 
-> ⚠ **不要把 Neighbor Expansion 挪回来。** 它在 §5 的流程图里位置很靠上（容易误读成检索的一环），但 §10 开头的顺序说明是权威的。
+`retrieve/` owns retrieval parameter selection and validation. `store/qdrant_store.py` owns the Qdrant request syntax and execution.
 
----
+## Grounded Evidence
 
-## §7.1 / §7.2 — 两路
+When enabled, the service compiles a query plan through `facts/query.py` and executes it with `evidence.py`.
 
-| | 词法 | 语义 |
-| --- | --- | --- |
-| 实现 | **Qdrant 原生 `qdrant/bm25`**（服务端推理，真 BM25，sparse + `modifier: idf`） | `text-embedding-v4`，经 `embed/` 的 `Embedder` 接口 |
-| 查询 | —— | **原样送进去，不做任何改写**；每查询**恰好 1 次**调用 |
-
-**不使用任何学出来的稀疏权重**（learned sparse）：它既**不是 BM25**；且提交时的 `text-embedding-v4` **不提供该能力**（§7.1）。
-
-### ⚠ 一条必须实测的假设
-
-**BM25 的分数对分词器高度敏感**，所以"真 BM25"这个选择成立，但理由**不是**"BM25 天然更强"，而是"**配正经分词器的 BM25** 更强"。
-
-> **实现要求**：选 `qdrant/bm25` 时，**它的分词行为要实测一次**（拿一两个多语言长文档的 case 对照），**别默认它等价于 Lucene Analyzer**——这是 [`../../../docs/open-questions.md`](../../../docs/open-questions.md) 的 **V1**。
-
----
-
-## §7.3 — Weighted RRF
-
-**请求形状的权威写法在 PRD §7.3**（`prefetch` 两路 + 根级 `rrf{weights, k}`），本文件不复制。
-⚠ **与 PRD 唯一的有意差异**：PRD 片段的根级 `limit` 写的是 `<top_k>`，实现取 **`2 × N`**
-（要全部融合结果，截断在排序之后做）——依据见 ledger 的「V13 补完」。
-
-| 要点 | 说明 |
+| Plan | Execution |
 | --- | --- |
-| **`k` 必须显式设 `61`** | **不是默认值（2），也不是文献里的 60**。是**正确性常量，不是调参项**——换算由来见 D5 |
-| **每个 `prefetch` 都要带 `using`** | 命名向量场景下不写 `using`，Qdrant 无法确定用哪一路 |
-| **根级 `limit` 取 `2 × prefetch_limit`**（**要全部融合结果**） | **不在 Qdrant 里按 `top_k` 截**——截断在 [`fusion.py`](./fusion.py) 里、确定性排序**之后**执行（否则并列分数卡在截断线上时"谁进谁出"由 Qdrant 随机决定）。契约 `len(data) <= top_k` 仍成立，但**任何一层都不要写死 100**。⚠ PRD §7.3 的片段写的是 `<top_k>`——实现有意把截断点后移，依据见 ledger 的「V13 补完」 |
-| **每路 `prefetch` 的 `limit`（`N`）必须显式给定** | 初值 **200**，是"进入 RRF 融合的候选池"大小 |
-| 权重初值 `[0.5, 0.5]` | **任何调整都必须有 ablation 数据支撑** |
+| `filter` | Match source-backed subject, relation, object, and qualifiers. |
+| `walk` | Follow bounded source-backed relation edges. |
+| `interval` | Compare only source-stated time ranges. |
+| `current` | Return a legal empty selection when full input is present. |
 
-**版本门槛**：`k` 自 v1.16.0、`weights` 自 v1.17.0 起可用 → 要求 **≥ v1.17.0**，部署时**钉死**（[`../../../deploy/`](../../../deploy/)）。
+The executor also reviews source coverage and unexplained related statements. It must not treat physical coverage as semantic completeness.
 
-### 三个不同的量，不要混用
+Return control to hybrid retrieval when:
 
-`prefetch_limit`（**200**）· 种子数（`neighbor.expansion_seed_limit`，实际 **1000**）· Top-K（**100**，§2.2）
+- no supported plan exists;
+- source coverage is incomplete;
+- a path has unresolved branches;
+- relevant source text contains conflicts or unexplained statements;
+- a source, hop, or evidence limit is exceeded.
 
-> ⚠ **别把 §10 的"20 种子 / 60 槽位"读进这里**——那是 PRD 用来演示预算怎么算的
-> **示例算术**。实际取值与它的差异见 [`../rank/CLAUDE.md`](../rank/CLAUDE.md) §2。
+Never return a partial fact set as if it were complete.
 
-**融合池上界**：200 × 2 路 = 至多 400 条，要给 100 个名额留出**邻域折叠与去重的余量**。
+## Query Router
 
-### 一个简化，以及它的代价
+The router maps a query to exactly `MULTI_HOP` or `DEFAULT`.
 
-**RRF 只用排名不用分数**，因此 **BM25 分数与余弦相似度无需归一化对齐**——这绕开了 hybrid 检索最麻烦的一步。**代价**：权重代表的是"**名次话语权**"而非"分数重要性"（§7.3）。
+- Invalid model output falls back to `DEFAULT`.
+- The router does not rewrite the query or retrieve evidence.
+- Blank-query validation remains at the HTTP boundary.
+- Router failures never turn Search into a 500.
 
----
+## Evidence Checker
 
-## 共同取证（`evidence.py`）—— 混合检索之前的一条短路
+The checker uses agreement between BM25-only and dense-only rankings. It must not use fused RRF scores as calibrated thresholds.
 
-启用 `retrieval.grounded_evidence` 时，`service` 先让
-[`../facts/query.py`](../facts/query.py) 把问题编译成共同计划，再交给本目录的
-`select_evidence(...)` 执行——命中则直接产出证据片段（不生成答案，§2.1 照旧），
-不适用或判"不齐"才回原混合检索。
+The current service path keeps the checker result observational; routing is owned by the query router.
 
-`evaluate_evidence(...)` 在同一次选择中返回选择结果和诊断原因；
-`select_evidence(...)` 保留只返回选择的兼容入口。诊断由编排层发送到
-[`../observability/`](../observability/)，不写入 Search 响应，也不另跑一次选择。
+## Boundaries
 
-> ⚠ **问法识别不归本目录**：关系同义词与问法句法集中在 [`../facts/`](../facts/)
-> （`query.py` 编译计划、`grammar.py` 抽取来源句法、`input.py` 检查当前字面输入）。
-> **新增问法改那里，不要在本目录加对应分支**——本目录只执行计划。
-
-| 计划 | 执行 |
-| --- | --- |
-| `filter` 条件筛选 | 按主体/关系/客体与原文限定条件取独立事实；**名单与计数共用同一份计划** |
-| `walk` 有限关系连接 | 按有序步骤沿原文边行走；每个候选分支都必须有下一步，重复关系重复执行，超跳数整体回退；不给推导结果造新记忆 |
-| `interval` 显式区间比较 | 只用原文明确的起止月份；来源日期不冒充事件日期 |
-| `current` 当前输入 | 计划判定输入已完备 ⇒ 空选择，由 `service` 返回合法空结果 |
-| **逐次取证**（`per_occurrence`） | 标题 / 主题 / 出席这类"哪几次"的问法：**关掉按三元组的去重**，且**不先用时间窗口裁事实**——每一次出现都带着自己的来源日期进证据；窗口与次数的比较留给答案模型（`evaluate_evidence`，理由见 [`../../src/tianximem/facts/CLAUDE.md`](../facts/CLAUDE.md)） |
-
-外加两类把关：**数量消歧**（`_quantities`，在 `filter` 分支里**无条件跑**——同一项的多个数量观察若单位冲突、或没有可信来源时间可分新旧，选择失败）与**来源覆盖审查**（计划的字面范围，以及要求完整路径的计划沿途主体的原文里若仍有未解释的相关声明，选择失败）——**物理扫过不等于语义齐全**。
-
-`walk_subjects` / `walk_source_literals` 定义路径审查的字面范围，
-`walk_sources_supported` 检查未返回来源中的未知声明；来源抓取仍由 `service` 调用
-`store`，与事实选择共用读快照。原文投影已返回完整 QA 时，该条中的未知声明仍在输出内；
-另一条相关来源中的否定或未知变更不得被旧的正向关系边遮住。
-
-**两条上限由调用方注入**（`source_limit` / `hop_limit` 实参，来自
-`retrieval.evidence_limit` / `evidence_hop_limit`；键与口径见
-[`../../../docs/config-reference.md`](../../../docs/config-reference.md)）——
-**本目录不读配置**。
-
-### 不齐全 ⇒ `None`，回原混合检索
-
-以下任一情况 `select_evidence` 返回 `None`（或 `service` 不进这条路径）⇒ 原混合
-检索链原样接管；**不得把部分索引当完整集合**：
-
-* 没有适用的计划（`compile_query` 返回 `None`）；
-* 当前用户的事实索引未扫完（版本覆盖不全）；
-* 相关原文仍有未解释声明或数量冲突；
-* `require_complete_walk` 计划缺少已识别关系的可达原文、候选分支缺项或相关更正无法解释；
-* 选择超过 `evidence_limit`。
-
-设计与验证记录见 [`../../../eval/reports/retrieval-evidence-20261005.md`](../../../eval/reports/retrieval-evidence-20261005.md)。
-
----
-
-## §8 — Evidence Checker
-
-判断当前候选是否已足够回答 Query；足够则直接返回，不足才进入 Agentic Search。
-
-> **v1 里它是恒返回"充足"的带日志空实现**（D13）——下游 `agent/` 归 v2。**判据与接入点要在 v1 就写对**；⚠ **D26 之后 A4 已移出 v1** ⇒ `arm_rankings` 没人传、`criterion_would_say` 恒为 `None`（要补上那份分布得先给 `store/` 加一个单路查询——**已登记、未实现**）。
-
-### 判据不能用融合分数
-
-> **RRF 融合后的分数不是校准量**——Qdrant 官方明确警告不要把单路阈值用到根级 `score_threshold`，**"照搬 dense-only 的阈值会静默截断结果"**。
-
-改用**名次一致性判据**：分别跑一次 `bm25-only` 与一次 `dense-only`，用两者返回的**排名**做判断。
-⚠ **判据的三条阈值原文在 PRD §8**（`两路 top1 相同` / `top-5 重叠 ≥ 3` / `bm25 top1 在前 3`），
-本文件不复制；实现在 [`checker.py`](./checker.py)。
-
-⚠ **v1 的调用方不跑这两次查询**（D26 之后 A4 已移出 v1）：`decide()` 接受可选的 `arm_rankings`，但唯一的调用方不传 ⇒ `criterion_would_say` 恒记 `None`。判据本身写全并测到了，见 [`checker.py`](./checker.py)。
-
-### 阈值要标定，且**开关必须是配置项**
-
-判据里的三个初值需在代理评测上标定。**`checker.enabled` 必须是配置项**（§15 / D15）——§13 的 A4 要关它做对照。四个键的落点见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §4。
-
----
-
-## 边界：本目录到 Rerank 为止
-
-下游是 [`../rank/`](../rank/) 的三连环——**排序 → 扩窗 → 打包**（§10 + §11.2 + §11.3）。本目录**不**做扩窗、**不**做打包、**不**排序。
-
-**混合链要交接的信息**：Checker 的判定（v1 恒为"充足"）与候选名次（`Candidate`，交给 `rank/` 精排）。共同取证链交回 `service` 的是 `EvidenceSelection`（独立事实或原文来源）；**打包（含原文投影的段合并）仍由 `service` 调 [`../rank/`](../rank/) 的打包器完成**——本目录不越界。
-
-**`top_k` 的最终计数不在本目录**：本目录返回的是候选（或 `EvidenceSelection`），**精确 ≤ `top_k` 的计数责任在打包完成之后**（§2.2）——因为扩窗会往里加槽位（§10），而扩窗发生在 `rank/`。
+- Do not perform reranking, expansion, or packaging.
+- Do not return generated answers.
+- Do not bind fact fields in the router.
+- Do not duplicate question syntax from `facts/`.
+- Do not read configuration directly.

@@ -1,5 +1,5 @@
-"""契约预检 —— **在花掉任何一次 Smoke 之前**，把 [`contract.md`](../../docs/contract.md) §4 的清单
-在本地的真服务上自动跑一遍。
+"""契约预检 —— **在花掉任何一次 Smoke 之前**，把
+[`contract.md`](../../docs/contract.md) 的合规清单在本地的真服务上自动跑一遍。
 
 ```bash
 make contract-check          # 或 uv run python eval/smoke/preflight.py
@@ -12,7 +12,7 @@ uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000   # 打�
 | --- | --- |
 | **契约级**自检：打**真 HTTP**，看**真响应** | 质量评测（那是 [`../harness/`](../harness/) 的事） |
 | 跑在**本地服务 + 本地 Qdrant + 自建网关**上 | 不碰 AML 任何端点 ⇒ **不消耗 Smoke 配额** |
-| **Smoke 之前的最后一道门** | 不能替代 Smoke（S1–S3 只能靠 Smoke 消除，§17.1） |
+| **Smoke 之前的最后一道门** | 不能替代 Smoke |
 
 ## 四条设计决定
 
@@ -33,7 +33,7 @@ uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000   # 打�
 **3. 它不碰开发期的集合。**
 自启时用一份**临时 configs/**（`TIANXIMEM_CONFIG_DIR` 指过去），把集合换成
 `memories_preflight`，跑完 drop 掉。否则预检写进去的记忆会**永久留在 `memories_dev` 里**，
-污染之后的每一次检索——而那正是 `open-questions.md` **V9** 的形状。
+污染之后的每一次检索。
 
 **4. 它不共用 [`../harness/driver.py`](../harness/driver.py) 的 `ServiceClient`。**
 两者都打 `/add` 与 `/search`，请求形状也确实长得一样——但**失败模型不同，不能硬合并**：
@@ -106,11 +106,11 @@ _PREFLIGHT_PROFILE = "preflight"
 #: `score` 的量级必须是**名次倒数**，不是融合分数。
 #:
 #: 融合分数（RRF，k=61、两路权重 1.0）的量级是 `1/61 ≈ 0.016`，两位小数下几乎是 0；
-#: 而 `1/(rank+1)` 在 rank=0 处是 `1.0`。两者的量级差约 30 倍（D5 实测过 0.0328 vs 0.5），
+#: 而 `1/(rank+1)` 在 rank=0 处是 `1.0`。两者的量级差约 30 倍，
 #: 所以只要断言"最小的那个 score 也不像融合分数"就能把它们分开。
 _MIN_PLAUSIBLE_SCORE = 0.05
 
-#: `created_at` 的合法形状：日粒度 `YYYY-MM-DD`，或**空串**（`event_time` 为 NULL，§11.3）。
+#: `created_at` 的合法形状：日粒度 `YYYY-MM-DD`，或 `event_time` 为 NULL 时的**空串**。
 _DAY_GRAIN_RE = r"^\d{4}-\d{2}-\d{2}$"
 
 
@@ -162,7 +162,7 @@ def expect(condition: bool, message: str) -> None:
 def _force_utf8_stdio() -> None:
     """把 stdout/stderr 切到 UTF-8 + `errors="replace"`。
 
-    ⚠ **这不是洁癖，是一个实测到的崩溃**：本文件**通篇是中文**，
+    ⚠ **这不是洁癖，是一个到的崩溃**：本文件**通篇是中文**，
     而 Windows 的默认控制台是 GBK（cp936），`sys.stdout` 的默认 error handler 是 **`strict`**。
     于是"缺密钥"那条中文报错在**准备打印的时候**抛 `UnicodeEncodeError`，
     预检以 **exit 1** 退出——**正好在它要报告问题的时刻崩掉**，是最坏的一种失败。
@@ -211,7 +211,7 @@ def _rmtree_best_effort(path: Path, *, attempts: int = 5) -> None:
     """删掉临时目录。Windows 上句柄释放是**异步**的，所以重试几次。
 
     ⚠ **删不掉要说出来。** 用 `ignore_errors=True` 会把"留下了垃圾"也一起吞掉，
-    而静默留下垃圾正是本项目最不想要的那一类失败——实测过：它一次性留下了 7 个临时目录，
+    而静默留下垃圾正是本项目最不想要的那一类失败——过：它一次性留下了 7 个临时目录，
     而屏幕上什么都没说。
     """
     for attempt in range(attempts):
@@ -427,7 +427,7 @@ class Preflight:
         于是响应里**只有一项**——凡是"要多条才能验"的检查（`score` 的单调性、
         `top_k` 真的会截断）都必须让它们分属不同 session，**否则检查会静默变空过**。
 
-        ⚠ **`request_id` 只是"唯一 + 原样回显"**（§2.1）——服务端**不解析它**（D28）。
+        ⚠ **`request_id` 只是"唯一 + 原样回显"**——服务端**不解析它**。
         这里仍然把 `chunk-<n>` 拼进去，纯粹是为了让 id 在日志里**可读**；
         它**不是**格式要求，服务端认任何形状（`abc` / UUID / `foo:bar` 都行）。
         """
@@ -454,7 +454,7 @@ class Preflight:
     # ── 检查 ───────────────────────────────────────────────────────────
 
     def check_add_echoes_the_three_fields(self) -> None:
-        """§2.1：`200` + `success: true` + 三个字段**逐字原样回显**。"""
+        """Add 成功响应：`200` + `success: true` + 三个字段**逐字原样回显**。"""
         rid, uid, sid = f"{self._nonce}-echo-chunk-0", f"{self._nonce}-u-echo", "s-echo-中文-ü"
         resp = self._add(
             request_id=rid,
@@ -476,7 +476,7 @@ class Preflight:
     def check_add_rejects_illegal_requests(self) -> None:
         """非法请求必须是**明确的 4xx**（不是 500、也不是静默接受）。
 
-        ⚠ 非 200 的行为契约**未定义**（§15 ⇒ 假设 AML 会重试），所以 `Add` 侧真正要守的是
+        ⚠ 非 200 的行为契约**未定义**（调用方会重试），所以 `Add` 侧真正要守的是
         "**合法的必须 200**"；但**边界校验落在 4xx 而不是 5xx** 仍要钉住——
         5xx 意味着我们的代码崩了，那是另一类问题。
         """
@@ -502,7 +502,7 @@ class Preflight:
             )
 
     def check_search_returns_a_list_of_exactly_four_fields(self) -> None:
-        """§2.1：`data` 是数组；每项**恰好** `id` / `content` / `created_at` / `score`。"""
+        """Search 响应：`data` 是数组；每项**恰好** `id` / `content` / `created_at` / `score`。"""
         user = f"{self._nonce}-u-shape"
         self._seed(user, "s-shape", ["shape"])
         data = self._data(
@@ -529,7 +529,7 @@ class Preflight:
             expect(isinstance(item["score"], (int, float)), f"`score` 必须是数：{item['score']!r}")
 
     def check_created_at_is_day_grain_or_empty(self) -> None:
-        """§11.3：`created_at` **始终存在**，且是 `YYYY-MM-DD` 或空串。
+        """`created_at` **始终存在**，且是 `YYYY-MM-DD` 或空串。
 
         ⚠ 空串是**有定义的降级路径**（消息没带 `timestamp` ⇒ `event_time` 为 NULL）。
         本条用**不带 `timestamp`** 的消息写入，所以这里期望的就是空串——
@@ -581,7 +581,7 @@ class Preflight:
         )
 
     def check_content_properties(self) -> None:
-        """§11.3：`content` 的**性质**（不比对我们的 render —— 那是循环论证）。
+        """`content` 的**性质**（不比对我们的 render —— 那是循环论证）。
 
         四条：含原文（证明是**证据**而不是生成的答案）· 有 `Q:` / `A:` 行首标记 ·
         首尾无空白（AML 只做 `"\\n".join`，不插分隔符）· **无绝对时间戳前缀**。
@@ -612,7 +612,7 @@ class Preflight:
         )
 
     def check_score_is_rank_derived(self) -> None:
-        """§11.3：`score` **单调递减**、`rank=0` 就是 `1.0`，且**不是**原始 RRF 分数。
+        """`score` **单调递减**、`rank=0` 就是 `1.0`，且**不是**原始 RRF 分数。
 
         ⚠ 三条记忆**分属三个 session**：同一个 session 里位置相邻的记忆会被
         合并成**一个** Context Segment，那样响应里只有一项，单调性就**没东西可验**了
@@ -640,7 +640,7 @@ class Preflight:
         )
 
     def check_count_is_within_top_k(self) -> None:
-        """§2.2：`len(data) <= top_k` **精确成立**，且 `top_k` 真的被用上了。
+        """Search 响应满足 `len(data) <= top_k`，且 `top_k` 真的被用上了。
 
         ⚠ **`<= top_k` 单独是空过的**：写死 `limit=100` 也能满足它。
         所以先用 `top_k=1` 验"**真的会截断**"——库里明明有 3 条，只许回 1 条。
@@ -665,7 +665,7 @@ class Preflight:
         expect(len(one) == 1, f"库里有 3 段，top_k=1 却返回 {len(one)} 条——`top_k` 没被用上")
 
     def check_empty_result_is_a_list(self) -> None:
-        """§2.1：空结果是 `[]`，**不是 `null`**。"""
+        """Search 的空结果是 `[]`，**不是 `null`**。"""
         user = f"{self._nonce}-u-empty"  # 这个 user 从没写过任何东西
         resp = self._search(user_id=user, query="never written anything", top_k=10)
         expect(
@@ -677,7 +677,7 @@ class Preflight:
         )
 
     def check_add_then_search_immediately(self) -> None:
-        """§2.1：**Add 返回 200 时，那条记忆已经可检索。**
+        """**Add 返回 200 时，那条记忆已经可检索。**
 
         "不允许异步建索引"是契约原文。这条是它的唯一可观测形式：
         Add 的响应一回来就查，**中间不等任何东西**。
@@ -697,7 +697,7 @@ class Preflight:
         )
 
     def check_isolation_between_users(self) -> None:
-        """§2.2：`user_id` 是**唯一**的隔离字段——A 写的，B 绝不能看到。"""
+        """`user_id` 是**唯一**的隔离字段——A 写的，B 绝不能看到。"""
         alice = f"{self._nonce}-u-alice"
         bob = f"{self._nonce}-u-bob"
         self._seed(alice, "s-iso", ["alice-secret"])
@@ -724,7 +724,7 @@ class Preflight:
         )
 
     def check_session_id_is_not_a_filter(self) -> None:
-        """§2.2：`session_id` 只是分组字段，**不是 Search 的过滤器**。
+        """`session_id` 只是分组字段，**不是 Search 的过滤器**。
 
         同一 `user_id` 下的另外一个 session 写的记忆，必须能被检索到。
         （结构上 `SearchRequest` 里根本没有 `session_id` 字段——本条是它的**行为**证明。）
@@ -741,7 +741,7 @@ class Preflight:
         )
 
     def check_replay_does_not_write_again(self) -> None:
-        """§2.2：同一 `request_id` 重复 POST（payload 不变）⇒ **库里没有新增行**。
+        """同一 `request_id` 重复 POST（payload 不变）⇒ **库里没有新增行**。
 
         **怎么在 HTTP 层看见"没有新增行"**：**两次检索返回的 id 集合与条数完全一致**。
         ⚠ 位置是请求的纯函数 ⇒ 重放算出同一位置 ⇒ **没有守卫时**重放会撞 `UNIQUE`、

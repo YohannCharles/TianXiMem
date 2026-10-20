@@ -1,27 +1,10 @@
-# 开发期覆盖（`TIANXIMEM_PROFILE=local`）
-#
-# ⚠ **只写真正与基线不同的键。** 这份文件存在的意义就是让"开发期与提交期差在哪"
-#    一眼可见（configs/CLAUDE.md 的原文理由）——**重述默认值等于把那个信息淹掉**。
-#    下面每多写一行，Step 5 切换时就多一个"这行要不要跟着变"要判断。
+# Development profile. Override only settings that must differ from the product profile.
 
 storage:
   qdrant:
-    # 开发期的集合**必须与提交期分开**。
-    #
-    # §6.3 的派生索引是按 point id **upsert** 的 ⇒ 上一套实验遗留的、这一套不会覆盖的
-    # point 会**静默留在集合里**，污染下一次实验**且不报错**——那正是
-    # docs/open-questions.md 的 **V9**。改一个集合名是最省事、也最难出错的隔离手段。
-    #
-    # ⚠ 提交期的集合名就是 `default.yaml` 里的 `memories`。**别把开发期的名字带上去。**
+    # Keep development points isolated from the product collection.
     collection: memories_dev
 
-# ══ 精排：开发期显式关掉 ═══════════════════════════════════════════════
-# 这是**与提交口径的第二处差别**（第一处是上面的集合名）。
-# `default.yaml` 里是 `true`——D8 把排序定为主线（A3 在 conv-26 上量到开比关 +4.3pt）；
-# 但实测单题 100 篇要 5–12s、抖动大，而本地是**串行**跑题 ⇒ 整轮墙钟约 3×，
-# 它直接决定迭代速度。
-# ⚠ **别反过来把 `default.yaml` 改成 false**：那一份是提交口径。
-# ⚠ 它只影响"跑起来多慢"，与 §13 的开关纯度无关——A3 的两臂快照是显式覆盖这个键的
-#   （`configs/runs/a3-{on,off}/`）。
 rerank:
+  # Disable remote reranking for faster local iteration.
   enabled: false

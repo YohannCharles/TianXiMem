@@ -1,4 +1,4 @@
-"""通用 runner —— **给定数据集与配置，跑一轮，落一份 run record**（§12.1 / §13）。
+"""通用 runner —— **给定数据集与配置，跑一轮，落一份 run record**。
 
 > **本文件是"把零件串起来"的那一层**，它不实现其中任何一环：
 >
@@ -14,7 +14,7 @@
 
 ## 为什么需要一个通用 runner
 
-§13 的每一条对照（A0 / A3 / A4 / T1 / T2）都要"跑一轮并落一份可比记录"，
+每一条命名对照都要"跑一轮并落一份可比记录"，
 而**它们的差别只在配置与开关上**——把这一轮跑通的地方只该有一处。
 各 arm 的脚本（[`t1_timestamp.py`](./t1_timestamp.py)、
 [`t2_cross_session.py`](./t2_cross_session.py)）
@@ -31,19 +31,18 @@ uv run python eval/experiments/run.py --dataset longmemeval-s --limit 3 --skip-i
 ```
 
 ⚠ **`--limit` 会写进数据指纹的 `note`**——"跑了一小撮"与"跑完了"的数字
-**看起来一样**，不写下来就会有人拿它们比（§13）。
+**看起来一样**，不写下来就会有人拿它们比。
 ⚠ **重跑是安全的**：`request_id` 由 `(user_id, session_id, 批序号)` 确定性派生，
-`applied_batches` 的批次级幂等守卫会命中（§6.5）。但**换过渲染模板/配对规则后不行**
+`applied_batches` 的批次级幂等守卫会命中。但**换过渲染模板/配对规则后不行**
 ——`applied_batches` 会**直接放行而不改写**（同一 `request_id` 已应用过），
-于是你测的是**旧语料 + 新代码**，**静默**。⇒ 改了模板/配对规则就必须换干净的库与集合。
+于是你测的是**已写入的语料 + 新代码**，**静默**。⇒ 改了模板/配对规则就必须换干净的库与集合。
 
-## 本文件的形状（2026-10-15 拆分）
+## 本文件的形状
 
-本模块现在只做**命令行**那一层：`main` / `build_parser` / 退出码与不可达提示；
+本模块负责**命令行**那一层：`main` / `build_parser` / 退出码与不可达提示；
 "把零件串起来"的代码（`run_round` 与它的加载、两个前置检查）在
 [`runner.py`](./runner.py)，run record 的组装与打印在 [`record.py`](./record.py)。
-**入口路径与 CLI 一个字都没动**——上面那张流程图描述的整条链仍然从本文件进入、
-以本模块的 `main` 为入口；下面导入块把搬走的名字**重新导出**。
+整条评测链从本文件的 `main` 进入；下面导入块把实现模块的公开名字重新导出。
 """
 
 from __future__ import annotations
@@ -64,8 +63,8 @@ from eval.datasets.prepare import PreparationError, ensure_dataset
 from eval.experiments.recipes import recipe_for
 
 # ── façade：搬去 runner.py / record.py 的名字在这层**重新导出** ─────────────
-# `from eval.experiments.run import X` 全线照旧（`arms.py`、`tests/`、`tools/` 都在用）。
-# ⚠ 重新导出的是**名字的快照**：`monkeypatch.setattr(run, "X", ...)` 打不到搬走后的
+# 保持 `from eval.experiments.run import X` 兼容（`arms.py`、`tests/`、`tools/` 都在用）。
+# ⚠ 重新导出的是**名字的快照**：`monkeypatch.setattr(run, "X", ...)` 打不到移出后的
 #   真实现——要补丁就去补 `runner.X` / `record.X`（同 `eval/harness/judge.py` 的写法）。
 from eval.experiments.record import (  # noqa: F401
     _assemble_record,

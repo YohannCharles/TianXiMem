@@ -6,22 +6,11 @@ uv run --env-file .env python tools/ab_answer_prompt.py --run-id tr-splitfix --d
 
 ## 它为什么存在
 
-「这份数据集该用哪份答案 prompt」**已经连续三次是低分的直接原因**：
+不同数据集的答案契约可能需要专用 prompt。通用 `ANSWER_PROMPT` 同时服务
+corporatebench / medmemorybench，不能为一个数据集直接改写，否则会改变其他数据集的基线。
+本工具在固定上下文、问题与判分口径的条件下比较候选 prompt，只重答当前逐字拒答的题。
 
-| 数据集 | 通用 `ANSWER_PROMPT` 的后果 | 换掉之后 |
-| --- | --- | ---: |
-| `memtrapbench` | 250 题里 **160 道逐字拒答、通过 0** | 0.144 → **0.424** |
-| `mquake` | 冲突就拒答（旧值与替换值并存）+ 禁掉它**设计上要求**的世界知识 | 0.400 → **0.540** |
-| `tempreason` | 93/332 逐字拒答（答案要落在**区间**上，条款却按字面匹配） | 0.638 → **0.795** |
-
-而**通用那份不能改**：它还被 corporatebench / medmemorybench 用着，动它会连带动那几份的
-基线（[`../eval/harness/extra_pipeline.py`](../eval/harness/extra_pipeline.py) 里
-`MQUAKE_ANSWER_PROMPT` 的 docstring 已经把这条写死了）。
-
-⇒ 每次都要"新加一份专用 prompt"，而**决定用哪一份不能靠猜**——2026-10-03 的 mquake
-就是四个候选同条件跑出来的（B0 不含拒答条款改动 0 条新对、B1 66 条、B2 88 条、B3 93 条）。
-
-## 方法（照 mquake 那次）
+## 方法
 
 ```text
 输入：某个已跑完的 run 的产物（`input.jsonl` 里的 `retrieved_context` + `question`）
@@ -31,13 +20,13 @@ uv run --env-file .env python tools/ab_answer_prompt.py --run-id tr-splitfix --d
 输出：每个候选"新答对多少条" + 折算后的总分
 ```
 
-⚠ **新答对的题是加在旧分上的**：旧分里那几道是错的，现在对了 ⇒ 新总分 =
-`(旧正确数 + 新对) / 总题数`。**不改判分口径**（改口径 = 改基线，那是另一件事）。
+⚠ **折算总分时只替换子集结果**：原有正确题保持不变，新增正确题计入分子 ⇒
+`(原正确数 + 新对) / 总题数`。**不改判分口径**（改口径 = 改基线，那是另一件事）。
 
 ## 三条纪律
 
 1. **别同时跑两条链**：抢同一份网关与重试预算。`--judge-workers` 是链**内部**的并行，不冲突。
-2. **样本要够**：几十条拒答题上的差可能是噪声。mquake 那次是 201 条、temperason 是 93 条。
+2. **样本要够**：几十条拒答题上的差可能是噪声，应结合样本量与逐题结果判断。
 3. **选了谁就把谁搬进 `extra_pipeline.py`** 并加一条数据集分派——**别把候选留在这里**。
 """
 
@@ -78,7 +67,7 @@ def _judge(dataset: str, item: dict, generated: str) -> bool:
 #: 候选 prompt。**每个数据集一组**，名字要能自解释（写进报告里）。
 #:
 #: ⚠ 它们**不是运行时配置**——选完就把赢家搬进 `extra_pipeline.py` 当 `<数据集>_ANSWER_PROMPT`，
-#: 这里只留"当时比过哪几个"的记录。
+#: 这里记录当前 A/B 比较使用的答案 prompt。
 CANDIDATES: Final[dict[str, dict[str, str]]] = {
     "tempreason": {
         # B1：只删通用那份的**拒答条款**。
@@ -101,8 +90,7 @@ CANDIDATES: Final[dict[str, dict[str, str]]] = {
             "\n"
             "Answer:"
         ),
-        # B2：B1 + 明说"区间里的每个月都成立"。**单题探针上它反而答错了**（Real Madrid），
-        # 所以它进 A/B 是为了**在 93 条上验一次**，不是因为它看起来更好。
+        # B2：B1 + 明说"区间里的每个月都成立"；由 A/B 在拒答子集上验证效果。
         "B2 B1+区间说明": (
             "You are an assistant that answers a question using the memories provided below.\n"
             "\n"

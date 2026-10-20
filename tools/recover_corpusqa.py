@@ -3,10 +3,10 @@
 
 ## 为什么需要它
 
-官方 2026-09-29 采集（`official-eval-questions.jsonl` 10,144 条 search）里有一片带
-「`Corpus: `」前缀的语料，README §4.2 只把其中 `Corpus: {…}`（JSON 三元组）那一支
-认成 MQuAKE-Remastered——**那个归属只覆盖了这一族的一支**。逐 user 核过（2026-10-06）：
-按 user 语料的形态，这一族其实有 **591 个 user**（592 减去 1 个只是碰巧出现子串的）：
+官方采集（`official-eval-questions.jsonl` 10,144 条 search）里有一片带
+「`Corpus: `」前缀的语料。`Corpus: {…}`（JSON 三元组）属于 MQuAKE-Remastered，
+但该归属只覆盖这一族的一支。按 user 语料的形态，这一族共有 **591 个 user**
+（592 减去 1 个只是碰巧出现子串的）：
 
 | 族 | user 数 | search 数 | 语料指纹 |
 | --- | ---: | ---: | --- |
@@ -18,11 +18,10 @@
 
 MQuAKE 那一支由 `recover_official_gold.py` 负责（它已补了 1,124 条），不在这里重复。
 
-**上一轮调查说「240 users = MuSiQue，240 questions、金标就是答案」——count 对，金标口径只对一半**：
-MuSiQue 那一支的语料逐段**多重集**分别等于 `musique_full_v1.0_dev.jsonl` 里同一个 `id` 的
-`answerable=True` / `answerable=False` 实例（实测 120 / 120，一一对上；同一题面被喂给两个 user，
-一个拿可答版、一个拿不可答版）。⇒ **120 条的金标不是答案串，而是「证据不足」**——否则会把
-不可答题的答案判成对的。判据不是只看题面（两版题面相同），而是语料段落逐条比对。
+MuSiQue 那一支的语料逐段**多重集**分别等于 `musique_full_v1.0_dev.jsonl` 里同一个 `id`
+的 `answerable=True` / `answerable=False` 实例（120 / 120 一一对应；同一题面分别喂给两个
+user）。⇒ **不可答变体的 120 条金标是「证据不足」**，不能按答案串判分；否则会把不可答题
+判成对的。判据是语料段落逐条比对，而不是只看题面（两版题面相同）。
 
 另外：有 1 个 user 的对话里恰好出现 "Corpus:" 子串（Foucault 问答 + City Council 报告），
 **不是这一族**，别把它算进来——所以「带 `Corpus:` 的 user」是 592，本族是 591。
@@ -64,7 +63,7 @@ MuSiQue 官方发布是 Google Drive 的 `musique_v1.0.zip`
 对 `musique_ans_v1.0_dev.jsonl` 的 sha256 一致，已核。
 FEVEROUS 的 URL 取自官方仓库 `Raldir/FEVEROUS/download_data.sh`。
 
-## 已核实的身份锚点（2026-10-06）
+## 已核实的身份锚点
 
 * HybridQA：113/113 条题面与 `dev.json` **逐字**相同（100 个 user），`answer-text` 与
   `dev_reference.json` 的 `reference[question_id]` 归一化后逐条一致；表语料抽一条与
@@ -143,7 +142,7 @@ OPTIONAL: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
-#: MuSiQue 题面的尾指令——**逐字**（240/240 实测都以它结尾），判族靠它。
+#: MuSiQue 题面的尾指令——**逐字**（240/240 都以它结尾），判族靠它。
 MUSIQUE_SUFFIX = (
     "\n\nAnswer using only the supplied paragraphs. "
     "If the evidence is insufficient, respond with INSUFFICIENT_EVIDENCE."
@@ -218,7 +217,7 @@ FEVEROUS_JUDGING = (
 
 
 def norm(text: str) -> str:
-    """题面/段落归一化：NFKC + 转小写 + 空白折叠（与上一轮调查同一套，否则匹配率会假低）。"""
+    """题面/段落归一化：NFKC + 转小写 + 空白折叠；与其他金标回收工具保持同一口径。"""
     text = unicodedata.normalize("NFKC", text or "")
     return re.sub(r"\s+", " ", text).strip().lower()
 

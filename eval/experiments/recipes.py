@@ -2,8 +2,7 @@
 
 ## 为什么必须有它
 
-本仓的分数**只在同一口径内可比**，而 10 个数据集的**全量题数差着量级**
-（2026-10-02 实测）：
+本仓的分数**只在同一口径内可比**，而 10 个数据集的**全量题数差着量级**：
 
 ```text
 mquake 69,618 · tempreason 9,823 · personamem 5,000 · medmemorybench 1,939
@@ -11,12 +10,12 @@ clbench 1,899 · memtrapbench 1,050 · corporatebench 750 · lme 500 · beam 400
 ```
 
 ⇒ **全量跑不成立**（mquake 全量按本机速率要跑几十天），每个数据集都必须有一个
-"取多少"的口径。在此之前它只活在**各次 run 的命令行里**（`--limit 3` 之类），
-**下一次想复现得自己猜**——而"猜错一个数"的后果是**分数看起来完全正常、却不可比**。
+冻结的"取多少"口径。把口径集中在本文件，复现时无需从历史命令行反推；
+"猜错一个数"会让分数看起来完全正常、却不可比。
 
 ## ⚠ `limit` 在每个数据集上数的**不是同一个东西**
 
-这是本表最容易被读错的一列，逐数据集实测过：
+这是本表最容易被读错的一列，逐数据集过：
 
 * **对话数**（locomo / beam）——`limit 3` 是**三段对话**，不是三题
 * **题数**（longmemeval）——每条记录 = 1 题，且**各自带一整套 haystack**
@@ -52,7 +51,7 @@ uv run python -c "from eval.experiments.recipes import flags_for; print(flags_fo
 实际题数等于它——**改了 k 而忘了改这里，测试立刻红**（否则"口径漂了"只会在
 两次 run 的分数不可比时**静默**表现出来）。
 
-> ⚠ **加载器改了、题数就会变**（例如 V14 那次跳过空正文）。这张表因此**依赖归档数据**：
+> ⚠ **加载器改了、题数就会变**。这张表因此**依赖归档数据**：
 > 没有 `dataset/` 时那条断言会 skip，**但不会假装通过**。
 """
 
@@ -66,13 +65,13 @@ __all__ = ["AML_FROZEN_RECIPES", "FROZEN_RECIPES", "Recipe", "flags_for", "recip
 
 @dataclass(frozen=True, slots=True)
 class Recipe:
-    """一个数据集的冻结口径。**`n_questions` 是复核实测值，不是估算。**"""
+    """一个数据集的冻结口径。**`n_questions` 是复核值，不是估算。**"""
 
     #: 传给 `run.py --limit` 的值。`None` = **不抽样**（该数据集全量就在可接受范围内）。
     limit: int | None
     #: 传不传 `--spread`。**no-op 的数据集写 `False`**（写了也只是噪音）。
     spread: bool
-    #: **实测**题数——`tests/test_experiments.py` 拿它当断言值。
+    #: 冻结题数——`tests/test_experiments.py` 拿它当断言值。
     n_questions: int
     #: `limit` 数的**是什么**（本表最容易读错的一列，见模块 docstring）。
     axis: str
@@ -89,8 +88,7 @@ class Recipe:
         return " ".join(parts) or "(none)"
 
 
-#: **冻结口径表**。依据：2026-10-02 逐个数据集实测 + **独立复核**（复核者重新加载、
-#: 并试图证伪"轴 / spread 必要性 / 确定性 / 覆盖度"四条）。
+#: **冻结口径表**。每项依据实际加载结果复核轴、`spread` 必要性、确定性与覆盖度。
 FROZEN_RECIPES: Final[dict[str, Recipe]] = {
     "hybridqa": Recipe(
         limit=120,
@@ -150,12 +148,8 @@ FROZEN_RECIPES: Final[dict[str, Recipe]] = {
         note=(
             "全量 500。**必须 spread**：不加会整类丢掉 knowledge-update 与 "
             "single-session-assistant。"
-            " ⚠ **2026-10-02 由 300 降到 100**：`--limit 300` 实测 **4.2 分钟/题**"
-            "（每题要灌 ~250 块、且 500 份 haystack 互不重复）⇒ 整轮 ~20 小时，"
-            "而本地网关在 Cloudflare 后面、撑不住这种长占。降档的代价是"
-            "**噪声底从 ~1pt 升到 ~1.8pt**（按 1/√n 折算）⇒ 它只挡得住 2pt 以上的改动。"
-            " ⚠ 换 k **不是取子集**（组内 step 随 k 变，k=100 与 k=300 的题集互不包含）"
-            "⇒ **不要拿两次不同 k 的分数比**。"
+            "`--limit 300` 每题耗时高，整轮成本明显高于默认值；默认 100 题的可比噪声底约为 1.8pt。"
+            "不同 k 使用不同题集 ⇒ **不要拿两次不同 k 的分数比**。"
         ),
     ),
     "clbench": Recipe(
@@ -165,9 +159,8 @@ FROZEN_RECIPES: Final[dict[str, Recipe]] = {
         axis="**任务数**（1 条任务 = 1 题，自带自己的文档语料）",
         note=(
             "全量 1,899。**必须 spread**：不加时 Procedural Task Execution 只占 4%"
-            "（全量 24.8%）。⚠ 取整抖动实测：k=300 拿到 **299** ⇒ 冻结的是 k，不是题数。"
-            "✅ **本机能跑**（2026-10-09 复测）：全量墙钟 **≈3.5 小时**"
-            "（`--judge-workers 4`；Add 那一段仍是串行）。"
+            "（全量 24.8%）。k=300 的实际题数为 **299**，冻结口径以 k 为准。"
+            "四路判分 worker 下全量约 3.5 小时；Add 段仍按用户串行。"
             " ⚠ **它的官方分是全有全无的 LLM rubric 判分**（`clb_pipeline.py` 的原文："
             '"strict, all-or-nothing … The final score is binary"）⇒ 一道题从 0 翻到 1 要'
             "**每一条** rubric 都满足，**中间进展在 `overall` 里看不见**。"
@@ -182,11 +175,9 @@ FROZEN_RECIPES: Final[dict[str, Recipe]] = {
         n_questions=400,
         axis="**对话数**（20 个对话 × 每个 20 题）",
         note=(
-            "**已是全量**（本卡 100K 只有 20 行 parquet）。"
-            "✅ **本机能跑**（2026-10-09 复测）：单题上下文 **≈110k token**"
-            "（2 题 879 KB），全量墙钟 **≈1 小时**（`--judge-workers 4`）。"
+            "**已是全量**（当前数据卡只有 20 行 parquet）。"
+            "单题上下文约 **110k token**；四路判分 worker 下全量约 1 小时。"
             "⚠ 一旦要抽样就**必须 spread**（8 个 category 分块排）。"
-            " 细节见 eval/reports/ledger.md 的「跑一轮要多久」。"
         ),
     ),
     "corporatebench": Recipe(

@@ -1,6 +1,6 @@
 """Embedding 后端：维度来源、落盘缓存、坐标系失效、HTTP 响应解析。
 
-对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 与 embed/CLAUDE.md §缓存。
+对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 与 `embed/CLAUDE.md` 的缓存说明。
 ⚠ **全部用例都不碰网络**——缓存与维度用 `FakeEmbedder`，HTTP 用桩客户端。
 """
 
@@ -64,14 +64,14 @@ def test_dim_change_across_calls_fails_loudly() -> None:
         emb.encode(["b"])
 
 
-# ── 期望维度（`models.embed_dim`）：**声明**的那道闸（2026-10-09）──────────
+# ── 期望维度（`models.embed_dim`）：**声明**的那道闸──────────
 
 
 def test_coordinate_key_carries_the_declared_dim() -> None:
-    """**换维度 ⇒ 换坐标系键 ⇒ 换缓存文件**——旧缓存不可能被静默命中。
+    """**换维度 ⇒ 换坐标系键 ⇒ 换缓存文件**——不兼容缓存不可能被静默命中。
 
-    这是 2026-10-09 那个坑的正面防护：网关侧把 embedding 输出从 4096 改成 1024，
-    而**模型名没变**，于是同一个坐标系命中了 4096 维的旧缓存，撞上 1024 维的集合。
+    若 embedding 输出维度变化而**模型名没变**，同一个坐标系可能命中
+    4096 维的不兼容缓存并撞上 1024 维的集合；期望维度进入坐标键可阻止该路径。
     """
     assert (
         EmbeddingCoordinate(model="m", dim=4096).key()
@@ -94,7 +94,7 @@ def test_declared_dim_rejects_a_different_fresh_embedding(tmp_path) -> None:
 def test_declared_dim_also_guards_a_cache_only_hit(tmp_path) -> None:
     """**全命中缓存**那条路也拦得住——它走的是另一个方法（`DiskVectorCache.get`）。
 
-    ⚠ 2026-10-09 的形状正是全命中：新维度下**一个内层调用都没有**，所以
+    ⚠ 该场景是缓存全命中：新维度下**一个内层调用都没有**，所以
     `CachingEmbedder.encode` 里那段维度自检根本执行不到。坐标系键虽然已经含 `dim`，
     但文件被复制 / 坐标系被绕过时仍需要这道锁（与 `_verify_coordinate` 同类）。
     """
@@ -136,7 +136,7 @@ def test_cached_embedder_falls_back_to_cache_dim(tmp_path) -> None:
 
 
 def test_first_call_hits_inner_second_call_does_not(tmp_path) -> None:
-    """**缓存命中时不重复调用远程模型**——这是 §7.2 那条"一次性成本"的落点。"""
+    """**缓存命中时不重复调用远程模型**——这是 embedding 的一次性成本边界。"""
     inner = FakeEmbedder()
     wrapped, _ = _wrap(inner, tmp_path)
 
@@ -233,7 +233,7 @@ def test_coordinate_key_is_part_of_the_file_name(tmp_path) -> None:
 
 
 def test_model_change_does_not_hit_old_cache(tmp_path) -> None:
-    """**换模型后旧缓存不得静默命中。**
+    """**换模型后不兼容缓存不得静默命中。**
 
     静默命中的后果：拿 A 模型的向量去查 B 模型的集合——维度可能还一样，
     于是**只表现为"检索结果很差"，不报错**（embed/README 的原话）。
@@ -251,7 +251,7 @@ def test_model_change_does_not_hit_old_cache(tmp_path) -> None:
 
 
 def test_template_version_change_does_not_hit_old_cache(tmp_path) -> None:
-    """**改渲染模板 = 改 embedding 输入 = 重建索引**（§11.3）。"""
+    """**改渲染模板 = 改 embedding 输入 = 重建索引**。"""
     assert TEMPLATE_VERSION != "v0-test"
     inner = FakeEmbedder()
     wrapped, _ = _wrap(inner, tmp_path, EmbeddingCoordinate(model="m"))
@@ -401,7 +401,7 @@ def test_empty_base_url_or_key_rejected() -> None:
 
 
 def test_v4_model_default_is_the_submission_model() -> None:
-    """直接构造时有默认模型名，且**就是 §2.3 那个名字**。"""
+    """直接构造时有默认模型名，且**就是配置声明的那个名字**。"""
     emb = TextEmbeddingV4Embedder(base_url="http://x/v1", api_key="k")
     assert emb.model == "text-embedding-v4"
 

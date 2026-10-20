@@ -7,7 +7,7 @@
 | **解析** | 把 `NOT MULTI_HOP` 读成 `MULTI_HOP`（**否定读成肯定**） | `parse_route` 整串匹配 |
 | **降级** | 端点挂了 / 输出非法 ⇒ **一次正常 Search 变 500** | 假客户端 + 真 HTTP 往返 |
 | **路径** | 分对了类却**走错分支** | 真 `SqliteStore` + `apply_batch` 的端到端 |
-| **纯度（§13）** | 关掉它却**仍有 LLM 调用**、或行为变了 | 假客户端的 `calls` 计数 + 两臂逐项比 |
+| **纯度** | 关掉它却**仍有 LLM 调用**、或行为变了 | 假客户端的 `calls` 计数 + 两臂逐项比 |
 
 ⚠ 与 `test_reranker.py` 的 `_FakeReranker` 同理：这里的假 LLM 是**协议级替身**
 （`LlmClient` 的 `name` + `complete`），**不是** HTTP 层的桩——HTTP 层另有
@@ -65,7 +65,7 @@ def _agentic_result(
     """一个满足 `AgenticSearch` 形状的返回值。
 
     ⚠ 它与真执行器一样**不精排**：`rerank_query` 是交给编排层的那一句联合 Query
-    （§9.1）。默认 `None` ⇒ 编排层用原问题——正是混合链那条路的行为。
+    默认 `None` ⇒ 编排层用原问题——正是混合链那条路的行为。
     """
     rounds = 1 if candidates else 0
     return AgenticResult(
@@ -215,7 +215,7 @@ def test_chat_sends_the_declared_model_temperature_and_max_tokens() -> None:
         httpx.Response(200, json={"choices": [{"message": "not an object"}]}),
         httpx.Response(200, json={"choices": [{"message": {"content": 42}}]}),
         # ⚠ **空白内容也算端点故障**：不然它会被记成"分类成功、结果是空串"，
-        #   于是"端点一直在回空"在 §14 里长得像"模型答得怪"。
+        #   于是"端点一直在回空"在指标里长得像"模型答得怪"。
         httpx.Response(200, json={"choices": [{"message": {"content": "   "}}]}),
     ],
 )
@@ -275,7 +275,7 @@ def test_illegal_output_degrades_to_default_and_keeps_the_raw_text(reply: str, r
 
 
 def test_llm_failure_degrades_to_default_and_never_raises() -> None:
-    """§4.3：端点挂了 ⇒ 回退 `DEFAULT`。**绝不让一次正常 Search 变成 500。**"""
+    """端点挂了 ⇒ 回退 `DEFAULT`。**绝不让一次正常 Search 变成 500。**"""
     router, _ = _router(LlmUnavailable("端点不可用"))
     decision = router.route("q")
     assert decision.route is Route.DEFAULT
@@ -285,7 +285,7 @@ def test_llm_failure_degrades_to_default_and_never_raises() -> None:
 
 def test_unexpected_backend_bug_also_degrades_but_is_labelled_differently() -> None:
     """★ **兜底捕获必须与"端点不可用"分得开**：`reason` 里带着异常类型，
-    所以"未预期的 bug"与"端点挂了"在 §14 上不是同一个数。"""
+    所以"未预期的 bug"与"端点挂了"在指标上不是同一个数。"""
     router, _ = _router(RuntimeError("协议实现坏了"))
     decision = router.route("q")
     assert decision.route is Route.DEFAULT
@@ -304,8 +304,8 @@ def test_query_is_injected_without_format_interpretation() -> None:
     assert query in sent
     assert sent.count("{query}") == 0  # 占位符**全部**被替换掉了
     # ⚠ **提示词里查询的位置不在末尾**：它落在中间的 `INPUT / Query:` 处，
-    #   **后面还跟着 OUTPUT FORMAT 与 7 个例子**（v5）。⇒ 这里**不断言"以 query 结尾"**，
-    #   改为断言"按模板逐处注入"——而"查询被夹在例子中间"这件事本身要记进报告
+    #   **后面还跟着 OUTPUT FORMAT 与 7 个例子**。⇒ 这里**不断言“以 query 结尾”**，
+    #   而是断言“按模板逐处注入”——查询位于例子中间这一事实会影响注意力，必须记录。
     #   （它会分散模型对真查询的注意力）。
     assert sent == ROUTER_PROMPT.replace("{query}", query)
     assert sent.index(query) < sent.index("CLASSIFICATION EXAMPLES")
@@ -319,12 +319,12 @@ def test_prompt_is_the_frozen_template_and_the_query_lands_after_the_user_line()
     # 分类规则那几段**逐字**在（改了提示词就必须同时改 `ROUTER_PROMPT_VERSION`）
     assert 'Explicit dependency signals: "then", "after", "using that"' in sent
     assert "Do not output explanations, confidence scores, JSON, or any additional text." in sent
-    # ⛔ v4 起**提示词里没有 NONE**（空/无效输入归入口，不归路由器）
+    # ⛔ 当前提示词里没有 NONE（空/无效输入归入口，不归路由器）
     assert "NONE" not in ROUTER_PROMPT
 
 
 def test_the_prompt_is_the_single_frozen_one() -> None:
-    """⛔ **全仓只有这一版提示词**（2026-10-10 按要求删掉了 v1 / v2 / v3）。
+    """⛔ **全仓只有这一版提示词**。
 
     ⚠ 删版本**是有代价的**，而且代价就写在这条用例旁边：
     **"换提示词值不值"的基线从此不能再原样重跑**——要重跑得先从报告里把那一版抄回来。
@@ -333,9 +333,9 @@ def test_the_prompt_is_the_single_frozen_one() -> None:
     assert ROUTER_PROMPT_VERSION == "v5"
     assert ROUTER_PROMPT is not None and ROUTER_PROMPT.strip()
     # 两条判据都在（换了提示词就得同时改版本号，见 `QueryRouter.__init__`）
-    assert "The key test" not in ROUTER_PROMPT  # ← 那是旧版的措辞，不该再出现
+    assert "The key test" not in ROUTER_PROMPT      # ← 该措辞不属于当前提示词
     assert 'Explicit dependency signals: "then", "after", "using that"' in ROUTER_PROMPT
-    # ⛔ v5 起是二分类：COUNT 整段判据已删，提示词里不该再出现它
+    # ⛔ 当前是二分类：COUNT 判据不属于提示词
     assert "COUNT" not in ROUTER_PROMPT
     # ⛔ 没有 NONE（空 / 无效输入归入口，不归路由器）
     assert "NONE" not in ROUTER_PROMPT
@@ -344,10 +344,10 @@ def test_the_prompt_is_the_single_frozen_one() -> None:
 
 
 def test_stray_none_output_degrades_and_is_not_a_fourth_route() -> None:
-    """★ **当前提示词里已经没有 `NONE` 了**，所以模型不该再吐它。
+    """★ **当前提示词里没有 `NONE`**，所以模型不应输出它。
 
-    ⚠ 这一条测的是**防御**：万一它吐了（旧版提示词的惯性，或模型自己发挥），
-    必须仍然 ①**不成为第四条执行路**、②**降级到 `DEFAULT`**、
+    ⚠ 这一条测的是**防御**：即使模型输出 `NONE`，
+    也必须仍然 ①**不成为第四条执行路**、②**降级到 `DEFAULT`**、
     ③**与"输出非法"分开记**——分开记才能回答"模型是不是在试图拒答"，
     而那是排查不出来的东西里最容易混掉的一种。
     """
@@ -387,15 +387,15 @@ def test_invalid_router_knobs_fail_at_construction(kwargs: dict) -> None:
 
 
 def test_blank_query_short_circuits_before_the_router(tmp_path) -> None:
-    """⛔ **空白 query 绝不进路由器**（2026-10-10）。
+    """⛔ **空白 query 绝不进路由器**。
 
     三层理由，缺一条这条守卫就不该在：
 
-    1. 空查询**不是分类问题**，是输入校验——让模型去猜三类之一是把它外包给 LLM；
-    2. 契约要的是 `{"data": []}`（§2.1 明说空结果合法），这条短路给的正是它；
+    1. 空查询**不是分类问题**，是输入校验——让模型去猜路由等于把它外包给 LLM；
+    2. 契约要的是 `{"data": []}`（空结果合法），这条短路给的正是它；
     3. **位置在 `_route()` 之前**才是关键——只要调了 `_route()` 就花掉一次 LLM 调用。
 
-    ⚠ HTTP 层对空白 query **仍然回 422**（那是刻意的、已记录的取舍，见 D40）⇒
+    ⚠ HTTP 层对空白 query **仍然回 422**⇒
     这条守卫服务的是**绕过 HTTP 的调用方**（测试、harness、将来的内部调用）。
     """
     store = SqliteStore.open(tmp_path / "t.db")
@@ -499,7 +499,7 @@ def _pipeline(
 
 
 def _snapshot(pipeline: SearchPipeline, tmp_path, **kwargs) -> dict:
-    """跑一次 Search，**从 §14 的出口读路由**（而不是去摸 `_SearchTrace` 私有件）。
+    """跑一次 Search，**从指标出口读路由**（而不是去摸 `_SearchTrace` 私有件）。
 
     ⚠ 这也顺带证明了一件事：路由的观测值**真的走到了落盘那条路上**——
     它进不了响应（形状是契约），所以磁盘是唯一的读法。
@@ -513,8 +513,8 @@ def _snapshot(pipeline: SearchPipeline, tmp_path, **kwargs) -> dict:
 
 
 def test_router_off_keeps_the_original_path_and_makes_no_llm_call(tmp_path) -> None:
-    """★ **§13 的开关纯度**：关掉路由器 ⇒ **一次 LLM 调用都不发生**，
-    而共同取证分支**照旧无条件先试**（= 本接缝之前的行为）。
+    """★ **开关纯度**：关掉路由器 ⇒ **一次 LLM 调用都不发生**，
+    而共同取证分支**仍无条件先试**。
     """
     store = SqliteStore.open(tmp_path / "t.db")
     _seed(store)
@@ -539,7 +539,7 @@ def test_complete_facts_precede_routing_and_make_no_llm_call(tmp_path) -> None:
 def test_grounded_facts_answer_a_count_question_without_consulting_the_router(tmp_path) -> None:
     """计数问法 ⇒ **与关掉路由器时逐字相同**的共同取证（名单与计数共用同一份计划）。
 
-    ⚠ `COUNT` 已不是路由取值（2026-10-14），这条测的是**接缝的顺序**：
+    ⚠ `COUNT` 已不是路由取值，这条测的是**接缝的顺序**：
     共同取证先于路由器，接走了就没有"哪条路"的问题。
     """
     store = SqliteStore.open(tmp_path / "t.db")
@@ -556,7 +556,7 @@ def test_grounded_facts_answer_a_count_question_without_consulting_the_router(tm
 
 
 def test_an_uncompilable_query_falls_back_to_the_hybrid_chain(tmp_path) -> None:
-    """⚠ **计数 / 名单意图不代表一定能编译出计划**（§3.2 的注意事项）：
+    """⚠ **计数 / 名单意图不代表一定能编译出计划**：
     编译不出来（`no_plan`）就照原样回退混合检索，**不返回半份集合、也不报错**。
 
     回退之后路由器才登场（`DEFAULT` ⇒ 混合链）。
@@ -575,9 +575,9 @@ def test_an_uncompilable_query_falls_back_to_the_hybrid_chain(tmp_path) -> None:
 
 
 def test_multi_hop_without_an_executor_degrades_loudly_to_default(tmp_path) -> None:
-    """⛔ **不许假装已经执行了多跳检索**（§3.3）。
+    """⛔ **不许假装已经执行了多跳检索**。
 
-    今天 `MULTI_HOP` 一定降级成 `DEFAULT`，而这件事**必须在 §14 上留下名字**：
+    没有执行器时 `MULTI_HOP` 一定降级成 `DEFAULT`，而这件事**必须在指标上留下名字**：
     `route_fallback = agentic_unavailable`。不然"分类成功但执行器不在"与
     "分类结果本来就是 DEFAULT"长得一模一样。
     """
@@ -594,7 +594,7 @@ def test_multi_hop_without_an_executor_degrades_loudly_to_default(tmp_path) -> N
 
 
 def test_multi_hop_with_an_executor_feeds_the_shared_tail(tmp_path) -> None:
-    """§3.3 的接缝：执行器**只负责多取几轮证据**，`②–⑦` 与混合那条路共用。
+    """执行器**只负责多取几轮证据**，`②–⑦` 与混合那条路共用。
 
     ⚠ 这条用例证明的是**接线**（候选真的流进了去重 → 精排 → 段合并 → 打包），
     **不是多跳的效果**——跑的是个假执行器。
@@ -622,7 +622,7 @@ def test_multi_hop_with_an_executor_feeds_the_shared_tail(tmp_path) -> None:
 
 
 def test_degraded_routing_still_returns_a_valid_200_shaped_response(tmp_path) -> None:
-    """★ **路由的失败不能让一次正常 Search 变成 500**（§4.3）。"""
+    """★ **路由的失败不能让一次正常 Search 变成 500**。"""
     store = SqliteStore.open(tmp_path / "t.db")
     _seed(store)
     router, _ = _router(LlmUnavailable("端点挂了"))
@@ -631,7 +631,7 @@ def test_degraded_routing_still_returns_a_valid_200_shaped_response(tmp_path) ->
     assert snapshot["router"]["statuses"] == {"degraded": 1}
     assert snapshot["router"]["routes"] == {"DEFAULT": 1}
     result = service.run(user_id="u", query=_FAILED_PATH_QUERY, top_k=100)
-    # 响应形状逐字不变（§2.1 那四个字段，一个不多一个不少）
+    # 响应形状逐字不变（四个字段，一个不多一个不少）
     for item in result.items:
         assert set(item.__dataclass_fields__) == {"id", "content", "created_at", "score"}
 
@@ -640,7 +640,7 @@ def test_degraded_routing_still_returns_a_valid_200_shaped_response(tmp_path) ->
 
 
 def test_router_never_touches_the_response_contract(tmp_path) -> None:
-    """§2.1 / §2.2：**路由不改变任何响应形状**——`top_k` 计数、字段集合、隔离。"""
+    """**路由不改变任何响应形状**——`top_k` 计数、字段集合、隔离。"""
     store = SqliteStore.open(tmp_path / "t.db")
     _seed(store)
     router, _ = _router("DEFAULT")
@@ -656,7 +656,7 @@ def test_router_never_touches_the_response_contract(tmp_path) -> None:
 
 def test_route_latency_is_absent_when_the_router_is_off(tmp_path) -> None:
     """⛔ **没路由时 `latency_ms` 记 `None` 而不是 0**：记 0 会让两臂的
-    "平均路由耗时"都算得出来，而其中一臂的 0 是假的（§6 的成本分析会读错）。"""
+    "平均路由耗时"都算得出来，而其中一臂的 0 是假的（成本分析会读错）。"""
     store = SqliteStore.open(tmp_path / "t.db")
     _seed(store)
     plain = _pipeline(store, router=None)
@@ -712,7 +712,7 @@ def test_build_query_router_carries_the_thresholds_from_config(tmp_path) -> None
 
 
 def test_build_services_wires_the_router_into_the_pipeline(tmp_path) -> None:
-    """**这一条挡的是"配了却没接上"**——它不报错，只让每一题都走原来的路。"""
+    """    **这一条挡的是"配了却没接上"**——它不报错，只让每一题都走默认路径。"""
     assert build_services(_config(tmp_path)).search.router is not None
     disabled = replace(_config(tmp_path), router=RouterConfig(enabled=False))
     assert build_services(disabled).search.router is None
@@ -762,7 +762,7 @@ def test_agentic_is_built_with_the_executor_timeout_not_the_router_one(tmp_path)
         assert isinstance(client, OpenAiCompatChat)
         # ⚠ 超时是构造期固定的 ⇒ 这是唯一能看见"用的是哪一个"的地方。
         assert client._timeout == 12.5  # noqa: SLF001 — 断言**不是**路由器的 10s
-        # ⚠ 关掉路由器之后**一个路由器客户端都不该被构造**（§13 的开关纯度）。
+        # ⚠ 关掉路由器之后**一个路由器客户端都不该被构造**（开关纯度）。
         assert services.search.router is None
         services.close()
         assert client._client is None  # noqa: SLF001 — 连接池**真的**被释放了
@@ -771,7 +771,7 @@ def test_agentic_is_built_with_the_executor_timeout_not_the_router_one(tmp_path)
 
 
 def test_agentic_force_is_loud_because_it_bypasses_the_router(tmp_path, caplog) -> None:
-    """`agentic.force`（§12.3 的 E1）**必须响亮**：它绕过路由器。
+    """`agentic.force`（E1）**必须响亮**：它绕过路由器。
 
     ⚠ 没有这条 WARNING，跑完之后分不出"分数变了"是 CoQ 的效果还是
     "路由器被绕过"造成的——而 E1 那一臂的全部意义就是**把这两件事分开**。
@@ -797,11 +797,10 @@ _LLM_ENV = {
 #: `default.yaml` 里路由开关那一行的锚点（见该文件 `router:` 段）。**默认是 `true`**。
 #: ⚠ **替换前先断言锚点在**：`str.replace` 找不到时**什么都不做**，
 #: 于是"配置没被改动"会表现成一个莫名其妙的断言失败（而不是"锚点漂了"）。
-_ENABLE_ANCHOR = "  enabled: true\n  # C —— 单次路由调用的超时"
-#: `default.yaml` 里**多跳执行器**开关那一行的锚点（见该文件 `agentic:` 段）。
-#: **2026-10-14 起也是默认 `true`** —— 缺端点校验对它是**同一条口径**（见
-#: `test_router_enabled_without_an_endpoint_refuses_to_start` 的第 ② 步）。
-_AGENTIC_ENABLE_ANCHOR = "  enabled: true\n  # C —— ⭐ **执行器选哪一种**"
+_ENABLE_ANCHOR = "  enabled: true\n  timeout_seconds: 10.0"
+#: `default.yaml` 中多跳执行器开关的锚点。缺端点时它与路由器一样拒绝启动，
+#: 对应用例见 `test_router_enabled_without_an_endpoint_refuses_to_start`。
+_AGENTIC_ENABLE_ANCHOR = "  enabled: true\n  # C: executor mode: plan or react."
 
 
 def _config_dir(tmp_path, **replacements: str):
@@ -838,7 +837,6 @@ def test_router_enabled_without_an_endpoint_refuses_to_start(tmp_path, missing: 
     with pytest.raises(ConfigError, match="router.enabled"):
         load_config(env, config_dir=_config_dir(tmp_path / "on"))
     # ② 显式关掉**两个**开关 ⇒ 缺端点本身不报错：缺省不是错误
-    #   （2026-10-14 起多跳执行器也默认开、同样要端点 ⇒ 只关路由器不够）
     off = _config_dir(
         tmp_path / "off",
         **{
@@ -864,7 +862,7 @@ def test_router_section_is_the_only_switch_and_a_typo_fails_loudly(tmp_path) -> 
     """拼错的键必须**响亮失败**（`_group` 的口径）：`router.enabeld` 被静默忽略
     等于"以为开了路由，其实一直是关的"。"""
     directory = _config_dir(
-        tmp_path, **{_ENABLE_ANCHOR: "  enabeld: true\n  # C —— 单次路由调用的超时"}
+        tmp_path, **{_ENABLE_ANCHOR: "  enabeld: true\n  timeout_seconds: 10.0"}
     )
     with pytest.raises(ConfigError, match="router"):
         load_config(

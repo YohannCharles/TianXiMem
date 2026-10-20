@@ -3,9 +3,8 @@
 
 ## 为什么要在意这一段
 
-[`../official-dataset-2026-09-29/README.md`] §4.2 的普查里，最大一族是
-`user:` / `assistant:` 的 persona 分享体（32,444 条 add），当时只能记成
-"没有足够特征把它归属到某一个具体数据集"。本脚本把其中**可归属的子集**钉死：
+官方采集里最大一族是 `user:` / `assistant:` 的 persona 分享体（32,444 条 add）。
+本脚本用可归属特征识别其中的子集：
 add 开头是 `Hello! I'd like to share my basic personal information ...`
 （同一段文字也出现为 `user: Hello! ...` 与 `[Time: ...] Hello! ...` 两种包装）
 的 186 个采集 user，逐字命中 **HaluMem-Medium**（MemTensor）。
@@ -18,10 +17,10 @@ add 开头是 `Hello! I'd like to share my basic personal information ...`
 | b 正文 | 该 user **全部** add message 去包装后命中 HaluMem 的 session dialogue | 186 |
 | c 题面 | 该 user 的 search question 逐字命中 HaluMem 的 per-session questions | 186 |
 
-实测：a=b=c=186，差集全空；命中 search 共 **1,481** 条。user → persona：
+a=b=c=186，差集全空；命中 search 共 **1,481** 条。user → persona：
 Sarah Garcia 50 / Taylor David 48 / Williams Donna 44 / Joseph Garcia 44
 （HaluMem-Medium 共 20 个 persona，采集只回放了这 4 个）。
-b 的阈值远在两个分布中间：命中 user 全部 100% 命中，非命中 user 实测最高 0%。
+b 的阈值远在两个分布中间：命中 user 全部 100% 命中，非命中 user 最高 0%。
 
 ## 上游判分口径（逐字引用，不发布精确匹配打分器）
 
@@ -40,7 +39,7 @@ HaluMem 仓库对 QA **不发布**字符串匹配打分器，只发一份 **LLM 
 * 文件：`HaluMem-Medium.jsonl`，33,511,525 B（≈33.5 MB），20 个 user / 3,467 题
 * 直链：<https://huggingface.co/datasets/IAAR-Shanghai/HaluMem/resolve/main/HaluMem-Medium.jsonl>
 * sha256：`486fbc130a5c8781a2af27ffa508a1d7855245137aa449c193ac4d29c45634e7`
-  （与 HF LFS oid 一致，2026-10-06 实测）
+
 * 许可：**CC-BY-NC-ND-4.0**（HF README front-matter）——仅本仓内部评测用，
   不得再分发；同库另有 `HaluMem-Long.jsonl`（106,535,674 B），本脚本不用。
 * 采集侧：`official-eval-questions.jsonl`（题面 join 用）与 `official-adds.jsonl`
@@ -59,7 +58,7 @@ HaluMem 有 6 个题面在多 session 重复（如 `What is Sarah Garcia's middl
     uv run python tools/recover_halumem.py    # 缺数据会按清单下载并校验 sha256
     uv run ruff check tools/recover_halumem.py
 
-产物：`official-dataset-2026-09-29/official-gold-extra-halumem.jsonl`，
+产物：`official-dataset-/official-gold-extra-halumem.jsonl`，
 一行一条命中的 search（seq/ts/user_id/question 与采集逐字相同）。
 """
 
@@ -85,7 +84,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 MEDIUM_BYTES = 33_511_525
 OUT_NAME = "official-gold-extra-halumem.jsonl"
 
-# add 正文命中阈值：实测 186 个命中 user 全在 100%、其余 user 最高 0%，这里是分布中间值。
+# add 正文命中阈值： 186 个命中 user 全在 100%、其余 user 最高 0%，这里是分布中间值。
 _ADD_HIT_FRAC = 0.95
 _ADD_HIT_MIN = 12
 
@@ -95,7 +94,7 @@ _TIME_PREFIX = re.compile(r"^\[Time: [^\]]+\]\s*")
 _ROLE_PREFIX = re.compile(r"^(?:user|assistant|human|ai):\s*", re.IGNORECASE)
 
 #: 上游 judge 提示词里与本数据集判分直接相关的逐字规则（出处见模块 docstring）。
-#: 引号与 `**` 强调都是原文照抄，别顺手改成中文标点。
+#: 引号与 `**` 强调都按原文保留，不使用中文标点替换。
 _JUDGING_RULES = (
     "上游对 QA 不发布精确匹配打分器，只发布一份 LLM judge 提示词："
     "MemTensor/HaluMem 的 `eval/eval_tools.py` 里 `EVALUATION_PROMPT_FOR_QUESTION`"

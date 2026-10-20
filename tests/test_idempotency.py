@@ -1,17 +1,14 @@
-"""§6.5 / §15 的批次级幂等——**唯一能抓到"守卫被绕开"的一组用例**。
+"""批次级幂等——**唯一能抓到"守卫被绕开"的一组用例**。
 
-对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 二、幂等。**Test 10 就是这里的
-`test_same_request_id_applied_once` + `test_retry_after_lost_response_*`。**
-
-核心事实（D4）：**内容幂等与"同一批被写了两次"解决的是两个不同的问题。**
-块是"写下即最终"的（D24 之后更没有回头改写的路径）——**但"写下的内容不会变"
+核心事实：**内容幂等与"同一批被写了两次"解决的是两个不同的问题。**
+块是"写下即最终"的——**但"写下的内容不会变"
 管不住"同一批被写了两次"**。
 
-> ⚠ **D28（2026-09-29）给守卫加了一半新职责：看 payload**。
+> ⚠ **守卫同时检查 payload**。
 > 位置是**请求的纯函数** ⇒ 重放必然算出**同一位置**，于是重放会撞 `UNIQUE`（**响亮**），
-> 而不再静默落成重复记录。⇒ 守卫的职责是**"别让 AML 的正常重试变成 500"**。
+> 而不会静默落成重复记录。⇒ 守卫的职责是**"别让 AML 的正常重试变成 500"**。
 > 而"同一个 `request_id`、**不同的** payload"是另一件事：它**不是**重放，
-> 静默挑一份落库会让另一份记忆凭空消失（检索侧看不出来）⇒ 现在**响亮冲突**（409）。
+> 静默挑一份落库会让另一份记忆凭空消失（检索侧看不出来）⇒ **响亮冲突**（409）。
 """
 
 from __future__ import annotations
@@ -30,9 +27,9 @@ def _msg(role: str, content: str) -> Message:
 
 
 def _rid(ordinal: int) -> str:
-    """**不透明**的 `request_id`（D28）——形状刻意做得像官方实发的那种。
+    """**不透明**的 `request_id`——形状刻意做得像官方实发的那种。
 
-    ⚠ 位置不再从它里面解析任何东西：它只是幂等键 + 位置的一半（整体参与哈希）。
+    ⚠ 位置不从它里面解析任何东西：它只是幂等键 + 位置的一半（整体参与哈希）。
     """
     return f"r_{ordinal:04d}"
 
@@ -61,11 +58,11 @@ def _snapshot(store: SqliteStore) -> list[tuple[str, str, int, str | None, str |
     return [(p.id, p.request_id, p.local_index, p.question, p.answer) for p in _pairs(store)]
 
 
-# ── Test 10：同一 `request_id` 重试 ⇒ 不重复落库 ────────────────────────
+# ── 同一 `request_id` 重试 ⇒ 不重复落库 ──────────────────────────────────
 
 
 def test_same_request_id_applied_once(store: SqliteStore) -> None:
-    """Test 10：同一个 Add 用同一个 `request_id` 重试两次 ⇒
+    """同一个 Add 用同一个 `request_id` 重试两次 ⇒
 
     * 不重复 `memory row`
     * 不重复 `vector`（`indexed` 由 `AddPipeline` 从真源重取，见 `test_service_add.py`）
@@ -95,11 +92,11 @@ def test_different_request_id_with_same_payload_is_a_different_batch(
     assert len({p.id for p in _pairs(store)}) == 2
 
 
-# ── D28 新增：同一个 request_id、**不同的** payload ─────────────────────
+# ── 同一个 request_id、**不同的** payload ────────────────────────────
 
 
 def test_same_request_id_with_a_different_payload_is_a_conflict(store: SqliteStore) -> None:
-    """**409，不是 500、更不是静默重放**（D28）。
+    """**409，不是 500、更不是静默重放**。
 
     静默挑一份落库的代价是：**另一份记忆凭空消失**，而检索侧完全看不出来
     ——它只会表现为"某些问题答不上来"。
@@ -178,18 +175,18 @@ def test_retry_after_lost_response_does_not_reallocate_positions(
 def test_retry_after_a_later_batch_still_dedupes(store: SqliteStore) -> None:
     """**守卫查的是 `applied_batches`，不是 `qa_pairs.request_id`。**
 
-    D4 的场景：批次 A 的指纹可能在任何一行上都读不到了，但 `applied_batches` 里还在
+    批次 A 的指纹可能在任何一行上都读不到了，但 `applied_batches` 里还在
     ⇒ 重放 A 必须被拦住。
 
-    ⚠ D24/D25 之后每一行只被**一个** Add 写过（没有 `touch_request_id` 那种改写路径），
-    所以 `qa_pairs.request_id` 今天**看起来**也够用。守卫**仍然只查旁表**，理由是它
-    **不依赖"这些行此后不会被改写"这条前提**——旁表是唯一记录"这批被应用过"的地方，
-    还带着 `user_id` / `session_id` / `applied_at` 三样运维信息。
+    ⚠ 每一行只被**一个** Add 写过，`qa_pairs.request_id` 也能查到应用记录；
+    守卫**仍然只查旁表**，因为它**不依赖"这些行不会被改写"这条前提**。
+    旁表是唯一记录"这批被应用过"的地方，还带着 `user_id` / `session_id` /
+    `applied_at` 三样运维信息。
     """
     _apply(store, _batch(_rid(0)))
     assert rd(store, store.is_batch_applied, _rid(0)) is True
 
-    # 后来的批次照旧落库（同一 session、新的行）
+    # 后续批次正常落库（同一 session、新的行）
     _apply(store, AddBatch(_rid(1), "u1", "s1", (_msg("user", "Q2"), _msg("assistant", "A2"))))
     assert [p.request_id for p in _pairs(store)] == ["r_0000", "r_0001"]
 

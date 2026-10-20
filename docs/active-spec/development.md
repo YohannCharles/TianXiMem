@@ -1,36 +1,64 @@
-# 跨平台开发入口
+# Development Commands
 
-最后核对：2026-10-15。本文只规定开发命令入口，不替代根目录 PRD。
+The canonical command entry point is the Python module:
 
-项目的规范入口是 Python 模块，不依赖 Unix shell（命令的定义与说明都在 `src/tianximem/dev.py`）：
-
-```text
-python -m tianximem.dev help                 # 全部命令与说明（= --help；`make help` 转发到它）
-python -m tianximem.dev sync | lock | format | format-check | lint | typecheck | test
-python -m tianximem.dev serve                # Add/Search 服务（单进程）
-python -m tianximem.dev config-check | check
-python -m tianximem.dev data-check --dataset locomo-refined     # data-patch / data-fetch 同形
-python -m tianximem.dev contract-check | diagnose | probe-reranker
-python -m tianximem.dev router-eval | coq-eval | coq-decompose | order-probe | export-multihop
-python -m tianximem.dev eval | baseline | replay-official | t1 | t2 | t2-dump
-python -m tianximem.dev qdrant-up | qdrant-down | image-build | up | down | deploy-check
-python -m tianximem.dev smoke | clean
+```bash
+uv run python -m tianximem.dev help
 ```
 
-用 `uv run` 起同一组命令：`uv run python -m tianximem.dev <cmd>`。每个子命令的 `--help`
-带着它的参数、退出码与那些坑（`help` 与 `--help` 是同一份）。
+The same command set works on Linux, macOS, and Windows. `Makefile` targets are compatibility aliases.
 
-多余参数**原样下传**给被调用的脚本：`python -m tianximem.dev eval --limit 3`；
-`Makefile` 侧是 `make eval ARGS='--limit 3'`。`DATASET=…` / `RUN=…` / `PROCESSES=…` /
-`ROUTER_OUT=…` / `COQ_OUT=…` 这些变量照旧可用（没设时用 dev.py 里的默认值——日期落点也在那里算）。
+## Commands
 
-Linux、macOS、Windows 都使用同一组参数。Windows PowerShell 不需要安装 `make`；
-`Makefile` 只是 Linux/macOS 上的兼容别名（每个目标一行转发），命令行为由 `tianximem.dev` 实现。
+```text
+python -m tianximem.dev sync
+python -m tianximem.dev lock
+python -m tianximem.dev format
+python -m tianximem.dev format-check
+python -m tianximem.dev lint
+python -m tianximem.dev typecheck
+python -m tianximem.dev test
+python -m tianximem.dev serve
+python -m tianximem.dev config-check
+python -m tianximem.dev check
+python -m tianximem.dev data-check --dataset <name>
+python -m tianximem.dev data-fetch --dataset <name>
+python -m tianximem.dev data-patch --dataset <name>
+python -m tianximem.dev contract-check
+python -m tianximem.dev diagnose
+python -m tianximem.dev probe-reranker
+python -m tianximem.dev router-eval
+python -m tianximem.dev coq-eval
+python -m tianximem.dev coq-decompose
+python -m tianximem.dev order-probe
+python -m tianximem.dev export-multihop
+python -m tianximem.dev eval
+python -m tianximem.dev baseline
+python -m tianximem.dev replay-official
+python -m tianximem.dev t1
+python -m tianximem.dev t2
+python -m tianximem.dev t2-dump
+python -m tianximem.dev qdrant-up
+python -m tianximem.dev qdrant-down
+python -m tianximem.dev image-build
+python -m tianximem.dev up
+python -m tianximem.dev down
+python -m tianximem.dev deploy-check
+python -m tianximem.dev smoke
+python -m tianximem.dev clean
+```
 
-数据准备支持 `--dataset NAME`（可重复）、`--tier all`、`--offline` 和 `--dir PATH`。
-路径在 Python 中通过 `pathlib` 处理，不拼接平台专用分隔符。服务与测试子进程使用
-参数列表启动，不经过 shell，因此空格路径和 Windows 路径不会被重新解析。
+Use `uv run python -m tianximem.dev <command> --help` for arguments and exit codes.
 
-Docker 那几条子命令（`qdrant-up` / `up` / `deploy-check` …）仍然需要 Docker Desktop 或
-Docker Engine；WSL 里 docker CLI 可能因 socket 权限用不了，那就去 Windows 侧跑同一条命令
-（见 `deploy/CLAUDE.md`）。
+Extra arguments are passed through:
+
+```bash
+uv run python -m tianximem.dev eval --limit 3
+make eval ARGS='--limit 3'
+```
+
+Data preparation accepts repeatable `--dataset`, `--tier all`, `--offline`, and `--dir`.
+
+Processes use argument lists rather than shell strings, so paths containing spaces and Windows paths are preserved.
+
+Docker commands require Docker Desktop or Docker Engine. If the current WSL environment cannot access the Docker socket, run the same command from the Windows side.

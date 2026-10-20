@@ -24,16 +24,16 @@ musique / hybridqa / feverous / halumem），每题该用哪套 prompt 由**题�
 | `musique` | `extra_pipeline.py#render_answer_prompt`（原生 Full 契约） | `extra_pipeline.py#judge_one`（规则：归一化精确匹配） |
 | 上表之外的 6 个 | `extra_pipeline.py#render_answer_prompt` | `extra_pipeline.py#judge_one` |
 
-**每个数据集用自己的 prompt 与判分**：`judge_kind` 只是套件里的语义声明，
-**不再是**"没有专属分支时借别的家族判分"的兜底开关。`supports()` 与 `_judge()`
-共用 [`_JUDGE_KINDS`](#) 一张表——预检说"能判"的组合，运行时一定走对应分支。
+**每个数据集用自己的 prompt 与判分**：`judge_kind` 是套件里的语义声明，
+并参与选择具体判分分支。`supports()` 与 `_judge()` 共用
+[`_JUDGE_KINDS`](#) 一张表——预检说"能判"的组合，运行时一定走对应分支。
 
 **prompt 与判分逻辑一行都不重写**：归档那几份用 `sys.path` + `import` 直接调
 （文件名带连字符的用 `importlib`），`official-extra` 那六个走 `extra_pipeline` 的公开入口。
 
 ## 口径说明
 
-1. **`personamem-v2` 走官方 narrow 口径**（2026-10-19 改回）：采集题是开放题，官方
+1. **`personamem-v2` 走官方 narrow 口径**：采集题是开放题，官方
    `evaluate-narrow` 用 `preference` + 模型回答问裁判要 0–1 分。`preference` 不在采集
    search 里，但 `official-gold-extra` 已从 `benchmark.csv` 按 query 逐字匹配补上
    （114/114 全部命中）⇒ **prompt 与打分函数逐字用归档那份**，只在外面加一层
@@ -90,10 +90,9 @@ _LOCAL_JUDGE_FAMILIES = frozenset({"personamem-v2", "halumem", "feverous"})
 
 #: 家族 → **真正接线的**判分语义。`supports()` 只认这张表。
 #:
-#: ⚠ 这是一张**分派镜像**，不是"允许的取值域"：`_judge()` 里没有对应分支的家族
-#: 绝不能出现在这里。历史实现按 `judge_kind ∈ {exact, llm}` 兜底，于是
-#: `musique` / `hybridqa` 在预检里"能判"、运行时却落到 `judge_tempreason` 的别名包含
-#: （2026-10-20 审计）。新增家族时**两边一起改**，测试逐组合钉住。
+#: ⚠ 这是一张**分派镜像**，不是“允许的取值域”：`_judge()` 里没有对应分支的家族
+#: 绝不能出现在这里。统一兜底会掩盖缺失的家族分支。新增家族时两边一起修改，
+#: 并让测试覆盖每个组合。
 _JUDGE_KINDS: dict[str, frozenset[str]] = {
     "locomo-refined": frozenset({"llm"}),
     "scriptmem": frozenset({"letters"}),
@@ -143,7 +142,7 @@ def _feverous_judge(item: dict, generated: str) -> dict:
     否则 "does not support" 会被读成 SUPPORTS）。
     ⚠ **采集重放仍是 label-only**：作答 prompt（`_FEVEROUS_LABEL_PROMPT`）只要一个标签。
     本地 `corpusqa_pipeline` 那条路才要求证据 id 并评严格证据组——采集正文里没有可解析的
-    原生元素 id（实测 0/53027 个方括号片段是合法 id），那里评证据必然全 0。
+    原生元素 id（ 0/53027 个方括号片段是合法 id），那里评证据必然全 0。
     """
     extra = _extra()
     qid = str(item["id"])
@@ -307,7 +306,7 @@ def _archived(family: str):
 #: FEVEROUS 采集重放的作答 prompt：**只要标签**。
 #:
 #: 本地 `corpusqa_pipeline` 那份要求 label + 原生证据 ID（那是 FEVEROUS 自己的评分标准），
-#: 但采集正文里没有可解析的原生元素 ID（实测 0/53027 个方括号片段合法），
+#: 但采集正文里没有可解析的原生元素 ID（ 0/53027 个方括号片段合法），
 #: `_feverous_judge` 也只看标签 ⇒ 在采集路径上要 ID 是**无效复杂度**（模型多写一串没人评）。
 _FEVEROUS_LABEL_PROMPT = """\
 Verify the following claim using only the retrieved evidence below.
@@ -361,10 +360,10 @@ def _answer_prompt(item: dict) -> str:
             claim=_feverous_claim(item),
         )
     if family == "clbench":
-        # ⚠ **不能直接把我们的 item 丢给官方那份 `build_answer_prompt`**（2026-10-06 实测）：
+        # ⚠ **不能直接把我们的 item 丢给官方那份 `build_answer_prompt`**：
         #   它读的是 `system_prompt` 与 `retrieval.selected[*].text`，
         #   而我们的项里**两个键都没有** ⇒ 渲染出来是 `(no memories)` + 空 system
-        #   ⇒ 模型**盲答**（实测 74 题全 0，而检索其实带回了 1.7k 字符）。
+        #   ⇒ 模型**盲答**（ 74 题全 0，而检索其实带回了 1.7k 字符）。
         #   ⇒ 按官方认的形状把命中塞回去（我们的命中已经渲染成一整串，因此只放一条）。
         native = item.get("gold_answer") or {}
         return _archived(family).build_answer_prompt(
@@ -422,7 +421,7 @@ PERSONAMEM_NARROW_PASS: float = 0.5
 
 
 def _narrow_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
-    """PersonaMem-v2 开放题——**官方 `evaluate_narrow` 口径**（2026-10-19 改回）。
+    """PersonaMem-v2 开放题——**官方 `evaluate_narrow` 口径**。
 
     上游 `pipeline_v2_personamem.py` 的 `evaluate-narrow`：
     `preference` 以 `do not` 开头用 `JUDGE_PROMPT_NARROW_NEGATIVE`，否则
@@ -497,7 +496,7 @@ def _judge(item: dict, generated: str, *, max_tokens: int) -> dict:
         if family == "halumem":
             return _halumem_judge(item, generated, max_tokens=max_tokens)
         if family == "feverous":
-            # 采集正文里没有可解析的原生元素 ID（实测 0/53027 个方括号片段是合法 ID），
+            # 采集正文里没有可解析的原生元素 ID（ 0/53027 个方括号片段是合法 ID），
             # 严格证据组判分在这条路上必然全 0 ⇒ 保留已声明的 label-only 口径。
             return _feverous_judge(item, generated)
         return extra.judge_one(
@@ -578,7 +577,7 @@ def _judge(item: dict, generated: str, *, max_tokens: int) -> dict:
     }
 
 
-#: CL-Bench 每批判几条 rubric。**30 是量出来的**（2026-10-06，同一道题、同一个网关）：
+#: CL-Bench 每批判几条 rubric。**30 是量出来的**：
 #: 10 条 → 12.1 秒 · 30 条 → 13.5 秒 · **109 条 → 360 秒还不返回**（撞网关的源站时限）。
 #: ≤30 条时**与归档那份的"一次判完"逐字等价**（只有一次调用）。
 _CLBENCH_CHUNK = 30
@@ -593,9 +592,9 @@ def _clbench_judge(item: dict, generated: str) -> dict:
     而它的判据本来就是**逐条独立判定、全中才算 1**（prompt 原文：
     *"For every requirement in the 【Rubrics】, verify one by one"* / *"strict, all-or-nothing"*）。
     ⇒ 拆批**不改变判据**（同一组条件被拆成几组"全都要满足"），只是让每次调用的规模落在
-    网关扛得住的范围内。⚠ 这是**已声明的偏离**（记在 docs/decisions.md **D34**）：
+    网关扛得住的范围内。⚠ 这是**已声明的偏离**：
     批与批之间互相看不见，所以**同一道题的判定可能与"一次判完"不同**——
-    实测 ≤30 条的那 128 道走的是同一条路（只有一批），**不受影响**。
+     ≤30 条的那 128 道走的是同一条路（只有一批），**不受影响**。
 
     ## 判分语义
 
@@ -676,11 +675,10 @@ def _clbench_judge(item: dict, generated: str) -> dict:
 
 
 def _generic_judge(item: dict, generated: str, *, max_tokens: int) -> dict:
-    """**没有专属判分的家族**——响亮报 `JUDGE_ERROR`，绝不借别的家族的判分顶替。
+    """    **没有专属判分的家族**——响亮报 `JUDGE_ERROR`，绝不借别的家族的判分顶替。
 
-    历史实现按 `judge_kind` 兜底：`exact` 直接借 `judge_tempreason` 的别名包含、
-    `llm` 借一份通用参考回答裁判。前者是**接线错误**——MuSiQue / HybridQA 因此
-    被 TempReason 口径静默判分（2026-10-20 审计）。⇒ 现在：
+    按 `judge_kind` 兜底会让 MuSiQue / HybridQA 被 TempReason 口径静默判分，
+    属于接线错误。当前行为是：
 
     * 没有显式分支 ⇒ `JUDGE_ERROR`（`supports()` 也会在预检阶段判 False）；
     * `exact` 的别名包含只写进 `diagnostics`，**不参与 `is_correct`**。

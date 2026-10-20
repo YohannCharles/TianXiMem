@@ -1,4 +1,4 @@
-"""一轮评测怎么跑（§12.1 / §12.3 / §6.5 / §13）。
+"""一轮评测怎么跑。
 
 ```python
 from eval.harness import ServiceClient, build_input_items, pipeline_for, run_judge

@@ -6,17 +6,17 @@ last weekend            →  last weekend (July 15 to July 16, 2023)
 I've taught for 7 years →  I've taught for 7 years (since 2016)
 ```
 
-## 为什么是"注解"而不是"替换"（2026-09-25）
+## 为什么是"注解"而不是"替换"
 
 两者都能让模型**不用做日历算术**（`t1-dated` 的 temporal 79 道里 27 道卡在这一步），但注解多三件事：
 
 | | 替换 | **注解** |
 | --- | --- | --- |
 | 相对形式还在吗 | ❌ 没了 ⇒ 纯相对 gold 必错、BEAM（规则相反）反向 | ✅ 在，模型按 gold 选形式 |
-| 与 **D21** 的关系 | 跨过它（"原文保留、日期是额外锚点"） | **就是 D21**，从段级挪到短语级 |
+| 与原文保留约束的关系 | 跨过它（"原文保留、日期是额外锚点"） | **满足该约束**，从段级挪到短语级 |
 | 失败可逆吗 | 错日期顶替了原文，看不出来 | 原文在，错了能看出是哪条推错 |
 
-代价只是正文变长——实测 346 题**平均 +1.1%**（中位 1.1%、最大 1.4%）。
+代价只是正文变长—— 346 题**平均 +1.1%**（中位 1.1%、最大 1.4%）。
 
 ## 锚点 = 该段自己的会话日期
 
@@ -28,17 +28,16 @@ I've taught for 7 years →  I've taught for 7 years (since 2016)
 而编错的日期比不换算更糟：**模型会自信地照抄**，而裁判是精确比值的。
 ⇒ 查不到数字的一律原样保留（`_quantifier` 返回 `None`）。
 
-## ⚠ 这份拷贝为什么还留着（D22 已落地之后）
+## ⚠ 这份拷贝为什么还留着
 
 生产实现是 [`../../src/tianximem/common/annotate.py`](../../src/tianximem/common/annotate.py)，
-消费点是 `rank/neighbor.py` 的 `_build_segment._text()`——**只在 `content` 侧、索引侧一个字不改**。
-理由与实测（`per-pair` 0.627 vs `t1-dated` 0.633，差在噪声内 ⇒ 日期进向量**没有贡献**）见
-[`../reports/ledger.md`](../reports/ledger.md)。
+消费点是 `rank/neighbor.py` 的 `_build_segment._text()`——**只在 `content` 侧生效，
+索引侧一个字不改**。日期注解是响应侧能力，不应进入 embedding 输入。
 
-**本文件留着有两个理由，都是刻意的**：
+**本文件保留有两个理由，都是刻意的**：
 
-1. harness **不许 import `src/`**（[`../CLAUDE.md`](../CLAUDE.md)），而那次注解实验
-   （run record 里的 `--memory-date annotate`）是在 harness 侧跑的——它是那次实验的**可复现工具**；
+1. harness **不许 import `src/`**（[`../CLAUDE.md`](../CLAUDE.md)），而
+   `--memory-date annotate` 需要 harness 侧的可复现实现；
 2. 两份实现的一致性由 [`../../tests/test_annotate.py`](../../tests/test_annotate.py)
    的**逐例等价断言**钉住（同一张用例表喂给两份，输出必须逐字相同）——
    **改任何一份都要同时改另一份**，那条测试会立刻红。

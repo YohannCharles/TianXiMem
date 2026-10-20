@@ -21,7 +21,7 @@ SQLite 事务**已提交** → Qdrant 的 embedding/upsert **失败** → 客户
 ### 修复路径：按 **request_id** 幂等重建
 
 `ApplyBatchResult.applied` 在守卫命中时是 `False`，但修复不需要那个列表：
-`fetch_by_request(...)` 能拿到**那一次 Add** 写下的全部块（D28 的作用域）。于是：
+`fetch_by_request(...)` 能拿到**那一次 Add** 写下的全部块。于是：
 
 * `point_id` 是位置派生的纯函数 ⇒ 同一对永远是同一个 point
 * `upsert` 幂等 ⇒ 已经写对的会被原样覆盖
@@ -45,10 +45,10 @@ __all__ = ["AddOutcome", "AddPipeline"]
 
 @dataclass(frozen=True, slots=True)
 class AddOutcome:
-    """一次 Add 的结果（**不进响应**——响应只有 §2.1 那三个回显字段）。"""
+    """一次 Add 的结果，仅供内部编排和诊断使用，不进入响应。"""
 
     applied: bool
-    """False = 幂等守卫命中（本批此前已应用过）。"""
+    """False = 幂等守卫命中（该批次已经应用）。"""
 
     new_pair_count: int
 
@@ -71,8 +71,7 @@ class AddPipeline:
         self._store = store
         self._qdrant = qdrant
         self._embedder = embedder
-        #: T1 的渲染变体（`packaging.inject_abs_time`）——**索引侧也要用它**：
-        #: 正文一变，embedding 输入就变（§7.2 的"同一份渲染"）。
+        #: `packaging.inject_abs_time` 同时作用于索引渲染；正文变化会改变 embedding 输入。
         self._inject_abs_time = inject_abs_time
         self._grounded_evidence = grounded_evidence
 
@@ -114,10 +113,10 @@ class AddPipeline:
     ) -> tuple[list[QaPair], bool]:
         """返回 `(要索引的对, 是否走了修复路径)`。"""
         if not result.applied:
-            # 守卫命中（重试）⇒ **按这一次 Add 幂等重建**（D28：作用域就是 request_id）
+            # 守卫命中（重试）⇒ **按这一次 Add 幂等重建**
             return self._batch_pairs(batch), True
 
-        # 正常路径：本批写下的**全部**行（D24 之后没有"被续接/被关闭的既有对"——
+        # 正常路径：本批写下的**全部**行（之后没有"被续接/被关闭的既有对"——
         # 一次 Add 触碰的恰好是它自己新写的那几行，不多不少）
         ids = list(result.new_pair_ids)
         if not ids:
@@ -130,7 +129,7 @@ class AddPipeline:
     def _batch_pairs(self, batch: AddBatch) -> list[QaPair]:
         """**这一次 Add**写下的全部块（真源）——修复路径的输入。
 
-        ⚠ D28 起作用域是 **`request_id`**：
+        ⚠ 该修复路径的作用域是 **`request_id`**：
 
         * **更准**：那次 Add 提交了哪些行、Qdrant 就可能缺哪些行——一行不多、一行不少
         * **更便宜**：长 session 上"整段重建"的代价随 session 增长，而它其实只需要一批

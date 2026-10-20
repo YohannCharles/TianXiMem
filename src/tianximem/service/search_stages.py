@@ -92,7 +92,7 @@ class GroundedEvidenceStage:
             )
             if len(evidence) > fetch_limit:
                 return EvidenceDecision(None, "fetch_limit")
-            # 读取期已把第一人称事实的主语换成真名（D50），计划侧仍是字面 `"i"`。
+            # 读取期已把第一人称事实的主语换成真名，计划侧仍是字面 `"i"`。
             # 同一个读快照里取一次真名键，交给 `matches` 做等价比较。
             owner = self._store.owner_name(conn, user_id)
             sources: list[QaPair] = []

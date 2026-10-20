@@ -24,17 +24,17 @@
 - 归档路径（`dataset/`）→ `locomo_refined.json` + `strip()`
 - 开发路径（`eval/datasets/LoCoMo-Refined/data/public/`）→ `conversations.jsonl`
 
-> ⚠ **D16 说"用 `locomo_refined.json` 会引入 209 条契约违规"——那句的前提是"不 strip"。**
+> `locomo_refined.json` 本身有 209 条记录的 `text` 带首尾空白，但那不等于契约违规。
 > 契约要求 `content` 首尾无空白，而本模块**两条路径都强制 `strip()`**
 > （见 [`preprocess.normalize_content`](./preprocess.py)），所以该违规在这里不可能出现。
-> 这条差异值得回填进 `docs/decisions.md` 的 D16——**归档单独就够用，不必依赖 clone**。
+> 因此归档单独就够用，不必依赖 clone。
 
 ## 说话人 → `role` 的映射
 
 数据集里没有 `role`（`locomo_refined.json` 只有 `speaker`），映射是
 **`speaker_a` → `user`、`speaker_b` → `assistant`**——这是数据集给两个真人的
-**约定标签，不是"用户 vs 助手"**（§6.2 的配对判据在这份数据上实际是
-"speaker_a 的一轮 + 对方回应，直到 speaker_a 的下一轮"）。
+**约定标签，不是"用户 vs 助手"**；在这份数据上，配对边界实际是
+"speaker_a 的一轮 + 对方回应，直到 speaker_a 的下一轮"。
 
 > 上面那条等价关系由 `tests/test_datasets.py` 守着，**不在运行时断言**：
 > 加载器只挑一个来源（`conversations.jsonl` 优先），两边都在场时由用例逐条比对。
@@ -170,7 +170,7 @@ def _load_questions(path: Path) -> dict[str, list[Question]]:
     """按 `sample_id` 归组题目。**`category` 归一成 `int` 再转 `str`**。
 
     ⚠ `questions.jsonl` 里是字符串 `"4"`，`locomo_refined.json` 里是整数 `4`——
-    不归一化而直接按 `category == 1` 筛选会**静默筛出 0 条**（§12.3）。
+    不归一化而直接按 `category == 1` 筛选会**静默筛出 0 条**。
     本模块只读前者，但归一化照做：它就是为这条落差存在的。
     """
     grouped: dict[str, list[Question]] = {}

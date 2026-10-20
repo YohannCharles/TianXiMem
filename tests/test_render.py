@@ -1,6 +1,6 @@
 """渲染 —— **唯一实现**（不变式 I1）的测试。
 
-对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 四、同一份渲染。
+对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 中渲染覆盖的核心不变量。
 ⚠ 这一层错了不会报错：两处渲染一旦漂移，"检索命中的是什么"与"模型读到的是什么"
 就会不一致，而检索照常返回值、分数照常算。
 """
@@ -18,7 +18,7 @@ def test_both_sides_present() -> None:
 
 
 def test_question_empty_only_answer_line() -> None:
-    """`question` 为空的对（§6.2 的"无问的对"）**只输出 `A:` 那一行**。"""
+    """`question` 为空的对**只输出 `A:` 那一行**。"""
     assert render(None, "[assistant] 先交代背景") == "A: [assistant] 先交代背景"
     assert render("", "[assistant] x") == "A: [assistant] x"
 
@@ -35,7 +35,7 @@ def test_both_empty_is_empty_string() -> None:
 
 
 def test_multiline_answer_kept_verbatim() -> None:
-    """多条非 user 消息的 role 标记**已经在 `answer` 里**（① 的决定 A1），
+    """多条非 user 消息的 role 标记**已经在 `answer` 里**，
     渲染只负责加 `A:` 前缀——不重新拼装、也不加任何额外标记。"""
     answer = '[assistant] 我查一下。\n[system] {"tool": "x"}\n[assistant] 09:42。'
     assert render("火车几点开？", answer) == f"Q: 火车几点开？\nA: {answer}"
@@ -44,7 +44,7 @@ def test_multiline_answer_kept_verbatim() -> None:
 
 def test_output_has_no_surrounding_whitespace() -> None:
     """**首尾无空白**：AML 只做 `"\\n".join(...)` 拼接、不插分隔符，
-    任何一项首尾留白都会让拼接处粘连（§11.3）。"""
+    任何一项首尾留白都会让拼接处粘连。"""
     for q, a in [("Q1", "A1"), (None, "A1"), ("Q1", None), ("  Q1  ", "  A1  ")]:
         out = render(q, a)
         assert out == out.strip(), repr(out)
@@ -59,9 +59,9 @@ def test_render_is_pure_and_deterministic() -> None:
 def test_render_injects_no_timestamp() -> None:
     """**不注入任何时间戳前缀。**
 
-    §11.3 有两条**互相独立**的规则都指向"不要注入绝对时间"（粒度变细、相对↔绝对互转），
-    而答案 prompt 第 7 条却要求转换相对时间——所以加绝对时间戳可能反而有害。
-    时间信息由 `event_time` 列负责筛选，正文只保留原始表述。
+    渲染文本保持原始时间表述，不把绝对时间写成正文前缀；答案 prompt 第 7 条另行要求
+    转换相对时间，因此加绝对时间戳可能反而有害。时间信息由 `event_time` 列负责筛选。
+
     """
     out = render("昨天发生了什么？", "[assistant] 你去了公园。")
     assert "2026" not in out
@@ -73,8 +73,7 @@ def test_render_injects_no_timestamp() -> None:
 def test_template_version_is_declared() -> None:
     """模板版本必须存在且非空——它进 embedding 缓存的坐标系。
 
-    §11.3 明确"改模板 = 改变 embedding 输入 = 整个向量索引要重建"，
-    版本号就是让"旧缓存静默命中"变成不可能的那把锁。
+    改模板就是改变 embedding 输入和缓存坐标，版本号用于阻止不兼容缓存静默命中。
     """
     assert TEMPLATE_VERSION
     assert isinstance(TEMPLATE_VERSION, str)
@@ -83,8 +82,7 @@ def test_template_version_is_declared() -> None:
 def test_template_separator_is_a_single_constant() -> None:
     """Q 与 A 之间的分隔只有一处定义——改模板时必须改这一个地方。
 
-    ⚠ PRD §11.3 与 rank/README §4 之间有一处**自相矛盾**：模板块是一个换行，
-    同节的示例画成了空行。这里取模板块的字面（规范表述优先于示意）。
+    ⚠ 模板块定义的是一个换行；示例中的空白排版不改变这个分隔符。
     """
     from tianximem.common.render import QUESTION_ANSWER_SEP
 
@@ -92,7 +90,7 @@ def test_template_separator_is_a_single_constant() -> None:
     assert render("q", "a").count(QUESTION_ANSWER_SEP) == 1
 
 
-# ── T1 的渲染变体（§11.3 / §13）────────────────────────────────────────────
+# ── T1 的渲染变体 ─────────────────────────────────────────────────────────
 _MAY_8_2023_MS = 1683504000000  # 2023-05-08T00:00:00Z
 
 
@@ -106,13 +104,13 @@ def test_render_date_is_the_switch_and_nothing_else() -> None:
     assert render_date(_MAY_8_2023_MS, inject_abs_time=False) == ""
     # ⛔ 星期试过更差（见 `render_date` 的注释）⇒ 前缀**只到日粒度**
     assert render_date(_MAY_8_2023_MS, inject_abs_time=True) == "2023-05-08"
-    # 时间缺失时**不是"1970-01-01"**，而是与 created_at 同一条降级路径：空串（§11.3）
+    # 时间缺失时**不是"1970-01-01"**，而是与 created_at 同一条降级路径：空串
     assert render_date(None, inject_abs_time=True) == ""
     assert day_granularity(None) == ""
 
 
 def test_date_prefix_goes_in_front_and_stays_trimmed() -> None:
-    """`date` 非空 ⇒ 正文最前面加 `[date] `；首尾仍然无空白（§11.3 自定界）。"""
+    """`date` 非空 ⇒ 正文最前面加 `[date] `；首尾仍然无空白。"""
     out = render("Q1", "A1", date="2023-05-08")
     assert out == "[2023-05-08] Q: Q1\nA: A1"
     assert out == out.strip()
@@ -125,7 +123,7 @@ def test_empty_pair_gets_no_date_prefix() -> None:
 
 
 def test_template_version_separates_the_two_arms() -> None:
-    """两臂的**缓存坐标必须不同**——否则"带"臂会静默复用"不带"臂的向量（§7.2）。"""
+    """两臂的**缓存坐标必须不同**——否则"带"臂会静默复用"不带"臂的向量。"""
     from tianximem.common.render import template_version
 
     assert template_version(inject_abs_time=False) == TEMPLATE_VERSION
@@ -152,12 +150,12 @@ def test_render_pair_takes_the_date_from_the_pair_itself() -> None:
     assert render_pair(_Undated(), inject_abs_time=True) == "Q: Q1\nA: A1"
 
 
-# ── T1 的开关纯度（§13）：两臂**只该差正文**────────────────────────────────
+# ── T1 的开关纯度：两臂**只该差正文**──────────────────────────────────────
 def _dress(chain, *, inject_abs_time: bool) -> list[str]:
     """灌三条**相隔的**位置（chunk 0/2/4）、每条都带 `event_time`，返回被索引的 id。
 
     ⚠ 三条不是相邻的：相邻会被扩窗合进同一段，那样"段数没变"这条断言就验不出东西
-    （[`../tests/CLAUDE.md`](../tests/CLAUDE.md) §三 的"一个候选 ≠ 一项"）。
+    （见 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 的"一个候选 ≠ 一项"）。
     ⚠ 用 `insert_pair` 而不是走 Add：这里要的是**确定的**位置与 `event_time`
     （Add 路径的位置 = `(request_id, local_index)`，`event_time` 取消息上的 timestamp）。
     索引侧仍然走**生产路径的同一个渲染函数**（`index_pairs` 的 `renderer`）。
@@ -196,7 +194,7 @@ def _dress(chain, *, inject_abs_time: bool) -> list[str]:
 def test_t1_switch_only_changes_the_text(wired, wired_dated) -> None:
     """同一个库、同一次检索、两臂逐项比：**只有 `content` 该变。**
 
-    §13 的纯度规则（[`../tests/CLAUDE.md`](../tests/CLAUDE.md) §五）：开关必须只影响它
+    开关纯度规则（[`../tests/CLAUDE.md`](../tests/CLAUDE.md)）：开关必须只影响它
     命名的那一件事。这里被"命名"的是**正文里带不带日期**，所以名次、`id`、`created_at`、
     `score`、段数**一个都不许动**——动了就说明这个对照同时在测两件事，结论不可归因。
     """
@@ -225,7 +223,7 @@ def test_t1_arm_renders_index_and_content_identically(wired_dated) -> None:
     """**I1 在 T1 的"带"臂上仍然成立**：被索引的文本 == content 里的那一对文本。
 
     这是这个开关最危险的地方——正文一改，索引侧与返回侧**必须同时改**。
-    只改一边不会报错，只会让"检索命中的是什么"与"模型读到的是什么"悄悄分叉（§7.2）。
+    只改一边不会报错，只会让"检索命中的是什么"与"模型读到的是什么"悄悄分叉。
     """
     ids = _dress(wired_dated, inject_abs_time=True)
     wired_dated.qdrant.by_user["u1"] = ids

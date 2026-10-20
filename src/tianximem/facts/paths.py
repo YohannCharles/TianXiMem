@@ -52,8 +52,8 @@ RELATION_NAMES = {
     "language of work or name": ("language of work or name",),
     # ⚠ **不要单独给 `field of work` 建关系名**：官方语料把它存成 `occupation`
     # （MQuAKE 的 P106），题面说 "field of work"——两者必须是**同一个**规范关系，
-    # 否则计划走 `field of work`、事实在 `occupation`，永远 `unsupported_walk`
-    # （2026-10-19 实测）。别名由下面 `occupation` 那一行统一收。
+    # 否则计划走 `field of work`、事实在 `occupation`，永远 `unsupported_walk`。
+    # 别名由下面 `occupation` 那一行统一收。
     "work location": ("work location", "workplace", "work place"),
     "genre": ("genre", "type of music"),
     "occupation": ("occupation", "field of work", "profession"),
@@ -69,9 +69,8 @@ _ALIASES = sorted(
 
 def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
     """A nested noun phrase is a literal root followed by ordered dependencies."""
-    # Parsing recognizes longer paths so the executor can reject them as a
-    # whole at its configured hop limit. A parser miss must not degrade into
-    # legacy relation-keyword retrieval of only the first hop.
+    # Recognize longer paths so the executor can reject the whole path at its
+    # configured hop limit rather than silently retaining only the first hop.
     if depth > 32:
         return None
     literal = text.strip()
@@ -107,7 +106,7 @@ def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
         ("educated at", r"(?:university|college|school) that (.+?) attended"),
         ("sport", r"sport associated with (.+)"),
         ("spouse", r"person (?:who is )?married to (.+)"),
-        # **"the <关系> of X" 的从句式**（官方 MQuAKE，2026-10-19）：
+        # **"the <关系> of X" 的从句式**：
         # "the country whose citizen performed X" / "the city where the CEO of
         # the developer of X was born"。都是「外层实体 + 内层从句」，通用嵌套。
         # `whose citizen performed X`：先沿该动词的关系走到 X，再到公民国。
@@ -123,7 +122,7 @@ def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
         # "… the sport developed, that is associated with X" 的内层是
         # "is associated with the position played by X"——方向是「内层实体 → 外层属性」。
         # ⚠ 只收**带谓语标记**的形态；`(.+?) is renowned for` 这种会把普通名词短语
-        # 也吞掉（实测 MQuAKE 815 → 782），不放进来。
+        # 也吞掉（ MQuAKE 815 → 782），不放进来。
         ("sport", r"(?:is |was )?(?:associated with|linked to|related to) (.+)"),
         ("position played on team / speciality", r"(?:is |was )?(?:played by|held by) (.+)"),
         ("country of origin", r"(?:created|developed|originated|produced) the sport (?:that is |which is )?(?:associated with|linked to|played by) (.+)"),
@@ -210,7 +209,7 @@ def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
     if city_hq:
         nested = noun_path(city_hq[1], depth + 1)
         return (nested[0], (*nested[1], "headquarters location")) if nested else None
-    # **描述性名词短语**（官方 MQuAKE 的主力问法，2026-10-18）：根不是字面名字，而是
+    # **描述性名词短语**：根不是字面名字，而是
     # "the company responsible for developing X" / "the music style played by X" /
     # "the country whose citizen performed X" 这类**原文里就有的关系短语**。
     # 与上面那些框架同一口径：都是「外层属性 + 内层实体」的嵌套，不是业务分支。
@@ -220,9 +219,9 @@ def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
             r"(?:the )?(?:company|organization|business) (?:responsible for|that) "
             r"(?:developing|developed|produces|produced) (.+)",
         ),
-        # **"created" 对齐 `creator`，不是 `developer`**（2026-10-19）：MQuAKE 的
+        # **"created" 对齐 `creator`，不是 `developer`**：MQuAKE 的
         # "the company that created Portal" 在语料里是 `creator` 边；映射成 developer
-        # 会让整条 walk 走不通（实测 21 题）。
+        # 会让整条 walk 走不通（ 21 题）。
         (
             ("creator",),
             r"(?:the )?(?:company|organization|business) (?:that )?created (.+)",
@@ -247,9 +246,8 @@ def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
         ),
         # "the current head of the Zimbabwe government"（国家在中间）——**注意是
         # `head of government`**：MQuAKE 的 `head of the X government` 问法里 gold
-        # 是政府首脑（P6），不是国家元首（P35）。实测 "What is the profession of the
-        # current head of the Zimbabwe government?" 的语料边是 `head of government`
-        # （2026-10-19）。
+        # 是政府首脑（P6），不是国家元首（P35）。 "What is the profession of the
+        # current head of the Zimbabwe government?" 的语料边是 `head of government`。
         (
             ("head of government",),
             r"(?:the )?(?:current )?head of (?:the )?(?:government) of (?:the )?(.+)",
@@ -287,7 +285,7 @@ def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
     if country_attr:
         # "current leader" 只是同一字段的时间限定（`_current` 负责取舍），映射到原文里
         # 同义的状态字段，不另造字段。⚠ MQuAKE 的 `leader of the country` 问法里
-        # **21/22 的 gold 是 head of government**（2026-10-17 实测），所以映射到
+        # **21/22 的 gold 是 head of government**，所以映射到
         # `head of government`；只有 `leader of the state` 才映射到 `head of state`。
         relation = (
             "head of government"
@@ -305,7 +303,7 @@ def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
         re.I,
     ):
         return named_office[1], ("officeholder",)
-    # **谓语后置的相对从句**（官方 MQuAKE 的另一半问法，2026-10-19）：
+    # **谓语后置的相对从句**：
     # "the sport that is associated with the position played by X" /
     # "the sport linked to the position played by X" / "the work that Harper Lee
     # is renowned for" / "the city located where X died"。都是**通用嵌套**：
@@ -454,7 +452,7 @@ def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
             r"(?:the )?(?:work|book|novel|song|film) (?:that |which )?(.+)",
         ),
     )
-    # **主语后置、谓语夹在中间的从句**（官方 MQuAKE，2026-10-19）：
+    # **主语后置、谓语夹在中间的从句**：
     # "the founder of the religion tied to X" 的 founder 在内、religion 在中间。
     # 先把 "the <属性> of the <东西> <从句> X" 拆成「内层实体 X → 外层属性」两步。
     inner_outer = (
@@ -611,7 +609,7 @@ def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
         # 那是 `date_bounds` 的职责，字段名本身只取前半。
         field_text = re.split(r"\s+(?:as of|in|during|on)\s+", possessive[2], maxsplit=1)[0]
         # `latest / current / most recent` 只是**时间限定词**，不是字段名的一部分：
-        # "X's latest job title" 仍是 `job title`（HaluMem 的通用问法，2026-10-19）。
+        # "X's latest job title" 仍是 `job title`。
         field_text = re.sub(r"^(?:latest|current|most recent|present)\s+", "", field_text, flags=re.I)
         field = relation_key(field_text)
         if field in _PROFILE_FIELD_NAMES:
@@ -648,7 +646,7 @@ def noun_path(text: str, depth: int = 0) -> tuple[str, tuple[str, ...]] | None:
                 }[comma[1].lower()]
                 return (nested[0], (*nested[1], "country of citizenship", relation))
     # **"the <属性> of the country located, where/whose …" 的逗号变体与后置从句**
-    # （官方 MQuAKE，2026-10-19）：`In what city is the capital located, of the country …`。
+    #：`In what city is the capital located, of the country …`。
     # 逗号两侧是同一个嵌套的两半，拼回去交给上面的通用规则。
     comma_tail = re.fullmatch(
         r"(?:the )?(capital|continent|official language|language|head of state|"
@@ -754,7 +752,7 @@ def question_path(text: str) -> tuple[str, tuple[str, ...]] | None:
         (None, r"(?:Which|What) city is home to (.+)"),
         (None, r"In (?:which|what) city is (.+?) located"),
         (None, r"Where is (.+?) located"),
-        # **官方 MQuAKE 的疑问壳变体**（2026-10-19）：全部只是剥掉疑问词，
+        # **官方 MQuAKE 的疑问壳变体**：全部只是剥掉疑问词，
         # 内层仍是 `noun_path` 的通用嵌套——不新增业务分支。
         ("capital", r"(?:Which|What) city (?:serves as|acts as|is) the capital(?: city)? of (.+)"),
         (None, r"(?:Which|What) city (?:serves as|acts as) (.+)"),
@@ -980,9 +978,8 @@ def question_path(text: str) -> tuple[str, tuple[str, ...]] | None:
         r"(?:Who|What) is (.+)",
         r"Where is (.+)",
         r"(?:Which|What) city (?:is|was) (.+)",
-        # 这些是**不带从句的裸壳**：必须排在"带 located in/that"的专用壳之后，
-        # 否则 `What continent is the country located in where X` 会把整段从句当根
-        # （2026-10-19 实测：root 变成 "… was created"）。
+        # 这些是**不带从句的裸壳**：必须排在“带 located in/that”的专用壳之后，
+        # 否则 `What continent is the country located in where X` 会把整段从句当根。
         r"(?:Which|What) continent is (.+)",
         r"(?:Which|What) continent contains (.+)",
         r"(?:Which|What) language is (.+)",

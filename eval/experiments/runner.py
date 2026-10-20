@@ -1,13 +1,12 @@
 """一轮评测的**机制层**：加载 → 投喂 → 检索 → 裁判（`run_round`），外加两个"跑之前就该
 失败"的检查（`judge_preconditions` / `missing_pipeline`）。
 
-本模块是 `run.py` 拆出来的机制半（2026-10-15）：那边只剩命令行与薄 façade
-（`main` / `build_parser` / 退出码与不可达提示），run record 的组装与打印在
-[`record.py`](./record.py)。**入口路径与 CLI 没动**——`eval.experiments.run` 的
-import 与调用两个方向都照旧（`run.py` 把这边的名字**重新导出**）。
+本模块负责机制层：`run.py` 保留命令行与薄 façade（`main` / `build_parser` /
+退出码与不可达提示），run record 的组装与打印在 [`record.py`](./record.py)。
+`eval.experiments.run` 的 import 与调用保持兼容（`run.py` 把这边的名字**重新导出**）。
 
-⚠ 测试/消费方若 `monkeypatch` 本模块的名字，**要打在真实现所在的这里**
-（`eval.experiments.runner`）——打在 `run.py` 的 façade 上对搬走的实现不生效。
+⚠ 测试/消费方若 `monkeypatch` 本模块的名字，**要打在实现所在的这里**
+（`eval.experiments.runner`）——打在 `run.py` 的 façade 上不会影响这里的实现。
 
 ⚠ **"打 HTTP、不 import `src/`"这条边界在 [`../CLAUDE.md`](../CLAUDE.md)，本文件不重复。**
 """
@@ -60,10 +59,10 @@ class EmptyDatasetError(RuntimeError):
     """
 
 
-#: §2.2：AML 固定传 `top_k=100`。**这里也用它**——预检要验的就是线上那个值。
+#: AML 固定传 `top_k=100`。**这里也用它**——预检要验的就是线上那个值。
 DEFAULT_TOP_K: Final[int] = 100
 
-#: 独立本地评测入口；各自的输入与评分范围见加载器和 pipeline（§12.4）。
+#: 独立本地评测入口；各自的输入与评分范围见加载器和 pipeline。
 DATASETS: Final[tuple[str, ...]] = (
     "beam",
     "clbench",

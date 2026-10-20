@@ -67,18 +67,12 @@ ALLOWED_RELATIONS = frozenset(
 )
 
 #: 这些数据集在题单里不带可比对的金标（裁判口径不是"答案串"），只进命中率分母。
-#: ⚠ **HaluMem 已移出**（2026-10-17）：它的 `gold_answer` 是可比对的答案串
-#: （`{'answer': '1983-05-06'}`），此前把它当不可测会让 14 个正确命中全被记成 "-"。
 _UNMEASURABLE = {"beam", "clbench", "personamem-v2", "memtrapbench"}
 
 
-#: ⛔ **不要给关系词表**：2026-10-16 实测这个模型一看到"allowed labels"就一律返回空
-#: （0 词表 3s 抽对，15 词表 13s 返回 `[]`）。关系名由模型自由写，规范化交给本地映射。
-#: ⚠ **2026-10-18 改写**：旧提示词（`Extract every …` + `Return [] if nothing is stated.`）
-#: 在**对话/邮件**类记录上一条都不抽，只在 `Corpus: A — r — B` 上有效——实测 24 条记录
-#: **0 条事实**。逐行二分把触发点定位到标题句与规则 9 的"返回空"指令同时在场；改写后
-#: 同一批记录 **22/24 非空、93 条事实**。判定口径见报告
-#: [`../eval/reports/common-facts-rule-vs-llm-20261016.md`](../eval/reports/common-facts-rule-vs-llm-20261016.md) §十五。
+#: ⛔ **不要给关系词表**：该模型看到 "allowed labels" 后会倾向返回空列表。
+#: 关系名由模型自由写，规范化交给本地映射。提示词避免同时包含标题式关系说明和
+#: "返回空"指令，该组合会让对话/邮件记录难以抽出事实。
 EXTRACT_PROMPT = """Extract subject-relation-object triples from the record as a JSON array of {{"subject","relation","object"}}.
 
 Rules:
@@ -187,7 +181,7 @@ _LABEL_SYNONYMS = {
     "attended school at": "educated at",
     "friends with": "friend",
     "made friends with": "friend",
-    # 2026-10-17 扩：按"被词表挡掉的关系名"清单补齐（relation_gap 报告里的 top 项）。
+    #  扩：按"被词表挡掉的关系名"清单补齐（relation_gap 报告里的 top 项）。
     "born on": "date of birth",
     "date of birth": "date of birth",
     "birth date": "date of birth",
@@ -233,8 +227,8 @@ _LABEL_SYNONYMS = {
     "worked for": "employee",
     "employed by": "employee",
     "employer of": "employee",
-    # 2026-10-17 第二批：模型照抄**原文动词短语**（"is a citizen of"），而词表里是名词
-    # （`country of citizenship`）。这一批全部来自 MQuAKE 更新句的实测输出。
+    #  第二批：模型照抄**原文动词短语**（"is a citizen of"），而词表里是名词
+    # （`country of citizenship`）。这一批全部来自 MQuAKE 更新句的输出。
     "is a citizen of": "country of citizenship",
     "citizen of": "country of citizenship",
     "is a national of": "country of citizenship",
@@ -317,7 +311,7 @@ def _synonym_relation(label: str) -> str | None:
     return None
 
 
-#: **前缀式更新句**的本地确定性拆解（2026-10-17）。模型在这类句子上要么返回空、
+#: **前缀式更新句**的本地确定性拆解。模型在这类句子上要么返回空、
 #: 要么把整个名词短语当主语（`"The capital of Malawi" is Oradea`）——两种都不是事实。
 #: 这里按**来源句法**拆（同 `grammar._UPDATE_FORMS` 的思路），拆不出就放弃：
 #: 这是模型输出的**本地兜底**，不是第二套抽取器（只在更新句上、只在模型没给对时跑）。
@@ -378,7 +372,7 @@ _CHUNK_LIMIT = 1500
 _MAX_CHUNKS = 12
 
 
-#: LLM 臂允许的关系 = 查询编译器认识的 + **规则层实际产出过的** + **gold 集里验证过的关系标签**
+#: LLM 臂允许的关系 = 查询编译器认识的 + **规则层实际产出过的** + **gold 集里确认的关系标签**
 #: （公平：两边同一个词表，由 `stage_index` 从规则库与 gold 集补齐）。
 VOCABULARY: set[str] = set(ALLOWED_RELATIONS) | {"located in", "date of birth"}
 
@@ -475,7 +469,7 @@ def _live_endpoint(values: dict[str, str]) -> int:
 
 
 def _endpoints(values: dict[str, str]) -> list[tuple[str, str]]:
-    """两个对话端点都要用：单个网关挂掉是常态（2026-10-16 实测 gw1 502 / gw2 正常）。"""
+    """两个对话端点都要用：单个网关故障是常态，另一个端点仍可完成评测。"""
     pairs = [
         (values.get("AML_BASE_URL", ""), values.get("AML_API_KEY", "")),
         (values.get("AML_BASE_URL_2", ""), values.get("AML_API_KEY_2", "")),
@@ -622,8 +616,8 @@ def stage_index(args: argparse.Namespace) -> int:
     users = [u for s in spec for u in s.get("users", [s["user_id"]])]
     rule_db, llm_db = args.dir / "rule.sqlite", args.dir / "llm.sqlite"
     args.dir.mkdir(parents=True, exist_ok=True)
-    # ⚠ **`--rule-only` 不许碰 `llm.sqlite`**：它曾把另一个臂整库重建成规则层，
-    # 于是两臂"逐题逐字相同"——那不是结论，是这条覆盖（2026-10-18 实测踩到）。
+    # ⚠ **`--rule-only` 不许碰 `llm.sqlite`**：否则另一个实验臂会被整库重建成规则层，
+    # 两臂将逐题逐字相同，后续比较失去意义。
     targets = (rule_db,) if args.rule_only else (rule_db, llm_db)
     for target in targets:
         _copy_schema(target, args.truth)
@@ -695,7 +689,7 @@ def stage_index(args: argparse.Namespace) -> int:
 
 
 def _gold_relation_labels() -> set[str]:
-    """`eval/facts/` 的人工金标里出现过的关系标签——那是这套管线验证过的说法。"""
+    """`eval/facts/` 的人工金标里出现过的关系标签。"""
     labels: set[str] = set()
     for path in sorted((ROOT / "eval/facts").glob("*.jsonl")):
         for line in path.read_text(encoding="utf-8").splitlines():

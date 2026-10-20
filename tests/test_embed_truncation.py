@@ -131,7 +131,7 @@ def test_cache_key_is_the_original_text_with_a_query_role_prefix(tmp_path) -> No
     """截断在缓存**之下**：键是原文，但查询侧带角色前缀、文档侧不带。
 
     两侧都不带前缀时，先文档后查询（或反过来）会静默复用另一侧的向量——
-    因为原文相同不再意味着模型输入相同（报告 §7.4 的两个复现顺序）。
+    因为原文相同并不意味着模型输入相同。
     """
     rec = _Recorder()
     inner = OpenAICompatEmbedder(
@@ -186,7 +186,7 @@ def test_distinct_long_queries_do_not_share_a_cache_entry(tmp_path) -> None:
 
 
 def test_second_call_of_the_same_long_query_hits_the_cache(tmp_path) -> None:
-    """同一个超长查询重试 ⇒ 不再打网关（缓存在截断之前生效）。"""
+    """同一个超长查询重试 ⇒ 不会重复请求网关（缓存在截断之前生效）。"""
     rec = _Recorder()
     inner = OpenAICompatEmbedder(
         base_url="http://x", api_key="k", model="m", client=rec, max_query_tokens=64

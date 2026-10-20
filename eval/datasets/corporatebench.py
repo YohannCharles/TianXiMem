@@ -1,6 +1,6 @@
 """CorporateBench（zenith 一家）的加载层——**邮件 + KB 问答，记忆是文档不是对话**。
 
-## 这份数据长什么样（2026-09-30 实测，`benchmark_data/corporatebench/`）
+## 这份数据长什么样
 
 ```text
 data/kb/zenith.kb             zip：documents/*.txt 354 份（带 Message-ID/From/Date/Subject 的邮件）
@@ -12,8 +12,8 @@ data/integrated_qa/zenith_questions.json 250 题
 
 ## 三条**显式的本地约定**
 
-1. **一条文档 = 一条消息**，而**整个语料共用一个 `Session`**。⚠ 能这么挤是因为 **D29**：
-   一段没有非 user 跟随的连续 user **每条各自独立成块** ⇒ 粒度一样、块数一字不变（353），
+1. **一条文档 = 一条消息**，而**整个语料共用一个 `Session`**。没有非 user 跟随的连续
+   user **每条各自独立成块** ⇒ 粒度一样、块数一字不变（353），
    而 Add 次数是 `batches()` 的 **41**（一条文档一个 `Session` 要 **353** 次）。
    `--limit` 选的是"哪个 QA 子集"，**语料不跟着裁**（裁了就没法检索）。
 2. **三个 QA 文件 = 三个 `Sample`**（各自 250 题、**共用同一份语料**）——这样 `--limit 1`
@@ -59,7 +59,7 @@ USER_PREFIX = "corp-"
 #: 三家 QA（顺序即 `Sample` 顺序）。
 QA_TYPES = ("kb_qa", "topic_qa", "integrated_qa")
 
-#: 写进**数据指纹**的 `note`（§13）——形状是我们造的，见模块 docstring 的三条约定。
+#: 写进**数据指纹**的 `note`——形状是我们造的，见模块 docstring 的三条约定。
 SHAPE_NOTE = (
     "⚠ **形状是本地约定**：一条文档 = 一条消息，**整份语料共用一个 session**；"
     "三种 QA 各自一个 Sample 且**共用同一份语料**（`limit` 只选 QA 子集，不裁语料）"
@@ -89,7 +89,7 @@ def _documents(bench_dir: Path) -> tuple[Session, ...]:
         for name in names:
             body = archive.read(name).decode("utf-8", "replace")
             messages.append(Message(role="user", content=body, timestamp_ms=_timestamp_ms(body)))
-    # ⚠ **整个语料一个 session**：D29 之后"连续 user 各自独立成块"，挤在一次 Add 里
+    # ⚠ **整个语料一个 session**： 之后"连续 user 各自独立成块"，挤在一次 Add 里
     #   粒度保得住，而 Add 次数少一个数量级（353 次 → 18 次）。
     return (Session(session_id="corpus", messages=tuple(messages)),)
 

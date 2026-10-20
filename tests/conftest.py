@@ -5,7 +5,7 @@
 
 ⚠ 本目录的测试**只用合成的 canonical 消息**（`role` / `content` / 可选 `timestamp`），
 **不碰任何数据集文件**——LoCoMo 只作为实现完成后的 fixture 验证数据，
-**不得反向影响核心数据模型**（D16）。
+**不得反向影响核心数据模型**。
 
 ⚠ **测试绝不调用远程模型**：embedding 一律用 `FakeEmbedder`（确定性、可计数）。
 需要 Qdrant 的用例在 Qdrant 不可达时**明确 skip**，不静默通过。
@@ -90,7 +90,7 @@ def rd(store: SqliteStore, method: Callable, /, *args, **kwargs):
 
     对应生产代码里的 `with store.read() as conn:`。测试里大量断言是"读一次、看结果"，
     每个都手写 `with` 只会淹没断言本身。**它绝不用于写**——写必须走 `store.transaction()`，
-    否则 §6.5 的三步就散了。
+    否则幂等重试的三步就散了。
     """
     with store.read() as conn:
         return method(conn, *args, **kwargs)
@@ -246,8 +246,8 @@ class FakeQdrantSearch:
         return self.exists_flag
 
     def hybrid_search(self, *, user_id: str, query_text: str, dense_vector):
-        # ⚠ **不收 `top_k`**（2026-10-01）：真 store 现在回**全部**融合结果，
-        #   截断搬到 `fusion.search` 里、排在确定性的排序之后（并列卡在截断线上时
+        # ⚠ **不收 `top_k`**：真 store 返回**全部**融合结果，
+        #   `fusion.search` 在确定性排序后截断（并列卡在截断线上时
         #   Qdrant 选谁是不确定的）。
         self.calls.append(
             {
@@ -258,12 +258,12 @@ class FakeQdrantSearch:
         )
         ids = self.by_user.get(user_id, [])
         # ⚠ **分数必须严格递减**，与真 Qdrant 的契约一致（融合结果按分数降序返回）。
-        #   给全部命中同一个分数会让"并列次序"进入下游——而 `retrieve/` 现在会按
-        #   `(-score, memory_id)` 定死并列次序（**V13**），于是本夹具声明的顺序会被
+        #   给全部命中同一个分数会让"并列次序"进入下游——而 `retrieve/` 会按
+        #   `(-score, memory_id)` 固定并列次序，于是本夹具声明的顺序会被
         #   按 id 重排，用例断言的"返回的就是我给的顺序"就不成立了。
         #   ⇒ 递减分数既忠实于真实现，也让"顺序 = 我给的顺序"这条断言继续有效。
         #   ⚠ 仍然是**刻意刺眼**的值：它绝不允许出现在响应里（`test_contract.py` 钉着）。
-        # ⚠ **不截断**：真 store 现在回全部融合结果，截断在 `fusion.search` 里做
+        # ⚠ **不截断**：真 store 返回全部融合结果，截断在 `fusion.search` 里做
         #   （排在按 `(-score, memory_id)` 的确定性排序之后）。
         return [
             ScoredMemoryId(mid, FUSED_SCORE - index * FUSED_SCORE_STEP)
@@ -291,7 +291,7 @@ FUSED_SCORE_STEP = 1e-6
 
 @dataclass
 class Wired:
-    """③-c 的对象图：真 `SqliteStore` + 假 Qdrant + 真 `DenseArm`/checker。"""
+    """测试对象图：真 `SqliteStore` + 假 Qdrant + 真 `DenseArm`/checker。"""
 
     services: object
     qdrant: FakeQdrantSearch
@@ -321,7 +321,7 @@ def wired(tmp_path) -> Iterator[Wired]:
 def wired_dated(tmp_path) -> Iterator[Wired]:
     """同 `wired`，但**开着 T1 的"带日期"渲染变体**（`packaging.inject_abs_time=True`）。
 
-    它存在是为了让"**T1 的两臂只差正文**"这件事可断言（§13 的开关纯度）——
+    它存在是为了让"**T1 的两臂只差正文**"这件事可断言（开关纯度）——
     那条断言要同时跑两臂并逐项比，所以两臂都得能就地造出来。
 
     ⚠ **它用自己的子目录**：两臂若共用 `tmp_path`，它们会写**同一个 `tianxi.db`**，
@@ -350,7 +350,7 @@ def wired_annotated(tmp_path) -> Iterator[Wired]:
 def wired_expanding(tmp_path) -> Iterator[Wired]:
     """同 `wired`，但**显式开着扩窗**（`radius=1`）。
 
-    ⚠ **为什么需要它**（2026-10-01，**D31**）：产品默认是 `radius=0`
+    ⚠ **为什么需要它**：产品默认是 `radius=0`
     （扩窗 + 段合并未挣到自己的位置），而 `wired` 刻意**继承内置默认值**
     ⇒ 拿 `wired` 写"扩窗会怎样"的用例会**静默地什么都不测**：
     返回的段照样合法、`id` 照样对，只有"邻居有没有进来"这一件事没了——
@@ -446,7 +446,7 @@ def seed_pair_in(
 ) -> str:
     """落一个块，返回它的 canonical `memory_id`（位置派生，见 ① 的 ID 纪律）。
 
-    ⚠ **`index` 现在映射成 `(request_id=f"seed:{index}", local_index=0)`**（**D28**）：
+    ⚠ **`index` 现在映射成 `(request_id=f"seed:{index}", local_index=0)`**：
     每个 `index` 是**一次独立的 Add**（各自一块）⇒ 它们之间**没有** `prev` / `next`，
     也不存在跨 Add 的序号。**要造"同一条链上相邻的几个块"请用 `seed_line`。**
 
@@ -491,7 +491,7 @@ def seed_in_add(
     不完整的（`question` / `answer` 有一个是 `None`）两侧都是 `None`。
 
     ⚠ **必须一次写完**：`prev` / `next` 是**写下时**算好的，没有事后回填
-    （D24 那条"块在写下那一刻就是最终形状"）。想造"中间缺一块"的形状，
+。想造"中间缺一块"的形状，
     就**别落那一块**——它的邻居的指针仍然指着它，而它不在库里 ⇒ 段自然断开。
     """
     ids = [make_pair_id(user_id, session_id, request_id, index) for index in range(len(entries))]
@@ -538,8 +538,8 @@ def seed_line(
     算好的：只落 0 和 2 的话，0 的 `next` 指着 1（那一行不在库里）⇒ 它们照样分开。
     ⇒ "对话里的洞"必须**真的少落一行**来表达，而那正是这张函数要的语义。
 
-    ⚠ D28 起它们**必须在同一次 Add 里**（`request_id` 相同、`local_index` 0..n-1）——
-    跨 Add 的块**永远不会**相邻，所以"落 0..n-1 号"在 D28 之后只有一个意思：
+    ⚠ 这些块**必须在同一次 Add 里**（`request_id` 相同、`local_index` 0..n-1）——
+    跨 Add 的块**永远不会**相邻，所以“落 0..n-1 号”只表示：
     **同一条链上的前 n 个块**。
 
     `qa`：可选，`(position) -> (question, answer)`；缺省是 `q{position}` / `a{position}`。

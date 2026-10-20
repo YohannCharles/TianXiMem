@@ -22,7 +22,7 @@ Doc-PP 与 [`recover_official_gold.py`](./recover_official_gold.py) 里那 6 个
    `checklist` 三键：本仓 [`eval/harness/extra_pipeline.py`](../eval/harness/extra_pipeline.py)
    的 `build_docpp_judge_prompt` 正是按这三键分流，缺一个会静默走错分支。
 
-## 来源（URL + sha256，2026-10-06 实测核对，与 `fetch_benchmark_data.py` 一致）
+## 来源
 
 GitHub `hwanchang00/doc-pp` @ `a70798e0d1f3f38cda68bed86876c474f9f453ed`，
 raw 前缀 `https://raw.githubusercontent.com/hwanchang00/doc-pp/a70798e0d1f3f38cda68bed86876c474f9f453ed/`：
@@ -46,7 +46,7 @@ raw 前缀 `https://raw.githubusercontent.com/hwanchang00/doc-pp/a70798e0d1f3f38
 
 仓内其余文件（README/assets/scripts/src/…）的 sha256 见
 [`eval/datasets/manifest.py`](../eval/datasets/manifest.py) 的 `_OFFICIAL_EXTRA_FILES`
-（D35 起清单只此一份，本文件不复制）。取数入口：`make fetch-data`。
+。取数入口：`make fetch-data`。
 
 ## 采集侧的对接口径
 
@@ -57,12 +57,12 @@ agent.` 开头的 query（该 preamble 逐字来自上游 `prompts/evaluate_mode
     head, user_question = query.split("\\n\\nUser question:\\n", 1)
     policy = head.split("# Policy Compliance\\n- ", 1)[1]
 
-join 键是 **(user_question, policy) 逐字配对**——题库里 1,141 行该配对实测唯一
+join 键是 **(user_question, policy) 逐字配对**——题库里 1,141 行该配对唯一
 （脚本内断言）；316 条采集全部命中（145 direct / 171 indirect）。
 
 ## 产物
 
-`official-dataset-2026-09-29/official-gold-extra-docpp.jsonl`，一行一条命中的
+`official-dataset-/official-gold-extra-docpp.jsonl`，一行一条命中的
 search：`seq` / `ts` / `user_id` / `question`（= 采集行自己的 `question` 字段
 逐字，本族恒等于 `query`）/ `source_dataset` / `source_locator` / `gold_kind`
 （恒 `rubric`）/ `gold_answers`（恒空）/ `gold_rubric`（indirect = checklist
@@ -78,7 +78,7 @@ search：`seq` / `ts` / `user_id` / `question`（= 采集行自己的 `question`
 
 题库与采集目录走 `--benchmark-dir` / `--dataset-dir`（缺省取
 [`eval.datasets.registry`](../eval/datasets/registry.py) 的 `benchmark_dir()` /
-`capture_dir()`，D16：路径不在代码里写死）。
+`capture_dir`，：路径不在代码里写死）。
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ from eval.datasets.registry import benchmark_dir, capture_dir  # noqa: E402
 
 __all__ = ["main", "load_archive", "read_archive_member"]
 
-#: 分卷 zip 的固定卷大小——`data.z01`–`z06` 实测各 94,371,840 字节（末卷是余量）。
+#: 分卷 zip 的固定卷大小——`data.z01`–`z06` 各 94,371,840 字节（末卷是余量）。
 VOLUME_SIZE = 94371840
 
 #: 末卷名（EOCD 与整个中央目录都在它里面）。
@@ -186,7 +186,7 @@ def _read_eocd(last_volume: bytes) -> tuple[int, int, int, int]:
     """从末卷里解析 EOCD，回 `(cd_disk, cd_off, cd_size, total_entries)`。
 
     ⚠ 分卷 zip 里 `cd_off` **相对中央目录所在卷（`cd_disk`）的起点**，不是
-    相对整个逻辑流——本机实测 `cd_disk=6`、`cd_off` 落在末卷内部。
+    相对整个逻辑流——本机 `cd_disk=6`、`cd_off` 落在末卷内部。
     """
     idx = last_volume.rfind(_ZIP_EOCD)
     if idx < 0:
@@ -361,7 +361,7 @@ def read_archive_member(docpp_dir: Path, member: str = MEMBER) -> bytes:
 
 
 def load_archive(docpp_dir: Path) -> dict[tuple[str, str], dict]:
-    """读题库，按 `(query, policy)` 建索引——**断言该配对全库唯一**（实测 1,141/1,141）。"""
+    """读题库，按 `(query, policy)` 建索引——**断言该配对全库唯一**（当前为 1,141/1,141）。"""
     raw = read_archive_member(docpp_dir)
     digest = hashlib.sha256(raw).hexdigest()
     if digest != MEMBER_SHA256:

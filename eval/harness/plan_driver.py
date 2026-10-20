@@ -23,7 +23,7 @@ from .driver import SearchHit, ServiceClient
 #: **非-wire** 逻辑（比如并发、改个日志）也会让它变，但它**并不改变 wire**。真正决定能不能续的是
 #: **user_id / wire_sha256 / evaluation_sha256 / top_k**。
 #: ⚠ `add_shape.py` / `batching.py` 若**真**改了 wire，会反映在 `wire_sha256`（以及 `user_id`）
-#: 上 ⇒ 比这几项**既够用、又不误伤**（2026-10-14 起）。
+#: 上 ⇒ 比这几项**既够用、又不误伤**。
 _WIRE_KEYS: tuple[str, ...] = (
     "input_contract",
     "dataset",
@@ -172,9 +172,9 @@ def freeze_run(out_dir: Path, plans: list[InputPlan], *, execution: dict) -> dic
             )
         # ⚠ **只有代码/配置漂移**（`judge.py`、`configs/*.yaml`、`service_revision` …）
         #   ⇒ **不拒绝**：大声警告、把漂移记进 `execution-drift.jsonl`、**继续跑**。理由
-        #   （2026-10-14）：改判分/配置本不该逼人重跑十几小时；真正的不兼容由上面那条
+        #：改判分/配置本不该逼人重跑十几小时；真正的不兼容由上面那条
         #   `data_fingerprint` 与 `execute_plan` 的逐用户 checkpoint 指纹保证。
-        #   ⚠ 代价是**前几题用旧代码/旧配置、后几题用新的**——这条记录就是复核口径用的。
+        #   ⚠ 代码或配置在运行中变化会让前几题与后几题使用不同口径——这条记录用于复核。
         if saved != manifest:
             drifted = sorted(
                 key
@@ -313,7 +313,7 @@ def execute_plan(
                 on_search(event.qid, result)
             continue
         # Add 段：把「到下一个 Search 为止」的所有 Add **并发**发出去（≤ `add_workers`）。
-        # ⚠ 安全：每个 Add 有自己的 `request_id`，位置是**请求的纯函数**（D28）⇒ 并发不发号、
+        # ⚠ 安全：每个 Add 有自己的 `request_id`，位置是**请求的纯函数**⇒ 并发不发号、
         #   服务的写事务自己串行（`BEGIN IMMEDIATE`）。⚠ **Search 必须等 Add 全完**——这条
         #   边界由「整段 Add 跑完才把游标推过它」保证；崩在中间 ⇒ 游标仍停在段首 ⇒ 重投整段
         #   （同 `request_id`/payload ⇒ 幂等，服务按 `applied_batches` 去重）。

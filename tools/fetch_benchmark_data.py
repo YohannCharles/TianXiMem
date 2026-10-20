@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""兼容旧命令；数据清单、准备和校验已迁入 eval/datasets/（D35）。
+"""兼容入口；数据清单、准备和校验由 eval/datasets/ 提供。
 
 新入口：python -m eval.datasets.prepare --dataset locomo-refined
 """

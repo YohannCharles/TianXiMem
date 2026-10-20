@@ -11,10 +11,10 @@ from api_config import (ANSWER_API_BASE, ANSWER_API_KEY, ANSWER_MODEL,
                         JUDGE_API_BASE, JUDGE_API_KEY, JUDGE_MODEL, JUDGE_VERSION)
 ```
 
-D35 后 `__file__` 在 `dataset/.upstream/aml/` 下，`parents[2]` 指向数据根目录。
-旧平铺归档时它指向仓库外；两种目录都不能靠那条路径找到配置。
+此时 `__file__` 在 `dataset/.upstream/aml/` 下，`parents[2]` 指向数据根目录。
+平铺兼容目录下它也可能指向仓库外；两种目录都不能靠那条路径找到配置。
 
-**处置（D12，见 [`CLAUDE.md`](./CLAUDE.md)）**：**不在仓库外创建它**。
+**处置（见 [`CLAUDE.md`](./CLAUDE.md)）**：**不在仓库外创建它**。
 本文件就是那一份，放在仓库内；由 harness 在 subprocess 里注入
 `PYTHONPATH=<本目录>`。`sys.path.insert(0, <不存在的路径>)` 只是塞进一个没有该模块的
 条目，**import 会继续往后找到 `PYTHONPATH` 里的这份**——归档保持只读，
@@ -24,7 +24,7 @@ D35 后 `__file__` 在 `dataset/.upstream/aml/` 下，`parents[2]` 指向数据�
 
 **两边命名不同，不是笔误**：归档读 `ANSWER_*` / `JUDGE_*`，我们 `.env` 里是 `AML_*`。
 
-## 对话端点有**多个**，本进程用哪一个是**被指派**的（D39，2026-10-09）
+## 对话端点有**多个**，本进程用哪一个是**被指派**的
 
 `memory` 与 `memory2` 提供的是**同一个** `Qwen/Qwen3.5-9B`（128K），但**各有各的 key**
 （对调都是 401）⇒ 端点是 `(base_url, api_key)` **成对**的，不能只管 url。
@@ -42,7 +42,7 @@ D35 后 `__file__` 在 `dataset/.upstream/aml/` 下，`parents[2]` 指向数据�
 
 ⚠ **`JUDGE_*` 缺省回落到所选端点**：两端点是同一个模型，裁判与答案没有理由分开配
 （归档 readme 记的裁判 `Qwen/Qwen3-14B` 我们**没有**；裁判弱于官方是已知代价，
-但**全部实验固定同一个裁判，§13 的相对对照仍然成立**）。
+但**全部实验固定同一个裁判，相对对照仍然成立**）。
 
 ⚠ **那七个名字里没有 embedding。** 归档 pipeline 是纯 LLM 的 answer/judge 驱动、
 不做任何向量化——Qwen3-Embedding 的配置不经过这里，它只属于 `src/tianximem`。
@@ -66,7 +66,7 @@ __all__ = [
     "JUDGE_VERSION",
 ]
 
-#: 由调用方注入的"本进程用第几个端点"（见模块 docstring 的 D39 一节）。
+#: 由调用方注入的"本进程用第几个端点"。
 #: ⚠ **不要放进 `.env`**：它描述的是"这一次调度"，不是这台机器的配置。
 ENV_ENDPOINT_INDEX: Final[str] = "AML_ENDPOINT_INDEX"
 

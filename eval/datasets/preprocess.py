@@ -1,6 +1,6 @@
-"""Schema 落差预处理层（§12.3 第 9 条）——**归一化成 AML 契约形状的唯一实现**。
+"""Schema 落差预处理层——**归一化成 AML 契约形状的唯一实现**。
 
-> **边界（D16）**：本模块**只知道 AML 的形状**（`role` / `content` / 可选 `timestamp`），
+> **边界**：本模块**只知道 AML 的形状**（`role` / `content` / 可选 `timestamp`），
 > 不知道任何数据集文件名。文件名的知识止步于 [`locomo.py`](./locomo.py) /
 > [`longmemeval.py`](./longmemeval.py)。**两个加载器都产出这里定义的形状**，
 > 于是 `pairing/` 与 `store/` 只需面对一种形状。
@@ -9,8 +9,8 @@
 
 1. **`content` 首尾无空白**——AML 只做 `\"\\n\".join(...)` 拼接、**不插分隔符**，
    所以首尾空白会直接进模型读到的正文
-   （[`../../../docs/contract.md`](../../../docs/contract.md) §4）。
-2. **`role` 必须存在**——§6.2 的配对判据只依赖一个字段（"这条是不是 `user`"）。
+   （[`../../../docs/contract.md`](../../../docs/contract.md)）。
+2. **`role` 必须存在**——配对判据只依赖一个字段（"这条是不是 `user`"）。
    缺 `role` 时 `pairing/` **不会报错**，它会把整个 session 归成一个对
    （[`../datasets/CLAUDE.md`](./CLAUDE.md) 的"两个数据集 turn schema 不一样"）。
 
@@ -19,11 +19,11 @@
 两个数据集都**没有** per-turn 时间戳（LoCoMo 是 session 级、LongMemEval 在
 `haystack_dates` 里）⇒ 同一 session 内所有消息拿到**同一个时间**
 ⇒ `event_time` 在 session 内必然没有区分度，**位置才是唯一能保证
-±1 邻域稳定的东西**（§6.1；D28 之后位置 = `(request_id, local_index)`，`request_id` 不解析，
-邻域沿 **Add 内的显式链**走）。这不是近似，是数据集的真实属性。
+±1 邻域稳定的东西**：位置是 `(request_id, local_index)`，`request_id` 不解析，
+邻域沿 **Add 内的显式链**走。这不是近似，是数据集的真实属性。
 
 **时区口径**：两份数据的时间串都是无时区的本地时间。这里按 **UTC** 解释
-（不做任何偏移）。理由：§11.3 只让 `created_at` 发到**日粒度**，±时区偏移最坏
+（不做任何偏移）。理由：`created_at` 只发到**日粒度**，±时区偏移最坏
 把日期挪一天，影响面远小于"自己发明一个时区"。这是**已定口径，不是待验证项**——
 真要改，改这一处即可，全链路只有这一个解释点。
 """
@@ -49,14 +49,14 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class Message:
-    """一条消息——**Add 载荷的最小单位**（§2.1）。"""
+    """一条消息——**Add 载荷的最小单位**。"""
 
     role: str
     content: str
     timestamp_ms: int | None = None
 
     def to_add_payload(self) -> dict:
-        """转成 §2.1 的 `messages` 项。`timestamp` 缺省时**不出现**该键（不是 `null`）。"""
+        """转成 Add 契约的 `messages` 项。`timestamp` 缺省时**不出现**该键（不是 `null`）。"""
         payload: dict = {"role": self.role, "content": self.content}
         if self.timestamp_ms is not None:
             payload["timestamp"] = self.timestamp_ms
@@ -65,7 +65,7 @@ class Message:
 
 @dataclass(frozen=True, slots=True)
 class Session:
-    """一个 session——**Add 的一次投喂范围**（§6.5 的切批只在 session 内发生）。"""
+    """一个 session——**Add 的一次投喂范围**；本地切批只在 session 内发生。"""
 
     session_id: str
     messages: tuple[Message, ...]
@@ -84,9 +84,9 @@ class Question:
     question: str
     gold: object
     category: str
-    #: **数据集自带的证据标记，只用于诊断，不参与评分**——LoCoMo 是 turn 级 `dia_id`
-    #: （`"D1:3"`），LongMemEval 是 session 级 id。两者不可比，故不统一成一种语义。
-    #: §13 的 T2 要人工判"没召回 / 召回但被截断 / 在里面但排序靠后"，靠的是它。
+    #: **数据集自带的证据标记，只用于诊断，不参与评分**——LoCoMo 是 turn 级
+    #: 消息 id，LongMemEval 是 session 级 id。两者不可比，故不统一成一种语义。
+    #: T2 诊断用它区分"没召回 / 召回但被截断 / 在里面但排序靠后"。
     evidence: tuple[str, ...] = ()
     #: LongMemEval 的拒答题标记（`question_id` 以 `_abs` 结尾，全库 30 道）。
     is_abstention: bool = False
@@ -169,7 +169,7 @@ def parse_lme_time(value: str) -> datetime:
 
 
 def to_epoch_ms(moment: datetime) -> int:
-    """§2.1 的 `timestamp` 是 **Unix 毫秒**（不是秒）。"""
+    """Add 契约的 `timestamp` 是 **Unix 毫秒**（不是秒）。"""
     return int(moment.timestamp() * 1000)
 
 
@@ -179,8 +179,8 @@ def to_epoch_ms(moment: datetime) -> int:
 def is_blank_content(raw: str) -> bool:
     """`strip()` 后为空——**"空正文"的唯一定义**。
 
-    两边的用法**正相反**，所以定义只该有一份：归一化层拿它**拒绝**（§11.3），
-    加载层拿它**跳过并告警**（**V14**——`lme_s_cleaned.json` 里真有一条空的）。
+    两边的用法**正相反**，所以定义只该有一份：归一化层拿它**拒绝**，
+    加载层拿它**跳过并告警**。
     """
     return not raw.strip()
 

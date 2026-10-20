@@ -3,7 +3,7 @@
 ⚠ 用**假 Qdrant**（鸭子类型）而不是真容器：本文件要精确控制"第几次 upsert 失败"。
 真 Qdrant 的行为已经由 `tests/test_qdrant_store.py` 的 20+ 集成用例覆盖。
 
-## 连接生命周期与跨线程（D17）
+## 连接生命周期与跨线程
 
 FastAPI 的 `def` 路由跑在**线程池**里，而 `sqlite3.Connection` 只能在**创建它的线程**里用
 ⇒ `sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that
@@ -111,10 +111,10 @@ def pipeline(store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder):
 
 
 def _rid(ordinal: int, *, user_id: str = "u1", session_id: str = "s1") -> str:
-    """一个**不透明**的 `request_id`（D28）。
+    """一个**不透明**的 `request_id`。
 
     ⚠ 形状**完全不重要**：位置 = `(request_id, local_index)`，一个字节都不解析。
-    这里刻意用**平台实发的那种**（`r_<hex>`）——它在 D25 的正则下会 500。
+    这里刻意用**平台实发的那种**（`r_<hex>`），验证任意不透明形状都可接受。
     """
     suffix = "" if (user_id, session_id) == ("u1", "s1") else f"-{user_id}-{session_id}"
     return f"r_{ordinal:04d}{suffix}"
@@ -171,7 +171,7 @@ def test_add_indexes_only_what_the_batch_touched(
 def test_positions_come_from_the_request_not_from_arrival_order(
     pipeline: AddPipeline, store: SqliteStore
 ) -> None:
-    """**位置只由请求决定**（D28）——不是到达顺序，也不是"上一个 Add 写到哪了"。
+    """**位置只由请求决定**——不是到达顺序，也不是"上一个 Add 写到哪了"。
 
     ⚠ 这里刻意**先发 `r_0002` 再发 `r_0001`**：两个 Add 各自拿到自己的位置
     （`(r_0002, 0)` 与 `(r_0001, 0)`），**互不接续**——这正是"跨 Add 没有顺序"的落点。
@@ -286,20 +286,20 @@ def test_sqlite_failure_does_not_touch_qdrant(
     assert qdrant.points == {}
 
 
-# ── D28：同 session 的 Add **可以并发** ─────────────────────────────────
+# ── 同 session 的 Add **可以并发** ───────────────────────────────────
 
 
 def test_same_session_adds_run_concurrently_and_do_not_collide(
     store: SqliteStore, qdrant: _FakeQdrant, embedder: FakeEmbedder
 ) -> None:
-    """**同一个 `(user_id, session_id)` 的 Add 并发**——D25 之后这是**允许**的。
+    """**同一个 `(user_id, session_id)` 的 Add 允许并发**。
 
-    旧口径（`MAX+1` 分配位置）下这条必须串行，否则位置撞车；现在位置是请求的纯函数
-    （`(request_id, local_index)`）⇒ 各批触碰**互不相交**的位置。
+    位置是请求的纯函数（`(request_id, local_index)`）⇒ 各批触碰**互不相交**的位置，
+    不需要应用级串行化。
 
     断言四件事：
       1. 无异常（**含 `IntegrityError`**——那正是"位置撞车"的信号）
-      2. **峰值并发 > 1**：不并发的话这条用例证明不了任何事（旧锁会把它压成 1）
+      2. **峰值并发 > 1**：不并发的话这条用例证明不了任何事
       3. 每个 chunk 的块都落下了，且块序号从 0 连续
       4. `id` 两两不同（位置派生 ⇒ 不同位置必然不同 id）
     """
@@ -312,7 +312,7 @@ def test_same_session_adds_run_concurrently_and_do_not_collide(
     )
 
     assert errors == []  # ← 线程里的异常会让用例"空过"，必须显式断言
-    assert qdrant.overlap.peak > 1  # ← **真的并发了**（旧锁下恒为 1）
+    assert qdrant.overlap.peak > 1  # ← **真的并发了**
 
     pairs = _pairs(store)
     assert sorted(p.request_id for p in pairs) == [f"r_{i:04d}" for i in range(4)]

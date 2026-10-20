@@ -11,13 +11,13 @@ I've taught for 7 years →  I've taught for 7 years (since 2016)
 [`../rank/neighbor.py`](../rank/neighbor.py) 的 `_build_segment._text()`——`content`
 的生产路径。索引侧与精排输入走 `render_pair`，**一个字都不改**。
 
-⇒ 与 T1 的 `packaging.inject_abs_time` 有根本区别：那个开关改的是 `content`
-**也**是 embedding 输入（改它要重建索引）；**本模块只改 `content`** ⇒ 随时可开关。
+与 `packaging.inject_abs_time` 不同：绝对日期注入会同时改变 embedding 输入并要求重建索引；
+本模块只修改返回的 `content`，可以独立开关。
 
 ## 为什么是"注解"而不是"替换"
 
 替换会让**纯相对 gold 必错**（相对形式没了），且 BEAM 的规则正好相反。
-注解则原文保留、日期是额外锚点（**就是 D21 从段级挪到短语级**），推错时也看得出是哪条。
+注解则原文保留、日期是额外锚点，推错时也看得出是哪条。
 
 ## 一条硬纪律：**推不出就不动**
 
@@ -26,9 +26,9 @@ I've taught for 7 years →  I've taught for 7 years (since 2016)
 
 ## ⚠ 与 [`eval/harness/annotate.py`](../../../eval/harness/annotate.py) 是**两份实现**
 
-harness 不许 import `src/`，而注解实验是在 harness 侧先做的。重复的是**逻辑**不是常量，
-由 [`tests/test_annotate.py`](../../../tests/test_annotate.py) 的**逐例等价断言**钉住——
-**改任何一份都要同时改另一份**。
+harness 不能导入 `src/`，因此保留一份等价实现。两份实现由
+[`tests/test_annotate.py`](../../../tests/test_annotate.py) 的逐例等价断言约束，
+修改任何一份都必须同步另一份。
 """
 
 from __future__ import annotations

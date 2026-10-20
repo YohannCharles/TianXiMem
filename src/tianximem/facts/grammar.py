@@ -100,7 +100,7 @@ _MEETING_TOPIC = re.compile(
     re.I,
 )
 #: 会议主题的**形状守卫**：主题是名词短语，不是从句。代词/连词/助动词开头的一律不要
-#: （实测 `what we'll be covering`、`making sure we're all connected …` 都是从句碎片）。
+#: （ `what we'll be covering`、`making sure we're all connected …` 都是从句碎片）。
 _TOPIC_REJECT = re.compile(
     r"^(?:what|which|who|how|why|when|where|whether|that|this|these|those|"
     r"making|being|getting|doing|having|to\s|we|you|they|i|it|our|your|their|"
@@ -110,7 +110,7 @@ _TOPIC_REJECT = re.compile(
 _SCHEDULED = re.compile(r"^Scheduled for:\s*(\d{4}-\d{2}-\d{2})\b", re.M | re.I)
 #: Calendar invite 的**标注字段**（CorporateBench / 真实日历邮件里都长这样）：
 #: `Organizer: X (mail)` 与 `Attendees:` 后面的一串 `- 人名 (mail)`。字段是原文写明的，
-#: 不需要任何推断 ⇒ 与署名块同一口径（§2.1 允许的"原文明说的独立事实"）。
+#: 不需要任何推断，与署名块一样属于原文明确陈述的独立事实。
 _ORGANIZER = re.compile(r"(?m)^Organizer:\s*([^(\n]+?)\s*(?:\([^)]*\))?\s*$")
 _ATTENDEES = re.compile(r"(?m)^Attendees:\s*\n((?:[ \t]*-[^\n]*\n?)+)")
 _ATTENDEE_LINE = re.compile(r"(?m)^[ \t]*-[ \t]*([^(\n]+?)[ \t]*(?:\([^)]*\))?[ \t]*$")
@@ -121,11 +121,9 @@ _SELF_NAME = re.compile(
     r"\b(?:My name is|I(?:'m| am)) ([A-Z][A-Za-z'’-]+(?: [A-Z][A-Za-z'’-]+){0,3})"
     r"(?=\s*[,.;!?]|\s+and\b|\s*$)",
 )
-#: `I am <状态词>` **不是**自我介绍——`I am Stable and Normal`（HaluMem 的心理健康句）
-#: 曾被当成名字 `Stable`，进而把同一 Add 里所有第一人称事实的主语都改成了它
-#: （2026-10-18 实测：`monthly income` 的主语变成 `Stable`）。这里只拦**状态/形容
-#: 词**这一小类：真正的名字不会出现在这张表里，而状态词几乎只以首字母大写出现在
-#: 句首或 `I am` 之后。
+#: `I am <状态词>` **不是**自我介绍——例如 `I am Stable and Normal`（HaluMem 的心理健康句）。
+#: 这里只拦**状态/形容词**这一小类：真正的名字不会出现在这张表里，而状态词几乎只以
+#: 首字母大写出现在句首或 `I am` 之后。
 _NOT_A_NAME = frozenset(
     {
         "stable", "normal", "fine", "good", "great", "okay", "ok", "well", "happy",
@@ -173,7 +171,7 @@ _ORIENTATION = re.compile(
 #: 字段。白名单只收**问句里能问、原文里真写**的档案字段（HaluMem 那批 + 通用档案）。
 #: 规范化交给 `relation_key`（与查询侧 `relation_key(字段名)` 对齐）。
 #: 档案字段白名单**唯一一份**在 [`evidence.PROFILE_FIELDS`](./evidence.py)；
-#: 这里只保留旧名字，抽取代码与测试都还按它引用。
+#: 这里保留兼容别名，抽取代码与测试按该名称引用。
 _PROFILE_FIELDS = PROFILE_FIELDS
 
 #: 自我介绍写下的名字本身也是**原文写明的字段**（`My name is X` ⇒ `X` 的 `name` 是 `X`）。
@@ -181,7 +179,7 @@ _PROFILE_FIELDS = PROFILE_FIELDS
 #: 本人明说的偏好（`contemporary is my top pick` / `my favorite style is X`）。
 #: 两条形状都**必须是原文写明的**：前者是"X 是我的首选"，后者是"我的最爱是 X"。
 #: 本人明说的偏好。两种形状，各自一条正则（**不合并**：合并后分组编号会错位，
-#: 且 `, but X is my top pick` 里的连词会被当成宾语的一部分——2026-10-18 实测踩到）。
+#: 且 `, but X is my top pick` 里的连词会被当成宾语的一部分—— 踩到）。
 #: 只收原文写明的"X 是我的首选 / 我的最爱是 X"，不做推断。
 _PREFERENCE_FIRST = re.compile(
     r"(?:^|[,;.]\s*(?:but|and|so)?\s*)([A-Za-z][A-Za-z0-9 '&/-]{1,40}?) is my "
@@ -554,7 +552,7 @@ def extract_evidence(
 
     # 显式边、显式月份限定或显式替换。只用于取回原文。
     # ⚠ **多行记录必须放行**：官方采集的 MQuAKE 更新句就是 `UPDATE: …\n{json}`
-    # 两行（D51）。判据是"首行是标签/短前缀 + 余下是一条显式声明"，长度上限照旧。
+    # 两行。判据是"首行是标签/短前缀 + 余下是一条显式声明"，长度上限照旧。
     if question and not answer and len(question) <= 2048:
         text = _LABEL.sub("", question.strip(), count=1)
         edited = bool(_REPLACEMENT.search(text))
@@ -662,7 +660,7 @@ def extract_evidence(
                 # （`title_key` 会抹掉 `-`、`<>`、`1:1`，那些标题将永远匹配不上）。
                 match_object=key(title[1]),
             )
-            # **会议讨论主题**（2026-10-17）：正文里的 "our upcoming task meeting to
+            # **会议讨论主题**：正文里的 "our upcoming task meeting to
             # discuss X" / "meeting about X" / "agenda … focus on X" 是**原文明说的主题**，
             # 与 Subject 是两回事（`What meetings are linked to X?` 问的正是它）。
             # ⚠ 只认**明确的讨论动词 + 同一句的宾语**，不做推断；计划/愿望句不产生事实。
@@ -694,7 +692,7 @@ def extract_evidence(
                     projection="source",
                     match_object=key(topic),
                 )
-        # **Calendar invite 的出席者 / 组织者**（2026-10-17）：标注字段，逐字可核。
+        # **Calendar invite 的出席者 / 组织者**：标注字段，逐字可核。
         # 主体是会议名（与 `document title` 同一字面），客体是人名——
         # `Who organized X?` / `Which employees were present at X?` 靠这两类事实。
         if title:
@@ -808,14 +806,14 @@ def extract_evidence(
                 actor, body = "I", utterance
             else:
                 continue
-            # **自我介绍把第一人称绑定到真名**（2026-10-17）：HaluMem / MemTrap 一类记录
+            # **自我介绍把第一人称绑定到真名**：HaluMem / MemTrap 一类记录
             # 以 "My name is X, and I am …" 开头，后面所有 "I / my" 都属于 X。不绑定的话
             # 事实主语会停在字面 "I"，查询永远匹配不上。
             introduced = _SELF_NAME.search(body)
             if introduced and key(actor) in {"i", "user", "用户"}:
                 actor = introduced[1].strip()
             safe_attributes = not (_UNSAFE.search(body) or _PLANNED.search(body))
-            # **省略主语的后续句仍归该说话人**（2026-10-17）：英语对话里主语只在第一句
+            # **省略主语的后续句仍归该说话人**：英语对话里主语只在第一句
             # 出现（"Been hectic lately. Started hitting the gym last week."）——
             # 拆句后第二句没有 "I"，事件就丢了。判据：说话人**明确**（不是字面 "I"）
             # 且整条发言里出现过第一人称。
@@ -833,9 +831,9 @@ def extract_evidence(
                     sentence,
                 ):
                     sentence = f"I {sentence[0].lower()}{sentence[1:]}"
-                # **第一人称复数也归说话人**（2026-10-19）：对话里 "We adopted another
+                # **第一人称复数也归说话人**：对话里 "We adopted another
                 # puppy called Pixie" 的主语是说话人这一方；不绑定就整条事件丢失
-                # （实测 LoCoMo 的 "When did Audrey adopt Pixie?" 因此 `no_match`）。
+                # （ LoCoMo 的 "When did Audrey adopt Pixie?" 因此 `no_match`）。
                 # ⚠ 只改**明确的过去时事件句**，且说话人有名字——状态句、计划句照旧不抽。
                 if actor != "I" and re.match(
                     r"^We\s+(?:adopted|bought|got|met|moved|left|finished|completed|"
@@ -907,7 +905,7 @@ def extract_evidence(
                         side=side,
                     )
                 # **"work as <职位> at <组织>" / "promoted to <职位> at <组织>"**
-                # （HaluMem 的通用问法，2026-10-19）：职位与组织都是原文逐字给出的
+                #：职位与组织都是原文逐字给出的
                 # 独立字段。⚠ 不收推断——只认这两种明确句式。
                 worked_as: re.Match[str] | tuple[str, str, str] | None = re.fullmatch(
                     r"I(?:'m| am)? (?:currently |still |now )?work(?:ing)? as (?:a |an )?(.+?) "
@@ -967,9 +965,9 @@ def extract_evidence(
                         f"{actor}'s date of birth is {birth[1]}.",
                         side=side,
                     )
-                # **标注字段**（2026-10-18）：`My highest education level is PhD` /
+                # **标注字段**：`My highest education level is PhD` /
                 # `my personality type is INTJ` / `my major is …` —— 与 `I was born on`
-                # 同一口径（原文写明的字段就是事实，D46 的邻居）。只收**本人自述**
+                # 同一口径。只收**本人自述**
                 # （说话人是 I / 具名发言）且值是短名词短语；计划/否定整句早已被上面挡掉。
                 field = _PROFILE_FIELD.search(sentence) if actor != "I" else None
                 if field is None and key(actor) in {"i", "user", "用户"}:
@@ -986,7 +984,7 @@ def extract_evidence(
                         side=side,
                     )
                 # **自我介绍本身**（`My name is X`）——名字是后续 Add 绑定第一人称的
-                # 唯一可信来源，所以它也要落成事实（2026-10-18）。
+                # 唯一可信来源，所以它也要落成事实。
                 intro = _SELF_INTRO.search(sentence)
                 if intro:
                     emit(
@@ -1128,7 +1126,7 @@ def extract_evidence(
                     sentence,
                     re.I,
                 )
-                # **通用事件谓词**（2026-10-17）：上面那张表只覆盖"参加"，而对话里
+                # **通用事件谓词**：上面那张表只覆盖"参加"，而对话里
                 # 大量事件是 "started hitting the gym" / "took a short trip to Rome" /
                 # "launch an ad campaign"。它们与 `participated in` 是同一件事：
                 # **原文说过的、有来源日期的事件**。
@@ -1148,7 +1146,7 @@ def extract_evidence(
                             # 领养 / 收养（LoCoMo "We adopted another puppy called Pixie"）：
                             # 与查询侧 `When did X adopt Y` 同一件事，答案仍是来源日期。
                             r"adopted|adopt|"
-                            # 其他对话里带来源日期的已完成动作（2026-10-19 官方语料实测）。
+                            # 其他对话里带来源日期的已完成动作。
                             # ⚠ **`joined` 刻意不在表里**（既有测试钉着）：`I joined a
                             # church and a gym` 这类并列句不适合当单一事件。
                             r"bought|purchased|sold|met|moved|finished|completed|"

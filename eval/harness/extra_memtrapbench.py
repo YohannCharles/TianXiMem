@@ -1,7 +1,7 @@
 """MemTrapBench 家族的 answer / evaluate：官方逐字答案 prompt ＋ LLM 四维均分裁判。
 
-拆自 `extra_pipeline.py`（2026-10-15，只搬位置）：那层现在是薄 façade、把本模块的名字
-全部重新导出。⚠ 过线阈值**是我们定的**（官方只给 4 维均分、没有过/不过线）——依据见
+`extra_pipeline.py` 是薄 façade，重新导出本模块的名字。
+⚠ 过线阈值**是我们定的**（官方只给 4 维均分、没有过/不过线）——依据见
 `extra_pipeline.py` 模块 docstring 第 2 条。
 """
 
@@ -70,7 +70,7 @@ def judge_memtrapbench_scores(raw_response: str) -> tuple[float | None, str]:
 #:     even without the history"**，gold 是 **"the correct answer that ignores
 #:     the misleading memory"**，官方 prompt 也说的是 **"reference … when needed"**。
 #:
-#: 用错 prompt 的后果（2026-10-03 实测，250 题）：**160/250 逐字拒答、通过 0**；
+#: 用错 prompt 的后果：**160/250 逐字拒答、通过 0**；
 #: 而 `poison` 那类又会被"不许用外部知识"这条**逼着照抄毒记忆**——两类失败同一个根。
 MEMTRAP_ANSWER_PROMPT = (
     "You can reference the recalled information in the Retrieved Memory block below "

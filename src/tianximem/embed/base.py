@@ -1,7 +1,7 @@
 """Embedder 协议 + 落盘向量缓存 + OpenAI 兼容的 HTTP 基类。
 
-**§7.4 的接口是硬要求**：`dim` 由接口提供、**不能写死**；代码中不得出现任何依赖
-具体模型输出结构的逻辑。Step 5 换模型时按新维度**重建集合**。
+`dim` 由接口提供，不能写死；代码不得依赖具体模型的多向量输出结构。
+更换 embedding 模型或维度时必须重建集合。
 
 ## 为什么 `dim` 是"第一次调用之后才知道的"
 
@@ -12,13 +12,13 @@
 
 ## 缓存的坐标系
 
-缓存键 = **渲染后文本的内容哈希**，**不是 `memory_id`**——渲染模板或日期口径一变，
-同一个 `id` 的文本就跟着变，用 `id` 当键会拿到**陈旧向量**（§7.2）。
+缓存键 = **渲染后文本的内容哈希**，不是 `memory_id`。渲染模板或日期口径变化会改变
+同一 ID 的文本，用 ID 作键会静默返回陈旧向量。
 
 坐标系（模型标识 + 渲染模板版本 + **期望维度**）**直接进缓存文件名**：
 `<cache_dir>/<coordinate_key>.db`（文件里也存一份）。这样"整体失效"是**结构性**的——
-Step 5 换了模型、改了模板、或改了 `models.embed_dim` ⇒ 换一个坐标系键 ⇒ **换一个文件**
-⇒ 旧缓存不可能被静默命中（§12.1 R1 对冲 1）；旧文件随手删掉即可。
+模型、渲染模板或 `models.embed_dim` 变化会改变坐标系键并切换到新缓存文件，
+因此不兼容缓存不会被静默命中；旧缓存文件可以直接删除。
 
 ## 一个刻意的表示统一
 
@@ -99,11 +99,10 @@ class DimensionMismatchError(RuntimeError):
 
 
 def _content_hash(text: str) -> str:
-    """缓存键 = **渲染后文本**的内容哈希（§7.2）。
+    """缓存键 = **渲染后文本**的内容哈希。
 
-    ⚠ 用文本而不是 `memory_id`：同一个 `id` 的文本会随**渲染模板**变
-    （模板是"贵"消融项 ⇒ 改它本来就该重新 embed），用 `id` 当键会拿到陈旧向量；
-    反过来，**相同文本、不同 `id` 必须能复用**。
+    渲染模板变化会改变同一 `id` 的文本，因此不能用 ID 作键；相同文本即使 ID 不同
+    也必须能够复用。
     """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -118,7 +117,7 @@ def to_float32(values: Sequence[float]) -> list[float]:
 
 @runtime_checkable
 class Embedder(Protocol):
-    """§7.4 的接口。**`dim` 由接口提供、不能写死。**"""
+    """Embedding 接口。**`dim` 由接口提供，不能写死。**"""
 
     @property
     def dim(self) -> int:
@@ -134,17 +133,11 @@ class Embedder(Protocol):
 class EmbeddingCoordinate:
     """缓存的坐标系：**模型标识 + 渲染模板版本 + 期望维度**。
 
-    ## `dim` 为什么在这里（2026-10-09 改）
+    ## `dim` 为什么在这里
 
-    原设计是"维度不进坐标系——它要等第一次调用之后才知道，所以按条目校验"。
-    那个设计**默认换维度必然换模型**（模型名变了 ⇒ 坐标系自动变 ⇒ 换文件）。
-
-    2026-10-09 实测打破了它：网关侧把 embedding 输出从 4096 改成 1024，而**模型名没变**
-    ⇒ 同一个坐标系命中 4096 维的旧缓存 ⇒ 撞 1024 维的集合，服务端 500。
-
-    ⇒ 现在坐标系里放的是**部署声明的期望维度**，不是探测到的：探测值本来就在第一次调用
-    之后才知道、进不了文件名；而声明值（`models.embed_dim`）在装配时就有 ⇒ 换维度就换
-    坐标系键、就换文件，**旧缓存不可能被静默命中**。
+    探测到的维度要等第一次调用之后才知道，无法用于构造文件名。部署声明值
+    （`models.embed_dim`）在装配时已经可用，因此坐标系使用声明值而不是探测值。
+    维度变化时坐标系键和文件名同步变化，**不兼容缓存不可能被静默命中**。
     """
 
     model: str
@@ -172,7 +165,7 @@ class DiskVectorCache:
     一个坐标系一个文件：`<cache_dir>/<coordinate_key>.db`。
     文件里也存一份坐标系（自描述），便于人工核对与排错。
 
-    ## 连接模型：**短生命周期**（D17）
+    ## 连接模型：**短生命周期**
 
     和 `store/sqlite_store.py` 同一套模型：**本类不长期持有 `sqlite3.Connection`**，
     每次读/写各自 `connect → … → close`。
@@ -320,8 +313,7 @@ class DiskVectorCache:
 class CachingEmbedder:
     """给任意 `Embedder` 套一层内容哈希缓存。
 
-    **命中时绝不调用内层（远程）模型**——这是 §7.2 那条"缓存后即成为一次性成本、
-    与迭代次数无关"的落点。
+    命中时绝不调用内层远程模型，使远程 embedding 成本只与实际未缓存文本相关。
     """
 
     def __init__(self, inner: Embedder, cache: DiskVectorCache) -> None:
@@ -355,7 +347,7 @@ class CachingEmbedder:
     def encode_query(self, texts: Sequence[str]) -> list[list[float]]:
         """查询侧：**缓存身份与文档侧分开**，截断发生在内层发送之前。
 
-        ## 为什么查询侧不能与文档侧共用缓存键（2026-10-20）
+        ## 为什么查询侧不能与文档侧共用缓存键
 
         文档侧原样编码、查询侧先截断 ⇒ **原文相同不再意味着模型输入相同**。
         若两侧都用原文作键：
@@ -399,9 +391,8 @@ class CachingEmbedder:
             if len(dims) > 1:
                 raise DimensionMismatchError(f"同一次响应里出现了多种维度：{sorted(dims)}")
             new_dim = next(iter(dims))
-            # 这是"这个部署只接受 `models.embed_dim` 这么大的向量"那道闸。
-            # ⚠ 全命中缓存时**走不到这里**——那条路径由 `DiskVectorCache.get()` 逐条拦
-            #   （2026-10-09 的静默命中正是全命中，见 `EmbeddingCoordinate` 的 docstring）。
+            # 这是“这个部署只接受 `models.embed_dim` 这么大的向量”那道闸。
+            # ⚠ 全命中缓存时**走不到这里**——那条路径由 `DiskVectorCache.get()` 逐条拦截。
             expected = self._cache.coordinate.dim
             if expected is not None and new_dim != expected:
                 raise DimensionMismatchError(
@@ -431,7 +422,7 @@ class CachingEmbedder:
     def _encode_missing(self, misses: Sequence[str], *, query: bool) -> list[list[float]]:
         """缓存未命中的那段交给内层。查询侧优先走内层的 `encode_query()`。
 
-        内层可能是任何 `Embedder` 实现（测试里的 `FakeEmbedder`、归档里的旧实现），
+        内层可能是任何 `Embedder` 实现（测试里的 `FakeEmbedder`、归档适配器），
         所以用鸭子类型探测——`encode_query` 是可选的输入适配能力，不是协议的一部分。
         """
         if query:

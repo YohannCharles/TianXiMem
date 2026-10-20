@@ -39,9 +39,8 @@ LOADERS = {
     "personamem-v2": ("personamem", "load_personamem"),
 }
 #: 只给这些数据集传 `question_ids`（按题筛语料而非整份加载）。
-#: ⚠ **feverous 已于 2026-10-14 移出本套件**：它的 25 题要带 56G 语料（占全套 98%）。
-#: loader（`eval/datasets/feverous.py`）与 `recipes.py` 的配方**都保留**——
-#: `run.py --dataset feverous` 那条独立评测路径不受影响，这里只是不再选它。
+#: ⚠ **feverous 不在本套件**：它的 25 题需要 56G 语料，占全套约 98%。
+#: loader 与 `recipes.py` 的配方仍保留，`run.py --dataset feverous` 可独立评测。
 TARGETED = {"longmemeval-s", "hybridqa", "medmemorybench"}
 
 

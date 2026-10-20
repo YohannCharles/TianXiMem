@@ -1,4 +1,4 @@
-"""`rank/reranker.py` —— 远端精排的接入（§11.2 / D12）。
+"""`rank/reranker.py` —— 远端精排的接入。
 
 ```text
 Hybrid → RRF → 去重 → 【rerank（恰好一次）】 → 扩窗 → 合并 → 打包
@@ -76,10 +76,9 @@ class FakeReranker:
 
 
 #: 本文件**显式传过**的最大扩窗半径（`_wire(..., radius=1)` 那两条用例）。
-#: ⚠ **不要从 `DEFAULT_RADIUS` 推导**：那是**产品默认值**，会随产品决策变
-#: （2026-10-01 起为 0）；而这里的间距要求只跟**本文件自己的用例传了什么**有关。
-#: 从产品默认值推导的话，"把默认改成 0"会顺手把这个间距缩到 3，而 `radius=1`
-#: 需要 **> 3** ⇒ 两个窗口首尾相接、候选塌成一段——**不报错，只是段数少了**。
+#: ⚠ 间距只跟本文件用例实际传入的半径有关，不能跟随产品默认值。
+#: `radius=1` 需要间距 **> 3**，否则两个窗口首尾相接、候选塌成一段——
+#: **不报错，只是段数少了**。
 _MAX_RADIUS_UNDER_TEST: Final[int] = 1
 
 #: 候选之间的间隔：必须 **> 2 × radius + 1**（理由见
@@ -145,7 +144,7 @@ def _remote(
     """一个打假传输层的 `RemoteReranker`（**不发真请求**）。
 
     `envelope` 默认是 `queries`（vLLM 原生）——**大多数用例只关心别的**，
-    信封那一条由 `test_request_shape_...` 与它的 legacy 对偶用例分别钉住。
+    信封那一条由 `test_request_shape_...` 与它的单数字段对偶用例分别钉住。
     """
     client = httpx.Client(
         transport=httpx.MockTransport(handler), timeout=timeout, base_url="https://gw.test"
@@ -177,18 +176,18 @@ def _result(index: int, score: float) -> dict:
 
 
 def test_request_shape_is_the_one_the_endpoint_actually_accepts() -> None:
-    """请求体就是**实测出来的那个形状**：`{model, queries, documents}`。
+    """请求体就是**出来的那个形状**：`{model, queries, documents}`。
 
-    ⚠ **`queries` 是数组**——2026-09-28 网关只改了 nginx.conf，把 `/v1/rerank`
-    **rewrite 到 vLLM 原生 `/v1/score`**，它要的就是这个形状。发旧的 `query`（单数）
-    拿到的是 **400**，而服务只会**降级**（D12）⇒ 这条断言是"精排到底有没有在跑"的第一道门。
+    ⚠ **`queries` 是数组**—— 网关把 `/v1/rerank` 转发到 vLLM 原生 `/v1/score`，
+    该端点要求这个形状。发送单数 `query` 会得到 **400**，而服务只会**降级**，
+    所以这条断言是"精排到底有没有在跑"的第一道门。
 
     ⚠ **断言里没有 `top_n`**——它是个静默截断的旋钮：传了就只回前 k 条，
     于是 `_parse` 的集合校验会失败 ⇒ 每次 Search 都降级。
-    **不传它就等于"全都要"**（实测）。
+    **不传它就等于"全都要"**。
 
-    ⚠ 这是 `rerank.envelope = "queries"`（**默认**）那一支；它的对偶是下面那条
-    `..._for_the_legacy_wrapper`——**两个网关各要一个名字，而发错的那个是静默降级**，
+    ⚠ 这是 `rerank.envelope = "queries"`（**默认**）那一支；它的对偶是下面的
+    单数字段变体——**两个网关各要一个字段名，发错时只会静默降级**，
     所以两条正向用例必须成对存在（与 `_parse` 收两个容器名同理）。
     """
     seen: dict[str, object] = {}
@@ -222,11 +221,11 @@ def test_request_shape_is_the_one_the_endpoint_actually_accepts() -> None:
 def test_request_shape_for_the_legacy_wrapper() -> None:
     """`rerank.envelope = "query"`：`{model, query, documents}`——**本机自托管网关**要的形状。
 
-    ⚠ 它与上面那条 vLLM 形状**互斥**，而且**两边都拒对面那一个**（实测）：
+    ⚠ 它与上面那条 vLLM 形状**互斥**，而且**两边都拒绝对方的字段**：
     vLLM 收到 `query` ⇒ 400；自研封装收到 `queries` ⇒ **422**
     （pydantic 报 `body.query Field required`）。
-    ⇒ 这条用例钉的是"填了 `envelope: query` 就真的发单数字段"，
-    而**没有它，那一支断了也不会有人知道**——表现与 D12 的降级一模一样。
+    ⇒ 这条用例钉的是“填了 `envelope: query` 就真的发单数字段”；
+    否则该分支失效时只会表现为不明显的降级。
     """
     seen: dict[str, object] = {}
 
@@ -253,7 +252,7 @@ def test_unknown_envelope_is_rejected_at_construction() -> None:
     """未知信封**在构造期就响亮失败**，不发出去等对面回 4xx。
 
     ⚠ 理由与 `rrf.k` / `workers` 同：它的错误表现是**每次检索都静默降级**，
-    那种失败只在 §14 的计数里看得见 ⇒ 能在本地拦下就绝不留给运行时。
+    那种失败只在可观测计数里看得见 ⇒ 能在本地拦下就绝不留给运行时。
     """
     import pytest
 
@@ -267,9 +266,9 @@ def test_unknown_envelope_is_rejected_at_construction() -> None:
 
 
 def test_vllm_data_container_is_accepted() -> None:
-    """信封 C：`data[]` + `score`（vLLM 原生 score 形状）——**现在实际走的这条**。
+    """信封 C：`data[]` + `score`（vLLM 原生 score 形状）。
 
-    ⚠ 它与下面那条 legacy 用例**成对存在**：`_parse` 收两个容器名是刻意的，
+    ⚠ 它与下面的单数字段容器用例**成对存在**：`_parse` 收两个容器名是刻意的，
     而"两个都收"这种声明**必须两条正向用例都钉住**——否则其中一条早断了也没人知道
     （真断了的表现是"每次检索都降级"，而响应一切正常）。
     """
@@ -296,7 +295,7 @@ def test_vllm_data_container_is_accepted() -> None:
 
 
 def test_legacy_results_container_with_relevance_score_is_accepted() -> None:
-    """信封 B：`results[]` + `relevance_score`（换 nginx 之前那一版）——**仍然认**。"""
+    """信封 B：`results[]` + `relevance_score`——兼容该端点返回形状。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -439,7 +438,7 @@ def test_extra_keys_are_ignored() -> None:
     assert _remote(handler).score(query="q", documents=["A", "B"]) == [0.7, 0.2]
 
 
-# ── 失败一律转 RerankUnavailable（D12：降级而不是 5xx）─────────────────
+# ── 失败一律转 RerankUnavailable─────────────────
 
 
 @pytest.mark.parametrize(
@@ -490,7 +489,7 @@ def _bad_json() -> Callable[[httpx.Request], httpx.Response]:
 
 
 def test_unexpected_exception_also_degrades_but_is_labelled() -> None:
-    """**未预期的异常也降级**（D12：Search 绝不因 reranker 失败），但**标签不同**。
+    """**未预期的异常也降级**，但**标签不同**。
 
     ⚠ 兜底捕获不是偷懒：一次没排上序 vs 整个 Search 500——后者的代价是 Full 的一次真机会。
     但它**必须留下痕迹**：`last_error` 里带着异常类型，
@@ -540,7 +539,7 @@ def test_build_reranker_returns_a_client_when_fully_configured(tmp_path) -> None
 def test_build_reranker_is_none_without_endpoint(tmp_path, env: dict, reason: str) -> None:
     """项 2 的一半：**没配全 ⇒ `None`**（服务照常起，走 `rerank_disabled`）。
 
-    ⚠ "没配"不报错是刻意的（D12：reranker 是唯一不被规则保证可用的组件），
+    ⚠ "没配"不报错是刻意的，
     但它会打一条 WARNING——"想用却没配全"与"明确关掉"是两件事，
     否则它会表现成"每次检索都静默不精排"。
     """
@@ -566,8 +565,8 @@ def _app_config(tmp_path, *, reranker: bool, rerank_env: dict | None = None):  #
     """造一份 `AppConfig`。`reranker=True` ⇒ 带上完整的 `TIANXIMEM_RERANKER_*`。
 
     ⚠ **`rerank.enabled` 一律强制为 `true`**：本组用例测的是 `build_reranker`
-    的三分支表，而出厂默认值是 `false`（`configs/default.yaml`——A3 未跑之前不默认付
-    精排的算力）。不强制打开的话，"齐备 ⇒ 有客户端"会静默变成命中"明确关掉"，
+    的三分支表，而代码内置默认值是 `false`。不强制打开的话，“齐备 ⇒ 有客户端”
+    会静默变成命中“明确关掉”，
     `test_build_reranker_is_none_without_endpoint` 想验的**缺端点**分支也就走不到了
     ——那就是一条**永远不会 FAIL 的检查**。
     """
@@ -631,7 +630,7 @@ def test_close_releases_the_reranker_client(tmp_path) -> None:
 
 
 def test_rerank_runs_exactly_once_per_search(wired: Wired) -> None:
-    """项 3：**每个 Search query 恰好一次**远端调用（§7.2 同款纪律）。
+    """项 3：**每个 Search query 恰好一次**远端调用。
 
     ⚠ 用**真的 HTTP 客户端 + 假传输层**（不是 `FakeReranker`）：这样数的是
     **真实请求次数**，而不是"我们以为自己调了几次"。
@@ -679,7 +678,7 @@ def test_candidate_truth_is_fetched_in_one_batch(wired: Wired, monkeypatch) -> N
     """项 5：**一次批量读**，绝不逐 candidate 查询。
 
     判据：`fetch_pairs_by_ids` 的每次调用都带着**整批 id**（没有单条 id 的调用）。
-    逐条查在短生命周期连接模型下要付 N 次 `connect`（D17），
+    逐条查在短生命周期连接模型下要付 N 次 `connect`，
     而 N=100 时那是 100 次连接——**慢，但完全不影响正确性**，所以只有这种断言抓得住。
     """
     ids = _ids(wired.store, 4)
@@ -698,7 +697,7 @@ def test_candidate_truth_is_fetched_in_one_batch(wired: Wired, monkeypatch) -> N
 
     assert calls, "根本没取正文"
     # ⚠ **每一个调用都必须是批量的**（不带单条 id）——这是本用例的主题。
-    #   D28 之后调用次数不再恰好是 2：沿链跳窗是**每跳一次 `IN` 查询**
+    #    当前调用次数不固定为 2：沿链跳窗是**每跳一次 `IN` 查询**
     #   （一跳把所有前沿节点的 id 收成一批），所以次数 = 取候选 + 取精排正文 + 跳数。
     assert all(len(c) > 1 for c in calls), f"出现了非批量的取正文：{calls}"
     assert sorted(calls[0]) == sorted(ids)
@@ -717,7 +716,7 @@ def test_successful_rerank_reorders_the_candidates(wired: Wired) -> None:
 
 
 def test_candidate_set_is_unchanged_by_rerank(wired: Wired) -> None:
-    """**reranker 只能改顺序，不能改集合**（§13 的开关纯度）。
+    """**reranker 只能改顺序，不能改集合**（开关纯度）。
 
     ⚠ 这条不是"再断言一次顺序"：它断言的是**同一批 id、一条不多一条不少**——
     如果将来有人让 rerank 返回"排好序的 id 列表"，这条会在集合层面炸。
@@ -748,10 +747,10 @@ def test_rank_zero_after_rerank_is_the_expansion_seed(wired: Wired) -> None:
 
     ⚠ `seed_limit=1` 是**必须的**：默认 30 会让 A 和 B **都**是种子，
     于是两边的邻居都会进来，本用例就什么也证明不了（那是"两条都过"的假绿）。
-    ⚠ `radius=1` 也是**必须显式的**：产品默认是 **0 = 不扩窗**（**D31**），
+    ⚠ `radius=1` 也是**必须显式的**：产品默认是 **0 = 不扩窗**，
     继承它则两条断言都不成立——而那是"**两条都不过**"，至少不假绿。
     """
-    # ⚠ 邻居必须是**同一次 Add 内**的相邻块（D28）⇒ 用 `seed_line` 一次落两条
+    # ⚠ 邻居必须是**同一次 Add 内**的相邻块⇒ 用 `seed_line` 一次落两条
     s1 = seed_line(
         wired.store,
         range(2),
@@ -786,7 +785,7 @@ def test_candidates_past_the_seed_limit_are_kept_but_not_expanded(wired: Wired) 
     构造：一个 session 5 条连续候选。精排把**最后一条**顶到名次 0，
     `seed_limit=1` ⇒ 只有它能扩窗。
     """
-    # ⚠ 5 条在**同一次 Add 里连续**（D28）——否则它们各成一段，"保留但不扩"就看不出来
+    # ⚠ 5 条在**同一次 Add 里连续**——否则它们各成一段，"保留但不扩"就看不出来
     ids = seed_line(wired.store, range(5), qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
     # want=[4,0,1,2,3]：ids[4] 名次 0，其余保持相对顺序
@@ -924,14 +923,14 @@ def test_ties_keep_the_incoming_order(wired: Wired) -> None:
     assert [item.id for item in got.items] == ids  # 原样不动
 
 
-# ══ 四、raw score 绝不外泄（§11.3）══════════════════════════════════════
+# ══ 四、raw score 绝不外泄 ══════════════════════════════════════════════
 
 
 def test_raw_rerank_score_never_reaches_the_api(wired: Wired) -> None:
     """项 18：reranker 的原始分**只活在适配器内部**，响应里的 `score` 仍是 `1/(rank+1)`。
 
     ⚠ 这一条同时钉住三件事：①原始分没透传、②`score` 不是融合分数、③**它是按输出位置
-    重算的**——若谁改成"照抄 rerank 名次"，第一位就不再是 `1.0`。
+    重算的**——若照抄 rerank 名次，第一位就不会是 `1.0`。
     """
     from tianximem.service.schemas import SearchResponse, SearchResultItem
 
@@ -992,7 +991,7 @@ def test_rerank_does_not_change_content_or_created_at(wired: Wired) -> None:
     assert by_id[ids[0]].content == "Q: q0\nA: a0"
 
 
-# ══ 五、HTTP 那一跳：降级之后**仍然是 200**（D12）══════════════════════
+# ══ 五、HTTP 那一跳：降级之后**仍然是 200**══════════════════════
 
 
 @pytest.mark.parametrize(
@@ -1006,8 +1005,8 @@ def test_rerank_does_not_change_content_or_created_at(wired: Wired) -> None:
 def test_http_search_returns_200_when_the_reranker_degrades(wired: Wired, exc: Exception) -> None:
     """项 16：reranker 挂了 ⇒ **整个 Search 仍然 200**、`data` 依然合法。
 
-    这是 D12 的核心要求：Full 只有 2 次，不能因为一个不被规则保证可用的组件
-    把一次真机会变成 5xx。**降级后的响应必须与"没开 rerank"逐字等价地合法。**
+    可选的精排失败不能把一次正常 Search 变成 5xx。
+    **降级后的响应必须与"没开 rerank"逐字等价地合法。**
     """
     from fastapi.testclient import TestClient
 
@@ -1049,11 +1048,11 @@ def test_rerank_uses_the_same_render_as_indexing_and_output(wired: Wired) -> Non
 
 
 def test_rerank_does_not_touch_the_token_budget(wired: Wired) -> None:
-    """精排**不参与预算**：开关 rerank **不改变 token 计数的次数**（§13 的开关纯度）。
+    """精排**不参与预算**：开关 rerank **不改变 token 计数的次数**（开关纯度）。
 
     ⚠ 为什么不直接断言"某个次数"：计数次数由**段数**决定（每段一次 + 最终串一次），
-    而段数是数据的性质、不是常数。⇒ 正确的问法是**开关前后一不一样**——
-    这也正是 §13 要的那个问题："关掉 rerank 是不是只动了顺序"。
+    而段数是数据的性质、不是常数。⇒ 正确的问法是**开关前后一不一样**：
+    关掉 rerank 应当只改变顺序。
     """
     ids = _ids(wired.store, 2)  # ★ 只落一次：两次 `_runs` 复用同一批对
     wired.qdrant.by_user["u1"] = ids

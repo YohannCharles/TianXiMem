@@ -3,7 +3,7 @@
 
 ## 它解决什么
 
-采集目录里现在有三份**互不相识**的产物：
+采集目录里包含三份互补的产物：
 
 | 文件 | 是什么 |
 | --- | --- |
@@ -38,7 +38,7 @@
    **不要当成已证实的归属**；
 6. `unknown`——没认出来。
 
-⚠ **`corpus` 那一条是启发式**：实测 `Corpus:` 前缀里有三族语料（MQuAKE 的
+⚠ **`corpus` 那一条是启发式**： `Corpus:` 前缀里有三族语料（MQuAKE 的
 `{"subject_id":…}`、文档/表格 JSON、以及零散文本），只靠前缀分不干净。
 所以它**只影响 `official-attribution.jsonl` 的族统计**，不影响任何一题的 `dataset`
 （题级 `dataset` 只从 1–4 来；`corpus` 归不出题级归属时题级留 `unknown`）。
@@ -47,7 +47,7 @@
 
     uv run python tools/build_official_kit.py
 
-输入输出都在采集目录（默认 `official-dataset-2026-09-29/`，可用 `--dataset-dir` 改）。
+输入输出都在采集目录。
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ PROMPT_REFS: dict[str, dict[str, str]] = {
         "（JUDGE_PROMPT_NARROW_POSITIVE / _NEGATIVE）",
         "observed": "（采集题为开放题；官方追加 recall personalization 后缀）",
         "note": "**官方 narrow 口径**：`preference` 来自 benchmark.csv（采集 search 里没有，"
-        "按 query 逐字匹配补上）；裁判回 0–1 分，阈值是我们定的（见 D34）",
+        "按 query 逐字匹配补上）；裁判返回 0–1 分，阈值由本地评测配置控制",
     },
     "beam": {
         "answer": "dataset/.upstream/aml/pipeline_beam.py#OPEN_ENDED_ANSWER_TEMPLATE",
@@ -189,7 +189,7 @@ def _norm_tag(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-#: 自标标签 → 数据集名（README §4.2.1 那张表）。**只有标签本身即证据的那些**。
+#: 自标标签 → 数据集名。**只有标签本身即证据的那些**。
 TAG_DATASETS: dict[str, str] = {
     "locomo_refined": "locomo-refined",
     "personamem_v2_32k": "personamem-v2",
@@ -207,7 +207,7 @@ TAG_DATASETS: dict[str, str] = {
 def corpus_hint(text: str) -> str:
     """首条 add 的**形态**归族——启发式，只用于无金标 user 的族统计。
 
-    ⚠ **它不是归属判据**：`Corpus:` 前缀下至少有三族语料（实测 2,674 条里只有 492 条
+    ⚠ **它不是归属判据**：`Corpus:` 前缀下至少有三族语料（ 2,674 条里只有 492 条
     带 `subject_id`/`UPDATE`，1,341 条是文档/表格 JSON）。这里分得开的只是"像什么"。
     """
     head = text.lstrip()[:400]

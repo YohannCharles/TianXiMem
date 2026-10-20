@@ -1,49 +1,29 @@
-# ── 运行时产物（var/）：一律不进版本库 ────────────────────────────────
-# 目录名是 var/ 而不是 data/ —— 后者与只读归档 benchmark_data/ 读起来像同一类东西。
-# var/ 只装"运行时状态"，装进去的东西都应当是可重建或可弃的。
-# ⚠ 必须写成 var/* 而不是 var/：写 var/ 会排除**目录本身**，git 就不再向下
-#   查找，下面那条 !var/CLAUDE.md 永远轮不到执行（静默失效）。
+# Runtime state
 var/*
-
-# 唯一的例外：保留 var/CLAUDE.md，让这个目录在 checkout 后依然存在且有说明。
 !var/CLAUDE.md
 
-# ⚠ 结论与正式共享材料入库，原始数据、临时实验与运行时状态不入库：
-#      --configs/            活动 profile            → 提交
-#      --configs/runs/       临时实验快照             → 默认忽略；正式对照按需显式提交
-#      --eval/experiments/    T2 的 133 行人工标注    → 提交
-#      --eval/reports/ledger.md  结果台账             → 提交
-#   若你新增一类产出，先问它属于哪一边。
-
-# 旧分支实验已于 2026-10-10 清理；新跑批的快照、探针与产物默认留在本地。
-# 保留目录说明；正式版本对照需要入库的配置/清单经核对后用 git add -f 显式提交。
+# Generated configuration snapshots
 /configs/runs/*
 !/configs/runs/README.md
-/eval/reports/runs/*
-!/eval/reports/runs/README.md
 
-# 代理评测的原始逐题产出：体积大、可重跑，
-# 且可能含受许可约束的数据内容（§12.5）。
+# Generated evaluation artifacts
+/eval/reports/runs/*
 eval/reports/**/*.json
 eval/reports/**/*.jsonl
 eval/reports/**/*.csv
-# 评测运行日志及轮转日志：本地诊断产物，不入库。
 eval/reports/**/*.log
 eval/reports/**/*.log.*
-!eval/reports/CLAUDE.md
 
-# 本地改进用的共同事实金标与样本，不纳入版本库。
+# Local fact annotations
 eval/facts/*.jsonl
 
-# ── 密钥 ───────────────────────────────────────────────────────────────
+# Secrets and environment
 .env
 .env.*
 !.env.example
-# 团队网关文档：**正文里有可用的 API Key**（文档自己写着"严禁提交至 GitHub 仓库"）。
-# 它不属版本库——要共享就把密钥那两行摘掉，或放团队内部的密码管理器。
 L20-推理服务API.md
 
-# ── Python ─────────────────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -57,114 +37,27 @@ venv/
 dist/
 build/
 
-# ── 编辑器 / 系统 ──────────────────────────────────────────────────────
+# Editors and operating systems
 .vscode/
 .idea/
 .DS_Store
 
-# Claude Code 的本地状态：权限配置（本机绝对路径）、调度器（scheduled_tasks.*）、
-# worktree、检查点、邮箱等。它们机器相关、可重建，**不进版本库**。
-# ⚠ Claude Code 会把这些写进 `.git/info/exclude`，但那份**不随仓库走**——换台机器
-#   就没有了 ⇒ 仓库层必须自己留一份。
-# 团队共享的 .claude/settings.json 是唯一例外，用否定规则放行。
+# Local TianxiCode state
 .claude/*
 !.claude/settings.json
 
-# ── 开发用数据集（eval/datasets/）───────────────────────────────────────
-# 第三方数据集以 **git clone** 形式放在这里（目录内有嵌套 .git）。**一律不入库**：
-#   - 许可约束：LoCoMo-Refined 是 **CC BY-NC 4.0**（§12.5），分发范围未确认前不提交
-#   - 嵌套 .git 会让 git 把它当 submodule 处理，留下 gitlink 记录
-#
-# ⚠ **只逐个忽略克隆下来的目录，不要写成 `eval/datasets/*`**（2026-09-24 修正）：
-#   那个写法会把**我们自己写在这个目录下的加载器**（`locomo.py` / `longmemeval.py` /
-#   `preprocess.py` / `registry.py`）也一起忽略——它们在 `git status` 里**根本不出现**，
-#   提交时静默丢失，而 D16 恰恰把"知道数据集文件名"的职责放在这里。
-#   ⇒ 又一处"不报错就丢东西"，与 `var/` 那条注释同一类。
-#   **新增一个 clone 时，在这里补一行它的目录名。**
+# Downloaded datasets
 eval/datasets/LoCoMo-Refined/
+/dataset/*
+!/dataset/CLAUDE.md
 
-# ── 参考实现（eval/baselines/ 下的克隆）─────────────────────────────────
-# 与 `eval/datasets/` 同一类：**逐个忽略克隆下来的目录，不写 `eval/baselines/*`**
-# ——那个写法会把**我们自己写的 `CLAUDE.md` 与将来的包装代码**一起忽略掉。
-#
-# 为什么这些副本都不入库：
-#   - 上游是**别人的仓库**，字节从公开源各自取（`git clone`），入库只会带来
-#     "本地副本与上游漂移"的问题，而 B1 的价值恰恰依赖于它**没被改过**
-#   - 嵌套 .git 会被 git 当 submodule 处理，留下 gitlink 记录
-#   - `invmem-candidate/` 额外一层：**全库无 LICENSE**（PRD 附录 B），
-#     分发边界未确认前不提交
-#
-# ⚠ **这些规则还有第二个作用，别顺手删**（2026-09-25 实测）：ruff 的
-#   `respect-gitignore` 默认为真 ⇒ `make fmt`（`ruff format .`）与
-#   `make lint`（`ruff check .`）**都不会扫这些目录**。
-#   而 `make fmt` 会**重写**它扫到的文件——一旦这个排除失效，它会把 Vendor
-#   进来的代码格式化掉，**B1 的"保持原样"边界就在一次 `make fmt` 里静默破了**。
-#   实测：`ruff format --check eval/baselines/` 输出为空（一个文件都不扫）。
-#
-# ⚠ 出处与 commit SHA 记在 docs/reference-implementations.md——**别只留个目录名**，
-#   换台机器要能取回同一份。**新增一个 clone 时，在这里补一行它的目录名。**
+# Vendored reference implementations
 eval/baselines/refind/
 eval/baselines/invmem-candidate/
 eval/baselines/memmachine/
 
-# ── 其他 ───────────────────────────────────────────────────────────────
-# 归档只读，整目录不入库。**理由是分发边界，不是体积**（2026-09-24 核对）：
-#   1. AML 仓【没有 LICENSE】，其 README 的 "Deliberately not included" 一节写明
-#      "Do not submit any of these materials in an issue or pull request."
-#   2. 里面的数据集带 CC BY-NC 等许可约束（§12.5）
-# ⇒ 这是**刻意状态，不要改成提交进去**。字节从公开源各自取：
-#   `make fetch-data`（出处 + sha256 的清单在 eval/datasets/manifest.py）。
-# ⚠ 因此在 benchmark_data/ 里放 README 是不会被提交的——关于归档的说明写在
-#   docs/benchmark-data.md。
+# Legacy archive and capture exports
 benchmark_data/
-
-# D35：仅目录说明入库；数据、下载的上游源码、临时文件与历史存档不入库。
-/dataset/*
-!/dataset/CLAUDE.md
-
-# ── 官方请求原文（采集导出）─────────────────────────────────────────────
-# `tools/replay_official_adds.py` 的输入：官方 AML 真跑出来的 `POST /add` 报文
-# （由 `capture.enabled` 那条诊断旁路导出）。与上面**同一条纪律**：官方评测数据不进 git。
-#
-# ⚠ 规则写在【仓库根】而不是只靠上面那条 `benchmark_data/`：这份文件是**当场导出**的，
-#   在还没取归档的机器上它多半就落在根上（导出的人不会先 mkdir）。
-# ⚠ 一条实测教训（2026-09-29）：**别为了让它被忽略就去 `mkdir benchmark_data/`**——
-#   `tests/test_datasets.py` 的 `needs_archive` 守卫判的是【目录在不在】而不是【归档在不在】
-#   ⇒ 建一个只装这个 jsonl 的空目录，会让两条归档用例从 **skip 变 fail**。
-#   （要真把归档取回来才是动那条守卫的时候：`make fetch-data`。）
 official-add-bodies-*.jsonl
 official-dataset-*
-
-# 解压的冻结评测包保留在本地；共享题号清单与加载代码分别住在 eval/ 下。
 /memory600-*/
-
-# 共享评测只提交精简题号 TSV；完整清单 JSON 在本地生成。
-/eval/experiments/selections/*.json
-
-# ── 仓根不放 scratch 数据文件（2026-10-12 / 2026-10-19）──────────────────
-# 一次事故：子 agent 的探针脚本用了相对路径，把 16 个 **scratch json**（内容是 id 列表）
-# 落进了仓根；而当时那条 `git add -A` 把它们**一起提交了**（已用 filter-branch 从历史里剔掉）。
-#
-# ⚠ **这类东西该落在 `$CLAUDE_JOB_DIR/tmp/`**（并行任务各一份、任务删掉时一起清），
-#   或者 `var/`；**不该落仓根**——因为一条 `git add -A` 就会把它们带上。
-# ⚠ 规则全部**只挡仓根**（`/*.x`，不动 `eval/` `configs/` 等处的正常文件）：
-#   仓根现在**一个合法的这类文件都没有**（清单/配置都在子目录），所以这几条是准确的。
-#   哪天要在仓根放真的同名文件，**先删对应规则并说清为什么**，别让新文件被静默忽略。
-#
-# ⚠ **不要写成全局 `*.jsonl` / `*.db`**：`eval/` 下有 12 条必须提交的 `.jsonl` 清单。
-/*.json
-/*.jsonl
-/*.db
-/*.db-*
-/*.sqlite
-/*.sqlite3
-
-
-# ── pytest 的临时根（Windows 上 %TEMP% 的 ACL 坏了时的绕法）──────────────────
-# `docs/roadmap.md` Step 0 记着那个绕法：`PYTEST_DEBUG_TEMPROOT=<一个新建目录> uv run pytest`。
-# ⚠ 那个目录**建在哪儿由跑的人决定**——实测有一次建到了**仓库根**
-#   （`.pytest-tmp-corpus-audit/`，里面是 `pytest-of-r0304/pytest-0`），
-#   于是 `git status` 里多出一个未跟踪目录，而它**本来就不该进版本库**（纯临时状态）。
-# ⇒ 规则写成**前缀通配**：这一族名字全挡住，不必每次新目录都来加一条。
-#   （`.pytest-tmp-corpus-audit/` 就是这个通配覆盖到的第一个。）
-.pytest-tmp-*/

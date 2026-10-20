@@ -1,4 +1,4 @@
-"""排序、扩窗、打包（§10 / §11 主线）。
+"""排序、邻居扩窗、段合并与打包。
 
 **本目录是"排序 → 扩窗 → 打包"三连环的落地点，顺序不可换。**
 
@@ -11,8 +11,8 @@ Hybrid Retrieval → RRF → memory_id 稳定去重
   → Final Packaging            ← rank/packaging.py
 ```
 
-端点不可用时按 D12 降级回 RRF 顺序，**不报错**（线格式表见 [`reranker.py`](./reranker.py)）。
-完整对照写在 [`CLAUDE.md`](./CLAUDE.md)，**改动之前先读那一节。**
+端点不可用时降级回 RRF 顺序，**不报错**（请求格式见 [`reranker.py`](./reranker.py)）。
+排序约定详见 [`CLAUDE.md`](./CLAUDE.md)。
 """
 
 from tianximem.rank.neighbor import (

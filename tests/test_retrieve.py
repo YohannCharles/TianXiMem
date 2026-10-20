@@ -1,6 +1,6 @@
-"""`retrieve/` —— 混合检索的策略与参数所有权（§7.1–§7.3）+ §8 判据。
+"""`retrieve/` —— 混合检索的策略、参数所有权与判据。
 
-⚠ 这些用例**不碰 Qdrant**：`store/` 那一侧已有 20+ 个集成用例（含 k=61 的实测）。
+⚠ 这些用例**不碰 Qdrant**：`store/` 那一侧已有 20+ 个集成用例（含 k=61 的）。
 本文件测的是**策略层**——参数校验、查询侧调用次数、名次编号、判据逻辑。
 """
 
@@ -82,7 +82,7 @@ def _retriever(store, embedder):
 def test_rrf_k_must_be_exactly_61() -> None:
     """`rrf_k` 是**正确性常量**——填错**必须拒绝**，不是"警告后照用"。
 
-    Qdrant 的默认是 `2`、文献是 `60`，只有 `61` 才等价于文献的 60（秩 0-based，D5）。
+    Qdrant 的默认是 `2`、文献是 `60`，只有 `61` 才等价于文献的 60。
     而填错**不会报错**：两种写法的名次都"看起来正常"，只有分数差一个数量级。
     """
     assert make_hybrid_params().rrf_k == RRF_K == 61
@@ -96,7 +96,7 @@ def test_rrf_k_error_explains_why() -> None:
     with pytest.raises(RetrievalParamError) as exc:
         make_hybrid_params(rrf_k=60)
     assert "正确性常量" in str(exc.value)
-    assert "D5" in str(exc.value)
+    assert "RRF" in str(exc.value)
 
 
 def test_prefetch_limit_must_be_positive() -> None:
@@ -129,7 +129,7 @@ def test_make_hybrid_params_returns_the_store_type() -> None:
 
 
 def test_lexical_query_is_identity() -> None:
-    """**查询侧不做改写**（§7.2）——把规格变成可断言的对象，而不是文档约定。"""
+    """**查询侧不做改写**——把规格变成可断言的对象，而不是文档约定。"""
     for query in ("火车几点开？", "  keep   spaces  ", "MixedCASE", "a\nb"):
         assert lexical_query(query) == query
 
@@ -232,7 +232,7 @@ def test_search_assigns_zero_based_ranks_in_store_order() -> None:
 def test_candidate_carries_no_score_field() -> None:
     """**`Candidate` 里没有 `score`——这是结构性防泄漏，不是省字段。**
 
-    融合分数不是校准量（§8），而响应里的 `score` 必须是**最终名次的函数**
+    融合分数不是校准量，而响应里的 `score` 必须是**最终名次的函数**
     （由 `rank/` 现算）。上游手里没有那个值，也就漏不出去。
     Rerank 接入后名次会变，届时 `score` 随之重算——固化在 `Candidate` 里就会过时。
     """
@@ -242,11 +242,10 @@ def test_candidate_carries_no_score_field() -> None:
 
 
 def test_search_honours_top_k_from_the_request_not_100() -> None:
-    """**`top_k` 来自请求、不写死 100**（§7.3）——写死会在 AML 传更小值时变成契约错误。
+    """**`top_k` 来自请求、不写死 100**——写死会在 AML 传更小值时变成契约错误。
 
-    ⚠ **断言的是"返回几条"，不是"传给 store 几条"**（2026-10-01）：截断从
-    `store.hybrid_search` 搬到了这里，因为 Qdrant 在并列卡住 `limit` 时**选谁是不确定的**
-    （实测同一请求连打 12 次，第 100 位的 id 有 2 种）。契约没变，执行点变了。
+    ⚠ **断言的是"返回几条"，不是"传给 store 几条"**：store 返回全部融合结果，
+    这里在排序后截断，因为 Qdrant 在并列卡住 `limit` 时**选谁是不确定的**。
     """
     store = _StubStore(hits=[ScoredMemoryId(f"m{i}", 1.0 - i * 0.1) for i in range(10)])
     got = _retriever(store, FakeEmbedder(dim=4)).search(user_id="u1", query="q", top_k=3)
@@ -274,7 +273,7 @@ def test_search_sends_the_raw_query_to_both_arms() -> None:
 
 
 def test_search_forwards_user_id() -> None:
-    """`user_id` 是**唯一**的隔离字段——编排层不得丢它（§2.2）。"""
+    """`user_id` 是**唯一**的隔离字段——编排层不得丢它。"""
     store = _StubStore(hits=[ScoredMemoryId("m0", 1.0)])
     _retriever(store, FakeEmbedder(dim=4)).search(user_id="alice", query="q", top_k=5)
     assert store.seen[0]["user_id"] == "alice"
@@ -343,7 +342,7 @@ def test_build_services_forwards_retrieval_params_to_the_store(tmp_path) -> None
         services.close()
 
 
-# ── §8 判据 ────────────────────────────────────────────────────────────
+# ── 检索一致性判据 ─────────────────────────────────────────────────────
 
 
 def test_rank_consistency_top1_agree() -> None:
@@ -378,18 +377,18 @@ def test_rank_consistency_thresholds_are_configurable() -> None:
     assert rank_consistency(["a", "b", "c"], ["x", "b", "c"], strict) is False
 
 
-# ── v1 的 Checker：恒充足，但每轮都记 ───────────────────────────────────
+# ── Checker：恒充足，但每轮都记 ─────────────────────────────────────────
 
 
 def test_checker_always_says_enough_in_v1() -> None:
-    """v1 **不做门控**（D13）——不管判据本来会说什么。"""
+    """    当前 checker **不做门控**——不管判据本来会说什么。"""
     checker = EvidenceChecker()
     assert checker.decide(query="q").enough is True
     assert checker.decide(query="q", arm_rankings=(["a"], ["x", "y", "z"])).enough is True
 
 
 def test_checker_records_every_decision() -> None:
-    """**每轮判定必须记录**——不记，Step 4 之前无法用数据回答 A4。"""
+    """**每轮判定必须记录**——不记录就无法从运行数据判断判据行为。"""
     inst = InMemoryCheckerInstrument()
     checker = EvidenceChecker(instrument=inst)
     checker.decide(query="q1")
@@ -399,9 +398,9 @@ def test_checker_records_every_decision() -> None:
 
 
 def test_criterion_input_is_none_when_probes_were_not_run() -> None:
-    """v1 的调用方不传两路排名 ⇒ 记成 `None`，**不是 `False`**。
+    """调用方不传两路排名 ⇒ 记成 `None`，**不是 `False`**。
 
-    两者对 A4 的结论完全相反：`None` = "没测"，`False` = "不会触发"。
+    两者含义完全相反：`None` = "没测"，`False` = "不会触发"。
     """
     decision = EvidenceChecker().decide(query="q")
     assert decision.criterion_would_say is None
@@ -431,7 +430,7 @@ def test_checker_default_instrument_is_a_noop() -> None:
     EvidenceChecker().decide(query="q")
 
 
-# ── 并列分数的次序（V13，2026-09-26）────────────────────────────────────
+# ── 并列分数的次序────────────────────────────────────
 def _tied_hits() -> list[ScoredMemoryId]:
     """一组**故意同分**的候选——RRF 的日常形态（`1/(61+名次)` 是离散值）。
 
@@ -446,7 +445,7 @@ def _tied_hits() -> list[ScoredMemoryId]:
 
 
 def test_tied_scores_get_a_deterministic_order() -> None:
-    """**同分项的次序必须与上游给的顺序无关**（V13）。
+    """**同分项的次序必须与上游给的顺序无关**。
 
     为什么这条重要：名次是**位置派生**的（`retrieve()` 里的 `enumerate`），而下游
     （种子选择 → 扩窗 → 打包顺序）全都读名次。上游（Qdrant）对同分项的返回顺序在两次

@@ -1,11 +1,10 @@
-"""语义那一路：查询侧只做**一次** embedding 调用（§7.2）。
+"""语义检索：查询侧只做**一次** embedding 调用。
 
 ## 三条不可违反的约束
 
-1. **每查询恰好 1 次调用**（§7.2）。索引侧是"每个对一个向量、缓存后趋近 0"，
+1. **每查询恰好 1 次调用**。索引侧是"每个对一个向量、缓存后趋近 0"，
    查询侧是"每查询恰好 1 次"——次数不对（0 次或 2 次）都说明接线错了。
-2. **查询原样送出，不做任何改写**——v1 没有 Query Analyzer（§5），查询改写属 v2；
-   而 agent 每轮自产的检索关键词属 agent 循环，**v1 两者都没有**（D13）。
+2. **查询原样送出，不做任何改写**。多跳执行器的后续检索词属于其自身循环。
 3. **索引侧与查询侧必须用同一个 Embedder 实例**——否则两边的 `dim` 与缓存坐标系
    可能不一致，而**不一致只会表现为"检索结果很差"，不会报错**。
 
@@ -13,7 +12,7 @@
 
 Qwen3-Embedding-8B 的模型卡推荐**查询侧**加 `Instruct: …\\nQuery:…`、文档侧不加。
 那层适配器在 [`../embed/query_instruction.py`](../embed/query_instruction.py)，**它不是"改写"**
-——是输入格式适配（是否开启见 config-reference §3）。
+——是输入格式适配，是否开启见 `docs/config-reference.md`。
 
 本模块用**鸭子类型**认它：持有对象若有 `encode_query()` 就用它，否则退回 `encode()`。
 这样 `DenseArm` 不必知道有没有开前缀，而**唯一不可违反的顺序**（前缀必须加在缓存之上）
@@ -35,7 +34,7 @@ class DenseArmError(RuntimeError):
 
 @runtime_checkable
 class EmbedderLike(Protocol):
-    """本模块对 Embedder 的最小要求（§7.4）。
+    """本模块对 Embedder 的最小要求。
 
     结构化的写法而不是 `object` + `getattr`：**接口本身就是文档**，
     而且 `isinstance` 能直接用来做下面的可选能力探测。
@@ -89,7 +88,7 @@ class DenseArm:
 
     @property
     def dim(self) -> int:
-        """维度来自接口（**不写死**）——集合的向量维度必须与它一致（§7.4 / §2.3）。"""
+        """维度来自接口（**不写死**），集合的向量维度必须与它一致。"""
         return int(self.embedder.dim)
 
     def encode_documents(self, texts: Sequence[str]) -> list[list[float]]:

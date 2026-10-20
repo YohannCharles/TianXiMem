@@ -103,7 +103,7 @@ def load_env() -> tuple[list[str], list[str], str]:
     pairs = [(b, k) for b, k in zip(bases, keys, strict=True) if b and k]
     if not pairs:
         raise SystemExit("缺少 AML_BASE_URL/AML_API_KEY（或 _2）")
-    # 探活：死端点会让一半请求白跑（2026-10-17 实测 gw1 整段时间 502）。
+    # 探活：死端点会让一半请求白跑。
     live = []
     for base, api_key in pairs:
         chat = OpenAiCompatChat(

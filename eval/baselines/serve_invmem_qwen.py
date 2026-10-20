@@ -7,11 +7,11 @@ AML_EMB_BASE_URL=$AML_EMB_BASE_URL AML_EMB_API_KEY=$AML_EMB_API_KEY \\
 PORT=8002 /tmp/invmem-venv/bin/python eval/baselines/serve_invmem_qwen.py
 ```
 
-## 为什么需要这个文件（2026-09-26）
+## 为什么需要这个文件
 
 候选仓库自带的 embedding 是 **`BAAI/bge-small-en-v1.5`（33M 参数）**，而我们是
 **Qwen3-Embedding-8B**（开发期；提交期按规定换 `text-embedding-v4`）。
-直接比会把"**embedding 强弱**"混进"**管线设计**"里——用户要求改成同一个 embedding 再比。
+直接比会把"**embedding 强弱**"混进"**管线设计**"里；这里统一 embedding，使比较只反映管线差异。
 
 ## 边界：**不改 vendor 代码**（与 B1 同一条纪律）
 
@@ -20,7 +20,7 @@ PORT=8002 /tmp/invmem-venv/bin/python eval/baselines/serve_invmem_qwen.py
 仍然跑在它的仓库里（[`invmem-candidate/`](./invmem-candidate/)）。
 
 ⚠ **这个跑出来的数字不是"候选仓库的分数"，是"它的管线 + 我们的 embedding"**。
-两个口径都要在 [`../reports/ledger.md`](../reports/ledger.md) 里写清楚。
+run record 必须写清这两个口径（[`../reports/CLAUDE.md`](../reports/CLAUDE.md)）。
 
 ⚠ **查询侧不加任何 instruction**（`retrieval.query_instruction` 在 v1 也默认 `""`）——
 两边保持一致，否则这一臂又多了第二个变量。

@@ -1,128 +1,86 @@
-# service/ — HTTP 层
+# service
 
-**PRD**：§2.1（接口形状）、§2.2（硬性规则）、§15（工程与部署）
+`service/` owns HTTP shapes, orchestration, service assembly, and degradation boundaries.
 
-## 要写什么
+## Files
 
 ```text
-app.py        FastAPI 实例 + HTTP 注册（`--factory` 入口）、lifespan
-wiring.py     依赖对象图装配；把配置到实现的映射集中在一个入口
-routes.py     POST /add、POST /search、GET /health（薄路由，只做形状映射）
-schemas.py    请求与响应模型（pydantic）= §2.1 的字面翻译
-add_pipeline.py    Add 链的**编排**（`AddOutcome` / `AddPipeline`）——apply_batch → 取回本批行 → render+embed → Qdrant upsert
-search_pipeline.py Search 链的**编排**（`SearchPipeline` / `_SearchTrace` / `AgenticSearch`）——先试共同取证，不适用则回退原混合检索链
-pipeline.py   两条链共用的**薄 façade**：重新导出上面两个模块的名字，没有自己的逻辑（"为什么编排在本目录"写在它的模块 docstring）
-search_stages.py  共同事实快照、索引回填和证据选择 stage；不拥有 HTTP 或普通检索尾巴
-grounded_planner.py  可选的受限计划生成器（`retrieval.grounded_planner.*`）——确定性计划编译失败时才调用一次 LLM，只产出 `QueryPlan`，不参与事实生成、选择或来源审查
-errors.py     异常 → 保持"可重试"的边界处理
-capture.py    请求**原文**采集（诊断旁路；`default.yaml` 默认开，代码内置缺省仍 `false`）—— **S6** 的唯一直接观察口
+app.py                FastAPI application and lifespan
+wiring.py             dependency graph assembly
+routes.py             /add, /search, /health
+schemas.py            request and response models
+add_pipeline.py       Add orchestration
+search_pipeline.py    Search orchestration and final rerank
+search_stages.py      grounded-evidence snapshot, backfill, and selection stages
+grounded_planner.py   bounded LLM plan generation
+errors.py             HTTP error mapping
+capture.py            raw request capture
+pipeline.py           compatibility facade for Add and Search pipelines
 ```
 
-> **`capture.py` 的边界**：它把官方发来的 `/add` / `/search` **原样**抄一份落盘
-> （`capture.enabled`，`default.yaml` 默认开），用来核验官方真实的请求形状——尤其 `request_id`。
-> **四条纪律与文件格式一处声明在** [`capture.py`](./capture.py) 的模块 docstring
-> （在解析之前抄 / 不改下游 body / 不吞异常 / 写盘失败不影响响应），本文件不复制。
-> ⚠ 它是本层**唯一**允许"吞掉自己内部错误"的地方（只留 WARNING），理由见那条纪律 4：
-> **诊断不该有能力把一次 Add 变成 500**。
+## HTTP Rules
 
-> **配置不在本目录**：由 [`../common/config/`](../common/config/) 统一提供，**注入** `build_services()`。
-> **`service/` 自己不读 `os.environ`**——这一条有静态测试钉住
-> （`tests/test_config.py::test_only_config_reads_the_environment`）。
->
-> ⇒ 本目录拿到的是一个 [`AppConfig`](../common/config/model.py) 对象；**它不知道那些值从哪来**。
+- Translate request and response models literally; do not leak internal fields.
+- Echo `request_id`, `user_id`, and `session_id` unchanged on Add.
+- Return `data=[]`, not `null`, for no matches.
+- Enforce `len(data) <= top_k` after final packaging.
+- Keep `created_at` present on every Search item.
+- Keep `/health` independent of downstream services.
+- Treat non-200 responses as retryable unless the payload is definitively invalid or conflicting.
+- Never return partial Add success.
 
-## 这一层只做两件事
+## Add Orchestration
 
-1. **把契约形状钉死**——请求/响应模型就是 §2.1 的字面翻译。
-2. **保持可重试**——内部异常时**不要吞掉、不要返回部分成功**。
+1. Call the pairing transaction.
+2. Render committed source blocks.
+3. Resolve vectors through the embedding cache.
+4. Upsert Qdrant points with `wait=true`.
+5. On derived-index failure, leave the batch recoverable through a same-payload replay.
+6. Return only after the source and derived index are ready.
 
-它**不**做检索、不做配对、不碰存储。所有业务都往下走。
+The service does not choose block boundaries or write source SQL itself.
 
-> **契约硬约束在根 `CLAUDE.md`（已加载）**——本节只列本层要落地的那几条，不重述 AML 侧的规则原文。
+## Search Orchestration
 
----
+```text
+grounded evidence
+  -> complete: package and return
+  -> incomplete: router
+       -> DEFAULT: hybrid retrieval
+       -> MULTI_HOP: executor
+  -> merge candidates
+  -> rerank once
+  -> expansion
+  -> segment merge
+  -> package
+  -> enforce top_k and token budget
+```
 
-## 本层必须守住
+The grounded-evidence path runs first when enabled. If it cannot return complete evidence, it falls back as a whole rather than mixing partial evidence with hybrid candidates.
 
-| # | 要求 | 出处 |
-| --- | --- | --- |
-| 1 | **精确计数**：`len(data) <= top_k`，含邻域扩展加进来的槽位 | §2.2 / §10 |
-| 2 | **原样回显** `request_id` / `user_id` / `session_id` | §2.1 |
-| 3 | **响应前必须持久化完成且立即可搜索**——不允许异步建索引 | §2.1 |
-| 4 | **位置 = `(request_id, local_index)`**（D28）——`request_id` 是 **opaque string**：**不许解析它**，也不许回退到"按到达顺序分配"。同 session 并发与乱序到达都安全 | §15 → **D28** |
-| 5 | **非 200 的行为未定义，必须假设 AML 会重试**——内部异常应让本批保持"可重试"（事务未提交），**而不是返回一个"部分成功"** | §15 |
-| 6 | **`user_id` 是唯一隔离字段**；`session_id` 不是 Search 的过滤条件 | §2.2 |
+The final rerank runs exactly once on the merged candidate list. Round-local reranking inside the multi-hop executor is separate and never enters the response.
 
----
+Optional failures must produce contract-valid responses with a named diagnostic reason or fallback state. They must not silently claim successful execution.
 
-## 共同取证分支（`retrieval.grounded_evidence`）
+## Configuration and Assembly
 
-Search 在开关打开时**先试共同取证**，不适用就**整体回退**到原混合检索链，
-**不半途混用**。本层拥有的是"先试哪条、何时退回"这个顺序决策；**回退判据的唯一
-声明处**在 [`../retrieve/CLAUDE.md`](../retrieve/CLAUDE.md) 的「不齐全 ⇒ `None`」节
-（键语义在 [`../../../docs/config-reference.md`](../../../docs/config-reference.md)）——
-确定性计划编译不出来时，可选的 `grounded_planner` 只生成受限计划（可带一段**逐字**的时间片段，
-由本地解析成区间；题面有时间措辞而计划没有区间时弃权）；索引未扫完或抓取行数超限时，
-本层直接记录原因并回退。LLM 输出不参与事实生成、选择或来源审查。
-`_grounded_decision` 在一个读快照内完成事实抓取、一次选择和相关原文审查；
-具体来源是否受支持的判据仍在 `retrieve/evidence.py`。
+`wiring.py` builds services from `AppConfig`. `service/` does not read environment variables or YAML.
 
-命中时**只做取证与打包**：原文或有来源的独立事实片段复用既有的段结构、
-槽位与 token 双预算（此路径半径恒为 0），**不调用 rerank**。
+The service runs with one worker. Configuration and process checks must both reject multi-worker startup.
 
-完整证据先返回；未完成时才调用可选路由器，MULTI_HOP 交多跳执行器，其余交混合检索。
-打包截断或来源缺失记录 `incomplete_packaging` 并整体转交，不把部分输出记成事实成功。
-显式 `agentic.force` 实验仍绕过共同事实。
+The downstream stack is blocking. Keep blocking storage and HTTP calls in synchronous route handlers or an explicit thread pool; do not block the event loop from `async def` request handlers.
 
-Add 侧：`apply_batch` 在**同一个写事务**里逐行索引事实（开关打开时）；
-**幂等重放**（守卫命中）也经同一入口补写事实索引——真源不变。
+## Request Capture
 
-四个配置键由 `build_services()` 从 `AppConfig` 注入两条 pipeline，**本层不读环境变量**：
-`retrieval.grounded_evidence`（两条都收）、`retrieval.evidence_limit` /
-`retrieval.evidence_hop_limit` / `retrieval.fact_backfill_limit`（只进 Search）。
+Capture records raw Add and Search requests before normal processing. It must not:
 
----
+- mutate request text;
+- alter downstream behavior;
+- suppress normal request errors;
+- turn capture failure into a response failure.
 
-## 两个容易写错的地方
+Capture files may contain sensitive evaluation data. Keep them out of Git and do not share them.
 
-### 必须 `--workers 1`
+## Tests
 
-**理由**：见根 `CLAUDE.md` 的《硬约束》表（`Add` 仍必须 `--workers 1`，出处 §15）——**本文件不重复**。
-⇒ 在那之前保持这条约束，**不要用"位置已经是请求的纯函数了"当理由把它去掉**。
-
-**这一条有两条防线，都不是文档警告**（③-d）：
-
-| 防线 | 在哪 | 拦住什么 |
-| --- | --- | --- |
-| **配置阶段** | `common/config/validate.py` 的 `validate()` | `TIANXIMEM_WORKERS != 1` ⇒ `ConfigError` |
-| **进程阶段** | `common/config/validate.py` 的 `assert_single_process()`，由 `create_app_from_env()` 调用 | **命令行**给的 `--workers 4`——配置层看不见它 |
-
-进程阶段的判据是 `multiprocessing.parent_process() is not None`：uvicorn 的 `--workers N`（N>1）会用
-`multiprocessing` 派生子进程来跑 app，而单进程启动时它是 `None`。
-⇒ **`--reload` 也会被一并拦下**（两者在子进程里形状相同，父进程只留下 pid 与名字）；开发期请用 `make serve`。
-
-> **`BEGIN IMMEDIATE` 是并发唯一的排队点**（`store/` 层）：所有写请求都在 SQLite 的
-> 写锁上串行，抢不到的一方**等待**（`busy_timeout`）而不是抛 `SQLITE_BUSY`。
-> 它是**数据库级**的，与"哪个进程"无关。
-
-### FastAPI 是 async，但这一层的下游是阻塞的
-
-**这一层的下游全部是阻塞调用**：SQLite 是阻塞 IO，而 embedding 与 rerank 是
-**同步 HTTP**（`httpx.Client`）——**同步客户端在事件循环里会堵住整个循环**。
-用 FastAPI 不代表要写 `async def` 业务函数：把阻塞部分显式下到线程池
-（`run_in_threadpool`），**或者干脆把路由写成 `def`**（FastAPI 会自动下线程池）。
-
-**不要**在 `async def` 里直接调阻塞的存储或模型调用——那会让并发请求互相饿死，
-而 30 分钟的单请求预算会掩盖这个问题，**直到 Full run 跑 0.5–2 天时才炸**（§15）。
-
-> ⚠ **模型不在本机**（D12/D14）：三者都经自建网关远程访问，所以"阻塞"的形状是
-> **等待网络**，不是等 GPU。这不会让它变轻——一个 30 秒的 rerank 超时
-> （`rerank.timeout_seconds`）在事件循环里就是 30 秒的停摆。
-
----
-
-## 契约自查
-
-跑 Smoke 之前逐条过 [`../../../docs/contract.md`](../../../docs/contract.md) §4 的清单。**Smoke 次数有限（每轨道 ≤30 次），不要拿它当调试器。**
-
-`make contract-check` 指 [`../../../eval/smoke/preflight.py`](../../../eval/smoke/preflight.py)——**尤其是"精确计数 ≤ `top_k`"与"`created_at` 始终存在"这两条检查**，它们最容易在加了邻域扩展之后悄悄破掉。
+Use focused tests for schemas, HTTP behavior, orchestration order, failure recovery, isolation, optional-service degradation, and response shape. Use the real preflight suite for the complete contract.

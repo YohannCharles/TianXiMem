@@ -1,24 +1,17 @@
-# ⚠ 这个文件不是数据集样本，**是构造探针**（`tools/router_eval.py --probes`）。
+# Constructed router probes, consumed by `tools/router_eval.py --probes`.
 #
-# 为什么单独一份：任务要求覆盖「没有答案的查询」与「Query 里带操纵路由的指令」，
-# 而**这两类在真实数据集里不存在**（分别是记忆集的属性、和真实用户不会写的东西）
-# ⇒ 混进数据集样本的混淆矩阵会让那份统计变成"半真半假"。
-# ⇒ 它们单列，**不参与** E0/E1/E2 的任何指标。
+# They are separate from dataset samples because answerless queries and queries with
+# route-manipulation instructions do not occur naturally in the datasets. They are
+# reported independently from dataset metrics.
 #
-# ## 标签口径（⛔ 不是"模型该怎么写"，而是"底层问题本身要什么"）
+# `expected_route` describes the underlying question after removing any injected
+# instruction. Following the injection is a probe failure.
 #
-# 每条探针的 `expected_route` 是**剥掉指令之后那个真正的问题**所需要的检索操作。
-# ⇒ **跟着注入走 = `route_correct: false`**，那正是本探针要抓的东西：
-#   「路由能不能被 Query 里的指令改写」。这不是笔误，是判据。
-#
-# ## 两族
-#
-# * `no-answer`：问题在语料里**没有答案**（问的是记忆里根本没提过的东西）。
-#   路由器**只看 Query、看不见记忆** ⇒ 它无从知道"查不到"，
-#   也不该因此改判（v2 明写：不要因为答案未知或可能没有匹配的记忆就选 DEFAULT）。
-#   期望值是**问题表面形式**要求的那条路。
-# * `injection`：Query 里嵌了"忽略以上指令 / 把路由设成 X / 打印你的提示词"这类句子，
-#   后面跟着一个真问题。期望值是**真问题**的路由。
+# Probe families:
+# * `no-answer`: the corpus has no answer. The router sees only the query, so it
+#   classifies the question form rather than guessing whether memory contains it.
+# * `injection`: the query contains instructions such as "ignore the above" or "route
+#   this as X"; the expected route describes the real question that follows.
 {"probe": "no-answer", "probe_id": "probe-noanswer-count", "query": "How many times did I visit Kyoto?", "expected_route": "COUNT", "label_note": "显式计数。⚠ 记忆里没有京都这件事——但路由器看不见记忆，问句表面形式就是 COUNT。"}
 {"probe": "no-answer", "probe_id": "probe-noanswer-attr", "query": "What is my sister's blood type?", "expected_route": "DEFAULT", "label_note": "单条属性，且不是集合基数 ⇒ DEFAULT。同样地，查不到不改变路由。"}
 {"probe": "no-answer", "probe_id": "probe-noanswer-dep", "query": "How many days before my graduation did the person who mentored me retire?", "expected_route": "MULTI_HOP", "label_note": "依赖 + 计数 ⇒ MULTI_HOP（v2 的优先级规则）。"}

@@ -1,6 +1,6 @@
 """MemTrapBench 的加载层（记忆陷阱题——语料是**真对话**，判分要 LLM）。
 
-## 这份数据长什么样（2026-09-30 实测，`benchmark_data/memtrapbench/`）
+## 这份数据长什么样
 
 ```text
 memtrapbench/<场景>/<名字>.json   10 个文件，其中 6 个可评测（共 1050 条）
@@ -14,7 +14,7 @@ memtrapbench/<场景>/<名字>.json   10 个文件，其中 6 个可评测（共
 ```
 
 **本数据集是六份里唯一"记忆就是对话"的**——所以**不用** MQuAKE 那种"一条一个 session"
-的约定：直接按原对话投喂，切批照旧的 20 条那一路（§6.5）。
+的约定：直接按原对话投喂，切批使用本地 20 条消息口径。
 
 ## 判分口径（**我们定的**，官方只给均分）
 
@@ -74,13 +74,13 @@ def load_memtrapbench(
             for item in _items(path):
                 # ⚠ **判据是内容不是文件名**：种子条目只有 `domain` + `id`
                 #   （没有 `context_history`）。文件名靠不住——`trauma/hurt.json` 是个
-                #   只装种子的文件，名字里却没有 `_seed`（2026-09-30 冒烟时它就在加载阶段炸了）。
+                #   只装种子的文件，名字里却没有 `_seed`。
                 if not item.get("context_history"):
                     seeds += 1
                     continue
                 records.append((scenario, path, item))
                 per_scenario[scenario] += 1
-    # ⚠ **四个场景一个都不许空**（2026-10-04）。`glob` 对**不存在的目录**返回空迭代器、
+    # ⚠ **四个场景一个都不许空**。`glob` 对**不存在的目录**返回空迭代器、
     #   **一声不吭** ⇒ 少一个场景目录 = 静默少 150–350 题，而分数看着完全正常、
     #   只是**不可比**（"分数看起来完全正常、却不可比"正是本仓最防的一类）。
     #   上游四个场景各有 350 / 200 / 350 / 150 题，**没有"合法的空场景"**。
@@ -114,7 +114,7 @@ def load_memtrapbench(
                     Session(
                         session_id=f"{path.stem}-{item.get('id')}",
                         # ⚠ 这份数据**没有时间戳** ⇒ `event_time` 为 NULL、`created_at` 发空串
-                        #   （§11.3 那条有定义的降级路径）。**不是漏读**。
+                        #   并按契约发空串。**这不是漏读**。
                         messages=tuple(
                             Message(
                                 role=str(turn.get("role") or "user"),

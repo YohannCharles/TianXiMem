@@ -1,4 +1,4 @@
-"""检索与判据 —— rerank 之前的那一半（§7.1–§7.3、§8）。
+"""检索策略与证据判据，覆盖 rerank 之前的检索阶段。
 
 **本目录只负责"拿到候选 + 判断够不够"。** rerank 之后的链路
 （**Neighbor Expansion、Context Packaging**）在 [`../rank/`](../rank/)。

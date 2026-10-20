@@ -1,4 +1,4 @@
-"""§14 指标的聚合与导出（**本目录唯一的实现文件**）。
+"""逐请求指标的聚合与导出。
 
 分工与出口形态写在 [`__init__.py`](./__init__.py) 与本目录的 `CLAUDE.md`——
 本文件只写"怎么发、怎么聚"。
@@ -6,12 +6,8 @@
 ## 一条必须记住的语义：观测值**是每次请求的增量**，不是累计值
 
 `SearchObservation` 的三个 rerank 计数是**这一请求引起的**增量。
-`SearchPipeline` 上的 `rerank_calls` / `rerank_degraded` / `rerank_disabled`
-**仍然是累计的**（`tools/probe_reranker.py` 与测试按累计值读它们，那是不该动的接口）
-⇒ 发射方用请求局部计数记录增量，不能用并发请求共享累计值的前后差。
-
-⚠ **聚合成累计值时不要拿累计值再相加**：那会把 346 次请求的 `rerank_calls`
-加成 `1+2+3+…+346`——而它看起来只是个"有点大"的数字，不会报错。
+`SearchPipeline` 上也保留累计计数供探针和测试读取。发射方必须使用请求局部计数，
+不能用并发请求共享累计值的前后差；聚合时也不能把累计值再次相加。
 """
 
 from __future__ import annotations
@@ -36,7 +32,7 @@ class SearchObservation:
     """一次 `Search` 的观测值。**发射方（`service/`）填好，本模块只聚合。**"""
 
     latency_ms: float
-    """这一次请求的墙钟耗时（毫秒）——§14 的 latency/query。"""
+    """这一次请求的墙钟耗时（毫秒）。"""
 
     rerank_calls: int
     """本请求里真正调用了 reranker 的次数（**增量**：0 或 1）。"""
@@ -48,7 +44,7 @@ class SearchObservation:
     """本请求里"端点不可用而降级"的次数（**增量**）。"""
 
     rerank_name: str | None = None
-    """这次用的哪个 reranker（D12 要求 run record 记它）。`None` = 这条链上没接。"""
+    """这次用的哪个 reranker，供 run record 记录模型身份。`None` = 这条链上没接。"""
 
     grounded_status: str = "not_recorded"
     grounded_operator: str | None = None
@@ -66,14 +62,14 @@ class SearchObservation:
     ⚠ `disabled` 说明**路由器没开**——它与 `DEFAULT` **不是一回事**：
     后者是"路由器开着、分类结果是默认路"，前者是"根本没有分类这一步"。
     两者在响应上完全一样（都是原混合检索链），**只有这里能分开**。
-    ⚠ 取值域**只有这三个**：2026-10-14 起路由是二分类，`COUNT` 不再是合法输出
-    （模型万一吐它 ⇒ 走 `degraded`，落 `DEFAULT`）。
+    ⚠ 取值域**只有这三个**：路由是二分类，`COUNT` 不是合法输出
+    （模型若输出它 ⇒ 走 `degraded`，落 `DEFAULT`）。
     """
 
     route_status: str = "not_recorded"
     """路由的三种状态：`disabled`（没开）/ `success`（模型正常分类）/ `degraded`（降级）。
 
-    ⚠ 与 `rerank` 的 `disabled` / `degraded` 三分法同形，**理由也同一条**（D12）：
+    ⚠ 与 `rerank` 的 `disabled` / `degraded` 三分法同形：
     混为一谈会把"端点一直挂"看成"我们本来就没开路由"。
     """
 
@@ -90,22 +86,22 @@ class SearchObservation:
     """这一次路由本身的墙钟耗时（**是 `latency_ms` 的一个可归因子集**，不是并列的量）。
 
     ⚠ 没有路由时为 `None`——**不要记 0**：0 会让"Router On"与"Router Off"两臂的
-    平均路由耗时都算得出来，而其中一臂的 0 是假的（§6 的成本分析会读错）。
+    平均路由耗时会失真，使未启用路由的运行看起来也有路由延迟。
     """
 
     agentic_status: str = "not_recorded"
     """多跳执行器这一次的状态：`disabled`（没走到那条路）/ `success` / `degraded`。
 
-    ⚠ 与 `rerank` 的三分法**同一条纪律**（D12）：`disabled` 指的是
+    ⚠ 与 `rerank` 的三分法**同一条纪律**：`disabled` 指的是
     **"这条路没被走到"**（路由判了别的、或执行器没装），不是"走了 0 轮"。
     把两者混起来，"多跳值不值"这个问题的分母就没了。
     """
 
     agentic_rounds: int = 0
-    """**实际执行的检索轮数**（含第一轮）。§14 的"Agent 平均轮数"就是它。"""
+    """**实际执行的检索轮数**（含第一轮），用于计算多跳平均轮数。"""
 
     agentic_stop_reason: str | None = None
-    """它为什么停（§11 的 `stop_reason`）：`sufficient` / `max_rounds` / `duplicate_query` …
+    """停止原因：`sufficient` / `max_rounds` / `duplicate_query` 等。
 
     ⚠ 与 `route_fallback` 是两件事：一个是"这条路的结局"，一个是"它压根没跑成"。
     """
@@ -116,15 +112,15 @@ class SearchObservation:
     agentic_rerank_calls: int = 0
     """多跳**每轮内部**的精排调用数。
 
-    ⚠ 它**不包含**最终那一次精排——那一次算在 `rerank_calls` 里（§9.4 的"最多四次"=
-    这里的 ≤3 ＋ 那里的一次）。⛔ 把两次混进同一个数，§9.4 那个上限就没法核对了。
+    它不包含最终精排；最终精排单独计入 `rerank_calls`。两者不能合并，否则无法核对
+    多跳内部与最终精排各自的调用量。
     """
 
     agentic_selected_evidence: int = 0
-    """跨轮累积的"模型选中"的证据条数（§8.1 的 `selected_evidence_ids`）。"""
+    """跨轮累积的模型选中证据条数。"""
 
     agentic_candidates: int = 0
-    """去重后的跨轮候选总数（§9.2）。
+    """去重后的跨轮候选总数。
 
     ⚠ 它是**去重后**的，与 `rounds × per_round_top_k` 不是一回事。
     """
@@ -155,7 +151,7 @@ class MetricsSink(Protocol):
 class NullMetricsSink:
     """什么都不记——**没配 `TIANXIMEM_METRICS_PATH` 时的默认**。
 
-    缺省不是错误：与 reranker 同一套口径（D12）——**没配就是不用**，服务照常起。
+    缺省不是错误：与 reranker 同一套口径——**没配就是不用**，服务照常起。
     """
 
     __slots__ = ()
@@ -171,8 +167,8 @@ class SnapshotMetricsSink:
     **为什么是快照而不是逐行追加**：聚合只该做一次（见 `__init__.py`）——
     追加式 JSONL 会把"怎么加"推给读的人，而 harness **不许 import 本模块**。
 
-    ⚠ **写失败不抛异常**：指标是诊断，不能因为它写不进去就让一次 Search 变成 500
-    （Search 的失败必须只来自契约或下游，§2.1）。写失败会在 `stderr` 上留一条。
+    **写失败不抛异常**：指标是诊断，写失败不能把一次正常 Search 变成 500；
+    错误会记录到 `stderr`。
     """
 
     path: Path
@@ -190,8 +186,7 @@ class SnapshotMetricsSink:
     grounded_planner_statuses: dict[str, int] = field(default_factory=dict)
     grounded_planner_calls: int = 0
     grounded_planner_latency_ms_sum: float = 0.0
-    #: 路由的三个分布 + 耗时。**它们是"路由到底有没有在跑"的唯一出口**
-    #: （响应里装不下——形状是契约；§14 那条 V12 的同款处境）。
+    #: 路由的三个分布 + 耗时。**它们是“路由到底有没有在跑”的唯一出口**。
     router_routes: dict[str, int] = field(default_factory=dict)
     router_statuses: dict[str, int] = field(default_factory=dict)
     router_reasons: dict[str, int] = field(default_factory=dict)
@@ -205,7 +200,7 @@ class SnapshotMetricsSink:
     router_latency_ms_max: float = 0.0
     selected_facts: int = 0
     selected_sources: int = 0
-    #: 多跳执行器的分布与总量（§14）。⛔ **`agentic_calls` 数的是"真的跑过多跳"的次数**
+    #: 多跳执行器的分布与总量。`agentic_calls` 数的是真的执行过多跳的次数
     #: （即 `agentic_latency_ms` 非 None 的那些）——均值必须按它除，不是按 `searches`。
     #: 与路由器那条「`router_calls <= searches`」同型。
     agentic_statuses: dict[str, int] = field(default_factory=dict)
@@ -369,7 +364,7 @@ class SnapshotMetricsSink:
                 "服务进程内累计到此刻的观测值（§14）。"
                 "⚠ `rerank.disabled` 是**没构造 reranker**（没配端点或显式关）、"
                 "`rerank.degraded` 是**端点不可用而退回 RRF 顺序**——"
-                "混为一谈会把「端点一直挂」看成「我们本来就没打算用它」（D12）。"
+                "混为一谈会把“端点一直挂”看成“我们本来就没打算用它”。"
                 "共同取证成功与空库短路不调用精排，也不计入 disabled。"
                 "⚠ 路由器同型：`router.statuses.disabled` 是**没开路由**、"
                 "`router.routes.DEFAULT` 是**开着但这一题分到了默认路**——"

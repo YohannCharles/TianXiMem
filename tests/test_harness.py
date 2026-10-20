@@ -1,4 +1,4 @@
-"""`eval/harness/` —— 切批 / HTTP 驱动 / 注入 / 裁判包装 / run record（§13）。
+"""`eval/harness/` —— 切批 / HTTP 驱动 / 注入 / 裁判包装 / run record。
 
 **这些用例一律不碰网络、不碰归档 pipeline**：
 驱动用 `httpx.MockTransport`，裁判包装用 `tmp_path` 里的**桩 pipeline**
@@ -86,7 +86,7 @@ class _Recorder:
         )
 
 
-# ── 切批（§6.5）──
+# ── 切批 ──
 def test_batches_are_20_and_keep_source_order():
     """**源序切批、不重排**——`request_id` 里带着批序号（服务端位置 = `(request_id, local_index)`），
     重排会让同一 `request_id` 对应另一批消息。"""
@@ -111,7 +111,7 @@ def test_batches_rejects_nonpositive_limit():
 
 
 def test_request_id_is_deterministic():
-    """§2.2 规定重试沿用同一个 `request_id` ——随机 id 会让"重跑一遍"变成"写第二遍"。"""
+    """重试沿用同一个 `request_id`——随机 id 会让"重跑一遍"变成"写第二遍"。"""
     assert request_id_for("u", "s", 0) == request_id_for("u", "s", 0)
     assert request_id_for("u", "s", 0) != request_id_for("u", "s", 1)
     assert request_id_for("u", "s", 0) != request_id_for("u", "s2", 0)
@@ -119,8 +119,8 @@ def test_request_id_is_deterministic():
 
 # ── HTTP 驱动 ──────────────────────────────────────────────────────────────
 def test_add_payload_matches_contract_shape():
-    """§2.1：`request_id` / `user_id` / `session_id` / `messages[]`；
-    message 只有 `role` / `content` / 可选 `timestamp`（D16 的 canonical 形状）。
+    """请求包含 `request_id` / `user_id` / `session_id` / `messages[]`；
+    message 只有 `role` / `content` / 可选 `timestamp`。
 
     ⚠ 正文带前缀是**缺省的官方形态**（[`add_shape.py`](../eval/harness/add_shape.py)）——
     这里没传 `dataset`，落到缺省规则 `user:` / `assistant:`（全量占比 82.9% 的那条）。
@@ -137,7 +137,7 @@ def test_add_payload_matches_contract_shape():
 
 
 def test_add_payload_native_shape_is_the_datasets_own():
-    """`native` = 改之前的形态（数据集给什么 role 就发什么、正文不加前缀）——**只作对照**。"""
+    """`native` 保留数据集原始 role、正文不加前缀——**只作对照**。"""
     recorder = _Recorder()
     client = ServiceClient(
         "http://stub",
@@ -158,8 +158,8 @@ def test_add_payload_native_shape_is_the_datasets_own():
 
 
 def test_message_without_timestamp_omits_the_key():
-    """`timestamp` 缺省时**不能发 `null`**——`event_time` 为 NULL 时 `created_at` 发 `""` 是
-    §11.3 那条**有定义的降级路径**，而 `null` 走的是另一条。"""
+    """`timestamp` 缺省时**不能发 `null`**——`event_time` 为 NULL 时 `created_at` 发 `""`，
+    而 `null` 走的是另一条路径。"""
     recorder = _Recorder()
     recorder.client().add(
         request_id="r",
@@ -173,7 +173,7 @@ def test_message_without_timestamp_omits_the_key():
 # ── 官方 add 形态（`add_shape.py`）────────────────────────────────────────
 #
 # ⚠ **这些断言里的每一个标签都取自官方流量的原文**，不是我们编的——见
-# [`eval/harness/add_shape.py`](../eval/harness/add_shape.py) 的实测表。
+# [`eval/harness/add_shape.py`](../eval/harness/add_shape.py) 的表。
 def _shaped(dataset: str, messages, *, speaker_names=("Sam", "Rae"), shape=DEFAULT_ADD_SHAPE):
     return shape_batch(messages, dataset=dataset, speaker_names=speaker_names, shape=shape)
 
@@ -228,7 +228,7 @@ def test_system_is_folded_into_the_user_side():
     正文 `You are a Chemical Engineer…`，而官方发的是 `role="user"` + `user: You are …`。
 
     ⇒ 官方的 role 取值域**只有 user / assistant**，`system` 是被折进 user 侧的。
-    这条**不是排版**：折叠把 `system` 折成 `user`，会改变"配得上对"的位置（D29）。
+    这条**不是排版**：折叠把 `system` 折成 `user`，会改变"配得上对"的位置。
     """
     got = _shaped("clbench", (Message(role="system", content="You are a Chemical Engineer"),))
     assert got[0] == {"role": "user", "content": "user: You are a Chemical Engineer"}
@@ -254,11 +254,11 @@ def test_native_is_the_untouched_dataset_shape():
 
 
 def test_locomo_first_message_matches_the_official_canary_verbatim():
-    """**逐字钉住**：数据集里的 `{"speaker": "Caroline", "dia_id": "D1:1",
+    """    **逐字钉住**：数据集里的 `{"speaker": "Caroline", "dia_id": "<turn>:<message>",
     "text": "Hey Mel! Good to see you! How have you been?"}`
     ——官方发出去的正是同一条 canary：
 
-        [locomo_refined][session_1][D1:1][text] Caroline: Hey Mel! Good to see you!
+        [locomo_refined][session_1][<turn>:<message>][text] Caroline: Hey Mel! Good to see you!
         How have you been?
 
     （`[<dataset>][session_N][D<k>:<i>][text] ` 那一段是**那 132 条 canary 专有的**，
@@ -276,7 +276,7 @@ def test_locomo_first_message_matches_the_official_canary_verbatim():
 
 
 def test_long_message_is_split_at_the_official_cap():
-    """**官方单条硬上限 ≈8,000 字符**（实测 2,514 条正好 8,000、0 条超过）。
+    """**官方单条硬上限 ≈8,000 字符**（ 2,514 条正好 8,000、0 条超过）。
 
     切出来的片是**独立的、同 role 的消息**，**每片重新带 `<标签>: ` 前缀**——
     主干流量里逐字见过切点落在半个 token 上（`…"row_span": "` → `Corpus: 1"…`）。
@@ -322,7 +322,7 @@ def test_splitting_happens_before_batching():
     assert len(batches(payloads)) == 1  # 3 片 × 8,000 = 24,000 < 32,000 ⇒ 仍在一批内
 
     # 而更多片就装不下了 ⇒ 会摊成多批（这正是官方对超长正文的做法：
-    # 片落进**不同的 Add**，否则同 role 的片按 D24 会合并成一个超限的块）。
+    # 片落进**不同的 Add**，否则同 role 的片按  会合并成一个超限的块）。
     # `"x" * 40_000` 空白分词只有 1 个"词"，所以这里显式喂词块来触发预算。
     many = tuple(
         Message(role="user", content=" ".join(["w"] * 900)) for _ in range(6)
@@ -354,7 +354,7 @@ def test_speaker_label_without_a_name_is_a_loud_failure():
 
 
 def test_search_over_limit_is_a_loud_failure():
-    """**§2.2 的核心那条**：返回超过 `top_k` 是**契约错误**，**AML 不会被静默截断**。
+    """返回超过 `top_k` 是**契约错误**，**AML 不会被静默截断**。
 
     本地必须抓死：等到 Smoke 那 30 次配额里才发现，代价就是配额本身。
     """
@@ -366,7 +366,7 @@ def test_search_over_limit_is_a_loud_failure():
 
 
 def test_search_null_data_is_rejected():
-    """空结果必须是 `[]` 而不是 `null`（§2.1）。`null` 会让下游静默变成"没有记忆"。"""
+    """空结果必须是 `[]` 而不是 `null`。`null` 会让下游静默变成"没有记忆"。"""
     recorder = _Recorder({"data": None})
     with pytest.raises(AssertionError, match="必须是数组"):
         recorder.client().search(user_id="u", query="q", top_k=10)
@@ -392,7 +392,7 @@ def test_ingest_sends_one_batch_per_20_messages():
     assert [len(b["messages"]) for _, b in recorder.requests] == [20, 1]
 
 
-# ── 注入（V3 / S1 的落点）──
+# ── 注入──
 def test_memories_go_to_speaker_1_and_speaker_2_stays_empty():
     """键名 `speaker_1_memories` 由 pipeline 源码确定；**怎么分是未知的**（见 judge docstring）。
 
@@ -486,7 +486,7 @@ def test_run_judge_wires_through_and_parses(stub_pipeline, tmp_path):
     """端到端（无网络）：回答步 → 判分步 → 解析。
 
     **桩脚本里那行 `import api_config` 就是 PYTHONPATH 注入的验证**——
-    归档的 7 个 pipeline 今天全部 import 失败，这条路径必须真的通。
+    归档的 pipeline 依赖这条路径找到 `api_config`，因此它必须真的通。
     """
     hits = [SearchHit(id="a", content="memory text", created_at="", score=1.0)]
     items = build_input_items(_sample(), {"conv-1#q0000": hits, "conv-1#q0001": []})
@@ -498,7 +498,7 @@ def test_run_judge_wires_through_and_parses(stub_pipeline, tmp_path):
     assert results[0].generated_answer == "memory text"
 
 
-# ── 对话端点的轮转（D39）──
+# ── 对话端点的轮转──
 
 
 def test_subprocess_env_injects_the_endpoint_index():
@@ -558,7 +558,7 @@ def test_endpoint_without_a_key_fails_loudly_at_import():
         capture_output=True,
         text=True,
         # ⚠ **同样的 locale 陷阱**：孩子把那句中文错误写到 stderr，父进程按 GBK 解它
-        #   ⇒ `stderr` 变成 `None`，而断言看起来像"没有那条信息"（2026-10-13 修；
+        #   ⇒ `stderr` 变成 `None`，而断言看起来像"没有那条信息"（修；
         #   与 `judge._run` 里那处是同一个 bug 的两份）。
         encoding="utf-8",
         errors="replace",
@@ -662,7 +662,7 @@ def test_run_judge_beam_uses_the_official_cli_and_maps_scores(tmp_path):
     assert results[1].is_correct is False and results[1].label == "SCORE=0.50"
 
 
-# ── run record（§13）──
+# ── run record ──
 def _results(*flags: bool) -> list[JudgeResult]:
     return [
         JudgeResult(
@@ -677,7 +677,7 @@ def _results(*flags: bool) -> list[JudgeResult]:
 
 
 def test_summarize_keeps_abstention_out_of_the_total():
-    """**拒答题行为与其他题不同**（正确答案是拒答），混进分类会失真（§12.2）。"""
+    """**拒答题行为与其他题不同**（正确答案是拒答），混进分类会失真。"""
     sample = Sample(
         user_id="u",
         dataset="longmemeval-s",
@@ -711,7 +711,7 @@ def test_config_fingerprint_hash_is_order_insensitive(tmp_path):
 
 
 def test_config_fingerprint_hashes_the_config_snapshot(tmp_path):
-    """③-d 之后**开关的家是 `configs/<profile>.yaml`**——指纹必须覆盖它。
+    """**开关配置位于 `configs/<profile>.yaml`**——指纹必须覆盖它。
 
     harness 不解析 yaml（那会与 `common/config/` 抢知识），只逐字节哈希；
     **"改了配置但没人注意到"靠哈希就够发现了**。
@@ -755,11 +755,11 @@ def test_build_record_validates_and_states_why_dimensions_are_empty(tmp_path):
     )
     assert set(DIMENSIONS) <= set(record.scores)
     assert all(record.scores[d] is None for d in DIMENSIONS)
-    # **空值必须带理由**——否则与"跑了但没分"无法区分（§3.2）
+    # **空值必须带理由**——否则与"跑了但没分"无法区分
     assert record.scores["by_dimension_note"].startswith("代理评测的七个维度子分")
-    # ⚠ 这个量**已不存在**（D24）⇒ `None` 必须**显式说明**理由，
+    # ⚠ 当前不产出这个量 ⇒ `None` 必须**显式说明**理由，
     #   否则读的人会以为是漏填。
-    assert "D24" in record.counters["note"]
+    assert "pending" in record.counters["note"]
     assert record.counters["pending_orphaned_real"] is None
     # 第 4/7 维的证据指向机制与单测，不是一个编出来的数
     assert "test_idempotency" in record.dimension_mechanism["Memory governance"]
@@ -782,7 +782,7 @@ def test_build_record_merges_override_counters(tmp_path):
 
 
 def test_run_record_rejects_missing_dimension():
-    """七个维度必须**逐维记录**（§3.2 / reports/CLAUDE.md）。"""
+    """七个维度必须**逐维记录**（见 `reports/CLAUDE.md`）。"""
     with pytest.raises(ValueError, match="缺维度"):
         RunRecord(
             run_id="r",
@@ -811,7 +811,7 @@ def test_run_record_rejects_empty_dimension_without_reason():
 
 
 def test_run_record_rejects_missing_fingerprint():
-    """三个指纹缺一个，两次 run 就不可比（§13）。"""
+    """三个指纹缺一个，两次 run 就不可比。"""
     with pytest.raises(ValueError, match="models 为空"):
         RunRecord(
             run_id="r",
@@ -826,7 +826,7 @@ def test_run_record_rejects_missing_fingerprint():
 
 
 def test_run_record_scope_carries_the_extrapolation_warning(tmp_path):
-    """§12.4 / P3：代理评测**不可线性外推**——这句话跟着每一个数字走。"""
+    """代理评测**不可线性外推**——这句话跟着每一个数字走。"""
     record = build_record(
         run_id="r",
         step="Step 1",
@@ -895,13 +895,12 @@ def test_harness_sources_have_no_src_path_hack():
                 assert "src" not in text, f"{path.name}:{node.lineno}: {text}"
 
 
-# ── 判分步骤的**瞬时故障重试**（2026-09-26 事故）────────────────────────
+# ── 判分步骤的**瞬时故障重试**────────────────────────
 def test_run_retries_a_transient_failure(monkeypatch, tmp_path):
-    """瞬时失败要重试，**成功即返回**——不把"抖了一下"升级成"整轮作废"。
+    """瞬时失败要重试，**成功即返回**——不把短暂抖动升级成整轮失败。
 
-    动机是一次真实事故：LongMemEval 那轮跑到第 47 题，判分侧一次 TLS 握手失败就把
-    **两小时的跑批整个打死**。两个子命令都幂等（`answer` 追加并跳过已完成、
-    `evaluate` 覆盖），所以重试是安全的。
+    判分侧一次 TLS 握手失败不应终止整轮。两个子命令都幂等（`answer`
+    追加并跳过已完成、`evaluate` 覆盖），所以重试是安全的。
     """
     from eval.harness import judge
 
@@ -952,7 +951,7 @@ def test_run_gives_up_after_the_attempt_budget(monkeypatch, tmp_path):
 
 
 def test_run_decodes_the_subprocess_as_utf8(monkeypatch, tmp_path):
-    """⭐ 父进程**必须**按 UTF-8 解子进程的管道（2026-10-13 实测踩过）。
+    """⭐ 父进程**必须**按 UTF-8 解子进程的管道。
 
     ⚠ 只写 `text=True` ⇒ 走 locale 编码（Windows 上是 GBK），而 pipeline 子进程写的是
     UTF-8（中文与全角标点）⇒ 读线程抛 `UnicodeDecodeError`、`stdout`/`stderr` **双双为
@@ -998,8 +997,8 @@ def test_a_failed_subprocess_without_captured_output_still_reports(monkeypatch, 
 def test_sanitize_jsonl_tmp_path(tmp_path):
     """末尾被截断的半行要被丢掉，**完整行一行不动**。
 
-    事故见 `judge._sanitize_jsonl` 的 docstring：半行会让 `answer` 步
-    `JSONDecodeError`，而表现是"**卡在同一道题**"（看起来像网络问题）。
+    半行会让 `answer` 步 `JSONDecodeError`，表现是**卡在同一道题**，
+    看起来像网络问题。
     """
     from eval.harness import judge
 
@@ -1031,10 +1030,8 @@ def test_sanitize_jsonl_noop_without_file(tmp_path):
 def test_jsonl_line_survives_the_archives_splitlines_reader(tmp_path):
     """正文里的 `U+2028` 不能让那一行被劈开——**归档是按 `splitlines()` 读的**。
 
-    事故见 `judge._jsonl_line` 的 docstring：LongMemEval 那轮有 1 个席位的正文含
-    `U+2028`，`json.dumps(ensure_ascii=False)` 不转义它、而 `splitlines()` 照断 ⇒
-    那一行被劈成两半 ⇒ `JSONDecodeError: Unterminated string` ⇒ **卡在同一道题**，
-    却看起来像网络问题（实测耗掉一小时，11 次续跑全死在同一题）。
+    `json.dumps(ensure_ascii=False)` 不转义 `U+2028`，而 `splitlines()` 会在此断开，
+    导致 `JSONDecodeError: Unterminated string` 并**卡在同一道题**。
     """
     from eval.harness import judge
 
@@ -1129,7 +1126,7 @@ def test_sanitize_jsonl_is_a_noop_on_a_clean_file(tmp_path):
     assert path.read_text(encoding="utf-8") == good
 
 
-# ── 超限兜底（2026-09-26，只为 B1）──────────────────────────────────────
+# ── 超限兜底──────────────────────────────────────
 def _client(base_url, *, status, body=None):
     """一个用 `MockTransport` 造出来的客户端：**所有请求都回同一个状态码**。"""
     from eval.harness import ServiceClient
@@ -1165,13 +1162,13 @@ def test_search_falls_back_only_on_server_errors(monkeypatch):
 
     no_fallback = _client("http://main", status=500)
     with pytest.raises(httpx.HTTPStatusError):
-        no_fallback.search_raw(user_id="u", query="q", top_k=1)  # 没配兜底 ⇒ 照旧抛
+        no_fallback.search_raw(user_id="u", query="q", top_k=1)  # 没配兜底 ⇒ 直接抛
 
 
 def test_search_retries_server_and_network_errors(monkeypatch):
     """Search 是只读的 ⇒ 瞬时 5xx / 网络层失败**有界重试**。
 
-    官方采集全量要发 8,783 次 search；一次抖动打死整轮（旧版实测过）不值得。
+    官方采集全量要发 8,783 次 search；一次瞬时抖动不应终止整轮。
     重试的 body 必须逐字相同（虽然 Search 无副作用，但语义要可复现）。
     """
     monkeypatch.setattr("eval.harness.driver.SEARCH_RETRY_BACKOFF_S", 0.0)
@@ -1242,7 +1239,7 @@ def test_search_does_not_retry_client_errors_and_retries_are_bounded(monkeypatch
 def test_injection_is_capped_at_the_platform_prefix(monkeypatch):
     """**平台的答案阶段是"取 117,760 token 前缀"**——harness 要自己模拟。
 
-    为什么：我们自己的服务守预算，**基线不一定**。实测 ReFind 在 LongMemEval 上有一题
+    为什么：我们自己的服务守预算，**基线不一定**。 ReFind 在 LongMemEval 上有一题
     返回 **897,838 字符**（≈22–30 万 token）⇒ 判分提示爆 128k ⇒ 网关 400 ⇒ 整轮被打死。
     而平台会替它截断 ⇒ 正确的模拟是"截前缀"，不是"让整轮炸掉"。
     """
@@ -1263,7 +1260,7 @@ def test_build_input_items_reports_truncation(monkeypatch, capsys):
     from eval.harness import judge_items
     from eval.harness.driver import SearchHit
 
-    # ⚠ 补丁必须打在**真实现所在的模块**上（2026-10-15 拆包）：`build_input_items` 现在住在
+    # ⚠ 补丁必须打在**真实现所在的模块**上：`build_input_items` 现在住在
     # `judge_items.py`，它按自己的模块全局查这个名字；`judge.py` 只是**再导出**——
     # 打在那个 façade 上会**静默失效**（补丁没人读，用例照过，却什么都没测）。
     monkeypatch.setattr(judge_items, "truncate_to_platform_prefix", lambda text: (text[:10], True))
@@ -1276,7 +1273,7 @@ def test_build_input_items_reports_truncation(monkeypatch, capsys):
     assert "被截到平台前缀" in capsys.readouterr().out
 
 
-# ── `/add` 的**有界重试**（2026-10-02，实测被网关一次抖动打死过一整轮）──────
+# ── `/add` 的**有界重试**──────
 def _flaky_add(*, fail_times, status=500, exc=None):
     """前 `fail_times` 次失败、之后成功。返回 `(client, 每次请求的 body)`。
 
@@ -1311,9 +1308,9 @@ def _add(client, **kw):
 
 
 def test_add_retries_server_errors_with_a_byte_identical_payload(monkeypatch):
-    """5xx ⇒ 重投**同一 `request_id` + 同一 payload**（AML 也是这么做的，§2.2 的 32 次）。
+    """5xx ⇒ 重投**同一 `request_id` + 同一 payload**。
 
-    ⚠ **payload 变了就是 409**（D28 的响亮冲突）⇒ 所以比的是整个 body，不是调用次数。
+    ⚠ **payload 变了就是 409**⇒ 所以比的是整个 body，不是调用次数。
     """
     monkeypatch.setattr("eval.harness.driver.ADD_RETRY_BACKOFF_S", 0.0)
     client, calls = _flaky_add(fail_times=2)
@@ -1325,7 +1322,7 @@ def test_add_retries_server_errors_with_a_byte_identical_payload(monkeypatch):
 
 
 def test_add_retries_network_errors():
-    """网络层失败（实测那条是 `peer closed connection without sending complete message body`）
+    """网络层失败（例如 `peer closed connection without sending complete message body`）
     **也要重试**——它不是 4xx，是我方无从预防的瞬时故障。"""
     client, calls = _flaky_add(
         fail_times=1, exc=httpx.RemoteProtocolError("peer closed connection")
@@ -1338,7 +1335,7 @@ def test_add_retries_network_errors():
 def test_add_does_not_retry_client_errors(monkeypatch):
     """⛔ **4xx 一律不重试**——那是我方 bug，重试只会把它藏起来。
 
-    ⚠ **409 是这里最要紧的一格**：它的含义正是"同 `request_id` 不同 payload"（D28）,
+    ⚠ **409 是这里最要紧的一格**：它的含义正是"同 `request_id` 不同 payload",
     重试它等于**把整轮跑批建在一个已经分叉的批次表上**，而且一次都不会红。
     """
     monkeypatch.setattr("eval.harness.driver.ADD_RETRY_BACKOFF_S", 0.0)
@@ -1370,7 +1367,7 @@ def test_add_retries_are_bounded(monkeypatch):
 def test_token_counting_survives_literal_special_tokens():
     """⛔ 正文里出现**字面的** `<|endoftext|>` 不能让整轮跑批崩掉。
 
-    2026-10-02 实测：LongMemEval 的 haystack 与 CorporateBench 的邮件正文里都有它，
+     LongMemEval 的 haystack 与 CorporateBench 的邮件正文里都可能出现它，
     而 `o200k_base` 默认把这种字面量当**特殊 token** 并抛 `ValueError`
     ⇒ **两条链各自死在 `build_input_items` 里**，而且**重跑一次还死在同一题上**
     （数据没变）——现象像"这一题特别慢"，**极易被误判成网关问题**。
@@ -1398,7 +1395,7 @@ def test_token_counting_survives_literal_special_tokens():
     assert out == text and cut is False
 
 
-# ── 部分分（`partial`）：**不进 overall** 的第二根尺（2026-10-03）──────────
+# ── 部分分（`partial`）：**不进 overall** 的第二根尺──────────
 def _clb_sample(*qids: str) -> Sample:
     return Sample(
         user_id="u",
@@ -1412,7 +1409,7 @@ def test_partial_credit_is_aggregated_but_never_touches_overall():
     """⛔ **`partial` 不许改 `overall`**——榜分是二值那一列，它只是本地仪器。
 
     它存在的理由是**分辨率**：CL-Bench 官方分全有全无，一道题从 0 翻到 1 要每一条
-    rubric 都满足 ⇒ 中间进展看不见。实测有题 `score=0` 而 `ratio=0.50`（14 条里满足 7 条）
+    rubric 都满足 ⇒ 中间进展看不见。有题 `score=0` 而 `ratio=0.50`（14 条里满足 7 条）
     ——二值分下与"一条都没满足"完全一样。
     """
     results = [
@@ -1495,11 +1492,11 @@ def test_clbench_labels_carry_the_requirement_ratio_as_partial(tmp_path: Path):
 
     got = _read_clbench_labels(answers, labels)
     assert len(got) == 1
-    assert got[0].is_correct is False  # 二值那列照旧
+    assert got[0].is_correct is False  # 二值列保持不变
     assert got[0].partial == 0.5  # ← 14 条里满足 7 条
 
 
-# ── 两个"接错了数据集"的修复（2026-10-03）──────────────────────────────
+# ── 两个"接错了数据集"的修复──────────────────────────────
 def test_memtrapbench_gets_its_own_answer_prompt():
     """⛔ **memtrapbench 不能用通用答案 prompt**——两者的取向正好相反。
 
@@ -1508,7 +1505,7 @@ def test_memtrapbench_gets_its_own_answer_prompt():
     must be answerable correctly even without the history"**、gold 是
     **"the correct answer that ignores the misleading memory"**。
 
-    用错的后果实测（250 题）：**160/250 逐字拒答、通过 0**；而 `poison` 那类会被
+    用错的后果（250 题）：**160/250 逐字拒答、通过 0**；而 `poison` 那类会被
     "不许用外部知识"逼着照抄毒记忆。⇒ 这条用例钉住**那份 prompt 不许再被"统一化"掉**。
     """
     from eval.harness.extra_pipeline import ANSWER_PROMPT, MEMTRAP_ANSWER_PROMPT
@@ -1525,9 +1522,9 @@ def test_memtrapbench_gets_its_own_answer_prompt():
 def test_judge_output_cap_is_big_enough_for_a_four_dimension_reply():
     """裁判自己的回答不能被输出上限截断——**截断的后果是整条记为错**。
 
-    2026-10-03 实测：`max_tokens=256` 时 MemTrapBench **129/250 条的 JSON 断在中间**
+     `max_tokens=256` 时 MemTrapBench **129/250 条的 JSON 断在中间**
     （129/129 根括号未闭合），而解析失败一律记错 ⇒ **一半的分数是截断的产物**。
-    四维各带 justification 的回答本来就长（实测被切的那批 p50 已到 250）。
+    四维各带 justification 的回答本来就长（被切的那批 p50 已到 250）。
     """
     import inspect
 
@@ -1540,12 +1537,11 @@ def test_judge_output_cap_is_big_enough_for_a_four_dimension_reply():
 def test_mquake_gets_its_own_answer_prompt():
     """⛔ **mquake 也不能用通用答案 prompt**——那两条规则对它有害。
 
-    · 「只用记忆、不用外部知识」——而 **MQuAKE-CF 的"未编辑跳"本来就要求世界知识**；
+    · 「只用记忆、不用外部知识」——而 **MQuAKE-CF 的"未编辑跳"需要世界知识**；
     · 「记忆里没有就逐字拒答」——记忆里旧值与「…is X (this replaces the earlier value)」
-      **并存**，模型一看到冲突就引用这条拒答。
+      **并存**，模型一看到冲突就可能引用这条拒答。
 
-    实测（768 题，只重答 201 条拒答、其余不动的同条件对照）：
-    B0 现状 0.3997 / B1 只删拒答条款 0.4857 / B2 +改写优先 0.5143 / **B3 本份 0.5208**。
+    因此专用 prompt 允许补充世界知识，并要求优先采用改写值。
     """
     from eval.harness.extra_pipeline import ANSWER_PROMPT, MQUAKE_ANSWER_PROMPT
 

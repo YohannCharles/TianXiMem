@@ -117,8 +117,8 @@ def _float(value: object, /, *, where: str, default: float) -> float:
     """浮点配置项。
 
     ⚠ **`bool` 要先挡掉**：Python 里 `True` 是 `int` 的实例，`isinstance(True, float)` 为假、
-    但 `isinstance(True, (int, float))` 为真——`timeout_seconds: true` 若不挡会变成 `1.0`，
-    于是超时被悄悄改成 1 秒，而**配置看起来完全正常**。
+    但 `isinstance(True, (int, float))` 为真——`timeout_seconds: true` 若不挡会变成
+    `1.0` 秒，而**配置看起来完全正常**。
     """
     if value is None:
         return default
@@ -154,7 +154,7 @@ def _bool(
 
     ⚠ 不用 `isinstance(value, int)` 之类的宽松判断：`0/1` 会被静默当成 `False/True`。
     `show_value=False` 供那些历史消息里不带 `收到 …` 的键保留原文案；
-    `present=False` 表示"键可以缺"，显式 `null` 仍然算非法（与旧行为一致）。
+    `present=False` 表示"键可以缺"，显式 `null` 仍然算非法。
     """
     if value is None:
         if present:
@@ -234,7 +234,7 @@ def _models(raw: object) -> ModelsConfig:
     g = _group(raw, where="models", allowed={"embedder", "embed_dim"})
     return ModelsConfig(
         # ⚠ 这里必须**再写一遍字面值**：`ModelsConfig` 是 `slots=True` 的 dataclass，
-        #   `ModelsConfig.embedder` 拿到的是 slot 描述符、**不是默认值**（踩过）。
+        #   `ModelsConfig.embedder` 拿到的是 slot 描述符、**不是默认值**。
         #   两处的同值由 `tests/test_config.py::test_model_default_is_the_same_in_both_places`
         #   钉住。
         embedder=_str(
@@ -370,8 +370,8 @@ def _packaging(raw: object) -> PackagingConfig:
         default=False,
         hint="它是「正文里的相对时间要不要就地注解成绝对日期」那个开关",
     )
-    # ⚠ **缺键取 `False`、dataclass 取 `True` 是有意的**（不是漏改）：D22 之前冻结的
-    #   快照按"无注解"跑。口径见 docs/config-reference.md §2；别把它"清理"成同值。
+    # YAML 缺键取 `False`、dataclass 缺省取 `True` 是有意的：缺键的配置快照按无注解
+    # 运行。口径见 docs/config-reference.md；不要把它清理成同值。
     unit_totals = _bool(
         g.get("annotate_unit_totals"),
         where="packaging.annotate_unit_totals",
@@ -391,15 +391,14 @@ def _rerank(raw: object) -> RerankConfig:
     enabled = _bool(g.get("enabled"), where="rerank.enabled", default=True)
     envelope = _str(g.get("envelope"), where="rerank.envelope", default=DEFAULT_RERANK_ENVELOPE)
     # ⚠ **这一条必须是硬错误**（哪怕两个值都能让服务起来）：它是"对面那个网关说什么格式"
-    #   的声明，而写错的表现是**每次检索都静默降级**——那种失败只在 §14 的计数里看得见，
-    #   排查成本远高于在这里响亮地拒绝。同 `rrf.k` / `workers` 的口径（配置化 ≠ 可调）。
+    #   的声明，而写错的表现是每次检索都静默降级，只在指标计数里可见。
+    #   因此这里直接拒绝无效值；配置化不等于可调。
     if envelope not in RERANK_ENVELOPES:
         raise ConfigError(
             f"`rerank.envelope` 只能是 {sorted(RERANK_ENVELOPES)}，收到 {envelope!r}\n"
-            "  `query`   = 自研封装（现役主网关 `memory.021130.xyz`；本机网关同上）；\n"
-            "  `queries` = vLLM 原生 score 形状（`memory3.021130.xyz` 在 2026-09-28 之后\n"
-            "              那一阵用过，2026-10-09 起改提供对话模型）；\n"
-            "  ⚠ 它与 `TIANXIMEM_RERANKER_BASE_URL` 是同一件事的两半：**换网关要一起换**。"
+            "  `query`   = 单个查询字符串信封；\n"
+            "  `queries` = 查询字符串数组信封；\n"
+            "  `rerank.envelope` 必须与 `TIANXIMEM_RERANKER_BASE_URL` 指向的端点匹配。"
         )
     return RerankConfig(
         enabled=enabled,
@@ -448,11 +447,10 @@ def _router(raw: object) -> RouterConfig:
 
 
 def _agentic(raw: object) -> AgenticConfig:
-    """多跳执行器（`MULTI_HOP`）。**每一个键都只影响它命名的那一件事**（§13）。
+    """多跳执行器（`MULTI_HOP`）配置。每个键只控制其命名的行为。
 
-    ⚠ `enabled` 是唯一的开关；`force` 是**实验**开关（E1 要绕过路由器），
-    其余都是上限/阈值。⛔ 这里刻意**没有**"轮数 × 每轮条数"之外的检索参数：
-    每轮召回深度取**请求的 `top_k`**，不为多跳另造一套（§3.2）。
+    `enabled` 控制执行器是否构造，`force` 是绕过路由器的实验开关，其余是上限和阈值。
+    配置不提供独立的检索深度：每轮召回深度使用请求的 `top_k`。
     """
     g = _group(
         raw,
@@ -498,7 +496,7 @@ def _agentic(raw: object) -> AgenticConfig:
     )
     if rerank_query_mode not in FINAL_RERANK_QUERY_MODES:
         # 取值域在**这里**就挡住：一个拼错的模式会让"联合精排"静默退化成"只用原问题"，
-        # 而两者的分数差正好是本阶段要测的东西（§9.1）——**那种静默会直接污染结论**。
+        # 而两种模式的分数差异正是评估对象；静默退化会污染结论。
         raise ConfigError(
             f"`agentic.final_rerank_query_mode` 必须是 {FINAL_RERANK_QUERY_MODES} 之一，"
             f"收到 {rerank_query_mode!r}"

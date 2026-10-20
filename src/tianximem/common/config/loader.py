@@ -114,7 +114,7 @@ def load_config(
             llm_base_url=(src.get(ENV_LLM_BASE_URL) or "").strip(),
             llm_api_key=(src.get(ENV_LLM_API_KEY) or "").strip(),
             llm_model=(src.get(ENV_LLM_MODEL) or "").strip(),
-            # ⚠ 这三个**允许为空**：空 ⇒ 不构造 reranker（D12 的降级形态，不是配置错误）
+            # ⚠ 这三个**允许为空**：空 ⇒ 不构造 reranker
             reranker_base_url=(src.get(ENV_RERANKER_BASE_URL) or "").strip(),
             reranker_api_key=(src.get(ENV_RERANKER_API_KEY) or "").strip(),
             reranker_model=(src.get(ENV_RERANKER_MODEL) or "").strip(),

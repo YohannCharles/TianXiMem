@@ -1,24 +1,14 @@
-# v1.0 流程对照 profile —— 用当前代码复现 v1.0 的 Search 链
-# （hybrid search + 精排 + 打包；不取证、不路由、不多跳、不扩窗）
-#
-# 与 default.yaml 的差别只有四个键（三个段），全部是"关掉 v1.0 之后才加的东西"。
-# （精排不用覆盖：`default.yaml` 本来就是 `true`。）
-# 不动 default.yaml（提交口径）和 local.yaml（开发口径）。
+# Compatibility profile for the v1.0 hybrid retrieval shape.
 
 storage:
   qdrant:
-    # 用独立集合（旧 memories_dev 是 4096 维的旧 embedding 遗留，维度不符）。
     collection: memories_v1flow
 
 retrieval:
-  # 关掉共同取证（v1.0 无此功能）。
   grounded_evidence: false
 
 router:
-  # 关掉查询路由器（v1.0 无此功能）。
   enabled: false
 
 agentic:
-  # 关掉多跳执行器（v1.0 无此功能）。
   enabled: false
-# neighbor.radius: 0 —— 已是 default，不动（不扩窗）。

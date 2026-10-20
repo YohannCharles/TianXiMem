@@ -1,9 +1,9 @@
 # ruff: noqa: E501
-"""Chain-of-Query 的**唯一推理控制提示词**（原版，**逐字照用**）。
+"""Chain-of-Query 的**唯一推理控制提示词**（**逐字照用**）。
 
 ⛔ **这个文件是"不许改"的声明，不是一份可以被优化的草稿。**
-提示词来自方案第四章的 `COMBINED_SUFFICIENCY_AND_REWRITE_PROMPT`，要求
-**不改写、不简化、不补充示例、不改变 JSON 字段**，只在运行时填入三个变量：
+该提示词作为冻结输入维护：不改写、不简化、不补充示例、不改变 JSON 字段，
+只在运行时填入三个变量：
 
 | 变量 | 本项目的含义 |
 | --- | --- |
@@ -11,8 +11,8 @@
 | `{used_query}` | 本次 Search 中**实际执行过**的查询（换行分隔；第一轮就含原始问题） |
 | `{retrieved_episodes}` | 有序的**证据文档**列表（本项目里一个文档 = 一个记忆块 `QaPair` 的渲染文本） |
 
-⚠ **不要**为了"更贴切"把 `Documents` / `Episodes` 等措辞改成 Message——方案第六章明说
-不必替换，而**改了就不再是原版**，也就失去了"这是原版 CoQ"这个前提。
+⚠ **不要**为了"更贴切"把 `Documents` / `Episodes` 等措辞改成 Message；这些词是
+固定 CoQ 提示词的一部分。
 
 ⚠ 长行是本文件**有意**的：提示词换了行就不再逐字相同。文件头的抑制指令是给
 `ruff` 的 `E501` 用的（它按**显示宽度**算，中英混排更容易超）。
@@ -27,7 +27,7 @@ from __future__ import annotations
 from typing import Final
 
 #: 提示词版本。⚠ **它是一条断言**：与 `agentic.prompt_version` 不符 ⇒ **构造期响亮失败**。
-#: 名字沿用方案 §10.4 的 `coq-original`（含义是"原版，没有本项目自己的改动"）。
+#: 标识冻结的 CoQ 提示词版本。
 COQ_PROMPT_VERSION: Final[str] = "coq-original"
 
 COQ_PROMPT: Final[

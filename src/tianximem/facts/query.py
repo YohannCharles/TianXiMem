@@ -46,12 +46,12 @@ class FactPattern:
         object.__setattr__(self, "relations", tuple(relation_key(r) for r in self.relations))
 
     def matches(self, fact: EvidenceFact, owner: str = "") -> bool:
-        """`owner` 是该 user 的真名键（读取期解析，D50）。
+        """`owner` 是该 user 的真名键。
 
         ⚠ **为什么需要它**：`store.fetch_evidence` 在**读取时**把第一人称事实的
-        `subject` 换成真名（D50），而计划里的 `subject` 仍是字面 `"i"`。
+        `subject` 换成真名，而计划里的 `subject` 仍是字面 `"i"`。
         不带 `owner` 比较会让「问 I」的计划在**有自我介绍的用户**上全部判否
-        ——静默回退原链，且只在部分用户上发生（2026-10-19 实测复现）。
+        ——静默回退原链，且只在部分用户上发生。
         """
         return (
             (not self.source_ids or fact.parent_memory_id in self.source_ids)
@@ -251,7 +251,7 @@ def _explicit_date_bounds(text: str) -> tuple[str, str] | None:
     return None
 
 
-#: 路径编译的护栏。⚠ **年份本身不是限制**（2026-10-17）：`time_bounds()` 会把
+#: 路径编译的护栏。⚠ **年份本身不是限制**：`time_bounds` 会把
 #: "as of September 4, 2025" 这类字面日期解析成区间并放进计划的 `date_bounds`；
 #: 只要时间措辞**已被字面吸收**，就不该因为句子里出现 `\d{4}` 而整题弃权
 #: （HaluMem 的 "… as of September 4, 2025" 曾因此 100% 落空）。
@@ -260,7 +260,7 @@ _UNSAFE_SCOPE = re.compile(
         r"\b(?:not|except|before|after|during|since|until|last|previous|former|ever|should|"
         r"could|would|will|plan|joined|started|attended)\b"
         # ⚠ `hope` 只拦**带人称主语的计划动词**：MQuAKE 有 "where Hope Lange is a
-        # citizen"，词级护栏把整题毙成 `unsupported_scope`（2026-10-17 实测）。
+        # citizen"，词级护栏把整题毙成 `unsupported_scope`。
         r"|\b(?:I|we|you|they|he|she)\s+hope(?:s|d)?\b"
     ),
     re.I,
@@ -395,9 +395,9 @@ _EVENT_STOP = {
 def _event_terms(text: str) -> str | None:
     """事件宾语 → 匹配词。
 
-    **精度优先**（2026-10-19）：要求宾语里的**每一个**实词都出现在事实客体里，
+    **精度优先**：要求宾语里的**每一个**实词都出现在事实客体里，
     而不是只取第一个。只取第一个时 "What did Evan mention …" 会匹配到任何含
-    "been" 的事件（实测 LoCoMo 精确率 0.47）；全词合取把这类假阳性挡在外面。
+    "been" 的事件（ LoCoMo 精确率 0.47）；全词合取把这类假阳性挡在外面。
     """
     tokens = [
         token
@@ -407,7 +407,7 @@ def _event_terms(text: str) -> str | None:
     if not tokens:
         return None
     if len(tokens) == 1:
-        # 单个实词保持原来的 `\bX\b` 形式（与既有计划逐字一致）。
+        # 单个实词使用 `\bX\b` 形式。
         return rf"\b{re.escape(tokens[0])}\b"
     return "".join(rf"(?=.*\b{re.escape(token)}\b)" for token in tokens)
 
@@ -451,9 +451,9 @@ def _meeting_topic_plan(text: str) -> QueryPlan | None:
     topic = meeting[1].strip().rstrip("?.")
     if not topic:
         return None
-    # **时间从句不参与主题匹配**（2026-10-18）：`about Task Documentation and Handover
+    # **时间从句不参与主题匹配**：`about Task Documentation and Handover
     # between January 2 and 5, 2024` 的主题是前半句；把 `between/January/2024` 当
-    # 主题词元会让它永远匹配不上（实测 CorporateBench 那批 `no_match`）。
+    # 主题词元会让它永远匹配不上（ CorporateBench 那批 `no_match`）。
     # 时间本身交给 `date_bounds`——与其它计划同一口径。
     bounds = time_bounds(text)
     topic = re.split(
@@ -468,13 +468,13 @@ def _meeting_topic_plan(text: str) -> QueryPlan | None:
         return None
     # ⚠ **标题那一半不在规则层做**：`fetch_evidence` 的 SQL 只支持 relation /
     # subject / object 相等，不支持 `object_terms`（那是 `matches` 才有的）——
-    # 拿它当标题前缀匹配会在**取回阶段**全量返回（实测直接打满 96 条上限）。
+    # 拿它当标题前缀匹配会在**取回阶段**全量返回（直接打满 96 条上限）。
     # 标题匹配留给 planner 的 `document title` 分支；规则层只认**明确的主题事实**。
     #
     # 主题用 `object_terms`（词元全部出现，顺序不限）而不是 `object` 相等：
     # 事实里存的是原文长句（`the Checkout Process Streamlining & Payment Gateway
     # Integration initiative`），题面是短名——**相等永远匹配不上**。
-    # 取回阶段只按 relation 拉 `meeting topic`（实测 15 条），不会爆上限。
+    # 取回阶段只按 relation 拉 `meeting topic`（ 15 条），不会爆上限。
     # 停用词不参与匹配：`task progress and status update` 里的 `and` 不该要求标题里
     # 也出现 "and"（标题写 `task progress & status update` 就永远匹配不上）。
     _STOP = {
@@ -490,9 +490,9 @@ def _meeting_topic_plan(text: str) -> QueryPlan | None:
         return None
     terms = "".join(rf"(?=.*\b{t}\b)" for t in tokens)
     # ⚠ **不设 `guard_literal`**：会议邮件里还有大量与本主题无关的句子，
-    # 来源审查会把它们当成"未解释的冲突"从而整题回退（实测 `unsupported_source`）。
+    # 来源审查会把它们当成"未解释的冲突"从而整题回退（ `unsupported_source`）。
     #
-    # **`document title` 也算同一批证据**（2026-10-18）：CorporateBench 的会议在语料里
+    # **`document title` 也算同一批证据**：CorporateBench 的会议在语料里
     # 大量以**邮件标题**出现（353 条 `document title` 事实），而 `meeting topic` 只有
     # 15 条。只查后者会让"titles of the meetings about X"整类 `no_match`。
     # 两者是**同一次取证的两种来源写法**，不是两条独立事实。
@@ -597,9 +597,8 @@ def compile_query(query: str) -> QueryPlan | None:
                 continue
             titles.add(title)
         if not titles:
-            # 题面没点名**文档标题**时，它问的是**会议主题**——而抽取层现在有
-            # `meeting topic` 事实（2026-10-17）。这里只生成主题计划；主题抓不到
-            # 就照旧回退混合链（`no_match`），不硬造标题。
+            # 题面没有点名文档标题时，问的是会议主题。这里只生成主题计划；
+            # 主题无法匹配时返回 `no_match` 并交给混合检索，不构造标题。
             topic_plan = _meeting_topic_plan(text)
             return topic_plan
         if titles:
@@ -708,20 +707,20 @@ def compile_query(query: str) -> QueryPlan | None:
             "filter",
             (FactPattern((relation,), subject=key(state[1]), object_terms=rf"\b{noun}\b"),),
         )
-    # **通用事件时间问法**（2026-10-17）："When did X <动词> <宾语>"。答案不是关系客体，
+    # **通用事件时间问法**："When did X <动词> <宾语>"。答案不是关系客体，
     # 而是**那条事实的来源日期**（`source_date`，渲染进 content 的 "Source record date"）。
     # 所以计划只需要找回**那条事件事实**；日期由执行器原样带出，不做任何日历换算。
     # ⚠ 匹配词取**宾语里第一个实词**，跳过开头的 `to` 与停用词：
-    # "start to go to the gym" 的第一个词是 `to`，会命中 "trip to Rome"（实测）；
+    # "start to go to the gym" 的第一个词是 `to`，会命中 "trip to Rome"（）；
     # 而要求**所有**实词都出现又会被目的状语拖死（"for his store" 不在事件宾语里）。
     # ⚠ **主语必须是"人"**（`{NAME}` 要求首字母大写、无动词）。`When does winter
     # begin where …` 里的 `winter` 是**小写普通名词**，不能被当成事件主语——
-    # 2026-10-19 实测：放宽动词表后这条被误接成 `participated` 计划。
+    #  ：放宽动词表后这条被误接成 `participated` 计划。
     # `{NAME}` 本身已经拦住了小写词，这里再显式要求 `did`（不是 `does`）。
     event = re.fullmatch(
         rf"When did ({NAME}) (?:go to|attend|visit|host|launch|start|get|"
         rf"paint|draw|join|apply to|receive|mention|design|lose|lost|take|took|"
-        # 事件动词补表（2026-10-18，官方 LoCoMo 语料实测）：这些在对话里都带来源日期，
+        # 事件动词补表：这些在对话里都带来源日期，
         # 与上面那批同一口径——答案仍是**那条事实的 source_date**，不做日历换算。
         # ⚠ `begin` 只作**人的**开始（"began a course"）；"winter begins" 是自然现象，
         # 不是记忆里的事件——它由 `{NAME}` 的大写要求挡住。
@@ -738,7 +737,7 @@ def compile_query(query: str) -> QueryPlan | None:
             "filter",
             (FactPattern(("participated",), subject=key(event[1]), object_terms=terms),),
         )
-    # **"When did X <动词> <宾语>" 的语序变体**（官方 LoCoMo，2026-10-19）：
+    # **"When did X <动词> <宾语>" 的语序变体**：
     # 疑问词后直接跟主语（"When Jon has lost his job"）或进行时（"When is X performing
     # at a festival"）。仍是**同一件事**：答案 = 那条事件事实的 `source_date`。
     # ⚠ 与上面同一口径：宾语匹配词要求**全部实词**命中，不做日历换算。
@@ -787,7 +786,7 @@ def compile_query(query: str) -> QueryPlan | None:
             (FactPattern(("friends with", "friends from"), subject=key(reference[1])),),
             resolve_references=True,
         )
-    # **会议主题问法**（2026-10-17）："What meetings are linked to X" /
+    # **会议主题问法**："What meetings are linked to X" /
     # "What are the titles of the meetings about X" / "Which meetings discuss X"。
     topic_plan = _meeting_topic_plan(text)
     if topic_plan is not None:

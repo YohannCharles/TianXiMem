@@ -1,6 +1,6 @@
 """MQuAKE-Remastered 的加载层（官方套件里最"不像对话"的一份）。
 
-## 这份数据长什么样（2026-09-30 实测，`benchmark_data/mquake-remastered/`）
+## 这份数据长什么样
 
 ```text
 4 份 parquet（CF3k / CF6334 / CF9k / T），每行一个 case：
@@ -16,7 +16,7 @@
 ## 两条**显式的本地约定**（数据集没有这些概念，是我们造的）
 
 1. **一条事实 = 一条消息**（不是一页、更不是一整段），而**整个样本共用一个 `Session`**。
-   ⚠ 能这么挤是因为 **D29**：没有非 user 跟随的连续 user **每条各自独立成块** ⇒ 粒度一样，
+   没有非 user 跟随的连续 user **每条各自独立成块** ⇒ 粒度一样，
    而 Add 次数是 `batches()` 的 **12**（一条一个 `Session` 要 **221** 次）。
 2. **一个 `Sample` = `cases_per_user` 个连续 case**（默认 64）。MQuAKE 本身没有"用户"这个概念，
    但评测需要"记忆远多于证据"才有检索可言（一个 case 只有 2–4 条事实）。
@@ -27,8 +27,8 @@
 * 事实：`"<subject> — <relation> — <object>"`（取自 `*_labeled`）
 * 改写：**一句自然语言**，由 `requested_rewrite[].prompt` 填出来——
   `"Ellie Kemper is a citizen of Croatia (this replaces the earlier value)"`。
-  ⚠ 写法是实测选的：三元组形状（`… — P27 — Croatia`）**模型会答"记忆里没有"**，
-  自然句才对。测法与结论见 `eval/reports/ledger.md`。
+  ⚠ 三元组形状（`… — P27 — Croatia`）会让模型回答“记忆里没有”；自然句能保留
+  “替换旧值”的语义，因此当前统一使用自然句。
 
 ⚠ 记忆里**同时**有原始事实与 UPDATE ⇒ **金标一律取 `new_answer`**，不存在
 "该取旧的还是新的"那种歧义（[`tools/recover_official_gold.py`](../../tools/recover_official_gold.py)
@@ -54,7 +54,7 @@ __all__ = [
     "load_mquake",
 ]
 
-#: 归档里的子目录（D16：数据集专属文件名的知识止步于本模块）。
+#: 归档里的子目录。
 DATA_DIR = "mquake-remastered"
 DATA_SUBDIR = "data"
 
@@ -66,14 +66,14 @@ USER_PREFIX = "mqk-"
 #: 一个 `Sample` 装多少个 case（约定，不是数据集事实）。
 CASES_PER_USER = 64
 
-#: 写进**数据指纹**的 `note`（§13）——上面两条约定是**我们造的**，改它会改分数，
+#: 写进**数据指纹**的 `note`——上面两条约定是**我们造的**，改它会改分数，
 #: 而两次 run 的 record 否则会长得一模一样。与切批口径同一条理由
 #: （[`../harness/batching.py`](../harness/batching.py)："常量不是旋钮"）。
 SHAPE_NOTE = (
     "⚠ **形状是本地约定**：一条事实/改写 = 一条消息，**整个 Sample 共用一个 session**；"
     f"一个 Sample = {CASES_PER_USER} 个 case（MQuAKE 没有「用户」这个概念，"
     "捆起来是为了让记忆远多于证据——一个 case 只有 2–4 条事实，检索无从谈起）；"
-    "**改写后链里未被编辑的边（`new_triples`）也进语料**（2026-10-17）"
+    "**改写后链里未被编辑的边（`new_triples`）也进语料**"
 )
 
 #: ⚠ 四份文件的 `case_id` **各自从 1 开始**，互不重叠地拼 `sample_id` 时必须带上文件名。
@@ -85,15 +85,15 @@ def _triple_text(subject: str, relation: str, object_: str) -> str:
 
 
 def _update_text(rewrite: dict) -> str:
-    """把改写拼成**一句自然语言**——⚠ 这行是实测调出来的，别改回三元组形状。
+    """把改写拼成**一句自然语言**——⚠ 这行是调出来的，别改回三元组形状。
 
     `requested_rewrite[].prompt` 形如 `"{} is a citizen of"`，填上 subject 就是人话：
 
         Ellie Kemper is a citizen of Croatia (this replaces the earlier value).
 
-    **为什么不用 `"UPDATE: … — P27 — Croatia"`**：2026-09-30 用真模型量过四种写法，
-    只有**自然句**那一种答得对（见 `eval/reports/ledger.md`）——`relation_id`（`P27`）
-    对语言模型是噪声，而"替换掉旧值"这层语义又必须说出来（否则与原始事实直接矛盾）。
+    **为什么不用 `"UPDATE: … — P27 — Croatia"`**： 用真模型量过四种写法，
+    只有**自然句**能稳定得到正确回答——`relation_id`（`P27`）对语言模型是噪声，
+    而"替换掉旧值"这层语义又必须说出来（否则与原始事实直接矛盾）。
     """
     subject = str(rewrite.get("subject", ""))
     target = str(rewrite.get("target_new_str", ""))
@@ -111,14 +111,14 @@ def _rows(path: Path) -> Iterator[dict]:
 def _memory_messages(row: dict) -> list[Message]:
     """一个 case 的记忆：原始事实 + 改写链——**一条消息一条事实**（顺序即事实链的顺序）。
 
-    ⚠ **整个 case 挤在一个 `Session` 里是对的**：**D29** 之后一段没有非 user 跟随的连续
-    user，**每条各自独立成块** ⇒ 粒度照样保得住，而 Add 次数少一个数量级。
+    ⚠ **整个 case 挤在一个 `Session` 里是对的**：没有非 user 跟随的连续 user
+    **每条各自独立成块** ⇒ 粒度照样保得住，而 Add 次数少一个数量级。
 
-    ⚠ **`new_triples` 里未被编辑的链边必须也进语料**（2026-10-17）：改写后的多跳链是
+    ⚠ **`new_triples` 里未被编辑的链边必须也进语料**：改写后的多跳链是
     `new_triples`，其中**只有被编辑的那一条**由改写句给出；其余边（例如
     `Croatia — head of state — Kolinda Grabar-Kitarović`）**不在 `orig_triples` 里**。
-    只发原始链 + 改写句时，256 个 case 里有 **44 个**的第二跳在语料里根本不存在
-    （实测；`eval/datasets/aml/mquake.py` 从一开始就补了这些边，两个加载器必须一致）。
+    只发原始链和改写句会让部分 case 的第二跳缺失。`eval/datasets/aml/mquake.py`
+    同样补齐这些边，两个加载器必须保持一致。
     """
     edited = {tuple(str(x) for x in triple[:2]) for triple in row.get("edit_triples") or ()}
     messages: list[Message] = []

@@ -1,4 +1,4 @@
-"""`eval/experiments/` —— 通用 runner 与各 arm 的声明（§12.1 / §13）。
+"""`eval/experiments/` —— 通用 runner 与各 arm 的声明。
 
 **一律不碰网络、不碰归档数据**：数据用合成的 `Sample`（monkeypatch 掉加载器）、
 服务用 `httpx.MockTransport`、裁判用 `tmp_path` 里的**桩 pipeline**
@@ -20,7 +20,7 @@ import pytest
 from eval.datasets import Message, Question, Sample, Session
 from eval.experiments import run as runner
 
-#: run_round 与它调用的协作者住在 runner.py（2026-10-16 拆的）。
+#: run_round 与它调用的协作者住在 runner.py。
 #: ⚠ 补丁必须打在「调用点解析的那个模块」上：打在 runner（= run.py）上的是名字快照，
 #: 而真调用发生在 runner.py 里 ⇒ 补丁静默失效（表现是真去加载数据、真发请求，不是报错）。
 from eval.experiments import runner as runner_impl
@@ -223,7 +223,7 @@ def test_run_round_parallel_judging_matches_serial(bench_dir, tmp_path, monkeypa
     assert [r.is_correct for r in parallel] == [r.is_correct for r in serial]
     # 打服务的请求序列一致（Add/Search 仍是主线程串行，并行只发生在判分那一段）
     assert parallel_recorder.requests == serial_recorder.requests
-    # 每个 user 的原始产出照旧落在自己的目录里
+    # 每个 user 的原始产出仍落在自己的目录里
     for i in (1, 2, 3):
         assert (tmp_path / "parallel" / f"conv-{i}" / "labels.jsonl").exists()
 
@@ -231,7 +231,7 @@ def test_run_round_parallel_judging_matches_serial(bench_dir, tmp_path, monkeypa
 def test_judging_rotates_endpoints_and_defaults_to_parallel(
     bench_dir, tmp_path, monkeypatch, capsys
 ):
-    """判分**默认并行到端点数**，且每个 sample 依次领一个对话端点（D39）。
+    """判分**默认并行到端点数**，且每个 sample 依次领一个对话端点。
 
     两个对话网关提供的是**同一个** `Qwen/Qwen3.5-9B` ⇒ 这条只决定"谁来算"，
     **不该改变任何判定**（上面那条用例守的就是那一半：并行 == 串行，逐题逐字）。
@@ -287,7 +287,7 @@ def test_run_round_rejects_unknown_dataset(bench_dir, tmp_path):
 
 
 def test_limit_is_recorded_as_a_truncated_run():
-    """**截断过的数字与全量看起来一样** ⇒ 数据指纹的 `note` 必须写下来（§13）。"""
+    """**截断过的数字与全量看起来一样** ⇒ 数据指纹的 `note` 必须写下来。"""
     assert runner.truncation_note(None) == ""
     assert "截断" in runner.truncation_note(3)
     # 两种截断维度是**分开**写的：只截 sample 与只截题目是两回事
@@ -353,7 +353,7 @@ def test_main_writes_a_record_that_carries_the_fingerprints(bench_dir, tmp_path,
     """**一轮跑完的产物形状**：record 落在 `reports/runs/<run_id>.json`，三个指纹都在。
 
     全程打桩（服务 / 数据 / 归档 pipeline），所以这不碰网络也不碰归档——它验的是
-    "runner 把哪几样东西交给了 `build_record`"，而**那正是 §13 要求可追溯的部分**。
+    "runner 把哪几样东西交给了 `build_record`"，而**那正是记录可追溯性的核心**。
     """
     recorder = _Recorder()
     monkeypatch.setattr(runner, "benchmark_dir", lambda: bench_dir)
@@ -402,7 +402,7 @@ def _pretend_judge_is_configured(monkeypatch) -> None:
 def test_main_fails_before_running_when_the_judge_is_not_configured(
     monkeypatch, bench_dir, tmp_path, capsys
 ):
-    """**裁判跑不起来时要在跑之前失败**（§15 的口径：别把"整轮白跑"伪装成"跑完没分"）。
+    """**裁判跑不起来时要在跑之前失败**：别把"整轮白跑"伪装成"跑完没分"。
 
     裁判是 subprocess，只继承环境变量；而 `.env` 由 `common/config/` 自己读。
     ⇒ 少了 `--env-file` 时 Add/Search 会**全部正常跑完**，然后才在裁判那一步炸。
@@ -424,7 +424,7 @@ def test_main_fails_before_running_when_the_judge_is_not_configured(
     assert "AML_BASE_URL" in err and "--env-file" in err
 
 
-# ── 记忆注入里的日期锚点（S1 的第二条假设，2026-09-25）──
+# ── 记忆注入里的日期锚点──
 def test_date_prefix_matches_the_one_in_src():
     """harness 里的 `DATE_PREFIX` 与 `src` 里那份**必须逐字相同**。
 
@@ -446,10 +446,10 @@ def test_platform_token_budget_matches_src():
     于是这对常量**故意重复了一份**，只能靠断言守。
 
     ⚠ **它守的是"判分看到的上下文"与"平台实际喂给答案模型的上下文"是同一段**：
-    §2.2 / §6.4 说答案阶段按 **117,760 token 取前缀**，所以 harness 判分前
-    必须先模拟同一条截断。窗口或分词器任一侧漂了，harness 会**继续按旧值截断**——
+    答案阶段按 **117,760 token 取前缀**，所以 harness 判分前
+    必须先模拟同一条截断。窗口或分词器任一侧漂移，harness 会按不同值截断——
     判分依据的那段文本与平台真正用到的不是同一段，**而没有任何东西会报错**
-    （`judge.py` 的注释自称"与 `budget.tokenizer` 同一口径"，此前无人验证）。
+    （`judge.py` 的注释自称"与 `budget.tokenizer` 同一口径"）。
     """
     from eval.harness.judge import PLATFORM_TOKEN_PREFIX, PLATFORM_TOKENIZER
 
@@ -471,14 +471,14 @@ def test_render_memories_date_prefix_is_opt_in():
 
     assert render_memories(hits) == "Q: q\nA: a\nQ: q2"
     assert render_memories(hits, date_mode="per_item") == (
-        "[2023-07-02] Q: q\nA: a\nQ: q2"  # ← 空 created_at 的那条不加前缀（§11.3 的降级路径）
+        "[2023-07-02] Q: q\nA: a\nQ: q2"  # ← 空 created_at 的那条不加前缀（降级路径）
     )
 
 
 def test_render_memories_header_mode_states_what_the_dates_are():
     """`header` 模式：**把"这些日期是什么"写明**。
 
-    `per_item` 单独用实测没能让模型改用日期（27/35 仍答相对），所以 `header` 把语义写出来——
+    `per_item` 单独用没能让模型改用日期（27/35 仍答相对），所以 `header` 把语义写出来——
     这一档存在就是为了分辨"提示不够清楚"与"模型做不到"。
     """
     from eval.harness import render_memories
@@ -522,14 +522,14 @@ def test_runner_flag_reaches_the_injection(bench_dir, tmp_path, monkeypatch):
     assert seen == {"date_mode": "header", "annotate_mark": "paren"}
 
 
-# ── 注解模式：把句子里的相对时间就地换算成绝对日期（2026-09-25）──
+# ── 注解模式：把句子里的相对时间就地换算成绝对日期──
 # 动机：`t1-dated` 的 temporal 79 道里 27 道**只差"把 yesterday 减一天"这一步**。
 # 这组用例钉住三件事：**只加不改**、**推不出不动**、**锚点是段自己的日期**。
 _ANCHOR = __import__("datetime").date(2023, 7, 20)  # 2023-07-20 是周四
 
 
 def test_annotate_only_adds_and_never_replaces():
-    """**原文一字不动**，注解跟在后面——D21 的口径（"日期是额外锚点，不是替换"）。"""
+    """    **原文一字不动**，注解跟在后面：日期是额外锚点，不是替换。"""
     from eval.harness.annotate import annotate
 
     out = annotate("Hey Mel! I joined an activist group last Tues.", _ANCHOR)
@@ -614,11 +614,11 @@ def test_render_memories_annotate_mode_adds_no_prefix():
     assert out.endswith("Q: z\nA: undated")  # 没有 created_at 的那条原样保留
 
 
-# ── T1：两臂的冻结快照与核对（§13 的配置指纹）──
+# ── T1：两臂的冻结快照与核对（配置指纹）──
 def test_t1_arms_differ_only_in_the_switch_and_the_collection():
     """两臂**只差两件事**：`inject_abs_time` 与集合名。
 
-    差第三件事就说明这个对照同时在测别的——而**分数看起来完全正常**（§13 的纯度规则）。
+    差第三件事就说明这个对照同时在测别的——而**分数看起来完全正常**（开关纯度规则）。
     """
     from eval.experiments import arms
     from eval.experiments import t1_timestamp as t1
@@ -860,10 +860,10 @@ def test_frozen_recipe_yields_a_sane_reproducible_sample(dataset: str):
 
     * **确定性**：同一口径连加载两次给同一批 qid
       （`stratified_sample` 组内等间隔取、无随机 ⇒ 这是它的承诺）。
-    * **样本内 `session_id` 不重复**（2026-10-02）：重复会让
-      `request_id_for(user, session, index)` **撞车**、payload 不同 ⇒ 服务按 **D28 回 409**，
+    * **样本内 `session_id` 不重复**：重复会让
+      `request_id_for(user, session, index)` **撞车**、payload 不同 ⇒ 服务返回 409，
       把整轮打死；而它**另一半后果是静默的**（两段无关对话落进同一个段合并分组）。
-      LME 实测 9/301 个样本中招，已在 `longmemeval.py` 就地消重。
+      `longmemeval.py` 在加载时消除这类重复 `session_id`。
     """
     from eval.datasets.layout import archive_file
     from eval.datasets.registry import benchmark_dir
@@ -916,11 +916,11 @@ def test_frozen_refuses_to_be_combined_with_an_explicit_limit(capsys, monkeypatc
     assert "不能同时给" in capsys.readouterr().err
 
 
-# ── 跑批诊断工具（tools/diagnose_run.py，2026-10-03）─────────────────────
+# ── 跑批诊断工具─────────────────────
 def test_diagnose_flags_a_prompt_induced_refusal_pattern(tmp_path: Path):
     """⛔ **这个工具的价值全在"把低分与模型不行分开"**——所以它必须能报出指纹。
 
-    夹具造的是 memtrapbench 那次的**真实形状**：模型逐字拒答，**而 gold 就在给它的
+    夹具模拟一种需要识别的失败形状：模型逐字拒答，**而 gold 就在给它的
     上下文里**（⇒ 该报"查 prompt"），外加一批 `JUDGE_ERROR`（⇒ 该报"查判分链路"）。
     """
     import json as _json
@@ -981,7 +981,7 @@ def test_diagnose_does_not_blame_the_corpus_for_a_no_memory_dataset(tmp_path: Pa
 
 
 def test_diagnose_reads_the_gold_shape_of_every_dataset(tmp_path: Path) -> None:
-    """⚠ `gold_answer` 的形状**逐数据集不同**（实测四种，见 `gold_strings` 的 docstring）。
+    """⚠ `gold_answer` 的形状**逐数据集不同**（四种，见 `gold_strings` 的 docstring）。
 
     **只认 `"answer"` 的那一版对 medmemorybench 恒返回空列表** ⇒ "证据在不在"恒为假
     ⇒ 工具报出"97% 的证据不在"并建议**去查语料**——**整条结论是判据自己造的**。
@@ -1068,15 +1068,11 @@ def test_diagnose_will_not_blame_the_corpus_when_its_own_check_cannot_see(
 def test_diagnose_warns_when_the_model_switched_refusal_wording(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """⚠ **换 prompt 之后模型常换一句拒答，而工具只认 `--refusal` 里那几句。**
+    """⚠ **模型可能换用不同措辞拒答，而工具只认 `--refusal` 里那几句。**
 
-    2026-10-04 的 `tr-promptfix` 实测：换了 prompt 后不再回
-    `Cannot determine from the memories.`，改成
-    `The provided memories do not contain information about …`——**12 条、全判错**，
-    而工具当时印的是"**拒答率 0/332 = 0.0%**"。
-
-    "0%"那一行**太好信**了。现在这种条数会**单独印一行**（不计进拒答率——
-    启发式会误伤"答案里本来就有的否定句"，真算数要靠显式加 `--refusal`）。
+    未识别的拒答会全部判错，并可能让拒答率看起来是 0%。当前实现会把未识别
+    的疑似拒答**单独印一行**，不计进拒答率——启发式会误伤答案里本来就有的否定句，
+    真算数要靠显式加 `--refusal`。
     """
     import json as _json
 
@@ -1117,7 +1113,7 @@ def test_diagnose_warns_when_the_model_switched_refusal_wording(
     assert "换了措辞的拒答" in printed and "**6 条" in printed, printed
 
 
-# ── 缺数据时的两条出口（2026-10-04）─────────────────────────────────────────
+# ── 缺数据时的两条出口─────────────────────────────────────────
 def test_main_gives_a_hint_when_the_dataset_loads_to_nothing(
     monkeypatch, bench_dir, tmp_path, capsys
 ):

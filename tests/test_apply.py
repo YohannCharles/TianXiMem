@@ -1,14 +1,14 @@
-"""一次 `Add` 的落库边界（D24 / **D28**）——组合 + 落库 + Add 内邻接一起测。
+"""一次 `Add` 的落库边界——组合 + 落库 + Add 内邻接一起测。
 
 对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 一、配对与落库。
 **这是唯一能同时验证"组合逻辑"与"落库结果"的一层。**
 
 ⚠ **本文件的头号主题是"边界只在一次 Add 内"**：
 
-* **组合**（D24）：不同 Add 永不拼接（Test 7 / 8）
-* **邻接**（D28）：`prev` / `next` 只在同一次 Add 内相连——**即使 user/session 都一样**
+* **组合**：不同 Add 永不拼接
+* **邻接**：`prev` / `next` 只在同一次 Add 内相连——**即使 user/session 都一样**
 
-> ⛔ **不要再写"批次续接"那一类用例**——实现不存在（D24 取消了跨批合并），
+> ⛔ **不要再写"批次续接"那一类用例**——实现不存在，
 > 逐条清单见 [`CLAUDE.md`](./CLAUDE.md) 的「一、记忆块组合」末。
 """
 
@@ -27,11 +27,11 @@ def _msg(role: str, content: str, ts: int | None = None) -> Message:
 
 
 def _rid(ordinal: int, *, user_id: str = "u1", session_id: str = "s1") -> str:
-    """一个**不透明**的 `request_id`（D28）——形状刻意做成**像官方实发的那种**。
+    """一个**不透明**的 `request_id`——形状刻意做成**像官方实发的那种**。
 
     ⚠ 它长什么样**完全不重要**（这正是要钉住的那件事）：不透明、不解析、原样参与哈希。
     本函数保留 `user_id` / `session_id` 两个参数只是为了让调用点在两种 session 之间切换时
-    读起来自然——**它们不再进入 id 的字符串**。
+    读起来自然——**它们不会出现在 `request_id` 的字符串里**。
     """
     return f"r_{ordinal:04d}{user_id[-1] if user_id != 'u1' else ''}"
 
@@ -48,7 +48,7 @@ def _apply(
 
 
 def _all(store: SqliteStore, user_id: str = "u1"):
-    """该 user 的全部行，按 `(request_id, local_index)` 排——**不是"会话顺序"**（D28）。"""
+    """该 user 的全部行，按 `(request_id, local_index)` 排——**不是"会话顺序"**。"""
     return sorted(
         rd(store, store.assert_isolation, user_id),
         key=lambda p: (p.request_id, p.local_index),
@@ -72,13 +72,13 @@ def _shape(store: SqliteStore, user_id: str = "u1") -> list[str]:
     return out
 
 
-# ── Test 7：跨 Add 不拼接 ───────────────────────────────────────────────
+# ── 跨 Add 不拼接 ───────────────────────────────────────────────────────
 
 
 def test_7_no_pairing_across_adds(store: SqliteStore) -> None:
-    """Test 7：`Add0 = U A U` / `Add1 = A U A` ⇒ **不出现 U(Add0)+A(Add1)**。
+    """`Add0 = U A U` / `Add1 = A U A` ⇒ **不出现 U(Add0)+A(Add1)**。
 
-    这是整个改动要买的那件事：`Q1` 与 `A1` 看起来明显是一对，**依然不许拼**。
+    即使 `Q1` 与 `A1` 看起来明显是一对，**依然不许跨 Add 拼接**。
     """
     _apply(store, _rid(0), (_msg("user", "Q0"), _msg("assistant", "A0"), _msg("user", "Q1")))
     _apply(store, _rid(1), (_msg("assistant", "A1"), _msg("user", "Q2"), _msg("assistant", "A2")))
@@ -93,11 +93,11 @@ def test_7_no_pairing_across_adds(store: SqliteStore) -> None:
     assert _positions(store) == [("r_0000", 0), ("r_0000", 1), ("r_0001", 0), ("r_0001", 1)]
 
 
-# ── Test 8：连续 assistant 跨 Add 不合并 ────────────────────────────────
+# ── 连续 assistant 跨 Add 不合并 ────────────────────────────────────────
 
 
 def test_8_consecutive_assistants_do_not_merge_across_adds(store: SqliteStore) -> None:
-    """Test 8：`Add0 = U A A` / `Add1 = A U A` ⇒ 不合并成 `AAA`。"""
+    """`Add0 = U A A` / `Add1 = A U A` ⇒ 不合并成 `AAA`。"""
     _apply(store, _rid(0), (_msg("user", "Q0"), _msg("assistant", "A0"), _msg("assistant", "A1")))
     _apply(store, _rid(1), (_msg("assistant", "A2"), _msg("user", "Q1"), _msg("assistant", "A3")))
 
@@ -109,20 +109,19 @@ def test_8_consecutive_assistants_do_not_merge_across_adds(store: SqliteStore) -
 
 
 def test_consecutive_assistants_still_merge_within_one_add(store: SqliteStore) -> None:
-    """同一条规则的另一半：**同一个 Add 内**的连续 assistant 照旧合并（不是一刀切成单条）。"""
+    """同一条规则的另一半：**同一个 Add 内**的连续 assistant 会合并（不是一刀切成单条）。"""
     _apply(store, _rid(0), (_msg("user", "Q0"), _msg("assistant", "A0"), _msg("assistant", "A1")))
     assert _shape(store) == ["Q: Q0\nA: [assistant] A0\n[assistant] A1"]
 
 
-# ── `request_id` 是 opaque string（D28）────────────────────────────────
+# ── `request_id` 是 opaque string────────────────────────────────
 
 
 def test_a_user_run_pairs_only_its_last_message(store: SqliteStore) -> None:
-    """**D32**：`Q Q A A Q A` ⇒ `[Q0a] [Q0b+AA] [Q1+A1]` ⇒ **3 行、2 个完整 QA**。
+    """`Q Q A A Q A` ⇒ `[Q0a] [Q0b+AA] [Q1+A1]` ⇒ **3 行、2 个完整 QA**。
 
-    ⚠ 改之前是 **2 行**（`[Q0a Q0b + AA] [Q1+A1]`）——两条 user 并进一个 question。
-    并起来会让块大到超过嵌入窗口（实测最长 38,270 token vs 窗口 8,192）⇒ 拆开，
-    代价是 `Q0a` **有问无答**（它不是"漏了"，是配不上）。
+    连续 user 只把最后一条配进 question。若把两条 user 并进一个 question，
+    块可能超过嵌入窗口；代价是 `Q0a` **有问无答**，但它不是"漏了"，只是配不上。
 
     ⚠ 链只连**完整的对**（`link_blocks` 的口径）⇒ `Q0a` 不进链。
     """
@@ -152,10 +151,9 @@ def test_a_user_run_pairs_only_its_last_message(store: SqliteStore) -> None:
 
 
 def test_request_id_is_opaque_and_any_shape_works(store: SqliteStore) -> None:
-    """**任意形状的 `request_id` 都必须能正常 Add**（D28）。
+    """**任意形状的 `request_id` 都必须能正常 Add**。
 
-    尤其这两类——它们在 D25 的正则下会**响亮失败**（500），正是 2026-09-29 那次
-    "Add 全挂"的形状：
+    尤其这两类必须可接受，且不能被格式校验拒绝：
 
     * 根本没有 chunk 序号：平台实发的 `r_3115…`、`abc`
     * 尾部多一段：`xxx:chunk-0-extra`
@@ -180,7 +178,7 @@ def test_request_id_is_opaque_and_any_shape_works(store: SqliteStore) -> None:
     assert len({p.id for p in _all(store)}) == len(opaque_ids)
 
 
-# ── 邻接：只在一次 Add 内（D28 的核心）─────────────────────────────────
+# ── 邻接：只在一次 Add 内─────────────────────────────────
 
 
 def test_full_qa_blocks_in_one_add_form_a_chain(store: SqliteStore) -> None:
@@ -241,7 +239,7 @@ def test_incomplete_blocks_are_stored_indexed_and_outside_the_chain(store: Sqlit
 
 
 def test_trailing_lone_question_is_stored_and_stays_lone(store: SqliteStore) -> None:
-    """`Q A Q` ⇒ `QA` + `Q-only`；Q-only **不进链**，而且**不会被后来的 Add 补上**。"""
+    """`Q A Q` ⇒ `QA` + `Q-only`；Q-only **不进链**，也**不会被其他 Add 补全**。"""
     _apply(store, _rid(0), (_msg("user", "Q0"), _msg("assistant", "A0"), _msg("user", "孤零零")))
     rows = _all(store)
     assert (rows[1].question, rows[1].answer) == ("孤零零", None)
@@ -257,7 +255,7 @@ def test_trailing_lone_question_is_stored_and_stays_lone(store: SqliteStore) -> 
 
 
 def test_neighbours_never_cross_adds_even_in_the_same_session(store: SqliteStore) -> None:
-    """**同一 `(user_id, session_id)` 的两次 Add，绝不互为邻居**（D28）。
+    """**同一 `(user_id, session_id)` 的两次 Add，绝不互为邻居**。
 
     ```text
     Add1: Q A Q A  →  M1 <-> M2
@@ -293,7 +291,7 @@ def test_all_questions_or_all_answers_are_all_isolated(store: SqliteStore) -> No
     _apply(store, _rid(1), (_msg("assistant", "A0"), _msg("assistant", "A1")))
 
     rows = _all(store)
-    # 2026-10-01：**合并只在"配得上对"时发生** ⇒ 同 role 相邻不再并，每条各自一块。
+    # **合并只在"配得上对"时发生** ⇒ 同 role 相邻不合并，每条各自一块。
     assert [(p.question, p.answer) for p in rows] == [
         ("Q0", None),
         ("Q1", None),
@@ -304,14 +302,14 @@ def test_all_questions_or_all_answers_are_all_isolated(store: SqliteStore) -> No
     assert all(p.prev_memory_id is None and p.next_memory_id is None for p in rows)
 
 
-# ── 位置与到达顺序无关（D28 的强形式）───────────────────────────────────
+# ── 位置与到达顺序无关───────────────────────────────────
 
 
 def test_arrival_order_does_not_change_the_truth_source(tmp_path) -> None:
     """**按任意顺序投递，真源逐字相同**（位置 = 请求的纯函数）。
 
-    ⚠ 与 D25 那版的区别：这里比的**不是"会话顺序"**（D28 起它不存在），
-    而是 `(id, request_id, local_index, question, answer, prev, next)` 的**多重集合**——
+    ⚠ 这里比的**不是"会话顺序"**，而是
+    `(id, request_id, local_index, question, answer, prev, next)` 的**多重集合**——
     它才是"这一批写出了什么"的完整描述。
     """
     adds = {
@@ -380,8 +378,8 @@ def test_sessions_are_independent(store: SqliteStore) -> None:
 
 
 def test_every_row_is_complete_at_write_time(store: SqliteStore) -> None:
-    """D24：没有 pending、没有 repair —— **没有任何后台任务会回头改这些行**。"""
-    # ⚠ D32：`U U A` 现在产出 **2** 块（`[Q0]` 与 `[Q1+A0]`），加上第二批的 1 块共 3 行
+    """没有 pending、没有 repair —— **没有任何后台任务会回头改这些行**。"""
+    # ⚠ `U U A` 产出 **2** 块（`[Q0]` 与 `[Q1+A0]`），加上第二批的 1 块共 3 行
     _apply(store, _rid(0), (_msg("user", "Q0"), _msg("user", "Q1"), _msg("assistant", "A0")))
     _apply(store, _rid(1), (_msg("assistant", "A1"),))
     assert [p.status for p in _all(store)] == [STATUS_COMPLETE] * 3
@@ -391,7 +389,7 @@ def test_every_row_is_complete_at_write_time(store: SqliteStore) -> None:
 
 
 def test_empty_batch_is_rejected_loudly(store: SqliteStore) -> None:
-    """空批次是**调用方的 bug**（§2.1 的 `messages` 就是批次的全部内容）。
+    """空批次是**调用方的 bug**（`messages` 就是批次的全部内容）。
 
     静默当成 no-op 会让"整个 session 一条都没写进去"伪装成成功。
     """

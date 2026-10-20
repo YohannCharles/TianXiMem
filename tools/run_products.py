@@ -9,9 +9,9 @@
 
 ## 为什么单独一个模块
 
-`diagnose_run` 与 `ab_answer_prompt` 各写过一份，两份只在**题号取哪个键**上不同
-（归档产物用 `id`，早期的一批用 `idx`）。那份差别做成显式参数，
-**`(目录, 题号)` 这条判据只留一份**——它是被实测事故换来的。
+`diagnose_run` 与 `ab_answer_prompt` 共用这里，区别只在**题号取哪个键**
+（归档产物用 `id`，兼容产物用 `idx`）。该差异是显式参数，
+**`(目录, 题号)` 这条判据只保留一份**。
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def rows_by_sample(
 
 
 def by_id_or_idx(row: dict) -> str:
-    """题号取 `id`，缺了退回 `idx`——**早期那一批产物的形状**（见模块 docstring）。"""
+    """题号取 `id`，缺了退回 `idx`；兼容产物使用 `idx`。"""
     return str(row.get("id") or row.get("idx"))
 
 

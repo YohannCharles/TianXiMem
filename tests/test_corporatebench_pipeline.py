@@ -210,7 +210,7 @@ def test_partial_credit_flows_through_answer_evaluate_harness_and_record(
     monkeypatch.setattr(ep, "_chat", fake_chat)
 
     def fake_run(pipeline, args, *, timeout, endpoint_index=None):  # noqa: ARG001
-        # `endpoint_index` = D39 的端点轮转；桩只要与 `judge._run` 的签名一致。
+        # `endpoint_index` =  的端点轮转；桩只要与 `judge._run` 的签名一致。
         parsed = ep.build_parser().parse_args(args)
         if parsed.command == "answer":
             assert ep.cmd_answer(parsed) == 0

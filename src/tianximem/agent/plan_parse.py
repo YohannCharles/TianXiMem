@@ -18,11 +18,10 @@
    ⇒ **整份计划作废**。理由：一个还没绑定的占位被送进检索器，会变成一次
    **词面检索**（模型看到的是 `{{s3}}` 这串字符），而**它不会报错**，
    只会安静地捞回一堆无关记忆。
-2. ⭐ **依赖以占位为准**（2026-10-13 更正）：程序**只按占位绑定**，所以"这一步依赖谁"
+2. ⭐ **依赖以占位为准**：程序**只按占位绑定**，所以"这一步依赖谁"
    **由查询文本唯一决定**；模型写的 `depends_on` 只是一个**声明**。
-   ⇒ 声明与占位不一致时**规范化成占位那一份并记一笔**（`dependencies_repaired`），
-   ⛔ **不作废计划**。⚠ v2 提示词下 50 题里 5 题命中，**全是"占位合法、声明写错"**，
-   而按旧规则（"声明里缺一个就作废"）那 5 道会整题退回普通混合检索。
+   ⇒ 声明与占位不一致时规范化成占位那一份并记录 `dependencies_repaired`，
+   不作废计划。占位合法而声明遗漏时，查询文本仍足以确定依赖，因此计划可以执行。
    ⚠ **一条原则性的分界**：判据是**"真相可不可确定"**，不是"错得严不严重"——
    "声明了一个不存在的步骤"猜不出来 ⇒ **作废**；"有占位却没声明"由文本决定 ⇒ **修**。
 3. **引句逐字校验是"存在性"，不是"语义正确性"**。⚠ **报告里不要把两者混起来**：
@@ -64,8 +63,8 @@ PLAN_DECOMPOSE_KEYS: Final[frozenset[str]] = frozenset({"steps"})
 #: 一步的字段：**恰好三个**。
 PLAN_STEP_KEYS: Final[frozenset[str]] = frozenset({"id", "query", "depends_on"})
 
-#: 每轮输出的字段：**恰好三个**（2026-10-13 起 `step_id` / `next_step_id` / `next_query`
-#: 都不再由模型给出——步骤编号**由程序附加**，下一查询**由程序绑定**）。
+#: 每轮输出的字段：**恰好三个**（`step_id` / `next_step_id` / `next_query`
+#: 不是模型字段——步骤编号**由程序附加**，下一查询**由程序绑定**）。
 STEP_ANSWER_KEYS: Final[frozenset[str]] = frozenset({"status", "answer", "evidence"})
 
 #: 一条证据的字段：**恰好两个**。
@@ -113,8 +112,7 @@ class PlanStep:
     declared_dependencies: tuple[str, ...]
     #: 声明了依赖、却没有对应占位的 id。⚠ **不作废计划**（见模块 docstring 第 2 条）。
     unused_dependencies: tuple[str, ...]
-    #: ⭐ **程序把声明改写过**（声明 ≠ 占位引用）。⚠ **不是失败**，但必须能被数出来：
-    #: v2 提示词下 50 题里有 5 题命中，全是"占位合法、声明写错"。
+    #: **程序把声明规范化成了占位引用**。这不是失败，但会计入诊断统计。
     dependencies_repaired: bool
 
 
@@ -243,8 +241,8 @@ def _require_keys(payload: dict[str, Any], expected: frozenset[str], *, where: s
 def parse_plan(text: str, *, max_steps: int = 4) -> Plan:
     """从模型输出里拿到一份**可执行的**计划，否则抛 `InvalidPlanOutput`。
 
-    `max_steps` 是**计划的步数上限**（方案是 1～4）。⚠ 它**不是** `agentic.max_rounds`
-    ——后者是"今晚真的执行几步"的预算，前者是"这份计划本身合不合法"。
+    `max_steps` 是**计划的步数上限**（当前为 1～4）。⚠ 它**不是** `agentic.max_rounds`
+    ——后者是实际执行步数的预算，前者是计划本身的结构约束。
     两者混成一个数，会让"计划有 4 步但只跑 3 步"看起来像"计划不合法"。
     """
     found = extract_json_object(text)
@@ -304,12 +302,12 @@ def parse_plan(text: str, *, max_steps: int = 4) -> Plan:
         placeholders = placeholders_in(query)
         for name in placeholders:
             if name not in seen:
-                # ⛔ **这才是真正的安全判据**：占位必须指向**此前出现过**的步骤。
+                # ⛔ **这才是真正的安全判据**：占位必须指向**先出现过**的步骤。
                 #   指自己 / 指后面 / 指不存在的 id ⇒ 绑不上（或绑出一个循环）⇒ 整份作废。
                 raise InvalidPlanOutput(
                     f"`{where}.query` 里的 {{{{{name}}}}} 不是**此前**出现过的步骤（已有 {seen}）"
                 )
-        # ⭐ **依赖以占位为准**（2026-10-13，见模块 docstring 第 2 条）：模型写的 `depends_on`
+        # ⭐ **依赖以占位为准**：模型写的 `depends_on`
         #   只是一个**声明**——程序只按占位绑定，所以"声明漏了一个"**不影响这份计划能不能执行**。
         #   ⇒ 规范化成占位那一份并**记一笔**，而不是把一份能用的计划整份丢掉。
         steps.append(

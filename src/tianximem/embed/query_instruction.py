@@ -2,21 +2,16 @@
 
 ## 为什么单独一层
 
-模型卡（`Qwen/Qwen3-Embedding-8B`）的官方用法是**两侧输入不一样**：查询侧加
-`f'Instruct: {task_description}\\nQuery:{query}'`（任务描述是一句短指令，建议英文），
-文档侧**不加任何前缀**（原文："No need to add instruction for retrieval documents"）。
-这与本项目 §7.2 的规格"**query 原样送进去，不做任何改写**"冲突，
-而模型卡给了量化后果：**查询侧不加 instruction 会让检索性能掉约 1%–5%**。
-
-**因此本模块提供的不是"改写"，而是一层可开关的输入格式适配**：
+Qwen3-Embedding 模型卡建议查询侧添加
+`f'Instruct: {task_description}\\nQuery:{query}'`，文档侧不添加前缀。
+本模块把该格式作为可选适配层提供，不改变文档文本。
 
 | `instruction` | 行为 |
 | --- | --- |
-| `""`（默认） | **与"原样送"逐字节相同**——v1 现状不变，开箱即用 |
-| 非空 | 只影响**查询侧**；文档侧**一个字节都不动**（**改它等于改索引**，§7.2 的"贵"消融项） |
+| `""`（默认） | 查询逐字节原样送入 embedding 模型 |
+| 非空 | 只影响查询侧；文档侧保持不变 |
 
-**要不要开、instruction 写什么，是一个待定的规格问题**，不是实现细节——
-默认关着，规格怎么定都不会让现有行为漂移。
+指令内容和是否启用由配置决定；关闭时保持原始查询输入。
 
 ## ⚠ 一条不可违反的顺序：前缀必须在**缓存之上**
 
@@ -57,7 +52,7 @@ DEFAULT_TASK: str = "Given a web search query, retrieve relevant passages that a
 
 
 def apply_query_instruction(query: str, instruction: str, template: str = DEFAULT_TEMPLATE) -> str:
-    """给一条查询加 instruction 前缀。`instruction` 为空 ⇒ **原样返回**（v1 现状）。"""
+    """给一条查询加 instruction 前缀。`instruction` 为空时原样返回。"""
     if not instruction:
         return query
     return template.format(task=instruction, query=query)

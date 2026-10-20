@@ -1,111 +1,76 @@
-# facts/ — 有逐字来源的确定性事实记忆
+# facts
 
-**PRD**：§2.1（`Search` **不得生成最终答案，也不得把答案伪装成记忆记录**）· §6.1（能被 `question` / `answer` 重建的东西一律不进真源）· §11.3（原文优先）
+`facts/` derives source-backed facts and compiles supported question forms into deterministic evidence plans. It does not call an LLM, generate answers, or count/list results.
 
-**定位**：确定性、**不调用 LLM** 的抽取与问题编译层——只产生「原文说过的独立事实」；事实是**派生数据**（可由 `qa_pairs` 的原文重建），不生成答案、不做名单 / 计数 / 汇总、不预先求和。
-内部「输出原文或抽取事实」的许可见 [`../../../docs/decisions.md`](../../../docs/decisions.md) **D33** 的 2026-10-05 补充。
-
-> **红线**：这里的事实**只描述原文说过的内容**——不能合成原文没有的关系或答案。
-> 同义事实的来源选择与呈现顺序（明确自述优先、引用陈述先于独立支持事实）只是**排序**，不是推出新事实的许可。
-
-> 当前数据流与模块边界的完整结构见 [`../../../docs/architecture.md`](../../../docs/architecture.md) 的「当前共同事实取证结构」——本文件不复制那张图。
-
-## 本模块的构成
+## Files
 
 ```text
-evidence.py     共同记录 `EvidenceFact`（主体 / 关系 / 客体 / 原文限定条件 / 来源侧与逐字引句 /
-                来源记录日期）+ 抽取版本 `EVIDENCE_VERSION`；规范化键 `key` / `words_key` /
-                `title_key` / `relation_key`（中英文同义关系归一到同一字段）
-grammar.py      `extract_evidence()`：来源句法 → 独立事实；旧规则为主，启用时用本地 spaCy
-                实体/关系候选补充泛化句式，仍经过否定/引用/计划/来源校验（不调用 LLM）
-sales.py        明确已完成交易的来源句法：只抽原文商品、数量、单价或已报告收入，不计算金额
-query.py        `compile_query()`：问题表面形式 → `QueryPlan`（filter / walk / interval /
-                current；名单与计数编译成同一证据计划）
-input.py        `input_complete()`：当前字面输入的**依赖检查**——只判输入齐不齐，不算答案
-paths.py        支持问法的有序关系路径；保留根实体与重复步骤，未解释问法交回检索
-conversation.py 具名发言切分（`named_utterances`）与显式句末切分（`sentences`）——
-                抽取与 `retrieve/evidence.py` 的来源审查共用
+evidence.py      Fact record, normalized keys, extraction version
+grammar.py       Source syntax to atomic fact candidates
+sales.py         Explicit completed-transaction facts
+query.py         Question syntax to QueryPlan
+input.py         Current-input dependency check
+paths.py         Supported relation-path parsing
+conversation.py  Named utterance and sentence splitting
 ```
 
-* `evidence.py` 的一条记录只写原文里能指出出处的部分：数量、容器、时段等进 `qualifiers`；给答案模型读的 `content` 由 [`../common/render.py`](../common/render.py) 的事实渲染入口生成——**渲染不在本目录**。交易的派生单笔金额只在 Search 打包时注解，不写入事实。
-* `grammar.py` 覆盖**有限的显式句法**（英文为主 + 部分中文，不承诺覆盖全部表达）：角色归属、容器与单项数量、署名 / 邮件元数据、明确月份区间、具名发言内的本人陈述等；引用、否定、计划与虚构的句子不产生正向事实。
-  显式更新句（`… (this replaces the earlier value)`）另有一张 `_UPDATE_FORMS` 表：
-  `The name of the current head of state in X is Y`、`X speaks the language of Y`、
-  `The headquarters of X is located in the city of Y` 等**只在更新句上尝试**，
-  且照抄数据源拼写（`univeristy` / `origianl`）。解析出的替换事实带
-  `replaces_earlier`，执行器据此取值（2026-10-17，MQuAKE 修复）。
-  **本人自述的档案字段**（`My highest education level is PhD` / `my personality type
-  is INTJ`）也抽，但**字段名走 `_PROFILE_FIELDS` 白名单**（15 个）：泛化的
-  `my X is Y` 会把叙述句变成事实。同一张表的同义写法（`MBTI personality type` ≡
-  `personality type`）在 `evidence.relation_key` 归一——**抽取侧与查询侧必须同时认**
-  （2026-10-18，D48）。
-  **官方采集的语料是各数据集的原始格式**（D51）：`{"subject":…,"relation":…,"object":…}`
-  这种 **JSON 三元组**按三个字段逐字读；`UPDATE: replace the prior value …` 前缀与末尾的
-  `(this replaces the earlier value)` 是同一件事——都落成带 `replaces_earlier` 的替换事实。
-  ⚠ 多行记录**不再被 `"\n" not in question` 挡掉**（官方更新句就是两行）。
-* `query.py` 的计划只绑定共同字段与共同操作（条件筛选、有限关系连接、显式区间比较、当前输入），**不为任何业务类别建专用执行路径**。`walk_root` / `walk_relations` 给出有序依赖；关键词集合不再证明路径完成。
-* **逐次取证**（`QueryPlan.per_occurrence`，标题 / 主题 / 出席这类"哪几次"的问法）：同一条事实在**不同来源**里的每一次出现各自算证据——执行器不得按三元组去重，也不得先用时间窗口把事实裁掉（窗口比较由答案模型看着每条证据的来源日期做）。
-* `input.py` 只回答"当前问题的输入是否已全部给出、是否无须历史"；配套的 `current` 计划返回空结果是**有定义的降级**，不计算也不返回答案。
+## Fact Record
 
-## 与上下游的接口
+Every fact carries:
 
-| 方向 | 入口 | 说明 |
-| --- | --- | --- |
-| **写入** | [`../pairing/apply.py`](../pairing/apply.py) 的 `index_pair_facts(store, conn, pair)` | 与原文**同一写事务**（Add 落库那一步）；幂等重放经同一入口补事实索引（不改真源）；旧库补索引由编排层按上限有界补齐，同样只写派生事实 |
-| **读取** | [`../retrieve/evidence.py`](../retrieve/evidence.py) 的 `select_evidence(...)` | 执行 `query.py` 编译的 `QueryPlan`，返回事实投影或原文投影；不适用 / 冲突 / 超限 ⇒ `None` |
-| **存储** | [`../store/sqlite_store.py`](../store/sqlite_store.py) 与 [`../store/schema.sql`](../store/schema.sql) | `memory_facts`（共同事实表）+ `evidence_coverage`（按来源与版本记扫描覆盖）；**本目录不写 SQL** |
-| **编排** | [`../service/pipeline.py`](../service/pipeline.py) | Search 先试共同取证与事实打包（`_fact_snapshot` / `_search` 的 grounded 分支 / `_package_evidence`），事实片段沿用既有槽位与 token 预算 |
-| **开关** | [`../common/config/`](../common/config/) 的 `retrieval.grounded_evidence` 与取证上限 | 键语义与取值在 [`../../../docs/config-reference.md`](../../../docs/config-reference.md)；**本目录不拥有开关**，也不定义业务专用键 |
+- subject, relation, and object;
+- source-stated qualifiers such as quantity, container, or time range;
+- source side and verbatim source quote;
+- source record date;
+- extraction version.
 
-抽取的输入是配对后的 `QaPair.question` / `answer` / `event_time`（形状归 [`../pairing/`](../pairing/)，本目录不解析原始 `messages`）；Add、幂等重放与旧库补索引共用 `extract_evidence` 这一个入口。
-⚠ **同一 Add 内的姓名绑定在 `pairing/apply.py`**（不是本目录）：它按 `fetch_by_request`
-找同一次 Add 里的 `My name is X`，把第一人称事实的主语换成人名——跨 Add 不做（D24 / D28）。
+Normalized keys are for matching only. They never replace or mutate source quotes.
 
-**回退是结构性的**：`compile_query` 给不出计划、当前用户索引未扫完、计划不适用、范围内还有未解释的相关声明或有冲突、取证超限——任一成立都交回**原混合检索链**，而不是返回部分结果或近似名单。
+## Extraction Rules
 
-## 边界：本目录不做什么
+- A positive fact requires a literal source assertion.
+- Negation, quotations, plans, hypotheticals, and examples do not create positive facts.
+- Non-user roles do not establish first-person facts unless the source explicitly identifies the speaker.
+- Source dates are not event dates.
+- Quantities keep their unit and are not pre-summed.
+- Ambiguous quantities, unit conflicts, unknown recency, and unresolved corrections fall back to source retrieval.
+- Explicit corrections retain each observation. The executor removes an older observation only when the replacement and ordering are source-backed.
+- The extraction version is part of fact identity and coverage. Change it whenever extraction semantics change.
 
-* **不生成答案**（§2.1 红线），也**不做名单 / 计数 / 汇总、不预先求和**——名单与计数问法只编译成同一证据计划，最终名单与数字由 AML 侧的答案模型生成。
-* **不调用 LLM**：抽取与编译都是确定性的；Add 路径本来就不调用任何 LLM（§7.2）。可选的
-  spaCy sidecar 是本地模型候选器，不改变 `EvidenceFact` 的来源校验、版本覆盖或查询边界。
-* **不拥有表、开关与专用检索路径**：不建业务专用表、不定义配置键、不按业务类别设 Search 分支。
-* **不碰存储与执行**：除 `evidence.py` 引 `common/render` 外只依赖标准库与自身；不 import `store/` / `retrieve/` / `service/`，不写 SQL、不查 Qdrant。
-* **不做扩窗**：共同取证的原文投影与事实投影都不扩邻域；段合并与打包归 [`../rank/`](../rank/)。
+Named-person binding happens during the Add write path. Within one Add, an explicit self-introduction can bind first-person facts to the speaker's name. The operation never crosses an Add boundary and never mutates source rows.
 
-## 本层特有的坑
+## Query Plans
 
-### 覆盖只表示「扫过」，不表示「讲全」
+| Plan | Meaning |
+| --- | --- |
+| `filter` | Match a subject, relation, object, and source-stated qualifiers. |
+| `walk` | Follow a bounded ordered sequence of source-backed relation edges. |
+| `interval` | Compare only time ranges explicitly stated by source text. |
+| `current` | Return a legal empty result when the question's complete input is present and history is unnecessary. |
 
-`evidence_coverage` 在**抽取出空集时也写**——它只表示该版本的抽取器处理过这个来源。物理扫描齐全 ≠ 语义完整：完整性由执行期的来源覆盖审查逐条判断（相关原文里仍有未解释的正向声明、否定冲突等 ⇒ 回退原文）。**不要把覆盖表当"全部语义已识别"用**，也不要用它跳过来源审查。
+Lists and counts use the same evidence plans. The final list and count are AML responsibilities.
 
-### 改抽取表示必须升版本
+Unsupported syntax, incomplete current input, unresolved branches, conflicts, or exceeded limits return control to the normal retrieval chain.
 
-覆盖按 `(parent_memory_id, version)` 记录。不升 `EVIDENCE_VERSION`，已被覆盖的来源**不会重扫**——新规则在那部分来源上永远不生效，且**不报错**。查询侧也只认当前版本：旧版本的事实行与覆盖都不能替当前版本作数。
+## Source Coverage
 
-### 引句与身份的硬校验
+`evidence_coverage` means that an extractor version processed a source. It does not mean the extractor understood every statement in that source.
 
-* `source_quote` 必须逐字出现在声明的 `question` / `answer` 侧，`item_quote` 必须逐字存在于 `source_quote` 之内——写入时**再验一遍**，违反直接抛错（不是静默）。
-* 事实的 `user_id` 必须与父记忆一致——写入与覆盖标记都会校验。
-* `key()` 这类规范化只用于**匹配**，不能碰引句本身：它保留标点身份（`C++` 与 `C#` 刻意不合并）。
-* 事实 `id` 由来源与位置派生，写入是 `ON CONFLICT DO NOTHING` ⇒ **首次表示冻结**，同一 `id` 不会被重放改写。
+- Empty extraction still records coverage.
+- Only the current extraction version counts as scanned.
+- Semantic completeness is checked during evidence execution by reviewing relevant source text for unexplained statements and conflicts.
 
-### `current` 判定是空结果的唯一合法入口
+## Boundaries
 
-只有"当前问题的全部输入已明确且无须历史"才返回空记忆。**误判没有报错**——把需要历史的问法判成 `current`，Search 会静默返回空。缺项、占位符、变量、历史依赖、重复冲突必须一律判「走检索」，扩展新句式时保持这个保守方向。
+- Do not write SQL or access Qdrant.
+- Do not implement business-category tables or Search branches.
+- Do not import `store/`, `retrieve/`, or `service/`.
+- Do not render text outside `common/render.py`.
+- Do not call a model in the Add path.
 
-### 语域、时间与数量
+## Validation
 
-* 引用、否定、计划、虚构一律不产生正向事实；判据按**整条发言**计算——一条发言里出现计划 / 否定 / 引用标记，该发言的角色类事实**整条不产出**。⚠ **"整段标签不能吞掉另一条未解释的正向声明"是执行期来源覆盖审查的规则**（[`../retrieve/evidence.py`](../retrieve/evidence.py)，且只在计划带字面范围守卫时运行），不是抽取层的保证。明显的引文续行不重绑说话人。
-  **唯一例外是并列从句**（D47）：`, so` / `, but` / `;` 切开后，**不含标记的前半句**照常抽取——`Lost my job as a banker yesterday, so I'm gonna …` 的后半句是计划，前半句是已发生的事件。逗号直接连接的从句仍整句不抽。
-* user / assistant / system 通用标签按大小写无关识别；question 侧用户自述绑定第一人称。
-  assistant / system 标签不产生本人正向事实；明确具名的真实发言仍可来自两侧。
-* 区间比较只用**原文明确写出的起止月份**；`source_date`（来源记录日期）**不冒充事件日期**。
-* 数量只保留原文给出的单个数值与单位，**不预先求和**；含糊数量、单位冲突、更新取舍没有可信来源时间 ⇒ 回退原文。数量观察的正文不重复引句数值，完整引句仍存在事实索引里。
-
-明确替换保留各次观察，避免同值再次出现时丢失其来源时间。
-执行器只在所有替换来源都有可信时间时排除更早的替换；未知时间或同刻冲突保留各个原文。
-更正之后出现的普通陈述以及无法比序的未知时间普通陈述仍保留；历史范围问题不沿用当前状态关系行走。
-
-独立来源中的 `is employed by` 在明确替换或月份区间里绑定已有 employee 字段；
-否定、条件、计划、引文和未知客体不产生正向就业边。查询编译器通过
-`require_complete_walk` 声明新增问法需要完整字面路径，执行期的判据归 `retrieve/`。
+- A fact quote must occur verbatim in the declared source side.
+- A field quote must occur within the source quote.
+- A fact user must match its parent memory user.
+- Fact IDs are source-derived and insert-once.

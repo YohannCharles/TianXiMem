@@ -1,12 +1,12 @@
-"""§6.1 / §6.3 的存储层：DDL、位置派生 id、Add 内邻接、隔离、事务原子性。
+"""存储层：DDL、位置派生 id、Add 内邻接、隔离、事务原子性。
 
-对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 六、存储。
+对应 [`../tests/CLAUDE.md`](../tests/CLAUDE.md) 的存储覆盖。
 
-⚠ **D28 起位置 = `(request_id, local_index)`**：本文件里"落几行"的写法统一走
+⚠ **当前位置 = `(request_id, local_index)`**：本文件里“落几行”的写法统一走
 `conftest.seed_in_add`（**一次 Add 内**几个块，自动连好 `prev` / `next`）与
 `seed_pair_in`（每个 `index` 是**一次独立的 Add**，彼此不相邻）。
 
-文件末尾另有一组**连接生命周期与跨线程**的用例——它们是 D17 那条跨层缺口的回归用例
+文件末尾另有一组**连接生命周期与跨线程**的用例——它们是连接跨层使用的回归用例
 （长期持有连接 × FastAPI 的 `def` 路由跑在线程池里），
 见 `store/sqlite_store.py` 的连接模型一节。
 """
@@ -52,7 +52,7 @@ def test_pair_id_is_position_derived_not_content_hash() -> None:
     """`id` 只由位置 `(user_id, session_id, request_id, local_index)` 决定——**与内容无关**。
 
     这是不变式 1：用内容哈希会在**重试/重建**时留下**孤儿 point**。
-    ⚠ `request_id` **作为一个整体**参与哈希（D28），**不解析**它的内容。
+    ⚠ `request_id` **作为一个整体**参与哈希，**不解析**它的内容。
     """
     a = make_pair_id("u1", "s1", "req-1", 0)
     assert a == make_pair_id("u1", "s1", "req-1", 0)  # 确定性
@@ -63,7 +63,7 @@ def test_pair_id_is_position_derived_not_content_hash() -> None:
     assert a != make_pair_id("u2", "s1", "req-1", 0)
     # 形状上就是"位置派生"：函数签名里根本没有内容参数
     assert len(a) == 64
-    # ⚠ **任意形状的 request_id 都等价可用**（D28 的核心）：这一段不解析它
+    # ⚠ **任意形状的 request_id 都等价可用**：这一段不解析它
     for opaque in ("abc", "req-001", "foo:bar", "xxx:chunk-0", "xxx:chunk-0-extra"):
         assert len(make_pair_id("u1", "s1", opaque, 0)) == 64
 
@@ -92,7 +92,7 @@ def test_id_is_position_derived_not_content_derived(store: SqliteStore) -> None:
 
 
 def test_position_is_derived_from_the_request_alone() -> None:
-    """**位置是请求的纯函数**（D28）：同一个 `(user, session, request_id, local_index)`
+    """**位置是请求的纯函数**：同一个 `(user, session, request_id, local_index)`
     无论谁来算、算几次，永远是同一个 `id`；而**内容变了 `id` 也不变**。
 
     ⇒ 同一批重试 ⇒ 必然算出同一个位置 ⇒ 撞的是 `UNIQUE`（响亮）而不是静默重复。
@@ -102,7 +102,7 @@ def test_position_is_derived_from_the_request_alone() -> None:
     assert make_pair_id("u1", "s1", "r3", 0) != make_pair_id("u1", "s1", "r", 3)
 
 
-# ── 不变式 2（D28）：位置 = (request_id, local_index)，唯一 ──────────────
+# ── 不变式 2：位置 = (request_id, local_index)，唯一 ──────────────
 
 
 def test_unique_constraint_rejects_a_duplicate_position(store: SqliteStore) -> None:
@@ -131,13 +131,13 @@ def test_unique_constraint_rejects_a_duplicate_position(store: SqliteStore) -> N
         )
 
 
-# ── 不变式 4（D28）：UNIQUE 索引正好是"取一次 Add"的键 ─────────────────
+# ── 不变式 4：UNIQUE 索引正好是"取一次 Add"的键 ─────────────────
 
 
 def test_by_request_query_uses_an_index(store: SqliteStore) -> None:
     """ "取一次 Add 的全部块"**不得扫全表**，也不该额外排序——它必须命中 UNIQUE 建出的索引。
 
-    这才是 §10 扩窗的数据来源（D28 起按 `request_id` 取整批）。
+    这也是扩窗读取一次 Add 内邻接数据的基础。
     """
     seed_in_add(store, [(f"Q{i}", None) for i in range(5)])
 
@@ -164,7 +164,7 @@ def test_by_request_returns_that_add_in_local_index_order(store: SqliteStore) ->
 
 
 def test_incomplete_blocks_stay_out_of_the_chain(store: SqliteStore) -> None:
-    """**A-only / Q-only 不参与邻接**（D28）：它们照样落库，但两侧指针都是 `None`。
+    """**A-only / Q-only 不参与邻接**：它们照样落库，但两侧指针都是 `None`。
 
     形状取 `A Q A Q`：开头的 A-only 配不上 user、后面的 QA 正常成链。
     """
@@ -232,8 +232,7 @@ def test_batch_write_rolls_back_entirely_on_error(
 ) -> None:
     """**一个批次是一个事务**：中途异常 ⇒ 整批回滚，不留半个批次。
 
-    contract.md §6：内部异常应让本批保持"可重试"（事务未提交），
-    而不是返回一个"部分成功"。
+    内部异常应让本批保持"可重试"（事务未提交），而不是返回一个"部分成功"。
     """
     original = store.insert_pair
     calls = {"n": 0}
@@ -250,7 +249,7 @@ def test_batch_write_rolls_back_entirely_on_error(
         apply_batch(
             store,
             AddBatch(
-                # ⚠ `request_id` 是 opaque string（D28）——**不解析它**，
+                # ⚠ `request_id` 是 opaque string——**不解析它**，
                 #    所以这里随便写什么都行（这一条用的是个正常形状）。
                 "r-rollback",
                 "u1",
@@ -294,7 +293,7 @@ def test_isolation_by_user_id(store: SqliteStore) -> None:
     assert [p.question for p in rd(store, store.assert_isolation, "u2")] == ["u2-Q"]
 
 
-# ── 连接生命周期与跨线程（D17 的回归用例）──────────────────────────────
+# ── 连接生命周期与跨线程──────────────────────────────
 
 
 def test_each_operation_gets_its_own_connection(store: SqliteStore) -> None:
@@ -425,8 +424,7 @@ def test_same_session_concurrent_writers_do_not_collide(store: SqliteStore) -> N
 
     * 每一批写**自己的** `request_id` ⇒ 不撞 `UNIQUE`；（若位置来自"读当前最大值再 +1"，
       这里就必须靠应用层串行化——而那个步骤不存在。）
-    * 也不再需要 `BEGIN IMMEDIATE` 来挡"两个事务读到同一个 MAX"——那是**位置**的问题，
-      而位置的读-改-写已经没有了。
+    * 因此不存在“读当前 MAX 再 +1”的位置读改写，也不需要用它来串行化位置分配。
 
     ⚠ **但 `BEGIN IMMEDIATE` 仍然必须保留**，理由是另一条：写事务**先读后写**
     （守卫 `SELECT` → `INSERT`），deferred `BEGIN` 下两方都要把读锁**升级**成写锁，
@@ -467,7 +465,7 @@ def test_same_session_concurrent_writers_do_not_collide(store: SqliteStore) -> N
     )
 
 
-# ── 旧库迁移（D28）：一次性的、在事务里、保正文 ─────────────────────────
+# ── 已有存储转换：一次性的、在事务里、保正文 ─────────────────────
 
 
 _OLD_SCHEMA = """
@@ -494,7 +492,7 @@ CREATE TABLE applied_batches (
 
 
 def _old_db(tmp_path) -> Path:  # noqa: F821 — 只在本文件用一次
-    """造一个**按 D25 规则写过**的库（旧 schema + 旧 id 公式）。"""
+    """造一个需要迁移的源 schema 数据库 fixture。"""
     import hashlib
     from pathlib import Path
 
@@ -502,14 +500,14 @@ def _old_db(tmp_path) -> Path:  # noqa: F821 — 只在本文件用一次
     conn = sqlite3.connect(path)
     try:
         conn.executescript(_OLD_SCHEMA)
-        # 两批：第一批 3 块（含一块 A-only）、第二批 2 块；旧 id = hash(u, s, chunk, local)
+        # 两批：第一批 3 块（含一块 A-only）、第二批 2 块；源 id = hash(u, s, chunk, local)
         rows = [
             # (chunk, local, question, answer, status, event_time, request_id)
             (0, 0, None, "[assistant] A0", "complete", None, "old-0"),  # A-only
             (0, 1, "Q1", "[assistant] A1", "complete", 111, "old-0"),
             (0, 2, "Q2", "[assistant] A2", "complete", 222, "old-0"),
             (7, 0, "Q3", "[assistant] A3", "complete", 333, "old-7"),  # 跳号
-            (7, 1, "Q4", "[assistant] A4", "pending", 444, "old-7"),  # 旧库里可能有的 pending
+            (7, 1, "Q4", "[assistant] A4", "pending", 444, "old-7"),  # 源 schema 中可能存在 pending
         ]
         for chunk, local, question, answer, status, event_time, request_id in rows:
             old_id = hashlib.sha256(
@@ -532,10 +530,10 @@ def _old_db(tmp_path) -> Path:  # noqa: F821 — 只在本文件用一次
 
 
 def test_legacy_db_is_migrated_in_place(tmp_path) -> None:
-    """**旧库（D25）搬到 D28**：正文一字不丢、`id` 重算、链重连、旧批次的指纹留空。
+    """**已有存储转换**：正文一字不丢、`id` 重算、链重连、已有批次的指纹留空。
 
-    ⚠ 这是**唯一**会碰旧数据的代码路径（`open()` 里自动跑一次），所以它必须有测试：
-    没测过的迁移比没有迁移更危险——它会在**真实数据**上第一次运行。
+    ⚠ 这是**唯一**会转换已有数据的代码路径（`open()` 里自动跑一次），所以它必须有测试：
+    未验证的转换会在**真实数据**上第一次运行，风险高于没有转换路径。
     """
     path = _old_db(tmp_path)
     store = SqliteStore.open(path)
@@ -543,7 +541,7 @@ def test_legacy_db_is_migrated_in_place(tmp_path) -> None:
     first = rd(store, store.fetch_by_request, "u1", "s1", "old-0")
     second = rd(store, store.fetch_by_request, "u1", "s1", "old-7")
 
-    # ① 正文一字不丢（含旧库里可能存在的 'pending'）
+    # ① 正文一字不丢（含源 schema 可能存在的 'pending'）
     assert [(p.question, p.answer) for p in first] == [
         (None, "[assistant] A0"),
         ("Q1", "[assistant] A1"),
@@ -551,7 +549,7 @@ def test_legacy_db_is_migrated_in_place(tmp_path) -> None:
     ]
     assert [(p.event_time, p.status) for p in second] == [(333, "complete"), (444, "pending")]
 
-    # ② `id` 按**新公式**重算（旧 id 不是新公式的产物）
+    # ② `id` 按**当前位置公式**重算（源 id 不使用该公式）
     assert first[0].id == make_pair_id("u1", "s1", "old-0", 0)
     assert second[0].id == make_pair_id("u1", "s1", "old-7", 0)
 
@@ -562,7 +560,7 @@ def test_legacy_db_is_migrated_in_place(tmp_path) -> None:
     assert first[2].next_memory_id is None
     assert second[0].prev_memory_id is None
 
-    # ④ 旧批次的指纹**留空**（不知道 payload）⇒ 重放只能放行，不能判冲突
+    # ④ 迁移批次的指纹**留空**（不知道 payload）⇒ 重放只能放行，不能判冲突
     assert rd(store, store.applied_batch_payload_hash, "old-0") is None
     assert rd(store, store.is_batch_applied, "old-0") is True
 
@@ -580,7 +578,7 @@ def test_migration_is_idempotent(tmp_path) -> None:
 
 
 def test_rebind_keeps_the_possessive_for_first_person_statements() -> None:
-    """读取期改名（D50）必须把 `My` → `<name>'s`，而不是裸真名。
+    """读取期改名必须把 `My` → `<name>'s`，而不是裸真名。
 
     同一类事实有两条路径：写入期的 `bind_first_person` 产出 `Rosa Quinn's orange case`，
     读取期的 `_rebind` 若不补 `'s`，正文会变成 `Barbara Jones orange case`。

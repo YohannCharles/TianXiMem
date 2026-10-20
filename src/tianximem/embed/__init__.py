@@ -1,10 +1,10 @@
-"""Embedding 后端（§7.4 / §7.2 / §2.3）。
+"""Embedding 后端。
 
-**架构必须 embedder-agnostic**：开发期的 Qwen3-Embedding-4B 与提交期的 `text-embedding-v4`
-**都不提供** sparse 或 ColBERT 输出，因此任何依赖多向量能力的代码都是**死重**（D2）。
+开发期的 Qwen3-Embedding-4B 与提交期的 `text-embedding-v4` 都只提供 dense 输出，
+因此实现不依赖 sparse、ColBERT 或其他多向量能力。
 
-⚠ 本目录**不自己拼字符串**——索引侧的输入是 [`../common/render.py`](../common/render.py)
-的那一份渲染（§7.2 要求 embedding 的输入与返回的 `content` 是同一份）。
+本包不自行拼接文档文本；索引输入来自 [`../common/render.py`](../common/render.py)，
+并与返回 `content` 共享同一份基础渲染。
 """
 
 from tianximem.embed.base import (

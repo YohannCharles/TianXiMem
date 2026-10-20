@@ -1,4 +1,4 @@
-"""记忆块组合规则（D24）——**纯函数**侧。
+"""记忆块组合规则——**纯函数**侧。
 
 ```text
 一次 Add 的消息
@@ -11,8 +11,7 @@
 本文件只覆盖它。跨 Add 的那一半（不拼接、乱序无关、幂等）在
 [`test_apply.py`](./test_apply.py)。
 
-> ⚠ **下面 Test 1–6 的编号是需求里给定的**，改它们先回去改需求。
-> Test 7–10 是跨 Add 的，住在 `test_apply.py` / `test_idempotency.py`。
+> 跨 Add 的不拼接、乱序无关与幂等行为分别由 `test_apply.py` / `test_idempotency.py` 覆盖。
 """
 
 from __future__ import annotations
@@ -45,11 +44,11 @@ def _text(block: MemoryBlock) -> str:
     return "\n".join(lines)
 
 
-# ── Test 1–6：需求里给定的六个形状 ───────────────────────────────────────
+# ── 六个基础组合形状 ─────────────────────────────────────────────────────
 
 
 def test_1_user_assistant_user_assistant(M: Callable[..., Message]) -> None:
-    """Test 1：`U A U A` ⇒ `[U+A] [U+A]`。"""
+    """`U A U A` ⇒ `[U+A] [U+A]`。"""
     blocks = compose_memory_blocks(
         [M("user", "Q0"), M("assistant", "A0"), M("user", "Q1"), M("assistant", "A1")]
     )
@@ -61,11 +60,10 @@ def test_1_user_assistant_user_assistant(M: Callable[..., Message]) -> None:
 
 
 def test_2_runs_merge_within_one_memory(M: Callable[..., Message]) -> None:
-    """Test 2：`U U A A A U A` ⇒ **3 块**（**D32**）——一段 user 只把**最后一条**配进去。
+    """`U U A A A U A` ⇒ **3 块**——一段 user 只把**最后一条**配进去。
 
-    ⚠ 形状由 **D32**（2026-10-03）定（一段 user 只配最后一条）：一段长 user 全进 question
-    会到 38,270 token（窗口 8,192）⇒ 线上静默截断、本地 400。代价是前面的 `Q0`
-    变成**有问无答**。
+    ⚠ 一段 user 只配最后一条：把整段长 user 放进 question 可能超过嵌入窗口，
+    导致线上截断或本地请求失败。代价是前面的 `Q0` 变成**有问无答**。
     """
     blocks = compose_memory_blocks(
         [
@@ -87,7 +85,7 @@ def test_2_runs_merge_within_one_memory(M: Callable[..., Message]) -> None:
 
 
 def test_3_leading_assistant_stands_alone(M: Callable[..., Message]) -> None:
-    """Test 3：`A U A` ⇒ `[A] [U+A]`——首个 A 配不上，**独立成块**。"""
+    """`A U A` ⇒ `[A] [U+A]`——首个 A 配不上，**独立成块**。"""
     blocks = compose_memory_blocks([M("assistant", "A0"), M("user", "Q1"), M("assistant", "A1")])
     assert [_text(b) for b in blocks] == ["A: [assistant] A0", "Q: Q1\nA: [assistant] A1"]
     assert blocks[0].question is None
@@ -95,33 +93,33 @@ def test_3_leading_assistant_stands_alone(M: Callable[..., Message]) -> None:
 
 
 def test_4_trailing_user_stands_alone(M: Callable[..., Message]) -> None:
-    """Test 4：`U A U` ⇒ `[U+A] [U]`——末尾的 U 配不上，**独立成块**。"""
+    """`U A U` ⇒ `[U+A] [U]`——末尾的 U 配不上，**独立成块**。"""
     blocks = compose_memory_blocks([M("user", "Q0"), M("assistant", "A0"), M("user", "Q1")])
     assert [_text(b) for b in blocks] == ["Q: Q0\nA: [assistant] A0", "Q: Q1"]
     assert blocks[1].answer is None
 
 
 def test_5_lone_assistant(M: Callable[..., Message]) -> None:
-    """Test 5：`A` ⇒ `[A]`。"""
+    """`A` ⇒ `[A]`。"""
     blocks = compose_memory_blocks([M("assistant", "A0")])
     assert [_text(b) for b in blocks] == ["A: [assistant] A0"]
 
 
 def test_6_lone_user(M: Callable[..., Message]) -> None:
-    """Test 6：`U` ⇒ `[U]`。"""
+    """`U` ⇒ `[U]`。"""
     blocks = compose_memory_blocks([M("user", "Q0")])
     assert [_text(b) for b in blocks] == ["Q: Q0"]
     assert blocks[0].answer is None
 
 
-# ── 组合的边界（与 Test 1–6 同一批规则，补上"容易漏"的形状）────────────────
+# ── 组合的边界（补上容易漏的形状）──────────────────────────────────────────
 
 
 def test_adjacent_same_role_runs_alternate_strictly(M: Callable[..., Message]) -> None:
     """⚠ **相邻的 user-only 块是正常的**，不是"漏合并"。
 
-    **D32** 只把一段 user 的**最后一条**配进 question ⇒ 一段 `U U A` 产出 `[U] [U+A]`，
-    那两个 `U` **是独立的两条消息**。形状变了要有人知道，所以这条钉住**新的**形状。
+    当前规则只把一段 user 的**最后一条**配进 question ⇒ 一段 `U U A` 产出 `[U] [U+A]`，
+    那两个 `U` **是独立的两条消息**。形状变了要有人知道，所以这条钉住当前形状。
     """
     blocks = compose_memory_blocks(
         [
@@ -146,10 +144,9 @@ def test_adjacent_same_role_runs_alternate_strictly(M: Callable[..., Message]) -
 
 
 def test_wholly_non_user_batch_splits_per_message(M: Callable[..., Message]) -> None:
-    """整批没有 user ⇒ **每条各自一块**（2026-10-01：合并只在"配得上对"时发生）。
+    """整批没有 user ⇒ **每条各自一块**。
 
-    ⚠ 旧规则这里是**一个**块。改的理由见模块 docstring——判分池那种全 `user` 的批
-    在旧规则下会整个塌成一块，而这里同一条规则的另一半。
+    ⚠ 相邻同 role 消息不合并。否则判分池那种全 `user` 的批会塌成一块。
     """
     blocks = compose_memory_blocks([M("assistant", "A0"), M("assistant", "A1")])
     assert len(blocks) == 2
@@ -160,9 +157,8 @@ def test_wholly_non_user_batch_splits_per_message(M: Callable[..., Message]) -> 
 def test_a_user_run_without_a_reply_does_not_merge(M: Callable[..., Message]) -> None:
     """**判分池那种形状**：`U U U U` ⇒ **4 个独立的 Q-only 块**，不是一个巨块。
 
-    这正是这次改规则要解决的问题：官方**判分池**的 Add 实测是 100% `role: user`，
-    旧规则把一次 Add（≤20 条）整个塌成 1 块，而且**一个配对的块都没有**
-    ⇒ `link_blocks` 只连配对块 ⇒ 邻接链全空 ⇒ 扩窗与段合并**一行都不执行**。
+    官方**判分池**的 Add 是 100% `role: user`。若把这些消息合并成一块，
+    就没有任何配对块，`link_blocks` 的邻接链为空，扩窗与段合并也不会执行。
     """
     blocks = compose_memory_blocks([M("user", f"Q{i}") for i in range(4)])
     assert [b.question for b in blocks] == ["Q0", "Q1", "Q2", "Q3"]
@@ -171,15 +167,13 @@ def test_a_user_run_without_a_reply_does_not_merge(M: Callable[..., Message]) ->
 
 
 def test_a_user_run_pairs_only_its_last_message(M: Callable[..., Message]) -> None:
-    """**D32**：`U U U A` ⇒ `[U] [U] [U+A]`——只有**最后一条**进对。
+    """`U U U A` ⇒ `[U] [U] [U+A]`——只有**最后一条**进对。
 
-    ⚠ 这正是 **S5** 那个形状（平台把一条超长 user 消息切成多片，2026-10-01 实测：
-    会切、硬上限 ≈8,000 字符）。**D20 当初把整段并进一个 question**，正是为了让被切碎的
-    文档"问题完整"；**D32 把它反过来了**——因为合起来会让块到 38,270 token，
-    超过 `text-embedding-v4` 的 8,192 窗口。
+    ⚠ 平台会把超长 user 消息切成多片，硬上限约为 8,000 字符。若把整段 user
+    并进一个 question，块可达 38,270 token，超过 `text-embedding-v4` 的 8,192 窗口。
 
     ⇒ **两条路都错，只是错的地方不同**：合并 ⇒ 块嵌不进去（线上静默截断）；
-    不合并 ⇒ 前面那些 `q` **有问无答**。D32 选了后者，这条用例钉住这个取舍。
+    不合并 ⇒ 前面那些 `q` **有问无答**。 选了后者，这条用例钉住这个取舍。
     """
     blocks = compose_memory_blocks([M("user", f"Q{i}") for i in range(3)] + [M("assistant", "A")])
     assert len(blocks) == 3
@@ -241,7 +235,7 @@ def test_tool_call_between_user_and_assistant_stays_in_one_block(
 
 
 def test_empty_content_is_kept_as_marker_only(M: Callable[..., Message]) -> None:
-    """空 content **不丢弃**（§2.1 保证非空，这里是防御）——渲染成 `[role]`，否则是静默丢消息。"""
+    """空 content **不丢弃**（契约保证非空，这里是防御）——渲染成 `[role]`，否则是静默丢消息。"""
     blocks = compose_memory_blocks([M("user", "Q0"), M("assistant", "")])
     assert blocks[0].answer == "[assistant]"
 
@@ -267,7 +261,7 @@ def test_source_indexes_cover_every_message_exactly_once(M: Callable[..., Messag
 def test_source_metadata_is_kept_verbatim(M: Callable[..., Message]) -> None:
     """`messages` / `roles` / `timestamps` 与原始输入**逐条对应**。
 
-    ⚠ D32 之后 `U U A` 产出**两块**（`[Q0]` 与 `[Q1+A0]`）⇒ 断言要跨两块收集，
+    ⚠ 当前规则下 `U U A` 产出**两块**（`[Q0]` 与 `[Q1+A0]`）⇒ 断言要跨两块收集，
     不能只取一个块。`source_idxs` 合起来仍必须是 `0..n-1` 的排列（不丢不重）。
     """
     m0, m1, m2 = M("user", "Q0", 100), M("user", "Q1", 200), M("assistant", "A0", 300)
@@ -279,7 +273,7 @@ def test_source_metadata_is_kept_verbatim(M: Callable[..., Message]) -> None:
 
 
 def test_event_time_is_the_first_message_of_the_block(M: Callable[..., Message]) -> None:
-    """`event_time` = **该块首条消息**的 timestamp（§6.1 的口径）。"""
+    """`event_time` = **该块首条消息**的 timestamp。"""
     blocks = compose_memory_blocks(
         [
             M("assistant", "A0", 111),
@@ -310,14 +304,14 @@ def test_composition_is_deterministic(M: Callable[..., Message]) -> None:
 def test_prefix_blocks_are_independent_of_what_follows(M: Callable[..., Message]) -> None:
     """**前面的块的形状不受后面消息影响**——这是"不跨 Add 等下一个 chunk"的可断言形式。
 
-    旧规则（D20/§6.5）里，末尾那个只有 question 的对会被下一个 Add 的答案补上；
-    现在 `Q1` **在下一次调用里仍然是同一个独立的块**（`Q1+A1` 只存在于第二次调用里）。
+    末尾只有 question 的块不会被下一个 Add 的答案补上；
+    `Q1` **在下一次调用里仍然是同一个独立的块**（`Q1+A1` 只存在于第二次调用里）。
     """
     first_block = compose_memory_blocks([M("user", "Q0"), M("assistant", "A0")])
     with_tail = compose_memory_blocks([M("user", "Q0"), M("assistant", "A0"), M("user", "Q1")])
     assert with_tail[0] == first_block[0]
 
-    # 末尾只有 question 的块**不会**被后续的 assistant 补上：那次补全发生在**另一次调用**里。
+    # 末尾只有 question 的块**不会**被后续的 assistant 补上：补全只发生在**同一次调用**里。
     # （比 `_text` 而不是整个块：`source_idxs` 是 **Add 内**的下标，两次调用的下标本来就不同）
     assert _text(with_tail[1]) == _text(compose_memory_blocks([M("user", "Q1")])[0]) == "Q: Q1"
 
@@ -327,7 +321,7 @@ def test_empty_input_yields_no_blocks() -> None:
     assert compose_memory_blocks([]) == ()
 
 
-# ── 判据与编码器的单点纪律（原有断言，跟着规则一起搬过来）──────────────
+# ── 判据与编码器的单点纪律 ───────────────────────────────────────────────
 
 
 def test_is_user_only_judges_role(M: Callable[..., Message]) -> None:
@@ -351,7 +345,7 @@ def test_encode_answer_always_marks_role(M: Callable[..., Message]) -> None:
 
 
 def test_message_strips_surrounding_whitespace() -> None:
-    """首尾空白在**进入核心之前**去掉：AML 只做 `"\\n".join(...)`、不插分隔符（§11.3）。"""
+    """首尾空白在**进入核心之前**去掉：AML 只做 `"\\n".join(...)`、不插分隔符。"""
     assert Message(role="user", content="  两侧有空白  ").content == "两侧有空白"
 
 

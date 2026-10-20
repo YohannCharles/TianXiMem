@@ -5,17 +5,17 @@
 | 类 | 挡什么 | 靠什么 |
 | --- | --- | --- |
 | **轮次** | 轮数不受控 / 提前停错 / 该继续却停了 | 脚本化的 LLM 回复 + 逐轮记录 |
-| **索引映射** | 数字索引 → **稳定 ID** 错位（§5） | 断言文档序与索引**逐位对应** |
-| **证据** | 历史已选证据被本轮名次挤掉（§4.4） | 直接读提示词文本，断言那条证据还在 |
-| **降级（§10）** | LLM / 检索坏了却**变成 500** | 假客户端抛异常 + 断言 `fallback_reason` |
-| **纯度（§13）** | 关掉开关却仍有 LLM 调用 / 仍有精排 | 假协作者的调用计数 |
+| **索引映射** | 数字索引 → **稳定 ID** 错位 | 断言文档序与索引**逐位对应** |
+| **证据** | 历史已选证据被本轮名次挤掉 | 直接读提示词文本，断言那条证据还在 |
+| **降级** | LLM / 检索坏了却**变成 500** | 假客户端抛异常 + 断言 `fallback_reason` |
+| **纯度** | 关掉开关却仍有 LLM 调用 / 仍有精排 | 假协作者的调用计数 |
 
 ⚠ 与 `test_router.py` 同一套做法：假 LLM 是**协议级替身**（`name` + `complete`），
 不是 HTTP 桩；HTTP 层的形状由 [`../src/tianximem/llm/`](../src/tianximem/llm/) 自己的用例覆盖。
 
 ⚠ **`agent/` 里没有真 Qdrant、没有真 SQLite**：本文件用一个鸭子类型的假 store
 （只实现 `read()` + `fetch_pairs_by_ids`），因为执行器**只用到这两样**——
-用到第三样就说明它越界了（§8「不改写原文」，原文只有一条来源）。
+用到第三样就说明它越界了：原文只能来自 `store`。
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ class FakeStore:
 
 
 class FakeRetriever:
-    """按 query 返回脚本化候选——**并记下每一次调用的形状**（§12.1 的"每轮融合召回"）。"""
+    """按 query 返回脚本化候选——**并记下每一次调用的形状**。"""
 
     def __init__(
         self,
@@ -204,14 +204,14 @@ def _agent(
     )
 
 
-# ── ① 原版提示词与填充 ──────────────────────────────────────────────────
+# ── ① 当前提示词与填充 ──────────────────────────────────────────────────
 
 
 def test_the_prompt_is_the_original_one_and_it_is_the_only_one() -> None:
-    """⛔ **提示词逐字照用**（方案 §4.1）——它不许被"优化"。
+    """⛔ **当前提示词逐字照用**——它不许被"优化"。
 
     这里只钉住那些**改了就会改变语义**的锚点，不做整段比对（整段比对会在
-    排版上过度敏感）；真正的防线是"文件里只有这一版"这条纪律。
+    排版上过度敏感）；构造器只接受当前这一版提示词。
     """
     assert COQ_PROMPT_VERSION == "coq-original"
     for anchor in (
@@ -226,7 +226,7 @@ def test_the_prompt_is_the_original_one_and_it_is_the_only_one() -> None:
     ):
         assert anchor in COQ_PROMPT
     # ⛔ 提示词里**只有**那三个占位符——多一个就说明有人动过它。
-    # ⚠ 一共 5 个花括号而不是 3 个：原版提示词里 `{used_query}` 与
+    # ⚠ 一共 5 个花括号而不是 3 个：当前提示词里 `{used_query}` 与
     #   `{retrieved_episodes}` **各出现两次**（"Inputs (schemas)" 段一次、
     #   末尾那段作业说明一次）。填充会把两处都替上——那正是要的行为。
     assert COQ_PROMPT.count("{") == 5
@@ -242,7 +242,7 @@ def test_filling_the_prompt_does_not_rewrite_it() -> None:
         original_query="Q1", used_queries=["Q1", "Q2"], documents=["[0]\ndoc"]
     )
     assert "Q1" in prompt and "Q2" in prompt and "[0]\ndoc" in prompt
-    # 变量周围的正文照旧在（只替换占位符本身）
+    # 变量周围的正文保持不变（只替换占位符本身）
     assert "Now perform the task using:" in prompt
     assert "{original_query}" not in prompt
     assert "{used_query}" not in prompt
@@ -278,7 +278,7 @@ def test_a_query_containing_another_placeholder_is_not_substituted_twice() -> No
     assert "why does it say {used_query} here?" in prompt
 
 
-# ── ② 解析：两阶段提取 + 严格校验（方案 §6）─────────────────────────────
+# ── ② 解析：两阶段提取 + 严格校验 ──────────────────────────────────────
 
 
 def _payload(text: str, count: int = 3):
@@ -361,7 +361,7 @@ def test_no_json_object_at_all_is_rejected() -> None:
     ],
 )
 def test_strict_validation_rejects_everything_off_spec(raw: str, reason: str) -> None:
-    """§6.2 的表：**缺字段不补默认值、布尔不通过整数校验、越界即异常**。"""
+    """**缺字段不补默认值、布尔不通过整数校验、越界即异常**。"""
     with pytest.raises(InvalidCoqOutput, match=reason):
         _payload(raw)
 
@@ -385,11 +385,11 @@ def test_normalize_query_is_case_and_whitespace_insensitive() -> None:
     assert normalize_query("a b") != normalize_query("ab")
 
 
-# ── ③ 轮次与停止条件（方案 §7）──────────────────────────────────────────
+# ── ③ 轮次与停止条件 ────────────────────────────────────────────────────
 
 
 def test_first_round_sufficient_stops_immediately() -> None:
-    """一轮就够 ⇒ **只跑一轮、只调一次 LLM、只精排一次**（§12.1 第一行）。"""
+    """一轮就够 ⇒ **只跑一轮、只调一次 LLM、只精排一次**。"""
     llm = FakeLlm(_reply(sufficient=True, indices=[0], confidence=0.9))
     retriever = FakeRetriever(default=_candidates("m1", "m2"))
     reranker = FakeReranker()
@@ -436,7 +436,7 @@ def test_second_round_runs_when_evidence_is_insufficient() -> None:
 
 
 def test_rounds_never_exceed_max_rounds() -> None:
-    """三轮仍不足 ⇒ 停在 `max_rounds`，**绝不多跑第四轮**（§7.4）。"""
+    """三轮仍不足 ⇒ 停在 `max_rounds`，**绝不多跑第四轮**。"""
     llm = FakeLlm(
         [
             _reply(indices=[0], query="q2"),
@@ -462,13 +462,13 @@ def test_rounds_never_exceed_max_rounds() -> None:
     assert len(result.stats.rounds) == 3
     assert result.stats.stop_reason == "max_rounds"
     # ⚠ **q4 从没被执行过**（它在 max_rounds 那一步被丢掉了）⇒ 它不该出现在
-    #   最终精排 Query 里（§9.1："不包含仅生成但没有执行过的 new_query"）。
+    #   最终精排 Query 里（其中只包含实际执行过的 `new_query`）。
     assert result.rerank_query is not None
     assert "q4" not in result.rerank_query
 
 
 def test_a_rewritten_query_equal_to_a_previous_one_stops_the_loop() -> None:
-    """§7.5：程序侧的去重保险。⚠ 大小写与空白差异也算重复。"""
+    """程序侧的去重保险。⚠ 大小写与空白差异也算重复。"""
     llm = FakeLlm(_reply(indices=[], query="  WHERE   did i join? "))
     retriever = FakeRetriever(by_query={"Where did I join?": _candidates("m1")})
     agent = _agent(llm=llm, retriever=retriever)
@@ -488,7 +488,7 @@ def test_an_empty_next_query_stops_the_loop() -> None:
 def test_sufficient_but_not_confident_is_recorded_as_such() -> None:
     """⚠ 这是个**真实状态**：模型判了"充分"却不敢担保（置信 < 阈值）。
 
-    ⛔ **不要**把它读成"置信度不够就得继续"（§7.5 明令禁止那种读法）——
+    ⛔ **不要**把它读成"置信度不够就得继续"——
     提示词在判充分时会原样回吐原问题，所以那一步无论如何都停。
     这里要的是**它停下来的原因能被看见**：混进 `duplicate_query` 会让
     "阈值太高"与"模型提不出新词"变成同一件事。
@@ -502,7 +502,7 @@ def test_sufficient_but_not_confident_is_recorded_as_such() -> None:
 
 
 def test_the_threshold_only_gates_the_early_stop() -> None:
-    """阈值 0.95 ⇒ 0.9 的"充分"不再提前停；阈值 0.5 ⇒ 同一份输出就停了。"""
+    """阈值 0.95 ⇒ 0.9 的"充分"不会提前停；阈值 0.5 ⇒ 同一份输出就停了。"""
     reply = _reply(sufficient=True, indices=[0], confidence=0.9)
 
     strict = _agent(
@@ -520,14 +520,14 @@ def test_the_threshold_only_gates_the_early_stop() -> None:
     assert loose.search(user_id="u", query="q", top_k=100).stats.stop_reason == "sufficient"
 
 
-# ── ④ 每轮的检索与精排（方案 §3.2 / §12.4）──────────────────────────────
+# ── ④ 每轮的检索与精排 ─────────────────────────────────────────────────
 
 
 def test_every_round_reranks_with_that_round_query_before_taking_top_n() -> None:
     """⚠ 顺序必须是"融合池 → **精排** → 取 N"，而精排用的是**本轮**的 Query。
 
     反过来（先用 RRF 名次截 N 再精排）只会重排一堆已被提前排除的候选，
-    **而结果看起来完全正常**（§3.2 专门点了这个坑）。
+    **而结果看起来完全正常**。
     """
     reranker = FakeReranker()
     agent = _agent(
@@ -547,7 +547,7 @@ def test_every_round_reranks_with_that_round_query_before_taking_top_n() -> None
 
 
 def test_round_candidate_depth_follows_the_request_top_k() -> None:
-    """⚠ 每轮召回深度取**请求的 `top_k`**，不为多跳另造一套检索参数（§3.2）。"""
+    """⚠ 每轮召回深度取**请求的 `top_k`**，不为多跳另造一套检索参数。"""
     retriever = FakeRetriever(default=_candidates("m1"))
     agent = _agent(llm=FakeLlm(_reply(sufficient=True, indices=[0])), retriever=retriever)
     agent.search(user_id="u", query="q", top_k=37)
@@ -555,7 +555,7 @@ def test_round_candidate_depth_follows_the_request_top_k() -> None:
 
 
 def test_round_rerank_can_be_switched_off_for_the_ablation() -> None:
-    """§12.4 的 A/B：关掉它 ⇒ **一次精排都不发生**（每轮与最终）。"""
+    """关掉它 ⇒ **一次精排都不发生**（每轮与最终）。"""
     reranker = FakeReranker()
     retriever = FakeRetriever(default=_candidates("m3", "m1", "m2"))
     agent = _agent(
@@ -569,12 +569,12 @@ def test_round_rerank_can_be_switched_off_for_the_ablation() -> None:
     assert reranker.calls == []
     assert result.stats.rerank_calls == 0
     assert result.stats.rounds[0].rerank_status == "disabled"
-    # ⚠ **候选集合不变**（关的是名次，不是候选）——这是 §13 那条纯度要求的落点。
+    # ⚠ **候选集合不变**（关的是名次，不是候选）——这是开关纯度的落点。
     assert result.stats.rounds[0].candidate_ids == ("m3", "m1", "m2")
 
 
 def test_a_broken_reranker_degrades_without_killing_the_round() -> None:
-    """D12：精排坏了 ⇒ **回原顺序**，本轮照跑。⚠ 但状态要记成 `degraded`。"""
+    """精排坏了 ⇒ **回原顺序**，本轮照跑。⚠ 但状态要记成 `degraded`。"""
     agent = _agent(
         llm=FakeLlm(_reply(sufficient=True, indices=[0])),
         retriever=FakeRetriever(default=_candidates("m1", "m2")),
@@ -601,7 +601,7 @@ def test_a_missing_source_row_disables_the_round_rerank_instead_of_misaligning()
     assert "m3" not in result.stats.rounds[0].document_ids
 
 
-# ── ⑤ 证据索引与原文（方案 §5 / §8）────────────────────────────────────
+# ── ⑤ 证据索引与原文 ───────────────────────────────────────────────────
 
 
 def test_documents_are_rendered_with_the_shared_renderer_and_indexed_from_zero() -> None:
@@ -616,7 +616,7 @@ def test_documents_are_rendered_with_the_shared_renderer_and_indexed_from_zero()
 
 
 def test_the_document_header_carries_only_real_metadata() -> None:
-    """⚠ 头部只放**真源里真有的**东西（日期，**只到日**，D21）。
+    """⚠ 头部只放**真源里真有的**东西。
 
     ⛔ 不要为了凑成"Time / Role / Content"三行去编 `Role`：编出来的字段
     就是在给模型假信息，而它会照着它回答。
@@ -633,7 +633,7 @@ def test_the_document_header_carries_only_real_metadata() -> None:
 
 
 def test_the_index_mapping_is_rebuilt_every_round() -> None:
-    """⭐ §5.2：**绝对不能复用上一轮的数字索引**。
+    """⭐ **绝对不能复用上一轮的数字索引**。
 
     做法就是让同一条证据在两轮里**落在不同的索引上**：`m2` 第一轮是索引 1，
     第二轮（本轮只有两条新候选 m4 / m5，历史证据排在后面）变成索引 2。
@@ -667,7 +667,7 @@ def test_the_index_mapping_is_rebuilt_every_round() -> None:
 
 
 def test_the_document_order_never_changes_after_the_index_is_built() -> None:
-    """§5.3 第 3 条：映射建立后**不得单独改动文档展示顺序**。
+    """映射建立后**不得单独改动文档展示顺序**。
 
     ⚠ 这条只能靠"提示词里那一段就是 `document_ids` 的顺序"来钉——顺序一动，
     模型给的索引就指向别的证据，而**这件事不会报错**。
@@ -693,7 +693,7 @@ def test_the_document_order_never_changes_after_the_index_is_built() -> None:
 
 
 def test_a_duplicate_across_rounds_is_deduplicated_by_stable_id() -> None:
-    """同一份证据在多轮命中，**最终候选里只留一份**（§8.2）。"""
+    """同一份证据在多轮命中，**最终候选里只留一份**。"""
     llm = FakeLlm(
         [
             _reply(indices=[], query="q2"),
@@ -710,12 +710,12 @@ def test_a_duplicate_across_rounds_is_deduplicated_by_stable_id() -> None:
     assert ids == ["m1", "m2", "m3"]
     assert len(ids) == len(set(ids))
     assert result.stats.unique_candidate_count == 3
-    # ⚠ `candidate_count` 是**去重前**的出现次数（§8.1）：2 ＋ 2
+    # ⚠ `candidate_count` 是**去重前**的出现次数：2 ＋ 2
     assert result.stats.candidate_count == 4
 
 
 def test_history_evidence_is_never_shown_twice_in_one_round() -> None:
-    """§5.3 第 6 条：同一轮里同一条只能出现一次。"""
+    """同一轮里同一条只能出现一次。"""
     llm = FakeLlm(
         [
             _reply(indices=[0], query="q2"),
@@ -728,14 +728,14 @@ def test_history_evidence_is_never_shown_twice_in_one_round() -> None:
     agent = _agent(llm=llm, retriever=retriever)
     agent.search(user_id="u", query="q", top_k=100)
 
-    # ⚠ 提示词里文档列表**出现两次**（原版提示词的 "Inputs (schemas)" 段与末尾各一次）
+    # ⚠ 提示词里文档列表**出现两次**（当前提示词的 "Inputs (schemas)" 段与末尾各一次）
     #   ⇒ 只在末尾那份里数。
     tail = llm.calls[1].rsplit("**Retrieved Documents**", 1)[1]
     assert tail.count("Q: Where did I join?") == 1
 
 
 def test_history_evidence_survives_a_round_where_it_ranks_last() -> None:
-    """⭐ §4.4 的硬要求：**已选中的证据不能因为本轮名次低就被丢掉**。
+    """⭐ **已选中的证据不能因为本轮名次低就被丢掉**。
 
     第二轮里 `m1` 掉出了 Top-N（`per_round_top_k=1` ⇒ 本轮只交一条），
     但它是第一轮选中的证据 ⇒ **它必须还在文档列表里**。
@@ -755,11 +755,11 @@ def test_history_evidence_survives_a_round_where_it_ranks_last() -> None:
 
 
 def test_the_document_budget_never_drops_history_evidence() -> None:
-    """⭐ §4.4：历史证据**先占预算**，然后才轮到本轮候选。
+    """⭐ 历史证据**先占预算**，然后才轮到本轮候选。
 
     ⚠ 这里同时钉住一条**可证的不变式**：`history_tokens ≤ max_prompt_tokens` 恒成立
     （历史只可能由**发出去过的**文档组成，而那些已经过预算）⇒ 所以
-    `_build_documents` 的"连历史都放不下"那条出口**今天不可达**。
+    `_build_documents` 的"连历史都放不下"那条出口在当前配置下不可达。
     本用例断言的是**它不会因为预算紧就把历史挤掉**这个正面的性质。
     """
     llm = FakeLlm(
@@ -781,11 +781,11 @@ def test_the_document_budget_never_drops_history_evidence() -> None:
     assert second.dropped_documents == 1
 
 
-# ── ⑥ 最终候选与联合精排 Query（方案 §9）───────────────────────────────
+# ── ⑥ 最终候选与联合精排 Query ─────────────────────────────────────────
 
 
 def test_the_joint_query_lists_the_original_once_then_the_executed_rewrites() -> None:
-    """⭐ §9.1：**原问题只出现一次**，后面跟着**实际执行过**的改写，按执行先后。"""
+    """⭐ **原问题只出现一次**，后面跟着**实际执行过**的改写，按执行先后。"""
     llm = FakeLlm(
         [
             _reply(indices=[], query="Who directs it?"),
@@ -803,7 +803,7 @@ def test_the_joint_query_lists_the_original_once_then_the_executed_rewrites() ->
 
 
 def test_the_joint_query_never_contains_a_query_that_was_never_executed() -> None:
-    """⚠ §9.1 最后一句：**不包含仅生成但没有执行过的 `new_query`**。"""
+    """⚠ **不包含仅生成但没有执行过的 `new_query`**。"""
     llm = FakeLlm(_reply(sufficient=True, indices=[], query="never executed"))
     agent = _agent(llm=llm, retriever=FakeRetriever(default=_candidates("m1")))
     result = agent.search(user_id="u", query="the original", top_k=100)
@@ -811,7 +811,7 @@ def test_the_joint_query_never_contains_a_query_that_was_never_executed() -> Non
 
 
 def test_the_original_query_mode_leaves_the_rerank_query_empty() -> None:
-    """§12.6 的对照项：只用原问题 ⇒ `None`（= 混合链那条路的行为）。"""
+    """只用原问题的模式 ⇒ `None`（= 混合链那条路的行为）。"""
     agent = _agent(
         llm=FakeLlm(_reply(sufficient=True, indices=[])),
         retriever=FakeRetriever(default=_candidates("m1")),
@@ -822,7 +822,7 @@ def test_the_original_query_mode_leaves_the_rerank_query_empty() -> None:
 
 
 def test_every_round_is_isolated_by_user_id() -> None:
-    """用户隔离**每一轮**都要带着（§7.3）——漏掉某一轮就是跨用户检索。"""
+    """用户隔离**每一轮**都要带着——漏掉某一轮就是跨用户检索。"""
     llm = FakeLlm([_reply(indices=[], query="q2"), _reply(sufficient=True, indices=[])])
     retriever = FakeRetriever(default=_candidates("m1"))
     agent = _agent(llm=llm, retriever=retriever)
@@ -830,11 +830,11 @@ def test_every_round_is_isolated_by_user_id() -> None:
     assert {call["user_id"] for call in retriever.calls} == {"alice"}
 
 
-# ── ⑦ 降级（方案 §10）——**绝不让一次正常 Search 变成 500** ─────────────
+# ── ⑦ 降级——**绝不让一次正常 Search 变成 500** ─────────────────────────
 
 
 def test_an_llm_failure_keeps_the_candidates_and_does_not_fall_back() -> None:
-    """§10.1 第 4、5 条：**保留已经取得的合法候选**，能出合法结果就不回退。"""
+    """**保留已经取得的合法候选**，能出合法结果就不回退。"""
     llm = FakeLlm([_reply(indices=[0], query="q2"), LlmUnavailable("端点挂了")])
     agent = _agent(llm=llm, retriever=FakeRetriever(default=_candidates("m1", "m2")))
     result = agent.search(user_id="u", query="q", top_k=100)
@@ -853,7 +853,7 @@ def test_an_unexpected_llm_error_is_recorded_differently_from_a_dead_endpoint() 
 
 
 def test_invalid_output_never_updates_the_evidence_set() -> None:
-    """§10.1 第 2 条 + §6.2：**不补默认值、不用无效索引更新证据**。"""
+    """**不补默认值、不用无效索引更新证据**。"""
     llm = FakeLlm(
         '{"is_sufficient": true, "evidence_indices": [99], "new_query": "q",'
         ' "confidence_score": 0.9}'
@@ -869,7 +869,7 @@ def test_invalid_output_never_updates_the_evidence_set() -> None:
 
 
 def test_a_retrieval_failure_with_nothing_collected_falls_back() -> None:
-    """§10.2：检索**调用失败** ≠ 没有相关记忆 ⇒ 交回混合检索（§10.1 第 6 条）。"""
+    """检索**调用失败** ≠ 没有相关记忆 ⇒ 交回混合检索。"""
     agent = _agent(
         llm=FakeLlm(_reply()),
         retriever=FakeRetriever(raises=RuntimeError("qdrant down")),
@@ -902,12 +902,12 @@ def test_a_retrieval_failure_after_evidence_was_collected_keeps_that_evidence() 
 
 
 def test_an_empty_retrieval_is_not_a_failure() -> None:
-    """⚠ §10.2 要区分的那两件事：**空结果**照常问模型（它会判"不足"），**异常**才降级。"""
+    """⚠ 要区分的那两件事：**空结果**照常问模型（它会判"不足"），**异常**才降级。"""
     llm = FakeLlm(_reply(indices=[], query="a better question"))
     agent = _agent(llm=llm, retriever=FakeRetriever(default=[]))
     result = agent.search(user_id="u", query="q", top_k=100)
 
-    assert len(llm.calls) >= 1  # 空候选**照样问了**（§10.2 要区分的那两件事）
+    assert len(llm.calls) >= 1  # 空候选**照样问了**（空结果与调用异常要分开处理）
     assert result.fallback_reason is None
     assert result.stats.rounds[0].recalled_candidates == 0
     # 文档列表为空 ⇒ 模型只能回 []，而它回不了越界的索引
@@ -950,7 +950,7 @@ def test_the_agent_never_imports_the_http_layer_or_the_router() -> None:
     """AST：执行器**不认识 HTTP、也不认识路由器**（两者接线在 `service/`）。
 
     ⚠ 这条挡的是"顺手从 agent 里调一下路由器"那类越界——它会让两个模块
-    互相纠缠，而 §13 的消融需要它们**各自可关**。
+    互相纠缠，而消融配置需要它们**各自可关**。
     """
     import ast
     from pathlib import Path
@@ -969,7 +969,7 @@ def test_the_agent_never_imports_the_http_layer_or_the_router() -> None:
 
 
 def test_the_agent_result_carries_no_answer_text() -> None:
-    """§2.1 的红线：产出物是**候选与名次**，里面没有答案。"""
+    """红线：产出物是**候选与名次**，里面没有答案。"""
     agent = _agent(
         llm=FakeLlm(_reply(sufficient=True, indices=[0])),
         retriever=FakeRetriever(default=_candidates("m1")),

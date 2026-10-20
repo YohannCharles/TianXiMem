@@ -3,7 +3,7 @@
 
 ```text
 PYTHONIOENCODING=utf-8 uv run python tools/bundle_eval.py \
-    --bundle var/exports/memory600-20261013 \
+    --bundle var/exports/memory600- \
     --out   eval/reports/runs/bundle600-<日期> \
     --arms  e0,e2
 ```
@@ -183,7 +183,7 @@ def _arm_config(
         rerank=replace(base.rerank, enabled=True),
         router=replace(base.router, enabled=router),
         agentic=replace(base.agentic, enabled=agentic, force=force, mode=mode),
-        # ⛔ 本工具发的不是官方流量，别污染 S6 的采集文件。
+        # ⛔ 本工具发的不是官方流量，别污染  的采集文件。
         capture=replace(base.capture, enabled=False),
         metrics_path=str(metrics),
     )
@@ -299,7 +299,7 @@ def run_arm(
                 try:
                     hits[question.qid] = [
                         # ⚠ `SearchHit` 是 `slots=True` 的 dataclass ⇒ **没有 `__dict__`**；
-                        #   用 `asdict` 落盘（它的四个字段就是 §2.1 的四项，原样存）。
+                        #   用 `asdict` 落盘（它的四个字段就是 Search 契约的四项，原样存）。
                         asdict(h)
                         for h in client.search(
                             user_id=space.user_id, query=question.question, top_k=top_k

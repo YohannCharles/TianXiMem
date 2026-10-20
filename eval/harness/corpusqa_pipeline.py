@@ -1,6 +1,6 @@
 """HybridQA / FEVEROUS 本地文本检索适配：Search-only 作答，固定上游函数判分。
 
-新入口要求显式 answer_contract。采集重放继续走原有分派层，不改变其 prompt/评分。
+入口要求显式 `answer_contract`。采集重放由分派层选择该契约，并复用相同 prompt 与评分。
 FEVEROUS 只接受答案 prompt 可见的元素 ID；空检索不会补候选页或 gold evidence。
 v3 对 JSON/标签/不可见 ID 错误最多做一次模型校正，只使用相同 Search 文本并保留两次输出。
 """

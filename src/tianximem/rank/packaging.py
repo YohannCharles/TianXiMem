@@ -1,4 +1,4 @@
-"""Context Packaging —— **段级打包 + token 预算**（§11.3 / §6.4）。
+"""Context Packaging：段级打包与 token 预算。
 
 ```text
 ContextSegment[]（已按 best_rank 升序）
@@ -11,13 +11,13 @@ ContextSegment[]（已按 best_rank 升序）
 
 ## 三条本文件独有、且**必须**守住的东西
 
-**1. 本函数是最终数量的守门人。** `len(data) <= top_k` 精确成立（§2.2）。
+**1. 本函数是最终数量的守门人。** `len(data) <= top_k` 精确成立。
 ⚠ 这里的 `top_k` 约束的是**段数**，不是中间 raw memory 数——扩窗会把 raw 数抬到
 远大于 `top_k`，而合并又会把它降回来（见 `neighbor.py` 的模块 docstring）。
 
 **2. 段是**原子单位**，装不下就停。** 不截半个段、不拆回单条、不跳过当前段再塞后面的。
 理由：段是"一段连续对话"，**截断点必须落在段边界上**——否则模型读到的上下文缺了一环，
-而 `content` 里**看不出来**（§11.2）。
+而 `content` 本身看不出这个缺口。
 
 **3. `content` 不通过参数注入。** [`common/render`](../common/render.py) 是**唯一实现**
 （不变式 I1）：同一份渲染既是 embedding 的输入、也是返回给 AML 的 `content`。
@@ -42,32 +42,22 @@ __all__ = [
     "placeholder_score",
 ]
 
-#: `created_at` 的时区口径：**固定 UTC，没有旋钮**（`docs/contract.md` §3 只规定"只给到日粒度"）。
-#: 固定 UTC 的理由：它**与机器无关**——用本地时区会让同一份数据在不同机器上差一天，
-#: 而本项目最怕的就是不可复现。
+#: `created_at` 固定使用 UTC 日粒度，不提供时区配置，保证同一数据在不同机器上一致。
 #:
-#: ⚠ **它与加载层必须一致**：`event_time` 由 harness 合成，**合成时用哪个口径、这里就得用
-#: 哪个口径**，否则日期会整体偏一天（且不报错）。⇒ 加载层也按 UTC 编码：benchmark 里
-#: "没有时区"的时间按 **floating calendar time** 处理，编成 Unix 毫秒写进 `event_time`。
-#:
-#: ⚠ **刻意不做成配置项**：一个"可以随手改的 `created_at_tz`"会与加载层脱钩——改了它，
-#: 日期整体偏一天，而**没有任何东西会报错**。
-#:
-#: 执行值是 [`common/render.py`](../common/render.py) 的 `day_granularity`（T1 的 `content`
-#: 前缀要用同一个格式，两处各写一份早晚会分叉）。本文件只**转出**这个名字，
-#: `packaging.day_granularity` 这个路径保持可用（值见 config-reference §7）。
+#: `event_time` 由 harness 按 UTC 合成；没有时区的时间按 floating calendar time 处理。
+#: 日期生成统一使用 [`common/render.py`](../common/render.py) 的 `day_granularity`；
+#: 本模块只重新导出该名称，保持 `packaging.day_granularity` 路径可用。
 UTC_ONLY: Final[str] = "UTC"
 
 
 def placeholder_score(rank: int) -> float:
-    """`1/(rank+1)`——**单调递减的占位值**，`rank` 是 **0-based**（§11.3）。
+    """`1/(rank+1)`：按 0-based 输出位置单调递减的占位分。
 
-    ⚠ **不要返回原始 RRF 分数，也不要返回 reranker 的原始分**：融合分数**不是校准量**
-    （§8），对我们没有意义；但**万一 AML 按 `score` 重排，省略 `score` 就有风险**。
-    取最安全的一侧：这个值无论 AML 是否重排，**顺序都不变**。
+    不返回原始 RRF 或 reranker 分数；这些分数不是校准量。占位分即使被 AML 再次排序，
+    也保持当前输出顺序。
 
-    ⚠ 这里的 `rank` 是**最终输出位置**（段级），不是 rerank 名次——两者在扩窗/合并
-    之后**不是一回事**。
+    ⚠ 这里的 `rank` 是**最终输出位置**（段级），不是 rerank 名次。扩窗与合并后，
+    这两个位置含义不同。
     """
     if rank < 0:
         raise ValueError(f"rank 不得为负：{rank}")
@@ -76,7 +66,7 @@ def placeholder_score(rank: int) -> float:
 
 @dataclass(frozen=True, slots=True)
 class ResponseItem:
-    """`data[]` 的一项——**§2.1 的四个字段，一个不多**。
+    """`data[]` 的一项，只包含契约规定的四个字段。
 
     ⚠ 这里**没有** `session_id` / `request_id` / `local_index` /
     `source_memory_ids` 之类的内部字段。
@@ -99,7 +89,7 @@ class PackagedResponse:
     | `considered_segments` | 合并后的段总数（= 排序后、截断前的候选段数） |
     | `truncated_by_top_k` | 因 `top_k` 而截断 |
     | `truncated_by_budget` | 因 token 预算而提前停止（**不是**截断，是"装不下就停"） |
-    | `output_tokens` | 最终输出的**真实** token 数（对拼好的字符串数的，§6.4） |
+    | `output_tokens` | 最终拼接字符串的真实 token 数 |
     """
 
     items: tuple[ResponseItem, ...]
@@ -184,7 +174,7 @@ def package(
         for output_rank, segment in enumerate(chosen)
     )
 
-    # 报告**真值**：对最终那个真实字符串数一次（§6.4 要求对真实字符串计数）。
+    # 对最终拼接字符串计数，报告真实值。
     output_text = SEGMENT_SEP.join(segment.content for segment in chosen)
     return PackagedResponse(
         items=items,

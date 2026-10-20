@@ -1,21 +1,13 @@
-"""Qwen3-Embedding-4B —— **开发期替代模型**（§12.1 R1，团队主动接受的偏离）。
+"""Qwen3-Embedding-4B 开发期 embedding 适配器。
 
-**不进提交链路**（§2.3 规定 embedding 只能用 `text-embedding-v4`）。它存在只是为控 API 成本，
-Step 5 之后停止使用。⚠ 2026-10-13 起是 **4B**，不是 8B——开发期网关（`memory2.021130.xyz`）
-只部署了这一个；两者**同为 1024 维**，所以换它**不会**被维度自检拦下，只会表现为"检索变差"。
+该适配器不进入提交链路；提交链路使用 `text-embedding-v4`。开发网关部署 4B 模型，
+与提交模型同为 1024 维，因此模型不匹配不会由维度校验发现，必须通过配置和缓存坐标控制。
 
-⚠ **本实现只产出 Dense 向量。** 不产出 sparse、不产出 ColBERT——词法那一路走 Qdrant 原生
-`qdrant/bm25`（§7.1），而 `text-embedding-v4` 也不提供该能力 ⇒ 任何依赖它的代码都是**死重**
-（理由见 [`CLAUDE.md`](./CLAUDE.md)）。
+本实现只产出 dense 向量。词法检索由 Qdrant 原生 `qdrant/bm25` 提供。
+查询默认原样送入模型；可选的 instruction 前缀位于
+[`query_instruction.py`](./query_instruction.py)，并且必须在缓存之外应用。
 
-⚠ **查询侧照原样送**（§7.2）：v1 不做任何查询改写。模型卡推荐的那层 instruction 前缀
-（查询侧加、文档侧不加）在 [`query_instruction.py`](./query_instruction.py)，**默认关着**，
-要不要开是待定的规格问题；而**唯一不可违反的顺序：前缀必须加在缓存之上**。
-
-维度来自真实返回，**不在此声明**——见 `base.py` 的说明。
-
-⚠ **本模块不读环境变量**：`base_url` / `api_key` / `model` 都由装配点传进来
-（`common/config/` 是全包唯一读环境变量的地方，③-d）。
+维度来自真实响应，不在此声明。本模块不读取环境变量；端点和凭据由装配层传入。
 """
 
 from __future__ import annotations
@@ -28,10 +20,8 @@ __all__ = ["DEFAULT_MODEL", "Qwen3EmbeddingEmbedder"]
 #: （那边是配置的默认，这里是直接构造这个类时的默认）。两处相等由
 #: `tests/test_config.py::test_model_default_is_the_same_in_both_places` 钉住。
 #:
-#: ⚠ 这个 id 是**服务端的事**，随网关而变：2026-09-28 迁到 vLLM 直服时是
-#: `qwen3-embedding-8b`，2026-10-09 回到自研封装（`memory.021130.xyz`）后是
-#: **`Qwen/Qwen3-Embedding-8B`**，2026-10-13 起 embedding 迁到 `memory2.021130.xyz`、
-#: 模型换成 **`Qwen/Qwen3-Embedding-4B`**。
+#: ⚠ 这个 id 是**服务端的事**，随网关而变。当前开发网关
+#: `memory2.021130.xyz` 使用 **`Qwen/Qwen3-Embedding-4B`**。
 #: ⚠ **两个网关对 `model` 的态度不同**：主网关（LLM/reranker）忽略它，填错不报错；
 #: `memory2` **会校验**，而且**大小写敏感**（`...-4b` → 404 `The model ... does not exist.`）
 #: ⇒ 写端点 `/v1/models` 声称的那个 id，逐字照抄。
@@ -43,7 +33,7 @@ class Qwen3EmbeddingEmbedder(OpenAICompatEmbedder):
 
     ⚠ 它与 LLM 那一路**不同 host、不同 key**（`.env` 里 `AML_EMB_*` 与 `AML_*`
     是两套值，别混用）；**reranker 在主网关**（`memory.021130.xyz`），用**第三个**变量名
-    （`TIANXIMEM_RERANKER_*`）——2026-10-13 起 embedding 与 reranker **不同 host**。
+    （`TIANXIMEM_RERANKER_*`）——embedding 与 reranker **使用不同 host**。
     """
 
     def __init__(

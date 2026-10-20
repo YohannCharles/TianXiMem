@@ -1,4 +1,4 @@
-"""PersonaMem 的 Search → 答案消息闭环与旧答案复用保护；不调用远端模型。"""
+"""PersonaMem 的 Search → 答案消息闭环与答案复用一致性保护；不调用远端模型。"""
 
 import json
 from types import SimpleNamespace

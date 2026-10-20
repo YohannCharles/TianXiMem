@@ -2,9 +2,9 @@
 
 本文件保护的是两件事，都不是功能：
 
-* **S6**：平台的 `request_id` 到底长什么样——**它已经答过一次**（官方发的是 `r_3115…`
-  这种不透明 id，而 D25 那条解析在真实流量上 100% 失败 ⇒ **D28**）。
-  现在它记的是**官方原样发来的正文**，用来核验请求形状（字段 / `timestamp` 单位 / 未知字段）。
+* **请求形状可核验**：平台发送的 `request_id` 是不透明字符串（例如 `r_3115…`），
+  任何按形状解析的逻辑都可能失败。采集记录**官方原样发来的正文**，用于核验字段、
+  `timestamp` 单位和未知字段。
 * **它绝不改变行为**：抄一份原文，不改变下游看到的 body、不吞异常、写盘失败不影响响应。
 
 ⚠ **HTTP 那几条用例走真 `create_app` + `TestClient`**（与 `test_contract.py` 同一套 `wired`
@@ -30,7 +30,7 @@ from tianximem.service.capture import CAPTURED_PATHS, CaptureMiddleware, Request
 _MIN_ENV = {"AML_EMB_BASE_URL": "http://unused/v1", "AML_EMB_API_KEY": "k"}
 
 _ADD_PAYLOAD: dict[str, Any] = {
-    # ⚠ 形状**随便**（D28：服务端一个字节都不解析它）——这里用本仓 harness 的形态，
+    # ⚠ 形状**随便**——这里用本仓 harness 的形态，
     #   只是为了让日志读起来眼熟。
     "request_id": "u1|s1|0",
     "user_id": "u1",
@@ -87,7 +87,7 @@ def _app_with_capture(wired: Wired, cap: RequestCapture):
 
 
 def test_capture_is_off_by_default(tmp_path: Path) -> None:
-    """**代码内置缺省**是关：缺键的旧快照按"采集关闭"跑。
+    """**代码内置缺省**是关：配置快照缺键时按"采集关闭"跑。
 
     ⚠ 与 `configs/default.yaml` 的基线（`true`）是两处口径，形状同
     `agentic.enabled` / `router.enabled`——本用例只钉前者。
@@ -152,7 +152,7 @@ def test_non_positive_max_bytes_is_rejected(tmp_path: Path, value: int) -> None:
 
 
 def test_record_carries_the_raw_body_and_the_request_id(capture: RequestCapture) -> None:
-    """`body` = 原样收到的对象；派生列只多给一个 `request_id`（**不解析它**，D28）。"""
+    """`body` = 原样收到的对象；派生列只多给一个 `request_id`。"""
     payload = {
         "request_id": "eval:run1:locomo_refined:conv-0:chunk-3",
         "user_id": "u1",
@@ -167,7 +167,7 @@ def test_record_carries_the_raw_body_and_the_request_id(capture: RequestCapture)
     assert entry["body"] == payload  # 逐字段原样（含中文）
     assert entry["body_bytes"] == len(body)
     assert entry["request_id"] == payload["request_id"]
-    # ⚠ D28 起**没有** `chunk_ordinal` 这一列——那个解析器已经删了
+    # ⚠ 当前记录**没有** `chunk_ordinal` 这一列；`request_id` 不按形状解析。
     assert "chunk_ordinal" not in entry
     assert entry["status"] == 200
     assert entry["kind"] == "req"
@@ -182,10 +182,10 @@ def test_meta_line_describes_the_file(capture: RequestCapture) -> None:
 
 
 def test_an_opaque_request_id_is_recorded_verbatim(capture: RequestCapture) -> None:
-    """**形状怪异的 `request_id` 照样原样记下来**（D28）。
+    """**形状怪异的 `request_id` 照样原样记下来**。
 
-    这正是那次冒烟失败的形状（`...:chunk-0-1790669310`）——**当时**服务端解析不出来 ⇒
-    500；现在它只是个字符串，既不解析、也不影响落库，但**记录里要能看见它**。
+    例如 `...:chunk-0-1790669310`：服务端不解析它，也不让它影响落库，
+    但**记录里要能原样看见它**。
     """
     payload = {**_ADD_PAYLOAD, "request_id": "r_31156f4174b24abe83ad2c09a486cc5f"}
 
@@ -230,7 +230,7 @@ def test_authorization_value_never_lands_in_the_file(capture: RequestCapture) ->
 
 
 def test_a_full_file_rotates_instead_of_stopping(tmp_path: Path) -> None:
-    """**写满一份就换下一份**（2026-09-29 起）——不许停，也不许把一份写成 1.5 GB。
+    """**写满一份就换下一份**——不许停，也不许把一份写成 1.5 GB。
 
     ⚠ 单个 1.5 GB 的 JSONL（一轮 Full 的量级）**打不开**，所以按 `max_bytes` 切开。
     """
@@ -336,11 +336,11 @@ def test_unhandled_exception_is_recorded_with_its_type(
 
     * `error` 记下**异常类型**（500 的响应体在这一层**外面**生成，见 `capture.py`）
     * `status` 是 `None`（异常穿过本层时还没有状态码）
-    * 请求原文**照旧在**（要核验的就是它）
+    * 请求原文**仍在记录里**（要核验的就是它）
     """
     bad = {
         **_ADD_PAYLOAD,
-        # 那次冒烟失败的形状：`chunk-0` 后面**还粘了一段运行时间戳**
+        # `chunk-0` 后面**还粘了一段运行时间戳**，仍需原样记录
         "request_id": "aml-local:probe:addtest:__selftest__:s1:chunk-0-1790669310",
     }
 
@@ -382,7 +382,7 @@ def test_capture_changes_neither_the_response_nor_the_truth_source(
     与本模块毫无表面关联。
 
     做法：同一个 payload 发两次（第二次走幂等守卫的修复路径），断言响应逐字相同、
-    且库里**只有一行**——采集开着那次也一样。
+    且库里**只有一行**——采集开启时也保持同一结果。
     """
     with TestClient(_app_with_capture(wired, capture)) as client:
         on = client.post("/add", json=_ADD_PAYLOAD)
@@ -394,7 +394,7 @@ def test_capture_changes_neither_the_response_nor_the_truth_source(
     assert on.status_code == off.status_code == 200
     assert on.json() == off.json()
     rows = rd(wired.store, wired.store.iter_pairs)
-    assert len(rows) == 1  # 两次都没多写（D25 的守卫 + 位置派生）
+    assert len(rows) == 1  # 两次都没多写
     assert rows[0].question == "Q1"
     assert _requests(capture) != []
 

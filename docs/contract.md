@@ -1,225 +1,160 @@
-# AML 参赛契约与合规自查
+# HTTP Contract
+
+This document defines the public HTTP surface. The service specification is [`../AML Agentic Memory 增强框架 PRD.md`](../AML%20Agentic%20Memory%20增强框架%20PRD.md).
+
+## Add
+
+`POST /add`
+
+```json
+{
+  "request_id": "opaque-string",
+  "user_id": "user",
+  "session_id": "session",
+  "messages": [
+    {
+      "role": "user",
+      "content": "message text",
+      "timestamp": 1697900000000
+    }
+  ]
+}
+```
+
+Success:
 
-> 最后核对：2026-09-25，对应 PRD §2 / §11.3 / §17。**冲突以 PRD 为准。**
-> §7 是**外部来源补充**（非 PRD），出处与可信度逐条标注——**它不覆盖本节 1–6。**
-> 本节每条都是**不可协商**的（§2 开头逐字："这一节的每一条都不可协商"）。
+```json
+{
+  "success": true,
+  "request_id": "opaque-string",
+  "user_id": "user",
+  "session_id": "session"
+}
+```
+
+Rules:
 
----
+- `messages` must contain at least one item.
+- `timestamp` is optional and uses Unix milliseconds.
+- The three identifiers are echoed unchanged.
+- A successful response means the source transaction is committed and the Qdrant index is ready for immediate Search.
+- A replay with the same `request_id` and canonical payload returns success without writing source rows again.
+- A different payload under the same `request_id` is a conflict.
 
-## 1. 接口形状（§2.1）
+## Search
 
-### `Add`（POST）
+`POST /search`
 
-**请求**
-| 字段 | 说明 |
-| --- | --- |
-| `request_id` | 唯一，**须原样回显** |
-| `messages` | **源序**；每项含 `role` 与非空 `content`；可选 `timestamp`（Unix 毫秒） |
-| `user_id` | 隔离字段 |
-| `session_id` | 分组字段 |
+```json
+{
+  "query": "question text",
+  "user_id": "user",
+  "top_k": 100
+}
+```
 
-**响应 200**：`success: true` + **原样回显** `request_id` / `user_id` / `session_id`
+Success:
 
-- 每次 Add 只喂 **≤20 条消息或 2,000 词**，由 AML **确定性切分**
-- **必须"持久化完成且立即可搜索"后才能响应**——不允许异步建索引
+```json
+{
+  "data": [
+    {
+      "id": "stable-id",
+      "content": "rendered evidence",
+      "created_at": "2026-07-26",
+      "score": 1.0
+    }
+  ]
+}
+```
 
-### `Search`（POST）
+Rules:
 
-**请求**：`query`、`user_id`、`top_k`
+- `query` must not be blank.
+- `top_k` must be at least 1.
+- `data` is always an array; no match returns `[]`.
+- The final array length is at most `top_k`.
+- The returned items are evidence, not answers.
+- `id` is stable for the same stored segment.
+- `content` is self-delimiting, has no leading or trailing whitespace, and contains no second-level timestamp.
+- `created_at` is always present as `YYYY-MM-DD` or `""`.
+- `score` is a monotonic rank placeholder such as `1 / (rank + 1)`.
 
-**响应**：`data` —— **按相关性降序的数组**，每项：
+## Health
 
-| 字段 | 要求 |
-| --- | --- |
-| `id` | **稳定字符串** |
-| `content` | 渲染后的记忆正文（§11.3） |
-| `created_at` | **必须始终带上**（理由见下） |
-| `score` | 可选。**返回随名次单调递减的占位值（如 `1/(rank+1)`），不要返回原始 RRF 分数** |
+`GET /health`
 
-- 空结果返回 `[]`
-- **不得生成最终答案，也不得把答案伪装成记忆记录**
+Response:
 
----
+```json
+{"status":"ok"}
+```
 
-## 2. 硬性规则（§2.2）
+This endpoint does not probe downstream services.
 
-| 规则 | 后果 |
-| ---- | ---- |
-| **`top_k` 由 AML 固定为 100** | 返回超过 `top_k` 是**契约错误**，不会被静默截断——**必须精确计数** |
-| **`user_id` 是唯一的检索隔离字段** | 跨 user 检索被禁止 |
-| `session_id` 只是分组字段 | **不是 Search 的过滤条件** |
-| **Add 最多被重试 32 次**，`request_id` 与 payload 不变 | **必须幂等** |
-| **答案窗口 128k token**，扣掉输出与安全余量后剩 **117,760 input** | **按返回顺序取前缀**——排在后面的证据会被整段截掉 |
-| 单请求最长 30 分钟 | 预算充足 |
+## Isolation
 
-**关于 `top_k` 的一条实现要求**（§7.3）：**返回项必须精确 ≤ 请求里的 `top_k`，任何一层都不要写死 100**。⚠ 实现把截断点放在 [`src/tianximem/retrieve/fusion.py`](../src/tianximem/retrieve/fusion.py) 的确定性排序**之后**：Qdrant 根级 `limit` 取 `2 × prefetch_limit`（要全部融合结果），不再直接取 `top_k`——依据见 [`eval/reports/ledger.md`](../eval/reports/ledger.md) 的「V13 补完」；`len(data) <= top_k` 的契约不变。
+- Search filters only by `user_id`.
+- `session_id` is grouping metadata.
+- No retrieval path may reveal another user's blocks or facts.
 
-**关于双预算**（§6.4）：索引单元是 QA 对，文本量约为单条消息的两倍。Top-100 装得下 100 个对，但**答案窗口只有 117,760 token 才是真正的上限**。因此必须**同时按槽位数和 token 数双预算截断**。token 用答案模型自己的分词器（`gpt-4o-mini` 的 `o200k_base`），**不要用字符数或空格切分近似**——单次近似偏差会在 100 个对上放大到几千 token。
+## Error Handling
 
----
+AML defines retries and timeouts. The service must assume a failed request can be retried.
 
-## 3. `created_at` 为什么不能省（§11.3）
+| Status | Meaning | Client action |
+| --- | --- | --- |
+| `200` | Successful contract response | Validate response shape and echoed fields. |
+| `409` | Same `request_id` with a different payload | Use a new `request_id`; retrying the same conflict cannot succeed. |
+| `422` | Invalid request shape | Correct the request. |
+| `5xx` | Internal or dependency failure | Retry when the operation remains retryable. |
 
-三个数据集各有一条独立理由，**缺了会整批丢分或静默失效**：
+Add must not return partial success. Search may fall back from optional reranking, routing, or multi-hop execution, but the final response must remain contract-valid and expose degradation through metrics.
 
-1. **CL-Bench 靠它渲染时间**——它读返回项的 `created_at`，渲染成 `- [timestamp] text` 前缀。不返回就等于放弃该数据集的时间信息。
-2. **格式与粒度**：归档里的渲染代码只做 `str(...).strip()` 后原样插入，**不解析**，所以任何人类可读格式都能过——**但粒度会被模型看见**。给秒级时间戳，模型更容易按秒级回答，从而踩中"粒度变细"规则。因此**只给到日粒度**（如 `2026-07-26`），**不要用裸 Unix 毫秒**（渲染出来是 `- [1753512557000] ...`，对模型无意义）。
-3. **`event_time` 为 NULL 时（消息未带 `timestamp`）发空串 `""`**——渲染代码 `str(item.get("created_at") or "")` 之后就是假值，会退化成 `- {text}`，是一个**有定义的降级路径**。**不要拿 Add 的到达时间兜底**：那是"何时写入"而不是"何时发生"，会给模型错误信息。
+## Compliance Checklist
 
----
+### Shape
 
-## 4. 本地合规自查清单
+- [ ] Add returns `success: true` and echoes all identifiers byte-for-byte.
+- [ ] Search returns a `data` array.
+- [ ] Every item has string `id`, string `content`, and `created_at`.
+- [ ] `score`, when present, decreases monotonically with output rank.
 
-跑 Smoke **之前**逐条过。全部通过才说明契约合规——Smoke 次数有限（每轨道 ≤30 次），不要拿它当调试器。
+### Counting and Budgets
 
-### 形状
-- [ ] `Add` 成功响应是 `200` + `success: true`，且 `request_id` / `user_id` / `session_id` **逐字原样回显**
-- [ ] `Search` 成功响应是 `200` + `data` 为**数组**（空结果是 `[]`，不是 `null`）
-- [ ] 每项含 `id`（字符串）、`content`（字符串）、`created_at`（**始终存在**，日粒度或 `""`）
+- [ ] `len(data) <= top_k`.
+- [ ] Count packaged segments, not raw memories.
+- [ ] The final joined context stays within the answer model input budget.
+- [ ] Budget decisions do not split a segment.
 
-### 计数与预算
-- [ ] `len(data) <= top_k` **精确成立**（含邻域扩展加进来的槽位——它们**占 `top_k` 名额**，§10）
-- [ ] 返回项精确 ≤ 请求里的 `top_k`（截断在 `fusion.py` 排序之后，**没有任何一层写死 100**）
-- [ ] 拼接后的总 token ≤ 117,760（用 `o200k_base` 数，**不是字符数**）
-- [ ] 前缀截断的安全性：窗口整体连续，截断点落在窗口边界上（§11.2 组内按 `local_index` 时间序输出的用意）
+### Isolation
 
-### 隔离
-- [ ] 任何检索路径都不会返回其他 `user_id` 的记录（含 Agent 工具调用、邻域扩展、缓存命中）
-- [ ] `session_id` **没有**被当成 Search 的过滤条件
+- [ ] No path crosses `user_id`.
+- [ ] `session_id` is never used as a Search filter.
 
-### 幂等
-- [ ] 同一 `request_id` 重复 POST（payload 不变）→ 返回 200 且**库里没有新增行**
-- [ ] 重试用例覆盖"事务已提交、响应未发出"：守卫查的是 `applied_batches`
+### Idempotency
 
-### 内容
-- [ ] `content` 里**没有秒级时间戳**；**允许**日粒度会话日期前缀（`[2023-10-22] `，**D21**）——`preflight` 的那条检查只管秒级
-- [ ] `content` 首尾无空白（AML 只做 `"\n".join(...)` 拼接，不插分隔符）
-- [ ] 每项能**独立读懂**——没有依赖跨项才成立的结构（如"接上条"）
-- [ ] 两个相邻项拼在一起时，`Q:` / `A:` 行首标记足以让模型分清边界
-- [ ] `score` 单调递减，**不是**原始 RRF 分数
+- [ ] Replaying the same request does not create new source rows.
+- [ ] Replaying with a different payload returns a conflict.
+- [ ] The guard is read from `applied_batches`.
 
-### 不得为
-- [ ] `Search` 不生成答案、不把答案伪装成记忆记录
-- [ ] reranker 只重排证据，**不生成答案**（§11.2）
+### Content
 
----
+- [ ] Relative time expressions remain in the source text.
+- [ ] Absolute dates use day granularity only.
+- [ ] Returned content is independently readable after newline joins.
+- [ ] Search never returns generated answers.
 
-## 5. 尚未确认的契约细节（§17.1，只能靠 Smoke 消除）
+## Preflight
 
-> **S1 是悬而未决清单里唯一"信息不足且后果最重"的一条**（§17.1）。Smoke 第一次跑通后，**第一件事**就是设计一个能判别它的最小实验。
+Run the local compliance checks before spending AML Smoke quota:
 
-| # | 未知 | 不消除的后果 |
-| --- | ---- | ------------ |
-| **S1** | AML 从返回项里取哪个字段（`content`？`text`？），取出的是**字符串还是整个 dict** | 记忆可能被**整批丢弃**，或退化成**原始 JSON**——**两种都不报错** |
-| **S2** | **"Adapter 计的词"我们复现不了**（⚠ **计数口径官方是给了的**：「由那个冻结的 Adapter 计」；切批的**边界规则**也有明文——两件都见 [`open-questions.md`](./open-questions.md) 的"S2 的现状"） | 本地复现的**批次边界**与线上可能不同 ⇒ **被批界切成两半的 QA 对数**对不上 |
-| **S3** | `created_at` 是否被 CL-Bench 那条路径消费 | 白白放弃该数据集的时间信息 |
+```bash
+uv run python -m tianximem.dev contract-check
+```
 
-**S1 的两个静默失败模式：**
+To target a running instance:
 
-1. AML 按 dict 处理我们的返回项 → 模型读到 `{"id": ..., "content": ...}` 形式的原始 JSON，正文被淹在结构里
-2. CL-Bench 那条路径读的是 `text` 字段，**且缺 `text` 的项会被直接跳过** → 我们的记忆被**整批丢弃**，退化成字面量 `(no memories)`
-
-**兜底（但不要提前上）**：若到 Step 6 仍无法确认，低风险做法是**返回项里同时带 `content` 与 `text`**——AML 规范要求 `content`，多余的键通常被忽略。**但这属于契约外的赌注，要等 Smoke 的实测结果再决定。**
-
-**S1 的最小判别实验**：Smoke 不返回答案文本，只能用端到端信号——**加一条只有它能回答的记忆，看分数是否变化**。
-
----
-
-## 6. 错误响应与重试（§15）
-
-契约**只规定了 200 的成功形状**（§2.1），**非 200 的行为未定义，因此必须假设 AML 会重试**——这正是幂等守卫的动机。
-
-**内部异常应让本批保持"可重试"**（事务未提交），而不是返回一个"部分成功"。
-
-
----
-
-## 7. 外部规范补充（**非 PRD 来源**）
-
-**出处**：<https://github.com/dlxeva/flowgrid-aml-retriever/blob/main/docs/API_CONTRACT.md>（团队指认）。
-它自称核对过三个**一手**来源（`agentmemories.ai/api-guide` 的 `05 ADD / SEARCH CONTRACT` 与
-`06 ERROR HANDLING`、官方评测仓 `AML-memory/agent-memory-leaderboard` 的 README
-「Disclosed production parameters」、官方赛事页），并自述"上游要求会变，跑新一轮评测前应比对当前官方文档"。
-
-> ⚠ **它是二手来源，且引用的三个一手来源都不在本仓归档里。** 凡本节与 §1–6 冲突处，
-> **按 §1–6 执行**；本节只作为**待核实的外部情报**，用于提前暴露风险，不作为依据。
-> 逐条标记：**✅ 本地已核实** / **⚠ 未核实**。
-
-### 7.1 切批口径（**S2 只清掉一半**）
-
-**一手来源**（[官方 api-guide](https://agentmemoryleaderboard.ai/api-guide)）
-给的规则只有一句：
-
-> "Ordinary Textual splits deterministically at either 20 messages or 2,000 Adapter-counted words."
-
-⚠ **不要引用"在最近的完整消息或句子边界分段"这个"原文"——它在一手来源里复现不出来**：
-`sentence boundary` 与 `complete message` 两个短语**整页都不存在**。那个说法出自**二手转述**，
-而它引用的三个一手来源都不在本仓归档里。
-
-回答了什么、没回答什么：
-
-| 问 | 结论 |
-| --- | --- |
-| 切批的**边界规则** | ✅ 「**每个来源会话默认调用一次 Add**」⇒ 与我们 harness 的"按 session 逐批投喂"形状一致 |
-| **「词」怎么数** | ✅ **口径给了**——一手来源的原话是 `2,000 **Adapter-counted** words`：**词数由那个冻结的 Adapter 计**，而它冻结 ⇒ 是确定的。<br>⚠ **但本仓复现不了**：那个 Adapter 是**平台侧的组件**，我们没有它 ⇒ 不知道它把什么算作一个词（空白分词？它自己的 tokenizer？）。**这是"实现口径未知"，不是"规范缺失"** |
-| **单条消息超过 2,000 词怎么办** | ✅ **2026-10-01 已实测**（一手观测：AML 调我们 `/add` 的请求原文）——**会切开**，且**不按句子边界**：单条硬上限 **≈8,000 字符**（2,514 条正好 8,000、**0 条超过**），超出部分切成**连续的多条同 role 消息**、每片**重新带 `<标签>: ` 前缀**、**拼回去是全文**（不是截断）。详见 [`open-questions.md`](./open-questions.md) 的 **S5** |
-
-> ⚠ **上面这一行是本次新增的实测结论**。官方那句只写了"达到任一边界时**确定性分段**"，
-> **没说"一条消息本身会不会被切开"**——我们量到的行为回答了那个没写出来的问题。
-> 它同时**修正了本表 7.1 转述里那句"消息一般不会被从中间切开"**——那句在一手来源里
-> 也复现不出来，行为上更是反的。
->
-> ⚠ **另一处对不上，值得单查**：官方口径是"2,000 个**词**"，而实测的片长是**按字符**卡的——
-> 2,514 条正好 **8,000 字符**、0 条超过，而且**英文散文与数字表格是同一个数**
-> （若是按词/按 token 计，数字表格的字符数会明显更少）。**两者怎么换算，目前没对上。**
-
-**已量的影响面**（全量两份数据，词数用空白切分近似）：
-LoCoMo 单条消息**最长 87 词** ⇒ 从不触到词数上限，**两条路径在它上面完全重合**；
-LongMemEval 中位 75 / **最长 11,661 词**，**60 条超 2,000 词**（**全部是 `user` 且全部在
-session 第 0 位**，影响 **57/500 = 11.4% 的题**），**40%（9,528/23,867）的 session 首批被
-词数上限切开**。
-⇒ **词数那一路只在 LongMemEval 上有分量。别用 LoCoMo 的"完全重合"外推。**
-
-> **缺口怎么补的**：配对判据按 role 拼——**S5 实测为"会切开"（见上表），所以配对必须扛得住它**。
-> 实测的切点**不在句边界**（落在半个 token 上），而按 role 拼**不依赖切点**。
->
-> ⚠ **配对只把一段 user 的【最后一条】配进 `question`**（**D32**，2026-10-03）：`q q q a`
-> ⇒ `[q] [q] [q+a]`。因为把连续 user **全部**并进去会让块大到嵌不进嵌入窗口
-> （实测 **38,270 token**，见 D32）。
-> ⇒ **前面的片段"有问无答"是明写接受的状态**，不是配对没扛住 S5。
-
-### 7.2 ⚠ **`GET /health` —— 平台会探，我们已实现**
-
-**原文**："Health：**无需鉴权的 GET**，返回任意 2xx 即视为正常。未单独配置 Health 地址时，
-正式任务检查与 Add **同源的 `/health`**。"
-
-**当时的冲突**：PRD §2.1 与根 `CLAUDE.md` 都写着本系统"**只提供 Add / Search 两个端点**"，
-而 `service/routes.py` 也只有 `/add` 与 `/search` ⇒ **`GET /health` 会 404**。
-
-**处置（团队决定，S4 的对冲）**：[`service/routes.py`](../src/tianximem/service/routes.py)
-的 `build_router()` 里加了 `GET /health` —— **只回 `{"status": "ok"}`，不探任何下游**
-（SQLite / Qdrant / 网关一个都不碰）：探活一旦做成深检查，任何一个抖动都会让平台判我们不健康，
-而本端点的**唯一作用**就是让平台看得见我们。回归用例：
-`tests/test_contract.py::test_http_health_is_an_unauthenticated_2xx`。
-
-> ⚠ **这是对 PRD 字面表述的一次有意增补**（多一个端点），依据是上面那条平台的 Health 要求
-> （**二手外部规范**，非 PRD）。它**不生成任何内容、不碰记忆**，所以"两个业务端点"的实质没变——
-> 但**字面差异是存在的，记在这里，不要当成 PRD 已涵盖**。
-
-**残留的未知**（仍是 §17.1 的 S4）：**平台到底探不探、探的是不是这个路径**——
-本地无从验证，只能靠 Smoke 看结果。加了它属于**便宜的对冲**：不该因为"可能用不上"而裸奔。
-
-### 7.3 ⚠ 几个与 §1–6 不同的细节
-
-| # | 外部说法 | 与本仓的差异 | 处置 |
-| --- | --- | --- | --- |
-| a | Search 请求可带 **`options`**（可选，选择题传字符串数组；开放题不发送） | §1 的 Search 形状里**没有**这个字段 | **不冲突**：`SearchRequest` 没开 `extra="forbid"`（[`schemas.py`](../src/tianximem/service/schemas.py)），未知字段被忽略 ⇒ 不会 422。**但它提醒我们：MCQ 数据集走的是同一条 Search** |
-| b | `created_at` 官方标注为 **可选** | 本仓 §3 要求**始终带上** | **保持本仓口径**：§3 的三条理由（CL-Bench 渲染）比"平台不要求"更硬。送出去不亏 |
-| c | 官方样例的 `created_at` 是 **`"2026-07-01T12:00:00Z"`（ISO-8601 带时分秒）** | §3 要求**只给到日粒度**（`2026-07-26`） | **保持日粒度**：§11.3 的理由是**粒度会被模型看见**（秒级会诱发"粒度变细"判负）。**别照样例"修正"成 ISO** |
-| d | 自动重试集：**Add = {408,409,425,429,500,502,503,504}**；Search 同上**但不含 409** | 根 `CLAUDE.md` 只记了"最多 32 次、payload 不变" | 一致（幂等仍是必需的）。⚠ **409 也在 Add 的重试集里** ⇒ "冲突"也会被重试，幂等守卫不能只在成功路径生效 |
-| e | **格式错误立即终止**：即使 HTTP 200，只要 Add 没回 `success=true`/三个 ID 不对，或 Search 没回 `data` 数组、某条缺 `id`/`content`，**当前阶段立即失败** | —— | **这条把契约预检从"应该做"变成"必须做"**：[`eval/smoke/preflight.py`](../eval/smoke/preflight.py) 查的正是这几项 |
-| f | 官方披露运行参数：**Full 超时 72 小时**；Add **64 global workers** / **每数据集 48 记录硬上限** / HTTP 超时 **1200s**；Search **32 workers** / 1200s / **6 次尝试** | 本仓记的是"0.5–2 天"、"30 分钟单请求" | **1200s = 20 分钟**（比 §2.2 的 30 分钟更紧）。⚠ **"48 记录硬上限"口径不明**——若指"每个数据集投喂的记录数"，LongMemEval 的 500 题会远超它。**登记为待核实，不要据此改架构** |
-| g | `request_id` / `user_id` 样例都按 run 命名（`eval:run_abc123:locomo:conv-0`） | 本仓 harness 用裸 `conv-26` / `lme-<qid>` | **建议采纳前缀**：这正是 §13 / V9 说的"跨 arm 串数据"的防线——不过它是**本地约定**，不影响契约 |
-
-> **F 那一条还带来一个正面结论**：Add 在线上是 **64 路并发**的 ⇒ §15 的"按 `(user_id, session_id)`
-> 串行化"与 D17 的短生命周期连接模型**在真实负载下才会被考验**，不是过度设计。
+```bash
+uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
+```

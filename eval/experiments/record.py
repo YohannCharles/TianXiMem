@@ -1,14 +1,14 @@
-"""run record 的组装与打印——"这一轮跑的是什么、结果长什么样"（§13 / §12.1 R1）。
+"""run record 的组装与打印——"这一轮跑的是什么、结果长什么样"。
 
-本模块是 `run.py` 拆出来的记录半（2026-10-15）：数据指纹之外那几样"描述这次 run"的东西——
-截断警示语（`truncation_note`）、模型与消融开关的声明（`models_fingerprint` /
-`_parse_switches`）、§14 服务指标的读取与精排降级的提示（`_read_service_metrics` /
+本模块负责记录层：数据指纹之外那些"描述这次 run"的内容——截断警示语
+（`truncation_note`）、模型与消融开关的声明（`models_fingerprint` /
+`_parse_switches`）、服务指标的读取与精排降级的提示（`_read_service_metrics` /
 `_warn_about_rerank`），以及跑完之后屏幕上那几行（`_print_result`）。
 **一轮怎么跑不在本模块**（那在 [`runner.py`](./runner.py)），命令行与薄 façade 在
 [`run.py`](./run.py)。
 
-⚠ 测试/消费方若 `monkeypatch` 本模块的名字，**要打在真实现所在的这里**
-（`eval.experiments.record`）——打在 `run.py` 的 façade 上对搬走的实现不生效。
+⚠ 测试/消费方若 `monkeypatch` 本模块的名字，**要打在实现所在的这里**
+（`eval.experiments.record`）——打在 `run.py` 的 façade 上不会影响这里的实现。
 
 ⚠ **"打 HTTP、不 import `src/`"这条边界在 [`../CLAUDE.md`](../CLAUDE.md)，本文件不重复。**
 """
@@ -40,7 +40,7 @@ def derive_run_id(dataset: str, *, now: datetime | None = None) -> str:
 
 
 def models_fingerprint(*, embedder: str, llm: str, reranker: str) -> dict[str, str]:
-    """§12.1 R1 的模型指纹：**换模型会让所有阈值与权重失效**。
+    """模型指纹：**换模型会让所有阈值与权重失效**。
 
     ⚠ **这三行是"声明"，不是"探测"**（与 `.env.example` 里 reranker 那条同一口径）：
     端点本身不回可信的模型名（reranker 回的永远是服务端路径）。
@@ -86,7 +86,7 @@ def _parse_switches(raw: str | None) -> dict[str, Any]:
 def truncation_note(
     limit: int | None, *, max_questions: int | None = None, spread: bool = False
 ) -> str:
-    """`--limit` 的警示语——写进数据指纹的 `note`（§13）。
+    """`--limit` 的警示语——写进数据指纹的 `note`。
 
     **这是本文件唯一一处"截断是否发生过"的判断**：跑了一小撮与跑完了的数字
     **在 run record 里长得一模一样**，不写下来就会有人拿它们比。
@@ -114,7 +114,7 @@ def _count_questions(samples: list[Sample]) -> int:
 
 
 def _assemble_record(args, *, run_id: str, bench_dir: Path, samples, results, note: str):
-    """把这一轮的**配置指纹 + 数据指纹 + 结果**装成 run record（§13）。"""
+    """把这一轮的**配置指纹 + 数据指纹 + 结果**装成 run record。"""
     if getattr(args, "input_contract", "native") == INPUT_CONTRACT:
         path = Path(args.reports_dir) / "runs" / run_id / "input-manifest.json"
         fingerprint = json.loads(path.read_text(encoding="utf-8"))["data_fingerprint"]
@@ -170,11 +170,10 @@ def _assemble_record(args, *, run_id: str, bench_dir: Path, samples, results, no
 
 
 def _read_service_metrics(args) -> dict[str, Any]:
-    """读服务侧写的 §14 指标快照（`--metrics`，缺省取 `TIANXIMEM_METRICS_PATH`）。
+    """读服务侧写的指标快照（`--metrics`，缺省取 `TIANXIMEM_METRICS_PATH`）。
 
-    **它不是 `counters=`**：那份是 §6.5 的 pending 计数器，`schema.validate()` 要求
-    `pending_orphaned_*` 两个键**必须在场**（D24 之后恒为 `None`）。§14 的指标住
-    `metrics=`（[`../reports/CLAUDE.md`](../reports/CLAUDE.md) 的字段表就是这么分的）。
+    **它不是 `counters=`**：`counters` 校验要求 pending 相关键显式存在；
+    服务指标写入 `metrics=`（[`../reports/CLAUDE.md`](../reports/CLAUDE.md)）。
 
     ⚠ **读不到就返回空 dict，并且说出来**：空 `metrics` 是**可见的**
     （记录里没有 `rerank` 键），但它有两种来源——"服务侧没配 `TIANXIMEM_METRICS_PATH`"
@@ -195,10 +194,10 @@ def _read_service_metrics(args) -> dict[str, Any]:
 
 
 def _warn_about_rerank(metrics: dict[str, Any]) -> None:
-    """**V12**："精排到底有没有在跑"此前没有任何门禁看得见——降级后的响应与精排成功的
-    响应**逐字同样合法**，`contract-check` 的 14 条全部照样通过。
+    """提示精排是否实际执行：降级后的响应与精排成功的响应同样合法，
+    `contract-check` 的 14 条也都会通过，因此必须显式暴露降级。
 
-    所以这一条要念出来。**它只警告，不让 run 失败**：端点挂了是**已实现的降级路径**（D12），
+    所以这一条要念出来。**它只警告，不让 run 失败**：端点挂了是**已实现的降级路径**，
     不是这一轮跑错了——但"这一轮的排序其实退回了 RRF 顺序"必须写在记录旁边。
     """
     rerank = metrics.get("rerank") or {}
@@ -206,7 +205,7 @@ def _warn_about_rerank(metrics: dict[str, Any]) -> None:
     if rerank.get("degraded"):
         print(
             f"\n⚠ 精排降级 {rerank['degraded']} 次（共 {searches} 次 Search）"
-            "——**这些请求的排序退回了 RRF 顺序**（D12 / V12）。"
+            "——**这些请求的排序退回了 RRF 顺序**。"
         )
     elif rerank.get("disabled"):
         print(

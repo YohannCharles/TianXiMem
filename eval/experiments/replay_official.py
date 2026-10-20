@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""按采集的 timeline 重放官方 add/search 并判分——**README §6.2 的线①**。
+"""按采集的 timeline 重放官方 add/search 并判分。
 
 ## 它和 `run.py` 的分工
 
@@ -68,7 +68,7 @@ DATASET = "official-capture"
 
 #: 采集的族名 → 归档清单里的 slug。**只有 `docpp` 一处不同**：
 #: 套件里它叫 `docpp`（`extra_pipeline._judge_one` 也按这个名字分派），
-#: 而 D35 之后的归档清单（`eval/datasets/prepare.py`）叫 `doc-pp`。
+#: 而当前归档清单（`eval/datasets/prepare.py`）叫 `doc-pp`。
 _ARCHIVE_SLUG = {"docpp": "doc-pp"}
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
@@ -138,7 +138,7 @@ def replay_user(
     if missing:
         for event in plan.events:
             if event.kind == "add":
-                # ⚠ **一批投不进去不能打死整轮**（实测 2026-10-06）：官方 43,272 条 add 里
+                # ⚠ **一批投不进去不能打死整轮**：官方 43,272 条 add 里
                 #   有 **1 条**的某个记忆块（连续 7 条 assistant，53,185 字符 ≈ 13k token）
                 #   超过 embedding 的 8,192 token 上限 ⇒ 服务端**稳定 500**（重试也一样）。
                 #   线上那一批就是丢了（AML 重试再多次也过不去），所以这里**跳过并记账**，
@@ -171,8 +171,8 @@ def replay_user(
                         flush=True,
                     )
             elif str(event.seq) in missing:
-                # ⚠ **检索偶发 500 也不许打死整轮**（2026-10-06 实测：一轮死在一次
-                #   `/search` 500 上，而服务本身健康、同一请求随后就成功）。
+                # ⚠ **检索偶发 500 也不应终止整轮**：服务可能仍然健康，
+                #   同一请求重试即可成功。
                 #   ⇒ 记账 + **不把这一题算进去**（判了就会以"没有记忆"的形状被计算，
                 #   那比缺一个样本更糟）⇒ 下一次重跑会把它补上（labels 不全 ⇒ 不跳过整户）。
                 try:
@@ -310,7 +310,7 @@ def _pick_per_family(plans: list[UserPlan], per_family: int) -> list[UserPlan]:
     """每族取前 N 个 user（族按该 user 的**多数题**归属——一个 user 的题基本同族）。
 
     **为什么要有这一档**：缺省顺序是"题多的先跑"，而题多的永远是那几个大 user
-    （实测前 15 个 user 就占 3,985 题）。一整晚的跑批要的是**每一族都有分**，
+    （前 15 个 user 就占 3,985 题）。一整晚的跑批要的是**每一族都有分**，
     而不是"最大的那一族跑完了、其余的还没轮到"。
     """
     from collections import Counter

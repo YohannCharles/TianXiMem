@@ -154,7 +154,7 @@ def test_official_extra_tier_is_well_formed() -> None:
     )
 
 
-# ── 取回工具的**入口行为**（2026-10-04）─────────────────────────────────────
+# ── 取回工具的**入口行为**─────────────────────────────────────
 def test_fetch_does_not_require_the_directory_to_exist_beforehand(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -194,7 +194,7 @@ def test_download_creates_the_directory_only_after_connecting(
 
     `tests/test_datasets.py` 的 `needs_archive` 守卫判的是【**目录在不在**】而不是
     【归档在不在】⇒ 网络不通时先在磁盘上留一个空 `benchmark_data/`，会让那两条归档用例
-    **从 skip 变 fail**，而屏幕上看不出与网络有关（`.gitignore` 里记着这条实测教训）。
+    **从 skip 变 fail**，而屏幕上看不出与网络有关。
 
     ⇒ `mkdir` 排在 `urlopen` **成功之后**。本用例让 `urlopen` 抛，断言目录**没被建**。
     """

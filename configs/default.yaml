@@ -1,386 +1,127 @@
-# 基线配置 —— 所有 profile 的父级
+# Product profile. All other profiles inherit this file.
 #
-# 加载顺序（见 src/tianximem/common/config/）：
+# Environment variables own endpoints, credentials, paths, and process shape.
+# YAML owns runtime thresholds, weights, model IDs, collection names, and switches.
 #
-#     本文件 ← configs/<profile>.yaml ← 环境变量
-#
-# ⚠ **每个键只有一个家。** 本文件**只放阈值 / 权重 / 模型名 / 集合名**；
-#    密钥、端点、**路径**、worker 数一律在 `.env` 里（见 .env.example）——
-#    两处都能设的值，最终会变成"跑出来的结果和这里写的不一样，而没人知道为什么"。
-#
-# ⚠ **配置化 ≠ 可调。** 下面每一项都标了类别：
-#     A 外部契约常量（AML 定的，无权改，写进来只为追溯）
-#     B 正确性常量（算错就静默出错，不许"顺手调"）
-#     C 自设阈值（可调，但任何调整都必须有 ablation 数据支撑）
-#   完整清单与出处见 docs/config-reference.md；本文件不复制那张表。
+# A: external contract constant; do not tune.
+# B: correctness constant; invalid values must fail validation.
+# C: tunable threshold or switch; changes require an evaluation record.
 
-# ══ 模型（§2.3）══════════════════════════════════════════════════════════
 models:
-  # C —— profile 之间**唯一真正该变**的东西。
-  # 开发期用 Qwen3-Embedding-4B（自建网关 `memory2.021130.xyz`，见 .env 的 `AML_EMB_BASE_URL`）。
-  # ⚠ 这个值是**服务端 id**（端点 `/v1/models` 列出来的那个），随网关变——**大小写敏感**：
-  #   写成 `...-4b` 会 404（2026-10-13 实测），填错就**不报错**的只有"网关忽略 model"那一档。
-  #   ⚠ 它**进缓存坐标系**，改它 = 换一份缓存文件。
-  # Step 5 必须换成 text-embedding-v4（§2.3 规定，不可协商）——
-  # ⚠ 换模型 = 换向量空间（**维度可能不变**）⇒ **整个 Qdrant 集合要重建**，且 embedding 缓存整体失效。
+  # Server-side model ID. It participates in the embedding cache coordinate.
   embedder: Qwen/Qwen3-Embedding-4B
 
-# ══ 存储（§6）═══════════════════════════════════════════════════════════
 storage:
   sqlite:
-    # C —— 抢不到写锁时**等待**而不是立刻抛 SQLITE_BUSY 的毫秒数（D17）。
-    # 跨 session 的真并发写入由 SQLite 自己串行化；这个值决定"排队"能排多久。
-    # ⚠ 不要为了"更快失败"把它调小——失败的那一方是可重试的错误，等待才是正常的。
+    # C: maximum wait when another writer holds the SQLite write lock.
     busy_timeout_ms: 5000
   qdrant:
-    # C —— 单集合 + user_id 作 tenant 过滤（D3）。
-    # ⚠ 换名字 = 换集合，上一套 point 会**静默留在旧集合里**（V9 那条风险的形状）。
+    # C: a new collection name isolates a new index namespace.
     collection: memories
 
-# ══ 检索（§7）═══════════════════════════════════════════════════════════
 retrieval:
-  # 有来源的事实取证；Add/Search 共用开关，效果记录见 eval/reports/。
-  # 共用主体/关系/范围/来源事实；未解释的相关原文或冲突继续走原检索。
+  # C: deterministic grounded-evidence short path.
   grounded_evidence: true
-  # C —— 共同取证返回片段上限与连接深度；超限回原检索。
+  # C: maximum returned evidence and source-review candidates.
   evidence_limit: 12
+  # C: maximum relation-walk depth.
   evidence_hop_limit: 4
-  # 旧记忆按用户/版本分批补事实索引；未扫完时回退原检索。
+  # C: maximum source rows backfilled in one Search request.
   fact_backfill_limit: 1024
-  # LLM 只负责把未覆盖的问法映射为受限计划；事实选择与来源审查仍是确定性的。
+
   grounded_planner:
+    # C: use one bounded LLM plan when deterministic compilation fails.
     enabled: true
     timeout_seconds: 10.0
     max_output_tokens: 256
     temperature: 0.0
+    # B: must match the prompt version implemented in code.
     prompt_version: v3
-  # C —— 每路进入 RRF 融合的候选池大小（§7.3 的 N）。
-  # ⚠ 不是种子数（§10 的 20）、不是 Top-K（§2.2 的 100）——三个不同的量。
-  # 融合池上界：200 × 2 路 = 至多 400 条，给 100 个名额留出邻域折叠与去重的余量。
+
+  # C: candidates entering RRF from each retrieval arm.
   prefetch_limit: 200
 
   rrf:
-    # ⛔ B —— **正确性常量，不是调参项**（D5）。
-    # Qdrant 的默认 k 是 2，RRF 文献是 60；Qdrant 的秩是 0-based（公式 1/(rank+k)），
-    # 只有 61 才等价于文献的 60：1/(0+61) = 1/(1+60)。
-    # 已在 Qdrant v1.17.0 上实测：k=61 给出 0.032786883 = 2/61，默认给出 0.5 = 2/2。
-    # ⚠ 填错**不会报错**——两种写法的名次都"看起来正常"，只有分数差一个数量级。
-    #    所以配置层会**拒绝启动**，而不是警告后照用。
+    # B: Qdrant uses zero-based ranks. This is equivalent to literature k=60.
     k: 61
-    # C —— [bm25, dense]，顺序与 §7.3 的 prefetch 顺序一一对应。
-    # **任何调整都必须有 ablation 数据支撑**（§7.3 原文）。
+    # C: [BM25, dense].
     weights: [0.5, 0.5]
 
-  # C —— 查询侧的 instruction 前缀（Qwen3-Embedding 的推荐输入格式，**不是"改写"**）。
-  # "" = 原样送（v1 现状）。模型卡称查询侧不加会让检索掉约 1%–5%。
-  # ⚠ 要不要开是**待定的规格问题**，不是实现细节——见 embed/query_instruction.py。
-  # ⚠ 一开就会**换掉查询侧的缓存键**（不是换坐标系），旧缓存不会静默命中。
+  # C: optional query-side instruction prefix. Empty means send the query unchanged.
   query_instruction: ""
 
-# ══ 扩窗与预算（§10 / §6.4）════════════════════════════════════════════
 neighbor:
-  # C —— 只对名次在前 N 位的候选主动扩窗；其余候选仍保留，只是不扩展。
-  # ⚠ §10 明确："种子数、窗口大小、Top-K、token 预算**是同一道题**，
-  #    任何一项调整都要重算其余三项" ⇒ **改它之前要有消融数据**。
-  #
-  # ⛔ **本键在 `radius: 0` 下是空转的**（2026-10-01 起半径默认为 0，见下面那一条）：
-  #    没有扩窗，种子数就没有含义。这里保留它只为"想开回来时两个数一起改"。
-  # ⚠ 上面那个 **+3.5pt 的依据（N1，2026-09-25 的 A/B）早于 D28**——链的来源在 D28
-  #    变过一次（`request_id` 不再解析、位置改成 `(request_id, local_index)`），
-  #    **那个数字没有被重跑过，不要引用它**。重跑它也不再有意义：见下面 radius 那一条。
+  # C: highest-ranked candidates eligible for expansion.
   expansion_seed_limit: 1000
-  # C —— 扩窗半径，**单位是 QA 对**：`±2` 拿回前后各**两整对**（最多 8 条消息），
-  # 不是前后各一条消息——扩窗比 message 粒度时更贵。
-  #
-  # ⛔ **2026-10-01 起默认为 0（= 关闭）：扩窗 + 段合并未挣到自己的位置**（D31）。
-  #    两条依据合起来：
-  #    ① **判分池上它根本不执行**——官方判分池 100% `role: user`，D29 之后配不上的
-  #       消息各自独立 ⇒ 没有配对块 ⇒ 链是 0 ⇒ 无事可做。**这是结构性事实，不是测量。**
-  #    ② 唯一能测的地方（locomo `official`，346 题）读出 **−0.87pt**
-  #       （0.7775 vs 0.7688），落在本仓那条 ~1pt 噪声底之内 ⇒ **读不出正收益**。
-  #    ⚠ **"条件不对所以看不出好"这条路已经堵死**：那次对照里链几乎不断（跨 Add 只 4.4%）、
-  #       上下文**翻了一倍**（token 6,784 → 14,304）、而预算**只用到 12%**（没有被截断）
-  #       ⇒ 三条都拉满，分数照样不动。
-  # ⚠ **代码一行未删**（`rank/neighbor.py` 原样保留）⇒ 想开回来只改这一个数，
-  #    连同上面那个 `expansion_seed_limit`。数字与口径见
-  #    `eval/reports/ledger.md` 的「扩窗为什么是 0」。
+  # C: expansion distance in memory blocks. Zero disables expansion.
   radius: 0
-  # C —— **段内顺序**（§11.2 的"组内顺序"，明文列为可消融项）。
-  # `keep`（默认）：纯位置（`local_index`）时间序，种子在它本来的时间位置。
-  # `front`：种子移到段首——⚠ **段内时间连续性会断**，而"窗口是连续对话、按时间序读才
-  #   成立"正是 §11.2 选时间序的理由 ⇒ 时序类任务有**真实风险**。
-  # `echo`：种子在段首**重复一份**，下面完整的时间序块原样保留——不破时序，代价是多一对 token。
-  # ⛔ **2026-09-25 实测：两个变体都否掉了**（346 题，见 eval/reports/ledger.md 的 N2）——
-  #   `front` 净 −2.0pt（multi-hop +1.8 但 temporal −3.5、single-hop −2.6），`echo` 净 −1.2pt
-  #   （时间序块原样保留却连 temporal 都掉 −4.7 ⇒ **重复本身有害**）。**保持 `keep`。**
-  # 实验动机：multi-hop 错的 29 题里 28 题的证据**就在上下文里**、模型没抓住（答得笼统 /
-  #   抓错事实）⇒ 试"把命中的那对放显眼"。⚠ 三个变体都跑过再定，别凭直觉换。
+  # C: segment-internal ordering: keep, front, or echo.
   seed_placement: keep
 
 budget:
-  # ⛔ A —— AML 定的 input 上限（答案窗口 128k 扣掉输出与安全余量），**无权改**。
-  # 只作追溯；截断策略（段是原子单位、装不下就停）在 rank/packaging.py。
+  # A: answer-model input budget.
   max_tokens: 117760
-  # ⛔ A —— 必须是**答案模型自己的分词器**（gpt-4o-mini 的 o200k_base）。
-  # ⚠ 不要用字符数或空格切分近似：单次偏差会在 100 个对上放大到几千 token。
+  # A: tokenizer used by the submission answer model.
   tokenizer: o200k_base
 
-# ══ 打包与渲染变体（§11.3）═════════════════════════════════════════════
-# 渲染规则（模板本身）一处声明在 `src/tianximem/rank/CLAUDE.md` §4，**不在配置里**——
-# 这里只有那个"贵"对照项（T1）的开关。
 packaging:
-  # C —— 正文里**带不带**会话日期前缀（每对渲染文本前加 `[YYYY-MM-DD] `，与 `created_at` 同格式）。
-  #
-  # ⛔ **2026-09-25 起默认为 `true`，推翻了 §11.3 的"不加"**（决策见 `docs/decisions.md` **D21**）：
-  #   三条腿上量出来的（3 段 346 题，`eval/reports/ledger.md`）——日期只写段首时 temporal 无感，
-  #   写到**每一对旁边**后 multi-hop +8.9pt、temporal +3.5pt，整体 0.601 → **0.633**。
-  #   机制：模型会把锚点接到自己那句相对表述上（`Last week` → `Last week (relative to …)`），
-  #   而那正是 LoCoMo-Refined 的 gold 形状（`The week before 6 March 2023`）。
-  # ⚠ **代价**：正文一改 ⇒ embedding 输入也改 ⇒ **整个向量索引要重建、缓存全失效**
-  #   （`tools/reindex.py`），且 `created_at` 的日粒度**必须**保持不变（秒级会踩"粒度变细"）。
-  # ⚠ 证据只有 **3 段 346 题**，不是全量 10 段；`false` 仍是合法取值（消融用）。
+  # C: include the source date prefix in rendered indexed text.
   inject_abs_time: true
-
-  # C —— 正文里的**相对时间就地注解**成绝对日期：`last Tues` → `last Tues (July 18, 2023)`。
-  # 实现与口径（含"推不出就不动"那条硬纪律）在 `src/tianximem/common/annotate.py`。
-  # ⚠ **它与上面那个键有一处根本区别**：`inject_abs_time` 改的是 embedding 输入
-  #   （改它要重建索引），**本键只改 `content`** ⇒ 随时开关，不用重建索引、不用换集合。
-  #   代价是 `content` 不再逐字等于被索引的文本——这是不变式 I1 的**一个声明式例外**：
-  #   `content` = 被索引的文本 + 一层确定性注解，去掉注解后逐字相同（tests/test_annotate.py）。
-  # ⚠ 它是 **C 类**（自设阈值）：**任何调整都要有 ablation 数据**（§7.3），
-  #   开关买到的东西见 `eval/reports/ledger.md`。
-  # ✅ 2026-09-26 起默认 `true`：3 段 346 题、同一索引、背靠背两臂，
-  #   overall 0.6387 → **0.7948**（temporal 17/85 → **68/85**，逐题赢 58 / 输 4）。
+  # C: annotate relative expressions in response content only.
   annotate_relatives: true
-  # 单笔数量 × 单价注解只用于受支持的交易事实；候选实验显式启用，默认关闭。
+  # C: add source-stated unit totals for supported transaction facts only.
   annotate_unit_totals: false
 
-# ══ 精排（§11.2 / D12）════════════════════════════════════════════════════
-# ⚠ **端点 / 密钥 / 模型名不在这里**——它们在 `.env` 的 `TIANXIMEM_RERANKER_*`（②层分工）。
-#    本段只有"开不开"与"等多久"这两个**阈值**。
 rerank:
-  # C —— §15 的消融开关之一。`false` ⇒ **不构造 reranker**，Search 直接用融合名次（记 `rerank_disabled`）。
-  # ⚠ 它的「关」分支**只该改变排名**，不得改变候选数量（§13 的开关纯度）。
-  #
-  # ✅ **默认 `true`（2026-09-28，提交口径）**：D8 把排序定为主线，而这条线就是那个"排序"
-  #   ——默认关着等于默认放弃主线。A3 在 conv-26（138 题）上量到**开比关 +4.3pt**
-  #   （0.5217 vs 0.4783，multi-hop +8.3；见 `eval/reports/ledger.md`）。
-  # ⚠⚠ **代价**：单题 100 篇 5–12s、抖动大 ⇒ **整轮墙钟约 3×**。所以**开发期在
-  #   `configs/local.yaml` 里显式关掉**（那里是覆盖，不是"本来没有"）。
-  #   **别在这里改回去**：这一份是提交口径，开发期的差别只该写在 `local.yaml` 里。
-  # ⚠ **要端点才真的跑得起来**：`TIANXIMEM_RERANKER_BASE_URL` / `_API_KEY` 缺了 ⇒
-  #   不构造 reranker、记 `rerank_disabled`、启动时留一条 WARNING（D12 的降级形态，不是配置错误）。
-  # ⚠ 「它值不值这份算力」是 §13 的 **A3** 回答的问题，而目前**只有一段对话**的证据
-  #   （两臂快照 `configs/runs/a3-{on,off}/`）——**别拿默认值当结论**，也别用
-  #   "改这一行跑一遍"当对照。
-  #
-  # 📌 **2026-09-29 曾临时改成 `false`，当天已翻回**：原因是**服务端**的精排每请求必
-  #   CUDA OOM（本机网关 8082 的 Qwen3-Reranker-4B，实测 5/5 请求 500、日志 688 条 OOM），
-  #   开着它等于每次检索都静默降级。**根因不在本仓**，已在那台服务上修掉
-  #   （关 KV cache、max_length 4096→2048、batch 8→4、加显存互斥锁、
-  #   `PYTORCH_CUDA_ALLOC_CONF=expandable_segments`）——进程显存 20.6 GiB → 8.0 GiB。
-  #   ⚠ 那条修复**动了精排的输入口径**（max_length 2048 ⇒ 约 0.26% 的候选被截断，
-  #   而 A3 那个 +4.3pt 是在 4096 下测的）⇒ **重放 A3 臂之前先看那条记录的说明**。
+  # C: rerank candidates when a reranker endpoint is configured.
   enabled: true
-  # C —— **对面那个网关收哪种线格式**。两种互斥，没有"都对"的写法：
-  #   * `query`   —— **自研封装的**形状（单个字符串）。**现役**：开发期主网关
-  #     `https://memory.021130.xyz/v1`（2026-10-09 起），以及容器里打的那台本机自托管网关
-  #     （`host.docker.internal:9002` → 宿主机 `127.0.0.1:8082`）。
-  #     发 `queries` ⇒ **422**（实测：pydantic 报 `body.query Field required`）。
-  #   * `queries` —— **vLLM 原生 score 形状**（`queries: [...]` 数组）。
-  #     `https://memory3.021130.xyz/v1` 在 2026-09-28～10-09 之间是这一档（那天只改了 nginx.conf，
-  #     `/v1/rerank` rewrite 到 vLLM 原生 `/v1/score`）⇒ 发 `query` ⇒ **400**。
-  #     ⚠ 那个 host 自 2026-10-09 起改提供对话模型，**这条已无部署在用**。
-  #
-  # ⛔ **本部署取 `query`**：两处要打的网关都是自研封装那一档。**它与 base_url 是同一件事
-  #   的两半 ⇒ 换网关必须一起换**；`make probe-reranker` / `make check` 两种都试，会印出
-  #   实际生效的是哪个。
-  #
-  # ⚠⚠ **填错的表现与 D12 的降级一模一样**：每次检索都不精排、**服务不报错、响应照旧合法**，
-  #   只在 §14 里 `rerank.calls` 涨而 `rerank.degraded` 同步涨时看得出来。
-  #   `make probe-reranker` 是那条便宜的判据（退出码 0 才算通）。
-  # ⚠ 它**不是可调旋钮**（配置化 ≠ 可调）：值只有"对面那一端是哪种"这一个正确答案，
-  #   写别的会被 `common/config/` 在启动阶段拒绝。
+  # B: request envelope accepted by the configured endpoint: query or queries.
   envelope: query
-  # C —— 单次 rerank 请求的超时（秒）。
-  # ⚠ 两条约束方向相反：**太紧 ⇒ 伪降级**（网关排队被报成"reranker 坏了"，V8 的单点风险），
-  #    **太松 ⇒ Search 被拖住**（单请求上限 30 分钟，§2.2）。
-  # 实测（开发机）：100 篇 ≈ 2.2s、200 篇 ≈ 5.3s ⇒ 30s 约 10 倍余量。
-  # ⚠ 那是**观测值不是规格**；换模型或换网关后要重新量。
+  # C: per-request timeout.
   timeout_seconds: 30.0
 
-# ══ 查询路由器（Search 的**共同取证之后**那一站）══════════════════════════
-# 二分类（MULTI_HOP / DEFAULT）→ 两条已有路径之一。实现在
-# `src/tianximem/retrieve/router.py`，提示词与解析契约在那个文件的 docstring 里。
-# ⚠ **它不是 Search 的第一站**（2026-10-14 起）：共同事实取证先试；确定性计划失败时
-#    可由 grounded_planner 用 LLM 生成受限计划，事实执行与来源审查仍不调 LLM。
-#    无条件先试，只有它没给出**完整**证据时才走到本段。
-# ⚠ **端点 / 密钥 / 模型名不在这里**——它们在 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` /
-#    `AML_MODEL`（②层分工：模型名属"端点身份"，跟 base_url 一起住 .env）。
-#    本段只有开关与三个阈值。
 router:
-  # C —— §15 的消融开关之一。
-  # `true`（**默认**）⇒ 共同取证没给出完整证据之后，按模型的分类走：
-  #   MULTI_HOP → 多跳执行器；执行器不在（`agentic.enabled = false`）⇒ 回退 DEFAULT
-  #               并记 `route_fallback`
-  #   DEFAULT   → 原混合检索链
-  #   ⚠ 模型若吐 `COUNT`（v5 里已不是合法值）⇒ 按**非法输出**降级到 DEFAULT，不报错。
-  # `false` ⇒ **不构造路由器**：这条链上一次 LLM 调用都不发生，
-  #   且共同取证分支照旧**无条件先试**（= 本开关存在之前的行为，逐字相同）。
-  #
-  # ⚠ **默认开启**（2026-10-14 起）：主流程按模型分类选路。要跑"关掉"的对照，
-  #   就用 profile 覆盖或臂快照（`configs/runs/`，见 `configs/CLAUDE.md`）。
-  # ⚠ 开启它需要一个**可用的对话端点**：`validate()` 在 `enabled = true` 而
-  #   `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` 缺一时**拒绝启动**（理由见
-  #   `common/config/validate.py` 的 `_validate_router`：缺端点的表现是"每一臂都降级"，
-  #   而那会被读成"路由没有帮助"——归因完全错）。
+  # C: classify an incomplete grounded-evidence query as MULTI_HOP or DEFAULT.
   enabled: true
-  # C —— 单次路由调用的超时（秒）。
-  # ⚠ **它与 `rerank.timeout_seconds` 方向不同，别照抄那一条**：路由器在检索**开始之前**，
-  #   它拖住的是整条链的起点，而它的降级路径**有定义**（回 DEFAULT = 原混合检索）
-  #   ⇒ **刻意比精排紧**（10s vs 30s）。超时的代价是"少省一次检索"，不是"检索不到"。
-  # ⚠ 它是观测值不是规格；换模型/网关后要重新量（数字见 `eval/reports/` 的路由报告）。
   timeout_seconds: 10.0
-  # C —— 单次生成的输出上限（token）。**成本护栏**：提示词要求只回一个词，
-  #   但模型没有义务遵守，而生成是逐 token 的。
-  # ⚠ **不要调到 1**：`MULTI_HOP` 会被截断成 `MULTI` ⇒ 输出非法 ⇒
-  #   **全部降级成 DEFAULT，而且不报错**。8 已经比最长的枚举值宽出几倍。
   max_output_tokens: 8
-  # C —— 生成温度。**默认 0 是"这一步要可复现"的声明**（§6）。
-  # ⚠ 网关**可能忽略这个字段**（实测有些自研封装不接它）——那就没有确定性保证。
-  #   所以"在一小组边界问题上重复调用、观察路由是否稳定"**必须真跑**，
-  #   不能拿这个键的存在当保证。
   temperature: 0.0
-  # ⛔ B —— **提示词版本，不是可调项**。它是一条**断言**：
-  #   与 `retrieve/router.py` 的 `ROUTER_PROMPT_VERSION` 不符 ⇒ **构造期响亮失败**。
-  #   理由（§6 的可复现性）：改了提示词却忘了改版本号的表现是
-  #   **两份 run record 声称同一份提示词**——那种漂移查不出来。
-  #   ⇒ 改 `router.py` 里的提示词，就必须同时改这个值。
-  # ⚠ **提示词只有一版**（当前 v5，二分类；v1/v2/v3 已按要求删除）⇒
-  #   "换提示词值不值"的基线**不能再原样重跑**。代价记在
-  #   `eval/reports/router-v4-20261010.md` §5 与 `docs/decisions.md` D40 补二。
+  # B: must match the router prompt version implemented in code.
   prompt_version: v5
 
-# ══ 多跳执行器（`MULTI_HOP` 分支）═══════════════════════════════════════
-# ✅ **执行器已实现**（`src/tianximem/agent/`，2026-10-10）：原版 Chain-of-Query
-#    提示词 + 每轮"混合召回 → 精排 → Top-N" + 跨轮证据累积 + 最终联合 Query 精排。
-# ⚠ 2026-10-14 起**默认开**（见下 `enabled`）：打开它一条 `MULTI_HOP` 最多多花
-#    1 次拆解 ＋ `max_rounds` 次 LLM（plan 模式）＋ 每轮 1 次内部精排。
-# ⚠ 它与 `router.enabled` 是**两条独立的开关**：`router` 选路、`agentic` 执行。
-#    只开 `agentic` 而不开 `router` ⇒ 一条请求都不会走到这里（除非用 `force`）。
-# ⛔ 与 PRD §9 的参数**不同**（§9 是 ReFind 形状：4 轮 / 每轮 top_k=5 / 三个工具）——
-#    本阶段按方案实现 `max_rounds`(=4) 轮 / 每轮 Top20 / **没有工具**。别拿 §9 的每轮 5 来"校正"这里。
 agentic:
-  # C —— §15 的消融开关之一（§13 的 A4「Agent 开 / 关」就是它）。
-  # `true`（**默认**，2026-10-14 起）⇒ 路由判到 `MULTI_HOP` 时**真的跑多跳执行器**。
-  #   ⚠ 它要求**对话端点齐备**（`_validate_agentic`：`agentic.enabled = true` 而缺
-  #     `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL` ⇒ **拒绝启动**）。
-  #   ⚠ 每条 `MULTI_HOP` 的 LLM 次数：`plan` 模式 ≤ 1 次拆解 ＋ `max_rounds` 次步骤回答
-  #     （每步内部各 1 次精排）＋ 最后共用 1 次最终精排。
-  # `false` ⇒ `build_agentic` 返回 `None` ⇒ 每条 `MULTI_HOP` 降级回 DEFAULT
-  #   并记 `route_fallback = agentic_unavailable`。**不是假装跑过了多跳。**
+  # C: construct the configured multi-hop executor.
   enabled: true
-  # C —— ⭐ **执行器选哪一种**（`react` / `plan`）。2026-10-12 新增。
-  #   `plan`（**本 profile 的默认**，2026-10-14 起）：先**一次性**拆出 1~4 步的固定计划，
-  #          之后每轮只回答"刚检索完的那一步"
-  #          （提示词、解析、停止判据**各自独立**，见 `src/tianximem/agent/plan*.py`）。
-  #   `react`：原版 Chain-of-Query —— 每轮重新决定"充分了吗 / 下一跳问什么"。
-  # ⚠ **它选的是执行器，不是"走不走这条路"**——路由仍归 `router.enabled` / `force`。
-  # ⚠ **代码内置缺省仍是 `react`**（`common/config/constants.py` 的 `DEFAULT_AGENTIC_MODE`）：那是给
-  #   **不填这个键的旧配置**留的"逐字不变"出口。本文件是**提交口径**，所以在这里写死 `plan`
-  #   —— 与 `retrieval.grounded_evidence` 同一种分工（内置缺省 false / 本文件 true）。
+  # C: executor mode: plan or react.
   mode: plan
-  # C —— ⚠ **实验开关：绕过路由器，把所有查询按 MULTI_HOP 处理**（§12.3 的 E1）。
-  #   存在的唯一理由是"独立验证 CoQ 的检索能力"——不绕过路由器，测出来的就是
-  #   "路由器 × 多跳"的合成效果，两者分不开。
-  #   ⛔ **不是给提交口径用的**：打开它等于关掉 MULTI_HOP / DEFAULT 的选择能力。
-  #   关闭时这条链与本开关存在之前**逐字相同**。
-  #   ⚠ 它**两种模式都遵循**（E1 跑的是 `mode` 选中的那个执行器）。
+  # C: force every query through MULTI_HOP. Diagnostic only.
   force: false
-  # C —— 检索轮数上限，**含第一轮**（§7.4）。
-  #   ⚠ 2026-10-15 起它与**兜底那次补位**解耦：兜底改成**按请求的 `top_k` 补到池子满**
-  #     （先从 `top_k` 条里精排挑一遍，再按名次去重补位；不够不凑），
-  #     不再按"`80 − 轮数 × per_round_top_k`"算 ⇒ **改这个数不再牵动兜底**。
-  #     ⇒ 池子上限：进了恢复分支 ⇒ `top_k`；没进 ⇒ `max_rounds × per_round_top_k`。
-  #   ⚠ **它同时是 Plan 模式的检索次数上限**：Plan 的计划最多 4 步（提示词写死）
-  #     ⇒ **取 4** 才让一个 4 步计划跑满（取 3 会截断第 4 步并记 `stop_reason = max_rounds`）。
-  #   ⚠ 2026-10-14 起由 3 改为 4（与 `agentic.enabled` 默认开同一次）；
-  #     代码内置缺省 `DEFAULT_COQ_MAX_ROUNDS` 仍是 3（缺这个键的旧快照逐字不变）。
+  # C: retrieval rounds, including the first round.
   max_rounds: 4
-  # C —— 每轮**精排之后**取前 N 条交给模型。
-  #   ⚠ 与"进精排的候选数"是两个量：后者取请求的 `top_k`（AML 固定 100）。
-  #     顺序必须是"融合池 → 精排 → 取 N"；反过来只会重排一堆已被提前排除的候选，
-  #     **而结果看起来完全正常**。
-  #   ⚠ **两模式在这里相同**（2026-10-13 对齐）：都是"召回请求的 `top_k`(=100) → 精排 →
-  #     取前 20"。⛔ 别再让 `plan` 只召回 20 条（它第一版是那样）——那会让
-  #     "推进机制"与"每轮检索深度"两个自变量缠在一起，对照**归不了因**
-  #     （见 `eval/reports/coq-musique-20261011.md` §8.5）。
+  # C: candidates retained for the model after each round's rerank.
   per_round_top_k: 20
-  # C —— "已判定充分"之后，还要置信度 ≥ 它才提前停（§7.4）。
-  #   ⛔ 不要反过来读成"低于它就必须继续"——提不出更好 Query 时原样回吐原问题
-  #     也是一种正常的停止（§7.5）。
-  #   ⚠ **只有 `react` 模式看它**：`plan` 不做充分性判断、没有置信度（方案第二节第 6 条）。
+  # C: react mode early-stop confidence threshold.
   sufficiency_threshold: 0.8
-  # C —— 每轮 prompt 的 token 上限。
-  #   ⛔ **不是** `budget.max_tokens`（117,760，那是 AML 答案窗口）：拿那个当上限
-  #     等于没有上限。⚠ 预算先给"此前已选中的证据"留够，剩下的才按名次补本轮候选。
+  # C: agent prompt budget per round.
   max_prompt_tokens: 6000
-  # C —— 单次生成的输出上限（token）。**`react` 模式用它**：回一个四字段的 JSON。
+  # C: react output budget.
   max_output_tokens: 256
-  # C —— **`plan` 模式**单次生成的输出上限（token）。2026-10-12 新增。
-  #   ⚠ 它**不是**上面那个 256 的两倍关系，是两个不同的输出结构：
-  #     拆解要回 1~4 步的计划，逐轮要回"答案 ＋ 若干逐字引句 ＋ 下一查询"。
-  #     256 会把四步计划从中间截断 ⇒ JSON 不完整 ⇒ 计划作废 ⇒ **看起来像模型不行**。
-  #   ⛔ `react` 模式**不看它**（两条路的输出形状不一样，合成一个数会卡住其中一边）。
+  # C: plan output budget.
   plan_max_output_tokens: 768
-
-  # C —— 单次调用超时（秒）。⚠ 与路由器的 10s 不是一回事（见 common/config/constants.py 的常量说明）。
+  # C: per-call timeout.
   timeout_seconds: 30.0
-  # C —— 生成温度。**默认 0 是"这一步要可复现"的声明**（§6）。
   temperature: 0.0
-  # C —— **每轮内部精排**（§12.4 的消融 A/B）。`false` = 直接用 RRF 顺序取 Top-N。
-  #   ⚠ 它只影响交给 LLM 的那 20 条名次，**不改候选集合**，也与最终精排无关
-  #     ⇒ 单变量对照成立。
+  # C: rerank candidates inside each multi-hop round.
   round_rerank_enabled: true
-  # C —— 最终精排 Query：`combined` = 原问题 ＋ 实际执行过的改写（§9.1 主方案）；
-  #   `original` = 只用原问题（§12.6 的后续消融项，本阶段**不做那个实验**，
-  #   开关先留着）。两者都**不会重复原问题**。
+  # C: final rerank query: combined or original.
   final_rerank_query_mode: combined
-  # ⛔ B —— **提示词版本，不是可调项**。与 `agent/coq_prompt.py` 的
-  #   `COQ_PROMPT_VERSION` 不符 ⇒ **构造期响亮失败**（同 `router.prompt_version`）。
-  #   ⚠ 提示词**只有这一版**（原版，逐字照用，见该文件头的说明）。
-  #   ⚠ **它只属于 `react` 模式**——Plan 的两条提示词各有自己的版本键，见下。
+  # B: prompt version assertions.
   prompt_version: coq-original
-  # ⛔ B —— Plan 模式**拆解**提示词的版本（`agent/plan_prompts.py` 的常量）。同一条断言纪律。
   plan_decompose_prompt_version: plan-decompose-v2
-  # ⛔ B —— Plan 模式**逐轮**提示词的版本。**与拆解那条分开**：两条各自演进，
-  #   一个版本号管不住两条（改了其中一条却忘了改版本号 ⇒ 两份 run record 声称同一份提示词）。
   plan_step_prompt_version: plan-step-v2
 
-# ══ 请求原文采集（诊断旁路，**默认开**）═════════════════════════════════
-# ⚠ 它**不属于 A / B / C 任何一类**：那三类说的都是"影响结果的量"，
-#    而本项只把官方发来的 `/add` / `/search` **原样**抄一份落盘，不改变任何行为。
-#
-# 为什么要有它：**S6** —— 平台的 `request_id` 到底长什么样、批序号语义是什么，
-# 我们**没有一手文档**（`docs/open-questions.md` 的 S6 记着"来源是团队告知"）——
-# 而当年的位置模型整个押在这个假设上，直到它被这条采集证伪。
-# 打开它跑一轮，就有官方真实请求的样本可核验；`/health` 刻意不记。
-#
-# 落地形态、四条纪律与文件格式见 `src/tianximem/service/capture.py`；
-# 路径在 `.env` 的 `TIANXIMEM_CAPTURE_PATH`（路径归 env，见 configs/CLAUDE.md）。
 capture:
-  # C —— 开关。`false` ⇒ **连中间件都不装**（零开销、零行为差异）。
-  # 📌 **基线取 `true`**（2026-10-19 确认）：S6 要看官方真实请求原文，
-  #   而 Full run 是唯一能拿到它的场合。团队已确认磁盘容量够，不设总量上限
-  #   （`max_bytes` 只是**切分粒度**，见下）。
-  # ⚠ 数据**不进 git、不传第三方**；落点在 `/data` 卷里，按 `capture.max_bytes`
-  #   切分成多份（`requests.jsonl` / `requests.part2.jsonl` …）。
-  # ⚠ 改动它**要重建镜像**（configs/ 是烘进镜像的，不是挂载的）。
-  #   ⚠ `git checkout -- configs/default.yaml` **关不掉它**——提交状态就是 `true`。
-  #   要临时关掉见 `deploy/CLAUDE.md` §0.6。
+  # C: record raw Add/Search requests for protocol diagnostics.
   enabled: true
-  # C —— **每份文件**写这么多字节就换下一份（`requests.jsonl` → `requests.part2.jsonl` …）。
-  # 为什么必须分：一轮 Full 的请求原文按 ~1.5 GB 估（§2.2 的 0.5–2 天），
-  # 而**单个 1.5 GB 的 JSONL 根本打不开**——诊断产物打不开就等于没记。
-  # ⚠ **它只是切分粒度，不是总量上限**：忘了关就是把盘记满，跑完记得关回去。
+  # C: rotate to a new file after this many bytes.
   max_bytes: 52428800

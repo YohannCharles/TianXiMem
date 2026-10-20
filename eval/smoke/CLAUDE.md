@@ -1,95 +1,43 @@
-# eval/smoke/ — 只打真 AML 的那一层
+# eval/smoke
 
-**PRD**：§2.4（机会成本）、§13（契约校验）、§17.1（只能靠 Smoke 消除的未知）
-
-## 要写什么
+`eval/smoke/` contains AML-facing contract checks.
 
 ```text
-preflight.py    契约预检（**跑 Smoke 之前先本地过一遍**）
+preflight.py  HTTP contract preflight
 ```
 
-> ⬜ **还没写的**：`quota.py`（配额与节流记账）、`s1_discriminator.py` / `s2_probe.py` / `s3_probe.py`
-> ——S1/S2/S3 三条探针（§17.1 的 S 系列——逐条现状见
-> [`../../docs/open-questions.md`](../../docs/open-questions.md)，本文件不列状态）。
-> **它们现在不存在**，别按上面的老清单去找。
+## Preflight
 
-## 为什么单独一层
+Preflight validates the public contract without importing service internals.
 
-**Smoke 的额度是稀缺资源**（配额数字见根 `CLAUDE.md`）。它**只能**用来做两件事，**不能当调试器**：
+It covers:
 
-1. **验证契约合规**——主路径（混合检索）必须能通过 Smoke 契约校验（§13）
-2. **消除本地无从验证的未知**（§17.1 的 S 系列）
+- Add success shape and identifier echo;
+- Search array shape and required fields;
+- `created_at` presence and day granularity;
+- final `top_k` count;
+- monotonic rank scores;
+- user isolation;
+- replay idempotency and payload conflict behavior;
+- response readability after newline joins;
+- absence of second-level timestamps.
 
-**任何能在代理评测上回答的问题，都不该花 Smoke 的额度。**
+Run an isolated instance:
 
----
+```bash
+uv run python -m tianximem.dev contract-check
+```
 
-## 1. 契约预检（`preflight.py`）
+Run against an existing service:
 
-**在花掉任何一次 Smoke 之前，把 [`../../docs/contract.md`](../../docs/contract.md) §4 的清单在本地自动跑一遍。**
+```bash
+uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000
+```
 
-**清单本身一处声明在 `contract.md`，本目录不重复**——这里只说**最值得自动化的三条**：它们最容易在加了邻域扩展之后悄悄破掉，而**破掉时不报错**：
+The existing-service mode writes a small isolated test user. Do not target a service whose storage must remain untouched.
 
-| # | 断言 |
-| --- | --- |
-| **精确计数** | `len(data) <= top_k`，**含邻域扩展加进来的槽位**（它们占名额） |
-| **`created_at` 始终存在** | 日粒度或 `""`，**不能缺字段** |
-| **`score` 单调递减** | 且**不是**原始 RRF 分数 |
+## Boundary
 
-`make contract-check` → `uv run python eval/smoke/preflight.py`。
-**默认行为是自己拉起一个隔离实例**（临时库 + 临时缓存 + 独立的 `memories_preflight` 集合，跑完关掉并 drop），**不需要先有服务在跑**。
-打**已经在跑**的那个服务：`uv run python eval/smoke/preflight.py --base-url http://127.0.0.1:8000`。
-**⚠ 后者会往那个服务写一小份数据**（`user_id` 带本次运行的随机 nonce，不与别的 run 冲突）——别拿正式 run 的实例当靶子。
+Smoke checks handle platform-facing contract behavior. Dataset quality and most retrieval comparisons belong in local evaluation.
 
----
-
-## 2. S1 判别实验（`s1_discriminator.py`）—— 本目录的头号任务
-
-> **S1 是悬而未决清单里唯一"信息不足且后果最重"的一条**（§17.1）。
-> **Smoke 第一次跑通后，第一件事就是设计一个能判别它的最小实验。**
-
-**要回答的**：AML 从返回项里取哪个字段（`content`？`text`？），取出来的是**字符串还是整个 dict**。
-
-**两个不报错的失败模式**：
-
-| 模式 | 后果 |
-| --- | --- |
-| AML 按 **dict** 处理我们的返回项 | 模型读到 `{"id": ..., "content": ...}` 形式的**原始 JSON**，正文被淹在结构里 |
-| CL-Bench 路径读 **`text`** 字段（缺 `text` 的项**被直接跳过**） | 我们的记忆被**整批丢弃**，退化成字面量 `(no memories)` |
-
-**判别手段**（§17.1）：**Smoke 不返回答案文本**，只能用端到端信号——
-
-> **加一条只有它能回答的记忆，看分数是否变化。**
-
-**兜底方案（不要提前上）**：返回项里同时带 `content` 与 `text`。AML 规范要求 `content`，**多余的键通常被忽略**——**但这属于契约外的赌注，要等 Smoke 的实测结果再决定。**
-
-**⚠ 这件事越早越好**（§17.1 的"何时清掉"列写的是"Step 6 之前，**越早越好**"）——因为若 S1 的答案是坏的那个，**§11.3 的整个打包策略都要重做**。
-
----
-
-## 3. S2 / S3 探针
-
-| # | 探针测什么 | 注意 |
-| --- | --- | --- |
-| **S2** | **"Adapter 计的词"怎么算**（切批的边界规则已有明文） | **本地复现不了词数那一路**。**它决定批界落在哪**，而批界决定有多少 QA 对被切成两半 ⇒ **本地分数与线上的差距里，这一条要算进去** |
-| **S3** | `created_at` 是否被 CL-Bench 那条路径消费 | 不消除就白白放弃该数据集的时间信息 |
-
-**两者都是 Step 6 前清掉即可**——但 S2 有一条**只在真实切批下才成立**的推论：本地复现的批界与线上不一定一致，影响面只有"被切成两半的 QA 对有多少"。
-
----
-
-## 4. 配额记账（`quota.py`）
-
-**必须记账，因为额度是硬的**（§2.4）。**配额数字一处声明在根 `CLAUDE.md`。**
-
-**台账本身写在 [`../../docs/submission.md`](../../docs/submission.md)**——那是**人看的记录**（哪次 Smoke 测了什么、结论是什么、Full 冻结的是哪个版本）。本目录的 `quota.py` 只做**机械节流**（阻止超次数、阻止 1 小时内第 2 次）。
-
-> **为什么"版本冻结"要单独记**：**不能因成绩不佳撤换**（§2.4）。所以"这次 Full 提交的是哪个 commit + 哪份配置"是**必须留痕**的信息——**它决定了赛后能否复现**。
-
----
-
-## 一条纪律
-
-**任何能在代理评测上回答的问题，都不该花 Smoke 的额度。**（§2.4）
-
-**推论**：本目录的每一行代码都应该指向 §17.1 的某一条 S，或指向 §13 的契约校验。**做不到这一点的脚本，请放到 [`../harness/`](../harness/) 或 [`../experiments/`](../experiments/)。**
+Do not use AML Smoke quota for a question local evaluation can answer.

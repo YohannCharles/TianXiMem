@@ -1,4 +1,4 @@
-"""查询侧 instruction 兼容层（§7.2 / `src/tianximem/embed/query_instruction.py`）。
+"""查询侧 instruction 兼容层（`src/tianximem/embed/query_instruction.py`）。
 
 **这组测试守的是一条静默失败的边界**：前缀加错位置时结果依然"看起来正常"，
 所以必须由测试来钉——而不是靠读代码。
@@ -53,7 +53,7 @@ def test_template_shape_has_no_space_after_query_colon() -> None:
 
 
 def test_empty_instruction_is_bytewise_identity() -> None:
-    """空 instruction ⇒ **逐字节原样**。v1 的规格（query 不改写）由此保持不变。"""
+    """空 instruction ⇒ **逐字节原样**，查询不改写。"""
     assert apply_query_instruction("q", "") == "q"
     inner = RecordingEmbedder()
     QueryInstructionEmbedder(inner).encode_query(["q"])

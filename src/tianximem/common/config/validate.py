@@ -60,7 +60,7 @@ def validate(cfg: AppConfig) -> AppConfig:
         raise ConfigError(
             f"`retrieval.rrf.k` 必须是 {RRF_K}，收到 {cfg.retrieval.rrf.k}。\n"
             "  它是【正确性常量】不是可调项：Qdrant 的 k 默认是 2、文献是 60，"
-            f"而 Qdrant 的秩 0-based，只有 {RRF_K} 才等价于文献的 60（D5）。\n"
+            f"Qdrant 的秩从 0 开始，只有 {RRF_K} 才等价于文献公式中的 60。\n"
             "  填错【不会报错】——两种写法的名次都看起来正常，只有分数差一个数量级。"
         )
     w_bm25, w_dense = cfg.retrieval.rrf.weights
@@ -112,11 +112,11 @@ def _validate_router(cfg: AppConfig) -> None:
     （那条口径见 `build_reranker`）——两者的**失败后果不对称**：
 
     * 精排缺端点 ⇒ 名次退回 RRF。**检索仍然完整**，降级是**有定义的**，
-      而且 run record 里 `rerank_disabled` 会如实记着。D12 接受这个代价，因为
+      而且 run record 里 `rerank_disabled` 会如实记着。 接受这个代价，因为
       精排是"唯一不被规则保证可用"的组件。
     * 路由开着却没端点 ⇒ **每一次请求都退 `DEFAULT`**。结果不是"少一点排序质量"，
       而是**"Router On" 这个实验臂根本没有路由器**——跑出来的分数会被读成
-      "路由没有帮助"，而归因完全错。**这正是 §13 要挡的那一类静默失败。**
+      "路由没有帮助"，导致归因完全错误。这是启动校验必须阻止的静默失败。
 
     所以：**开着就必须配齐**（`validate()` 在启动阶段响亮失败），而"不想配"
     的出口是**把 `enabled` 设为 `false`**（默认值）。这与 `embed_base_url` 那种
@@ -243,8 +243,7 @@ def assert_single_process() -> None:
     ⚠ **无法与 `--reload` 区分**（两者在子进程里形状完全相同），所以 `--reload` 也会被拦下
     ——**这是可接受的**：开发期请用 `make serve`（无 `--reload`、`--workers 1`）。
 
-    ⚠ 前提假设：**v1 的服务入口只有 uvicorn**。若将来有别的进程宿主（例如 harness 用
-    `multiprocessing` 跑服务），这条会误伤——**届时必须重审**，而不是加个开关绕过去。
+    当前服务入口是 uvicorn。其他进程模型未经验证，不能通过新增旁路开关绕过此检查。
     """
     if (os.environ.get(ENV_WORKERS) or "").strip() not in ("", "1"):
         return  # 已经（或即将）在 validate() 里拦过同一个问题，不重复报

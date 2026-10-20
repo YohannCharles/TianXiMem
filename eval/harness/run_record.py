@@ -1,4 +1,4 @@
-"""把一次 run 组装成 run record——**配置指纹 + 数据指纹 + 结果**（§13）。
+"""把一次 run 组装成 run record——**配置指纹 + 数据指纹 + 结果**。
 
 > **数字只有 [`../reports/`](../reports/) 一个家**（`schema.py` 定形状，本模块组装）。
 > 别处引用数字一律指回去。
@@ -9,16 +9,15 @@
 | --- | --- |
 | **配置**（profile + 开关 + 快照 hash） | 改过开关的两次 run 被当成同一次，**无法归因** |
 | **数据**（数据集 + 版本 + 切批口径） | 归档被换掉、或 `limit=` 截断过，数字却看着可比 |
-| **模型**（embedder / LLM / reranker） | §12.1 R1：换模型会让阈值与权重**全部失效** |
+| **模型**（embedder / LLM / reranker） | 换模型会让阈值与权重**全部失效** |
 
 ## 七维子分：**代理评测产不出，就不填**
 
-`architecture.md` §3 里七个维度是**由设计机制回应**的，不是由题面回应。
-所以这里填的是"证据在哪"，不是一个编出来的数——理由见
-[`schema.PROXY_SCORE_NOTE`](../reports/schema.py)。
+七个维度由设计机制回应，不由题面回应。所以这里填的是"证据在哪"，
+不是一个编出来的数——理由见 [`schema.PROXY_SCORE_NOTE`](../reports/schema.py)。
 
 **真正可用的信号是 `breakdown`**：按数据集自己的分类统计准确率。
-这正是"哪一类在掉"的输入，而 §14 砍掉的是**按问题类型做收益归因**那种论文式分析。
+它回答"哪一类在掉"；按问题类型做收益归因不属于本地代理评测的输出。
 """
 
 from __future__ import annotations
@@ -43,19 +42,18 @@ def config_fingerprint(
     *,
     configs_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """配置指纹（§13）：profile + 开关状态 + **配置快照 hash**。
+    """配置指纹：profile + 开关状态 + **配置快照 hash**。
 
-    ## 开关的家在 `configs/<profile>.yaml`（③-d）
+    ## 开关声明与配置快照并列记录
 
     本模块**不解析**那些 yaml——解析会与 `common/config/` 抢同一份知识，
     而 harness 的边界是"打 HTTP、**不 import `src/`**"。⇒ 这里只**逐字节哈希**
     `configs/default.yaml` + `configs/<profile>.yaml`（后者覆盖前者，见 `configs/CLAUDE.md`）。
     **"改了配置但没人注意到"这件事，靠哈希就够发现了。**
 
-    `switches` 留给**消融 arm 显式声明自己改了哪几项**（`checker.*` / `neighbor.*` /
-    `rerank.*` / `agent.*` / `budget.*`）——那些键的**落点已定、消费方尚未接线**，
-    所以今天传进来的多半是空字典。**它与快照 hash 是两回事**：快照回答"配置文件长什么样"，
-    `switches` 回答"这次跑的是哪一组消融"。
+    `switches` 记录**消融 arm 显式声明自己改了哪几项**（`checker.*` / `neighbor.*` /
+    `rerank.*` / `agent.*` / `budget.*`）。**它与快照 hash 是两回事**：
+    快照回答"配置文件长什么样"，`switches` 回答"这次跑的是哪一组消融"。
     """
     switches = dict(switches or {})
     canonical = json.dumps(switches, sort_keys=True, ensure_ascii=False)
@@ -88,14 +86,14 @@ def summarize(results: list[JudgeResult], samples: list[Sample]) -> dict[str, An
     """算总分与分类明细。
 
     **拒答题单列**：`question_id` 以 `_abs` 结尾的题**行为与其他题不同**
-    （正确答案是拒答），混进总分会让一个分类的数字失真（§12.2）。
+    （正确答案是拒答），混进总分会让一个分类的数字失真。
 
     ## `partial_credit`：**不进 `overall`** 的那一列
 
     只有判分方本来就给出部分分的数据集才有（CL-Bench / CorporateBench，见
     [`JudgeResult.partial`](./judge.py)）。它的存在理由是**分辨率**：CL-Bench 的官方分是
     **全有全无**的，一道题从 0 翻到 1 要每一条 rubric 都满足 ⇒ **中间进展完全看不见**
-    （实测有题 `score=0` 而 `ratio=0.50`）。⇒ 本地拿它当**更灵敏的仪器**，
+    （有题 `score=0` 而 `ratio=0.50`）。⇒ 本地拿它当**更灵敏的仪器**，
     而**榜分照旧是 `overall` 那一列**。
     """
     category_of = {q.qid: q.category for s in samples for q in s.questions}
@@ -251,21 +249,20 @@ def _corpus_dataset_score(dataset: str, results: list[JudgeResult]) -> dict[str,
 
 
 def _unavailable_counters() -> dict[str, Any]:
-    """§6.5 那三个计数器的**当前状态**：**D24（2026-09-27）起它们已不存在**。
+    """待处理计数器在这些运行记录中不可用。
 
-    它们量的是"一个 QA 对是新建 / 被补全 / 落单"，而 D24 取消了跨 Add 合并
-    ⇒ 块在写下那一刻就是最终形状，**没有"补全"这种归宿**。
+    Add 以组合边界为准，块在写入时已经具有最终形状，因此不存在
+    “新建 / 补全 / 落单”的 pending 阶段。
 
-    **保留字段、不填 0**：字段留着是为了**旧 run record 仍然读得回来**
-    （[`schema.py`](../reports/schema.py) 的校验要求它存在）；而 `None` 比 `0` 诚实——
-    `0` 会被读成"没有 pending"，事实是"**这个量已经不存在**"。
+    **保留字段、不填 0**：schema 要求这些字段存在，已有记录也按此形状读取；
+    `None` 表示该度量不可用，与“计数为零”不同。
     """
     return {
         "pending_created": None,
         "pending_completed": None,
         "pending_orphaned_real": None,
         "pending_orphaned_misjudged": None,
-        "note": "D24 起 pending 概念已取消——这个量**不存在**，不是 0",
+        "note": "当前写入模型不使用 pending 状态；该计数器不存在，不代表值为 0",
     }
 
 
@@ -273,6 +270,6 @@ def write_record(record: RunRecord, reports_dir: Path) -> Path:
     """落到 `eval/reports/runs/<run_id>.json`。
 
     ⚠ `eval/reports/**/*.json` 已被 `.gitignore` 忽略（体积大、可重跑，且逐题结果可能
-    含受许可约束的数据内容，§12.5）。**结论进 `ledger.md`，原始产出进 `runs/`。**
+    含受许可约束的数据内容）。报告存放规则见 [`../reports/CLAUDE.md`](../reports/CLAUDE.md)。
     """
     return record.write(Path(reports_dir) / "runs" / f"{record.run_id}.json")

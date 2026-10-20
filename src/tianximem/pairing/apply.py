@@ -1,7 +1,7 @@
 """一次 `Add` 的落库：**幂等守卫（含 payload 校验）→ 组合 → 按 Add 内位置写入**（一个事务）。
 
 ```text
-0. payload 指纹                 canonical(user_id, session_id, messages) → sha256（D28）
+0. payload 指纹                 canonical(user_id, session_id, messages) → sha256
 1. 幂等守卫（必须最先做）        SELECT ... FROM applied_batches WHERE request_id = ?
                                命中且指纹相同 → 本批已应用过（重试）→ **真源一行不动**；
                                                 启用共同取证时经 index_pair_facts() 补事实索引
@@ -16,15 +16,14 @@
 > **⚠ 第 1 步不能省。** 它是**唯一**能防"同一批被应用两次"的东西：服务在事务提交之后、
 > 响应发出之前崩溃（或响应丢失），AML 会重试同一批（`request_id` 与 payload 不变）。
 
-## `request_id` 是 **opaque string**（D28）
+## `request_id` 是 **opaque string**
 
 它只做三件事：**幂等键**、**溯源**、**成功响应原样回显**。位置的另一半也是它
 （`(request_id, local_index)`），但那只是"拿它当个字符串去 hash"——**一个字节都不解析**。
 
-> ⚠ 这推翻 D25。D25 从 `request_id` 里正则取 chunk 序号（`chunk-<n>`）当位置，
-> 而**平台实发的是 `r_3115…` 这种不透明 id**（2026-09-29 用请求采集抓到的真实请求）
-> ⇒ 那条路在真实流量上 **100% 失败**（`ValueError` → 500 → Add 全挂）。
-> 详见 `docs/decisions.md` 的 **D28**。
+> ⚠ **不能从 `request_id` 里正则取 chunk 序号（`chunk-<n>`）当位置**：
+> 平台实发的是 `r_3115…` 这种不透明 id，解析会失败并导致 Add 全挂。
+> 当前实现只把整个字符串作为哈希输入。
 
 ## 位置与邻接都来自**这一次** Add
 
@@ -32,7 +31,7 @@
 算出（只连完整 QA）。**跨 Add 既没有顺序、也没有邻接**——那道边界是结构性的：
 本函数从头到尾只看得见 `batch` 与它自己写下的那几行。
 
-## D25 起**没有"分配位置"这一步**（D28 保留）
+## **没有“分配位置”这一步**
 
 位置是 `(request_id, local_index)`，**两者都是请求的纯函数**：
 没有共享计数器、没有读-改-写 ⇒ **不需要按 session 串行化**，不同 Add 也可以并发到达
@@ -69,10 +68,10 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class AddBatch:
-    """一次 `Add` 的 **canonical 契约输入**（§2.1）。
+    """一次 `Add` 的 canonical 契约输入。
 
-    ⚠ 只有这四样东西。**不得**出现任何数据集专属字段——加载层负责归一化（D16）。
-    ⚠ **`request_id` 是不透明字符串**（D28）：它同时是**幂等键**与位置的**一半**
+    ⚠ 只有这四样东西。**不得**出现任何数据集专属字段——加载层负责归一化。
+    ⚠ **`request_id` 是不透明字符串**：它同时是**幂等键**与位置的**一半**
     （另一半是本批内的 `local_index`），但**绝不被解析**——任何形状都等价可用。
     """
 
@@ -83,7 +82,7 @@ class AddBatch:
 
 
 class PayloadMismatchError(RuntimeError):
-    """**同一个 `request_id`、不同的 payload**（D28）。
+    """**同一个 `request_id`、不同的 payload**。
 
     ⚠ 这不是"重放"，也**不是 500**：它是调用方的 bug（id 复用了，内容却换了），
     必须**响亮**地冲突，而不是静默挑一份落库——静默挑一份意味着**另一份记忆凭空消失**，
@@ -92,7 +91,7 @@ class PayloadMismatchError(RuntimeError):
 
 
 def payload_fingerprint(batch: AddBatch) -> str:
-    """规范化 payload 的 sha256（D28）。
+    """规范化 payload 的 sha256。
 
     **只算"这一批要写什么"**：`user_id` / `session_id` / `messages`（含 `role` /
     `content` / `timestamp`）。`request_id` **不在里面**——它是键，不是内容。
@@ -146,13 +145,13 @@ def _neighbour_id(batch: AddBatch, local_index: int | None) -> str | None:
 
 
 def index_pair_facts(store: SqliteStore, conn: sqlite3.Connection, pair: QaPair) -> None:
-    """Add/重放/旧来源补索引共用一个入口，并在同一事务记版本覆盖。
+    """为新增、重放和已有来源补建事实索引，并在同一事务记录版本覆盖。
 
-    **同一 Add 内的自我介绍把第一人称绑到真名**（2026-10-18）：HaluMem 一类记录把
+    **同一 Add 内的自我介绍把第一人称绑到真名**：HaluMem 一类记录把
     档案拆在多个块里（`local_index=1` 是 "My name is X"，`=2` 才是 "My highest
     education level is PhD"）。不绑的话后一条的事实主语停在字面 `"I"`，题面里的人名
     永远匹配不上。查找范围**只限这一次 Add**（`fetch_by_request`）——跨 Add 没有可信
-    的顺序（D24 / D28），而同一批里的自我介绍与档案字段是同一个人的同一次自述。
+    的顺序，而同一批里的自我介绍与档案字段是同一个人的同一次自述。
     """
     facts = extract_evidence(
         parent_memory_id=pair.id,
@@ -177,13 +176,13 @@ def _batch_owner_name(
 ) -> str | None:
     """该 user 自我介绍写下的真名（没有就 `None`）。
 
-    **先看这次 Add，再看该 user 已有的 `name` 事实**（2026-10-18 放宽）：HaluMem 一类
+    **先看这次 Add，再看该 user 已有的 `name` 事实**：HaluMem 一类
     记录把档案拆在**多个 Add** 里——自我介绍在第一批、`My highest education level is PhD`
     在后面的批。只认同一批的话，后一批的事实主语停在字面 `"I"`，题面里的人名永远匹配不上。
 
-    ⚠ **为什么跨 Add 在这里是安全的**（D24 / D28 的例外，理由要写清）：
+    ⚠ **为什么跨 Add 在这里是安全的**：
     * 绑定的**唯一来源**是**已经落库的 `name` 事实**（`relation_key = "name"`），
-      不是"猜一个主语"。没有自我介绍的用户**一条都不绑**——行为与之前逐字相同。
+      不是“猜一个主语”。没有自我介绍的用户**一条都不绑定**。
     * 它**不引入到达顺序依赖**：`name` 事实是用户自己的、稳定的；同一批 Add 无论
       第几次重放、以什么顺序到达，绑出来的主语都一样（重放时 `name` 已经在库里）。
     * 它**不改变事实的派生性**：`memory_facts` 仍可由 `qa_pairs` 重建——
@@ -211,11 +210,8 @@ def apply_batch(
 ) -> ApplyBatchResult:
     """应用一批 `Add` 消息。**幂等**：同一 `request_id` 至多被应用一次。
 
-    整个写入在**一个事务**里：崩溃或异常 ⇒ 整批回滚 ⇒ 保持"可重试"，
-    不会留下半个批次（contract.md §6）。
-
-    ⚠ **空批次直接抛 `ValueError`。** §2.1 的 `messages` 就是批次的全部内容，
-    空批次是**调用方的 bug**（harness 或加载层喂错了），不是 AML 的行为。
+    整个写入在一个事务里：崩溃或异常会回滚整批，因此不会留下半个批次。
+    空批次直接抛 `ValueError`；`messages` 是批次的全部内容，空批次属于调用方错误。
     静默当成 no-op 会让"整个 session 一条都没写进去"伪装成成功。
 
     ⚠ **指纹在开事务之前算**：它是纯粹的请求解析，失败时**不该**先拿一次写锁。
@@ -229,7 +225,7 @@ def apply_batch(
         # ── 第 1 步：幂等守卫（必须最先做，且必须是查 applied_batches）──
         if store.is_batch_applied(conn, batch.request_id):
             stored = store.applied_batch_payload_hash(conn, batch.request_id)
-            # ⚠ `stored is None` = **核不了**（D28 之前写下的行没有指纹）⇒ 放行。
+            # ⚠ `stored is None` = **核不了**⇒ 放行。
             #    判据是 is_batch_applied 那个布尔，不是这个值——把它当成"不同"会把
             #    老库里每一个 request_id 的重放都变成冲突。
             if stored is not None and stored != fingerprint:
@@ -267,8 +263,7 @@ def apply_batch(
                 next_memory_id=_neighbour_id(batch, next_index),
                 question=block.question,
                 answer=block.answer,
-                # D24：块在写下的那一刻就是最终形状 ⇒ 状态恒为 complete。
-                # `status` 列保留，但**不再有第二个取值**。
+                # 块写入时已经是最终形状，因此新写入行的 status 始终为 complete。
                 status=STATUS_COMPLETE,
                 event_time=block.event_time,
             )

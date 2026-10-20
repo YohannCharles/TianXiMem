@@ -1,7 +1,7 @@
 """CorporateBench 的答案格式与纯函数判分；不读取端点、不调用模型。
 
-标量给 exact-match 分，列表给真正的 set-F1。兼容旧运行的自然语言答案，
-新答案要求 JSON 值；空集合与证据不足的拒答是不同结果。题目类型可以进入
+标量给 exact-match 分，列表给真正的 set-F1。判分兼容自然语言答案，
+答案生成要求 JSON 值；空集合与证据不足的拒答是不同结果。题目类型可以进入
 答案 prompt，金标答案绝不进入。归档 README 的协议见 dataset/corporatebench/。
 """
 
@@ -64,7 +64,7 @@ def _list_item(text: str) -> str:
     bold = re.match(r"\*\*(.+?)\*\*", text)
     if bold:
         return bold.group(1).strip()
-    # 旧答案会在实体后补日期、职位或解释；JSON 数组不经过这个兼容步骤。
+    # 模型生成的列表项可能在实体后补日期、职位或解释；JSON 数组不经过这个清理步骤。
     text = re.sub(r"\s+\([^()]*\)(?:\s*[-–—]\s*.*)?\s*$", "", text)
     return text.strip().rstrip(".")
 
@@ -92,7 +92,7 @@ def _list_value(value: object) -> set[str] | None:
     bullets = re.findall(r"^\s*(?:[-*•]|\d+[.)])\s+(.+)$", text, re.MULTILINE)
     if bullets:
         return {_norm(_list_item(x)) for x in bullets}
-    # 去掉旧答案的引导语和谓语，保留实际列出的对象，而不是只在答案里搜金标。
+    # 去掉答案的引导语和谓语，保留实际列出的对象，而不是只在答案里搜金标。
     text = re.sub(
         r"^(?:the\s+)?(?:employees|meetings|participants|attendees|names|items)\b.*?"
         r"\b(?:are|include)\s*:?[ \t]*",
@@ -224,7 +224,7 @@ def score_corporatebench(generated: str, gold: object) -> tuple[float, str]:
     if not isinstance(value, str) or not wanted_text:
         return 0.0, "CorporateBench：标量答案类型无效"
     answer = _norm(value)
-    # 新的 JSON 字符串精确匹配；旧的短句保留带边界的实体匹配。
+    # 结构化 JSON 答案使用精确匹配；非结构化短句允许带词边界的实体匹配。
     ok = answer == wanted_text
     if not structured and not re.search(r"\b(?:not|no)\b", answer):
         ok = ok or re.search(rf"(?<!\w){re.escape(wanted_text)}(?!\w)", answer) is not None

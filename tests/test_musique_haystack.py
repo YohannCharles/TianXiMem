@@ -12,7 +12,7 @@
 
 ⚠ **不读真的 59 MB `musique_full_v1.0_dev.jsonl`**：`read_rows` 会把整份读进内存，
 不适合放进单元测试。真数据的核对走 `eval/coq-musique.jsonl` 的**内部一致性**（下面有），
-以及跑批时的实测数字。
+以及跑批时的数字。
 """
 
 from __future__ import annotations
@@ -149,8 +149,8 @@ def test_selection_drops_questions_whose_question_text_leaks_the_intermediate_en
     前面几条都在读 `question_decomposition` 的占位符——那是**用标注证明标注**。
     这一条读的是**用户真正看到的那句话**。
 
-    ⚠ 2026-10-11 实测：原判据选出的 25 道里有 **2 道泄题**（题面直接写了链中间那一跳的答案），
-    那两道退化成"一次查找"。加上这条之后候选 814 → 798，**恰好换掉那 2 道**。
+    ⚠ 题面直接写出链中间那一跳的答案时，题会退化成一次查找；
+    这条过滤必须把这类题从候选中移除。
     """
     leaking = _row("3hop1__a_b_c", hops=_CHAIN3)
     # 把 hop2 的答案写进题面
@@ -174,9 +174,9 @@ def test_selection_drops_questions_whose_hop_answers_are_not_entities() -> None:
 def test_the_leak_check_matches_whole_words_not_substrings() -> None:
     """⭐ 泄题判据必须是**词边界**：`NES` 不该被 `geNESis` 命中。
 
-    ⚠ 实测（2026-10-12，子 agent 独立复核）：纯子串版本**误杀 15 条**——
+    ⚠ 纯子串版本会**误杀 15 条**——
     中间跳答案是 `NES` 时，题面里的 `Genesis` 也算命中，整个 `…_15840_36002`
-    家族被整批丢掉；改成词边界后候选 798 → **813**。
+    家族会被整批丢掉；词边界匹配可将候选保持在 **813**。
     ⚠ 被误杀**不会报错**：它只是安静地少收几道题，而"少收"与"本来就没有"看起来一样。
     """
     from eval.datasets.musique import _appears_as_a_word
@@ -231,21 +231,20 @@ def test_the_haystack_merges_every_questions_paragraphs_into_one_user(tmp_path: 
     assert sample.user_id == HAYSTACK_USER
     assert len(sample.sessions) == 1
     # ⭐ 两题的段落并起来 ⇒ **4 段**（Alpha idx0 / Beta idx1 / Beta idx0 / Gamma idx1）。
-    #    ⚠ 两条 `Beta` **标题相同、idx 不同 ⇒ 正文不同 ⇒ 是两段不同的内容**，都要留
-    #    （2026-10-12 修：以前按 `title` 去重会丢掉其中一段，而它可能是某道题的**支持段落**）。
+    #    ⚠ 两条 `Beta` **标题相同、idx 不同 ⇒ 正文不同**，是两段不同内容，都要保留。
     assert sample.message_count == 4
     assert len(sample.questions) == 2
     assert all(q.category == "3-hop/chain" for q in sample.questions)
 
 
 def test_two_chunks_of_the_same_article_are_both_kept(tmp_path: Path) -> None:
-    """⭐ **同标题、不同 chunk ⇒ 两段都要进池子**（2026-10-12 修的一个真 bug）。
+    """⭐ **同标题、不同 chunk ⇒ 两段都要进池子**。
 
     `title` 是维基**文章名**，而候选段落是那篇文章的一个 **chunk** ⇒ 同标题下可以有好几段
     不同的正文，其中可能有某道题的**支持段落**。按 title 去重把它们当重复丢掉 ⇒
     **那几道题在池子里根本无解**，而池子看起来完全正常（段数、覆盖、判分都不报错）。
 
-    实测（2026-10-12，50 道题）：**丢掉 16 段支持段落、涉及 14 道题**，
+    **会丢掉 16 段支持段落、涉及 14 道题**，
     16/16 都能在池子里找到"同标题的另一些段" ⇒ 全是这一条造成的。
 
     ⚠ 与下一条用例**成对**：内容**相同**的段落仍然只留一份（多道题共用同一段是真重复）。
@@ -304,7 +303,7 @@ def test_an_unknown_or_non_chain_id_is_a_hard_failure(tmp_path: Path) -> None:
 
 
 def test_the_answer_never_leaks_into_the_pool(tmp_path: Path) -> None:
-    """§2.1：**不许把答案伪装成记忆**——金标与分解都不进 Add 载荷。"""
+    """**不许把答案伪装成记忆**——金标与分解都不进 Add 载荷。"""
     _write(
         tmp_path,
         [
@@ -369,7 +368,7 @@ def test_the_shipped_manifest_is_internally_consistent() -> None:
     assert not ({row["question_id"] for row in rows} & set(BROKEN_GOLD))
 
 
-# ── ⑤ 两套判分口径（2026-10-12）────────────────────────────────────────
+# ── ⑤ 两套判分口径────────────────────────────────────────
 
 
 def _musique_gold(answer: str, *aliases: str) -> dict:
@@ -379,7 +378,7 @@ def _musique_gold(answer: str, *aliases: str) -> dict:
 def test_the_strict_contract_rejects_a_more_specific_answer() -> None:
     """严口径（默认）：归一化后必须**相等**。⇒ `five` 会被 `five games` 判错。
 
-    ⚠ 这就是"判分是不是太严"那个问题的**唯一一处实证**：实测三臂各自只翻这 1 道。
+    ⚠ 这就是"判分是不是太严"那个问题的**唯一一处实证**：三臂各自只翻这 1 道。
     """
     gold = _musique_gold("five")
     assert judge_musique("five", gold, contract=ANSWER_CONTRACT)[0] is True
@@ -507,7 +506,7 @@ def test_the_dispatcher_uses_rule_by_default(monkeypatch) -> None:
 
 
 def test_the_rule_mode_still_reproduces_the_old_numbers(monkeypatch) -> None:
-    """⚠ `--musique-judge rule` 必须**一位不差**地复现历史口径（台账靠它）。"""
+    """⚠ `--musique-judge rule` 必须**逐项一致**地复现固定参考口径。"""
     from eval.harness import extra_pipeline as ep
 
     def forbidden(*_args, **_kwargs):  # pragma: no cover —— 规则模式不许调裁判

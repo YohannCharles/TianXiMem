@@ -391,7 +391,7 @@ def test_dated_replacement_cannot_suppress_a_claim_with_unknown_source_time(ordi
 
 
 def test_a_first_person_walk_root_is_resolved_to_the_owners_name() -> None:
-    """D50：读取期把 `"I"` 改写成真名，walk 的根实体也必须做同样的等价。
+    """    读取期把 `"I"` 改写成真名，walk 的根实体也必须做同样的等价。
 
     否则 `Where do I work?` 在**有自我介绍的用户**上永远断在第一步——而抽取层
     当前恰好能产出主语为 `I` 的事实（`Corpus: I — works for — …`）。

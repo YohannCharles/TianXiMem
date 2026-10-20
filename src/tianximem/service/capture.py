@@ -3,8 +3,8 @@
 ## 它为什么存在
 
 **不是为了功能，是为了"看见"**：契约核验（字段名、`timestamp` 单位、`top_k`、
-未知字段）在本地只能猜。⚠ **它已经干掉过一次事故（S6）**：官方 `request_id`
-是 `r_3115…` 这种不透明 id ⇒ 任何按形状解析的逻辑 100% 失败 ⇒ 直接催生了 **D28**。
+未知字段）在本地只能猜。采集可提供真实请求形状，避免对 `request_id` 等字段作
+错误的形状假设。
 
 **记哪些**：`/add` 与 `/search`（`CAPTURED_PATHS`）——**任何形状都记**，
 包括不合 schema 的 422 与内部异常的 500（它跑在路由与校验**之前**）。
@@ -26,8 +26,8 @@
 
 ## ⚠ 一个必须知道的边界
 
-那一行在**响应发出前**写（`flush`，**不 fsync**）。进程在响应前崩溃 ⇒ 这次请求不落盘，
-AML 会重试（§2.2 最多 32 次），重试那次会记到。
+记录在响应发出前写入并 `flush`，但不执行 `fsync`。若进程在此之前崩溃，该请求不会落盘；
+AML 的重试会作为新请求被记录。
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ class RequestCapture:
 
     ## 线程安全
 
-    `--workers 1`（§15）⇒ 只有一个进程，但 FastAPI 的 `def` 路由跑在**线程池**里，
+    服务只允许一个进程，但 FastAPI 的 `def` 路由运行在线程池中，
     而本类的写入点在**响应边界**上（事件循环 + 线程池都可能碰到它）⇒ 用一把锁把
     "判断该不该转 + 写 + 计数"做成一个原子段。跨进程不需要（单 worker）。
     """
@@ -210,7 +210,7 @@ class RequestCapture:
             else:
                 entry["body"] = payload
         if isinstance(payload, dict):
-            # ⚠ **只把 `request_id` 抄出来，不解析它**（D28）：它是不透明字符串，
+            # ⚠ **只把 `request_id` 抄出来，不解析它**：它是不透明字符串，
             #   这里取出来只是为了让人**一眼看见它长什么样**。
             request_id = payload.get("request_id")
             if isinstance(request_id, str):
@@ -299,7 +299,7 @@ class RequestCapture:
                     "note": (
                         "TianXiMem 的请求原文采集。每一行 `kind=req` 是一次 `/add` 或 "
                         "`/search`：`body` 是**原样**收到的请求体，`request_id` 是从里面"
-                        "取出来的那一个字段（**不做任何解析**——D28 之后它是不透明字符串）。"
+                        "取出来的那一个字段（不做任何解析：它是不透明字符串）。"
                         f"本份是第 {self._seq} 份；写满 {self._max_bytes} 字节就换下一份"
                         "（文件名形如 `<name>.part2.jsonl`）。"
                         "⚠ 只在 `capture.enabled=true` 时才有这些文件。"
