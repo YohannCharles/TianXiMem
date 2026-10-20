@@ -30,6 +30,30 @@ def test_run_forwards_streaming_workers_without_changing_answer_budget(tmp_path,
     assert forwarded[forwarded.index("--prefix-scheduling") + 1] == "independent"
 
 
+def test_judge_forwards_checkpoint_source_and_workers(tmp_path, monkeypatch):
+    from eval.experiments import official_dataset
+    from tools import run_official_eval as tool
+
+    forwarded = []
+    monkeypatch.setattr(official_dataset, "main", lambda argv: forwarded.extend(argv) or 0)
+    assert tool.main([
+        "judge",
+        "--source-run-dir", str(tmp_path / "official-v1.2"),
+        "--run-id", "official-v1.2-answer-v2",
+        "--reports-dir", str(tmp_path / "reports"),
+        "--configs-dir", str(tmp_path / "configs"),
+        "--profile", "compare",
+        "--max-tokens", "2048",
+        "--judge-workers", "16",
+        "--memory-date", "none",
+        "--annotate-mark", "paren",
+    ]) == 0
+    assert forwarded[:3] == ["judge", "--source-run-dir", str(tmp_path / "official-v1.2")]
+    assert forwarded[forwarded.index("--run-id") + 1] == "official-v1.2-answer-v2"
+    assert forwarded[forwarded.index("--judge-workers") + 1] == "16"
+    assert forwarded[forwarded.index("--max-tokens") + 1] == "2048"
+
+
 def _write(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

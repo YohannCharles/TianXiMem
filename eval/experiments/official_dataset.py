@@ -28,6 +28,7 @@ from eval.datasets.prepare import PreparationError, ensure_dataset
 from eval.datasets.registry import benchmark_dir, capture_dir
 from eval.harness import ServiceClient, api_config, build_official_items, pipeline_for, run_judge
 from eval.harness.annotate import MARKS
+from eval.harness.driver import SearchHit
 from eval.harness.judge import DATE_MODES
 from eval.harness.judge_results import results_from_labels
 from eval.harness.official_judging import StreamingOfficialJudge
@@ -759,6 +760,98 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
+def judge_from_checkpoints(args: argparse.Namespace) -> int:
+    """Run answer/evaluate from completed Search checkpoints without HTTP replay."""
+    source = Path(args.source_run_dir)
+    source_runtime = json.loads((source / "run-manifest.json").read_text(encoding="utf-8"))
+    source_manifest = load_manifest(source / "selection-manifest.json", verify_sources=True)
+    if source_runtime.get("data_identity") != data_identity(source_manifest):
+        raise ValueError("Search run 的题目清单指纹不一致")
+    status_path = source / "retrieval-status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8")) if status_path.is_file() else {}
+    if not status.get("complete"):
+        raise ValueError(f"Search 尚未完成：{source}；不能开始 answer/judge")
+    manifest = source_manifest
+    questions = {int(row["seq"]): row for row in manifest["questions"]}
+    plans = replay_plan(Path(manifest["capture_dir"]), only_seqs=set(questions))
+    compiled = [checkpoint_plan(plan, namespace=f"{source_runtime['run_id']}:{source_runtime['data_identity']}")
+                for plan in plans]
+    source_users = source_runtime["users"]
+    output = Path(args.reports_dir) / "runs" / args.run_id
+    if output.exists() and any(output.iterdir()):
+        existing = output / "run-manifest.json"
+        if not existing.is_file():
+            raise ValueError(f"评分输出目录已有未冻结产物：{output}")
+        saved = json.loads(existing.read_text(encoding="utf-8"))
+        if saved.get("data_identity") != source_runtime["data_identity"]:
+            raise ValueError("评分输出目录的数据指纹不一致")
+    else:
+        output.mkdir(parents=True, exist_ok=True)
+        write_json(output / "selection-manifest.json", manifest)
+        runtime = dict(source_runtime)
+        runtime.update({
+            "run_id": args.run_id,
+            "replay_source_run": str(source.resolve()),
+            "replay_only": False,
+            "answer_judge_only": True,
+        })
+        evaluation = dict(runtime.get("evaluation") or {})
+        evaluation["scheduling"] = f"offline checkpoint answer/judge; workers={args.judge_workers}"
+        runtime["evaluation"] = evaluation
+        write_json(output / "run-manifest.json", runtime)
+        for plan in compiled:
+            (output / plan.sample.user_id).mkdir(parents=True, exist_ok=True)
+
+    for family in sorted({row["dataset"] for row in manifest["questions"]}):
+        ensure_dataset(
+            "doc-pp" if family == "docpp" else family,
+            benchmark_dir(),
+            offline=True,
+            purpose="judge",
+        )
+    pipeline = pipeline_for(benchmark_dir(), "official-capture")
+    if not pipeline.is_file():
+        raise ValueError(f"评分 pipeline 缺失：{pipeline}")
+    errors: list[dict] = []
+
+    def on_error(user: str, qid: str, error: Exception) -> None:
+        errors.append({"user": user, "id": qid, "error": type(error).__name__, "detail": str(error)})
+
+    judge = StreamingOfficialJudge(
+        output, pipeline, workers=args.judge_workers, max_tokens=args.max_tokens,
+        on_error=on_error,
+    )
+    try:
+        submitted = 0
+        for plan, wire in zip(plans, compiled, strict=True):
+            wire_user = source_users.get(plan.user_id)
+            if not wire_user or wire_user != wire.sample.user_id:
+                raise ValueError(f"Search run 缺少用户映射：{plan.user_id}")
+            state = json.loads((source / wire_user / "checkpoint.json").read_text(encoding="utf-8"))
+            if state.get("next_event") != len(wire.events):
+                raise ValueError(f"用户 {plan.user_id} 的 checkpoint 尚未完成")
+            hits = {
+                str(qid): [SearchHit(**row) for row in rows]
+                for qid, rows in state.get("hits", {}).items()
+            }
+            items = build_official_items(
+                list(plan.questions), hits, date_mode=args.memory_date, annotate_mark=args.annotate_mark
+            )
+            for item in items:
+                judge.submit(wire_user, item)
+                submitted += 1
+        print(f"从 checkpoint 提交 {submitted} 道题到 answer/judge 队列", flush=True)
+    finally:
+        judge.close(drain=True)
+    if errors:
+        _append_jsonl(output / "errors.jsonl", {"kind": "answer-judge", "errors": errors})
+        print(f"answer/judge 完成但有 {len(errors)} 道技术错误：{output / 'errors.jsonl'}", flush=True)
+    else:
+        print(f"answer/judge 完成：{output}", flush=True)
+    write_summary(output)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -806,6 +899,16 @@ def build_parser() -> argparse.ArgumentParser:
             "（线上那一批同样会丢）；abort = 阻断该用户。4xx 永远不跳过"
         ),
     )
+    judge = sub.add_parser("judge", help="只从已完成 Search checkpoint 执行 answer → judge")
+    judge.add_argument("--source-run-dir", required=True)
+    judge.add_argument("--run-id", required=True)
+    judge.add_argument("--reports-dir", default="eval/reports")
+    judge.add_argument("--configs-dir", default="configs")
+    judge.add_argument("--profile", default="compare")
+    judge.add_argument("--max-tokens", type=int, default=1024)
+    judge.add_argument("--judge-workers", type=int, default=16)
+    judge.add_argument("--memory-date", default="none", choices=DATE_MODES)
+    judge.add_argument("--annotate-mark", default="paren", choices=MARKS)
     execute.add_argument(
         "--stop-on-error",
         action="store_true",
@@ -852,6 +955,10 @@ def main(argv: list[str] | None = None) -> int:
                     "run-id 必须是单层目录名"
                 )
             return run(args)
+        elif args.command == "judge":
+            if args.judge_workers < 1 or args.max_tokens < 1 or args.run_id in ("", ".", ".."):
+                raise ValueError("judge-workers/max-tokens 必须为正，run-id 必须是单层目录名")
+            return judge_from_checkpoints(args)
         elif args.command == "summarize":
             summary = write_summary(Path(args.run_dir))
             print(f"完成 {summary['completed']}/{summary['expected']} → {args.run_dir}/summary.md")

@@ -325,6 +325,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    judge = sub.add_parser("judge", help="只从已完成 Search checkpoint 执行 answer → judge")
+    judge.add_argument("--source-run-dir", required=True)
+    judge.add_argument("--run-id", required=True)
+    judge.add_argument("--reports-dir", default=DEFAULT_REPORTS)
+    judge.add_argument("--configs-dir", default="configs")
+    judge.add_argument("--profile", default="compare")
+    judge.add_argument("--max-tokens", type=int, default=1024)
+    judge.add_argument("--judge-workers", type=int, default=16)
+    judge.add_argument("--memory-date", default="none")
+    judge.add_argument("--annotate-mark", default="paren")
+
     status = sub.add_parser("status", help="离线汇总一个 run（不联网）")
     status.add_argument("--run-id", required=True)
     status.add_argument("--reports-dir", default=DEFAULT_REPORTS)
@@ -397,6 +408,25 @@ def main(argv: list[str] | None = None) -> int:
         if code == 0:
             print(f"→ {output}/comparison.md / comparison.csv / comparison.json")
         return code
+
+    if args.command == "judge":
+        if args.judge_workers < 1 or args.max_tokens < 1:
+            print("✗ judge-workers/max-tokens 必须为正", file=sys.stderr)
+            return 2
+        from eval.experiments.official_dataset import main as official_main
+
+        return official_main([
+            "judge",
+            "--source-run-dir", args.source_run_dir,
+            "--run-id", args.run_id,
+            "--reports-dir", args.reports_dir,
+            "--configs-dir", args.configs_dir,
+            "--profile", args.profile,
+            "--max-tokens", str(args.max_tokens),
+            "--judge-workers", str(args.judge_workers),
+            "--memory-date", args.memory_date,
+            "--annotate-mark", args.annotate_mark,
+        ])
 
     manifest, capture = preflight(args)
     if args.command == "check":
