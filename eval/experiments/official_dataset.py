@@ -785,6 +785,23 @@ def judge_from_checkpoints(args: argparse.Namespace) -> int:
         saved = json.loads(existing.read_text(encoding="utf-8"))
         if saved.get("data_identity") != source_runtime["data_identity"]:
             raise ValueError("评分输出目录的数据指纹不一致")
+        runtime = saved
+        evaluation = dict(runtime.get("evaluation") or {})
+        evaluation.update({
+            "answer_model": api_config.ANSWER_MODEL,
+            "judge_model": api_config.JUDGE_MODEL,
+            "answer_base": api_config.ANSWER_API_BASE,
+            "judge_base": api_config.JUDGE_API_BASE,
+            "max_tokens": args.max_tokens,
+            "memory_date": args.memory_date,
+            "annotate_mark": args.annotate_mark,
+            "llm_inflight_per_slot": int(
+                os.environ.get("OFFICIAL_LLM_INFLIGHT_PER_SLOT", "0")
+            ),
+            "scheduling": f"offline checkpoint answer/judge; workers={args.judge_workers}",
+        })
+        runtime["evaluation"] = evaluation
+        write_json(existing, runtime)
     else:
         output.mkdir(parents=True, exist_ok=True)
         write_json(output / "selection-manifest.json", manifest)
