@@ -107,7 +107,16 @@ class QueryInstructionEmbedder:
         return self._inner.encode(texts)
 
     def encode_query(self, texts: Sequence[str]) -> list[list[float]]:
-        """查询侧：加前缀**之后**才交给内层——于是缓存键落在带前缀的那份文本上。"""
-        return self._inner.encode(
-            [apply_query_instruction(text, self._instruction, self._template) for text in texts]
-        )
+        """查询侧：加前缀**之后**才交给内层——于是缓存键落在带前缀的那份文本上。
+
+        ⚠ 前缀先加、截断后做：内层的 `encode_query()`（若存在）负责在**发送前**
+        把超长文本压进模型窗口（[`truncate.py`](./truncate.py)）。顺序反过来的话，
+        前缀会被截掉，而"加了前缀"看起来仍然成立。
+        """
+        prefixed = [
+            apply_query_instruction(text, self._instruction, self._template) for text in texts
+        ]
+        encode_query = getattr(self._inner, "encode_query", None)
+        if callable(encode_query):
+            return encode_query(prefixed)
+        return self._inner.encode(prefixed)

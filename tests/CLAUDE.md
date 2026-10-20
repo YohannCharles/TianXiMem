@@ -55,6 +55,7 @@ test_current_payload.py 当前字面输入的依赖检查：payload 齐全且开
 test_retrieve.py        `retrieve/` 的策略与参数所有权（**不碰 Qdrant**）
 test_qdrant_store.py    Qdrant 派生索引集成（**需要真 Qdrant**，不可达整组 skip，不静默通过）
 test_embed_cache.py     embedding 维度来源 / 落盘缓存 / 坐标系失效（**不碰网络**）
+test_embed_truncation.py 查询侧超长输入的前置截断：只截查询侧、缓存键仍是原文、前缀先于截断、严格不超窗
 test_query_instruction.py 查询侧 instruction：**前缀必须加在缓存之上**那条静默边界
 test_service_add.py     Add 端的时序与两层幂等（假 Qdrant，精确控制第几次 upsert 失败）
 test_harness.py         `eval/harness/` 切批 / HTTP 驱动 / 裁判包装 / run record（桩 pipeline 真 import api_config）

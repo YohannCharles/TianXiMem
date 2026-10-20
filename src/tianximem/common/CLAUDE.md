@@ -79,6 +79,11 @@ tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
 
 **双预算**：本模块提供 token 计数，但**"槽位数 + token 数双截断"的决策在 [`../rank/`](../rank/)**——本模块只回答"这段文本是多少 token"，不决定截谁。
 
+2026-10-20 起 `O200kCounter` 还提供 `encode_ids` / `decode_ids`：供
+[`../embed/truncate.py`](../embed/truncate.py) 在**发送前**把超长查询压进 embedding 窗口。
+那是**输入适配**（与 instruction 前缀同一层），不是预算决策——`EMBED_MAX_TOKENS` 的
+查询侧消费方就是它，索引侧仍由打包预算与数据门禁守。
+
 ---
 
 ## 3. `config` —— 加载与校验（§15）

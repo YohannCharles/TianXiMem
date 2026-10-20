@@ -43,9 +43,11 @@ import httpx
 import numpy as np
 
 from tianximem.common.render import TEMPLATE_VERSION
+from tianximem.embed.truncate import truncate_for_embedding
 
 __all__ = [
     "CachingEmbedder",
+    "QUERY_CACHE_PREFIX",
     "DimNotKnownError",
     "DimensionMismatchError",
     "DiskVectorCache",
@@ -66,6 +68,15 @@ __all__ = [
 #: 而眼下没有任何调用方需要调它——**收一个没有消费方的键等于预留字段**。
 #: 真要调时：加配置键 + 从这里改成注入。
 _CACHE_BUSY_TIMEOUT_MS: Final[int] = 5000
+
+#: 查询侧缓存身份的前缀：**角色 + 适配版本**。
+#:
+#: 文档侧原样编码、查询侧发送前截断 ⇒ **原文相同不再意味着模型输入相同**。
+#: 两侧共用原文作键时，先文档后查询（或反过来）会静默复用另一侧的向量。
+#: 文档侧保持原文作键（**不失效已有的 Add 缓存**）；查询侧用这个前缀另起一套身份。
+#: ⚠ 改了 [`truncate.py`](./truncate.py) 的预算或截断形状 ⇒ 抬这里的版本号，
+#: 否则旧查询向量会被静默复用。
+QUERY_CACHE_PREFIX: Final[str] = "query-adapter-v1:"
 
 
 class EmbeddingError(RuntimeError):
@@ -339,6 +350,26 @@ class CachingEmbedder:
             ) from None
 
     def encode(self, texts: Sequence[str]) -> list[list[float]]:
+        return self._encode(texts, query=False)
+
+    def encode_query(self, texts: Sequence[str]) -> list[list[float]]:
+        """查询侧：**缓存身份与文档侧分开**，截断发生在内层发送之前。
+
+        ## 为什么查询侧不能与文档侧共用缓存键（2026-10-20）
+
+        文档侧原样编码、查询侧先截断 ⇒ **原文相同不再意味着模型输入相同**。
+        若两侧都用原文作键：
+
+        * 先 `encode([long])` 再 `encode_query([long])` ⇒ 查询命中**完整文档**的向量；
+        * 先 `encode_query([long])` 再 `encode([long])` ⇒ 文档命中**截断查询**的向量。
+
+        两条都不报错，只是向量悄悄错了。所以查询侧用
+        `QUERY_CACHE_PREFIX + 原文` 作身份；文档侧保持原文（**不失效已有的 Add 缓存**）。
+        截断策略或预算一变，就抬前缀里的版本号——旧查询向量整体失效，文档缓存不动。
+        """
+        return self._encode(texts, query=True)
+
+    def _encode(self, texts: Sequence[str], *, query: bool) -> list[list[float]]:
         texts = list(texts)
         if not texts:
             return []
@@ -346,16 +377,19 @@ class CachingEmbedder:
         # 先全部查缓存，并顺手在批内去重（同一次 batch 里重复文本很常见）
         found: dict[str, list[float] | None] = {}
         misses: list[str] = []
+        miss_keys: list[str] = []
         for text in texts:
-            if text in found:
+            key = QUERY_CACHE_PREFIX + text if query else text
+            if key in found:
                 continue
-            hit = self._cache.get(text)
-            found[text] = hit
+            hit = self._cache.get(key)
+            found[key] = hit
             if hit is None:
                 misses.append(text)
+                miss_keys.append(key)
 
         if misses:
-            fresh = self._inner.encode(misses)
+            fresh = self._encode_missing(misses, query=query)
             if len(fresh) != len(misses):
                 raise EmbeddingError(f"内层返回 {len(fresh)} 个向量，但请求了 {len(misses)} 条文本")
             prepared = [to_float32(v) for v in fresh]
@@ -381,17 +415,30 @@ class CachingEmbedder:
                     f"（坐标系 {self._cache.coordinate.describe()}）"
                 )
 
-            self._cache.put_many(zip(misses, prepared, strict=True))
-            for text, vec in zip(misses, prepared, strict=True):
-                found[text] = vec
+            self._cache.put_many(zip(miss_keys, prepared, strict=True))
+            for key, vec in zip(miss_keys, prepared, strict=True):
+                found[key] = vec
 
         out: list[list[float]] = []
         for text in texts:
-            vector = found.get(text)
+            key = QUERY_CACHE_PREFIX + text if query else text
+            vector = found.get(key)
             if vector is None:  # pragma: no cover — 上面已保证填满
                 raise EmbeddingError(f"内部错误：文本未取到向量（{text[:40]!r}…）")
             out.append(vector)
         return out
+
+    def _encode_missing(self, misses: Sequence[str], *, query: bool) -> list[list[float]]:
+        """缓存未命中的那段交给内层。查询侧优先走内层的 `encode_query()`。
+
+        内层可能是任何 `Embedder` 实现（测试里的 `FakeEmbedder`、归档里的旧实现），
+        所以用鸭子类型探测——`encode_query` 是可选的输入适配能力，不是协议的一部分。
+        """
+        if query:
+            encode_query = getattr(self._inner, "encode_query", None)
+            if callable(encode_query):
+                return encode_query(misses)
+        return self._inner.encode(misses)
 
 
 class OpenAICompatEmbedder:
@@ -415,6 +462,7 @@ class OpenAICompatEmbedder:
         timeout: float = 60.0,
         client: httpx.Client | None = None,
         batch_size: int = 64,
+        max_query_tokens: int | None = None,
     ) -> None:
         if not base_url or not api_key:
             raise ValueError("base_url 与 api_key 都不得为空")
@@ -424,6 +472,7 @@ class OpenAICompatEmbedder:
         self._timeout = timeout
         self._client = client
         self._batch_size = batch_size
+        self._max_query_tokens = max_query_tokens
         self._dim: int | None = None
 
     # ── 标识 ───────────────────────────────────────────────────────────
@@ -454,6 +503,7 @@ class OpenAICompatEmbedder:
             self._client = None
 
     def encode(self, texts: Sequence[str]) -> list[list[float]]:
+        """文档侧：**原样发送**。索引侧超窗是数据 bug，留给网关响亮失败。"""
         texts = list(texts)
         if not texts:
             return []
@@ -461,6 +511,18 @@ class OpenAICompatEmbedder:
         for start in range(0, len(texts), self._batch_size):
             out.extend(self._encode_chunk(texts[start : start + self._batch_size]))
         return out
+
+    def encode_query(self, texts: Sequence[str]) -> list[list[float]]:
+        """查询侧：**发送前先截断**到模型的单条窗口。
+
+        为什么不在 `encode()` 里统一截断：索引侧的正文由打包预算钉在窗口内，
+        超窗在那里是**数据 bug**，必须让本地网关响亮 400（与提交端点"静默截断"的
+        线上行为对齐不是这里的目标）。见 [`truncate.py`](./truncate.py)。
+        """
+        truncated = [
+            truncate_for_embedding(text, max_tokens=self._max_query_tokens) for text in texts
+        ]
+        return self.encode(truncated)
 
     def _encode_chunk(self, texts: Sequence[str]) -> list[list[float]]:
         url = f"{self._base_url}/embeddings"

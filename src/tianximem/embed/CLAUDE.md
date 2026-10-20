@@ -53,6 +53,30 @@ class Embedder(Protocol):
 >
 > **查询侧"不做改写"是 v1 的规格，不是省略。** §5 明确区分了两件事：图里的"关键词重写"是 **Agent 每轮自己产出的检索关键词**（属于 agent 循环）；而**检索之前那一次独立的 query 改写属 v2，v1 没有**。**v1 两者都没有**（D13）。
 
+### 查询侧超长输入：**发送前截断**（2026-10-20）
+
+> 官方采集（`official-dataset-2026-09-29`）里 CL-Bench 有一组 `query` 远超
+> `text-embedding-v4` 的单条窗口（`EMBED_MAX_TOKENS = 8,192`）。长度分布、延迟与
+> 问句位置的逐项数字见 [`eval/reports/embedding-20261020.md`](../../../eval/reports/embedding-20261020.md)。
+> 适配层此前**原样 POST**：网关要先收完整请求、再 tokenize，然后才拒绝或静默截断——
+> 这段时间它占着连接与推理槽位，同批的短查询一起变慢。
+>
+> **因此 `OpenAICompatEmbedder.encode_query()` 在发送前截断**（[`truncate.py`](./truncate.py)）：
+
+| 规则 | 落在哪 |
+| --- | --- |
+| **只截查询侧**：`encode()`（文档侧）**原样发送** | 索引侧正文由打包预算与 `tests/test_datasets.py` 钉在窗口内；那里超窗是**数据 bug**，必须让本地网关响亮 400，不能靠截断掩盖 |
+| **前缀先加、截断后做** | `QueryInstructionEmbedder.encode_query()` → 内层 `CachingEmbedder.encode_query()` → `OpenAICompatEmbedder.encode_query()`。反过来会把前缀截掉 |
+| **缓存身份两侧分开** | 文档侧仍用原文（已有 Add 缓存不失效）；查询侧用 `QUERY_CACHE_PREFIX + 原文`。两侧共用原文键时，先文档后查询（或反之）会静默复用另一侧的向量——原文相同**不再**意味着模型输入相同 |
+| 预算 = `EMBED_MAX_TOKENS × 0.56`，头尾各一半 | 0.56 的依据是 Qwen 官方 tokenizer 的实测最坏比例 1.70（`1/1.70` 再留余量），见报告 §7.3/§8.1；**它不保证 `text-embedding-v4` 的 tokenizer 同样安全**，只是可验证的保守近似。头尾各半的依据是 CL-Bench 问句位置分布 |
+
+> ⚠ **它没有配置键，是有意的**：窗口是模型的 API 事实（与 `rrf.k = 61` 同类），
+> 写进配置只会多一个"配得出、跑不通"的旋钮。截断不动 `content`、不动索引、不改 §7.2 的
+> "查询原样送"——它只是**在模型窗口处**做的输入适配，和 instruction 前缀同一层。
+>
+> 用例：[`tests/test_embed_truncation.py`](../../../tests/test_embed_truncation.py)
+> 钉住"文档侧不被截""两侧缓存身份分开""前缀先于截断""结果严格不超限"。
+
 **索引侧的渲染必须是 `common/render` 的那一份**（§7.2 / §11.3 要求它与返回给 AML 的 `content` 是同一份渲染）。**`embed/` 不自己拼字符串。**
 
 ---
