@@ -796,6 +796,18 @@ def judge_from_checkpoints(args: argparse.Namespace) -> int:
             "answer_judge_only": True,
         })
         evaluation = dict(runtime.get("evaluation") or {})
+        evaluation.update({
+            "answer_model": api_config.ANSWER_MODEL,
+            "judge_model": api_config.JUDGE_MODEL,
+            "answer_base": api_config.ANSWER_API_BASE,
+            "judge_base": api_config.JUDGE_API_BASE,
+            "max_tokens": args.max_tokens,
+            "memory_date": args.memory_date,
+            "annotate_mark": args.annotate_mark,
+            "llm_inflight_per_slot": int(
+                os.environ.get("OFFICIAL_LLM_INFLIGHT_PER_SLOT", "0")
+            ),
+        })
         evaluation["scheduling"] = f"offline checkpoint answer/judge; workers={args.judge_workers}"
         runtime["evaluation"] = evaluation
         write_json(output / "run-manifest.json", runtime)
