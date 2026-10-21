@@ -437,7 +437,7 @@ def main(argv: list[str] | None = None) -> int:
         # ⛔ 强制关掉采集：`default.yaml` 现在是 `true`，而本工具发的**不是官方流量**，
         #   落进那份文件会把"官方请求原文"污染成混合体（同 `coq_eval._arm_config`）。
         capture=replace(base.capture, enabled=False),
-        # §14 的出口：不给它路径就是 `NullMetricsSink`，轮数/停止原因/耗时整块空着。
+        # 指标出口：不给路径就是 `NullMetricsSink`，轮数/停止原因/耗时整块空着。
         metrics_path=str(metrics_path),
     )
     services = build_services(config)

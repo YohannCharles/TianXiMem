@@ -1,6 +1,6 @@
 """BEAM（100K 档）的加载层——**记忆是真对话、裁判用官方那份 pipeline**。
 
-## 这份数据长什么样（2026-09-30 实测，`benchmark_data/beam/`）
+## 这份数据长什么样
 
 ```text
 data/100K-00000-of-00001.parquet   20 个 conversation，一行一个：
@@ -17,7 +17,7 @@ data/100K-00000-of-00001.parquet   20 个 conversation，一行一个：
 1. **时间戳要"往下传播"**：`time_anchor` 只挂在每个 session 的**第一条**消息上
    （形如 `"March-15-2024"`，**不是** ISO 格式）⇒ 同一 session 的其余消息要靠它补
    `timestamp_ms`，否则 `event_time` 全空、`created_at` 只能发空串。
-   ⚠ 与 LoCoMo/LME 同一条形：**session 内没有区分度**（§6.1）。
+   ⚠ 与 LoCoMo/LME 同一条形：**session 内的时间没有区分度**。
 2. **金标是 `rubric`（列表）**，不是 `answer`：官方 `pipeline_beam.py` 的 `rubric_items()`
    认 `rubric_nuggets` / `rubrics` / `rubric`，判分是**逐条三点制**（0 / 0.5 / 1）。
    单独取 `answer` 只覆盖 10 组里的 5 组（[`tools/recover_official_gold.py`][gold] 里那条
@@ -43,7 +43,7 @@ from .sampling import stratified_sample
 
 __all__ = ["PARQUET", "PIPELINE", "TIME_ANCHOR_FORMAT", "USER_PREFIX", "load_beam"]
 
-#: 归档里的相对路径（D16：数据集专属文件名的知识止步于本模块）。
+#: 归档里的相对路径。
 PARQUET = "beam/data/100K-00000-of-00001.parquet"
 
 #: **官方 pipeline**（与 LoCoMo/LME/CL-Bench 一样，在归档里、由 harness subprocess 调）。
@@ -51,7 +51,7 @@ PIPELINE = "pipeline_beam.py"
 
 USER_PREFIX = "beam-"
 
-#: `time_anchor` 的形状（实测 `"March-15-2024"`）——**不是 ISO**，别拿 `fromisoformat` 去啃。
+#: `time_anchor` 的形状（ `"March-15-2024"`）——**不是 ISO**，别拿 `fromisoformat` 去啃。
 TIME_ANCHOR_FORMAT = "%B-%d-%Y"
 
 #: probing 组的顺序（决定题号顺序，别依赖 dict 的插入序）。

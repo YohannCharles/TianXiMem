@@ -526,10 +526,10 @@ def test_unparsed_explicit_edit_remains_original_text_without_an_invented_edge(t
 
 
 def test_parsed_update_sentence_supersedes_the_plain_edge(tmp_path):
-    """更新句法被解析成真实替换事实后，walk 按替换取值（2026-10-17 起）。
+    """更新句法被解析成真实替换事实后，walk 按替换取值。
 
     更新句本身声明"它替换早先的值"——所以即使没有 `event_time`，同一
-    subject|relation 的旧普通陈述不再进证据（与规则层 `_current` 同口径）。
+    subject|relation 的非当前普通陈述不会进入证据（与规则层 `_current` 同口径）。
     """
     store = SqliteStore.open(tmp_path / "db")
     add(

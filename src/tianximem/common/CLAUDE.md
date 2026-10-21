@@ -1,148 +1,71 @@
-# common/ — 渲染、token 计数、配置
+# common
 
-**PRD**：§11.3（渲染）、§6.4（token 预算）、§15（配置开关）
-
-## 本模块的构成
+`common/` owns shared rendering, token counting, and configuration loading.
 
 ```text
-render.py    ✅ 已实现——渲染的**唯一实现**（QA 对与事实片段）
-annotate.py  ✅ 已实现——正文里的相对时间**就地注解**（只改 `content`、不碰索引）
-amounts.py   ✅ 候选——交易事实的单笔数量 × 单价注解（只改 Search `content`）
-config/      ✅ 已实现——**全包唯一**读环境变量的地方（③-d）；**一个包**，见下面 §3 的构成
-tokens.py    ✅ 已实现——o200k_base 计数（§6.4）
+render.py      QA and grounded-fact rendering
+annotate.py    response-only relative-time annotation
+amounts.py     response-only transaction amount annotation
+tokens.py      o200k_base counting and token-id helpers
+config/        environment and YAML loading, models, validation, and constants
 ```
 
-**这不是一个工具箱。** 它存在的理由是**一条不变式**，外加两个"必须只有一份实现"的量。
+## Rendering
 
----
+`render.py` is the only implementation that builds indexed QA text and grounded-fact text.
 
-## 1. `render` —— 唯一实现（不变式 I1）
+- Indexing and reranking use the same rendered QA representation.
+- A grounded fact is rendered from its verbatim source quote, source date, statement, and supported fields.
+- Do not construct a second rendering path in `embed/`, `rank/`, or `retrieve/`.
+- A change to indexed rendering changes the embedding input and requires rebuilding the vector collection.
 
-> **§7.2 与 §11.3 要求：embedding 的输入 与 返回给 AML 的 `content`，必须是同一份渲染。**
-
-两处一旦不一致，"检索命中的是什么"与"模型读到的是什么"就会**漂移**——**而且这种漂移不会报错**：检索照常返回值，分数照常算，只是**命中的是另一个版本**。这类 bug 的排查成本极高（要同时对两处做 diff 才能发现）。
-
-**因此**：
-
-- `render.py` 是**唯一**拼 QA 对文本的地方
-- [`../embed/`](../embed/) **不自己拼字符串**
-- [`../rank/`](../rank/) 的 packaging **也不**自己拼
-- 两处都调 `render.py`，传同一个 QA 对
-
-**QA 对的渲染规则（模板、role 标记、自定界）的唯一声明处是 [`../rank/CLAUDE.md`](../rank/CLAUDE.md) §4**——本文件不重复，避免两处规则描述漂移（**同样的理由**）。
-
-**⚠ 「贵」消融项**：改渲染模板 = 改变 embedding 输入 = **整个向量索引要重建**（[`../../../tools/reindex.py`](../../../tools/reindex.py)）。模板现为 `v1` + **日粒度日期前缀**（**D21**，2026-09-25）——**推翻它要付重建索引的钱**。
-
-**渲染入口都在本模块**（一个对 / 一条事实 → 它的文本只该有一条路）：
-
-| 名字 | 用途 |
-| --- | --- |
-| `render(q, a, *, date="")` | 逐对的唯一拼装（`date` 非空 ⇒ 前缀 `[YYYY-MM-DD] `） |
-| `render_pair(pair, *, inject_abs_time)` | **两个调用点的入口**（索引侧 / 精排输入）——日期口径只此一处。⚠ **`content` 是那个声明式例外**：它走 `render` + `render_date` + 可选的 `annotate()`（见 [`../rank/CLAUDE.md`](../rank/CLAUDE.md) §4 与不变式 I1） |
-| `render_date(...)` · `day_granularity(...)` · `event_day(...)` | T1 的开关落点、日期格式（`created_at` 与 `content` **共用同一个格式**）与**时间换算的唯一一处** |
-| `render_evidence(*, statement, source_date, source_quote, quantitative=False)` | **共同事实的渲染入口**（`Memory fact` 首行 + `Statement` / `Source record date` / `Source quotation` 标记行）——数量观察不在正文重复数值（`quantitative=True` 时省略 `Source quotation` 行），完整引句仍存在事实索引里。它同属"文本拼装只有一处实现"的纪律：事实片段在抽取时经它渲染并落库，Search 直接取用；**事实不进向量索引**，所以它不走 I1 的 embedding↔content 比对 |
-| `render_record_evidence(*, source_id, source_date, source_quote, fields)` | 结构化事实的 JSON 渲染；只放原文引句、来源日期和逐字支持的字段，不计算金额 |
-
-⇒ **T1 的"带日期"臂**（`packaging.inject_abs_time`）不是三处各改一遍，而是这一条路上的一个开关。
-⛔ 反过来：**不要在别处再拼一次日期**——那会同时踩中"两处渲染漂移不报错"与"两臂同时在两个维度上不同"。
-
-> ### ⚠ `annotate.py` 是 I1 的**唯一例外**，边界写得死
->
-> `packaging.annotate_relatives=true` ⇒ 正文里的相对时间就地注成绝对日期
-> （`last Tues (July 18, 2023)`），原文一字不动。**它只接在 `content` 这一条路上**
-> （[`../rank/neighbor.py`](../rank/neighbor.py) 的 `_text()`），索引侧与精排输入
-> 仍然只认 `render_pair` ⇒ **开它不用重建索引**（与 T1 正相反）。
->
-> **例外到哪为止**：`content` = 被索引的文本 **+ 一层纯函数注解**，剥掉后**逐字相同**。
-> 别把它读成"以后可以往 `content` 里加任何东西"——每加一层都要重新回答
-> "它进不进索引、缓存坐标要不要动"（[`../../../docs/architecture.md`](../../../docs/architecture.md) §4）。
->
-> ⚠ **[`../../../eval/harness/annotate.py`](../../../eval/harness/annotate.py) 是同一套逻辑的第二份**
-> （harness 不许 import `src/`，而那次实验是在 harness 侧跑的）——**两份都对**，
-> 由 [`../../../tests/test_annotate.py`](../../../tests/test_annotate.py) 的逐例等价断言钉住。
-
-`amounts.py` 只处理上述结构化交易事实：原文明确数量和单价时，在引句的单价后补单笔计算注解。它不改落库事实、不进入 QA 渲染或向量索引、不汇总跨记录金额；开关由配置模块拥有，预算按最终正文重新计数。
-
----
-
-## 2. `tokens` —— 必须用答案模型自己的分词器（§6.4）
-
-| 要求 | 说明 |
-| --- | --- |
-| **`o200k_base`** | `gpt-4o-mini` 的分词器 |
-| **不要用字符数或空格切分近似** | **单次近似偏差会在 100 个对上被放大到几千 token** |
-| 上限 **117,760** | 答案窗口 128k 扣掉输出与安全余量 |
-
-> ### ⚠ R1 类风险（§6.4）
->
-> 本地 qwen3.5-9b 的分词器与 `gpt-4o-mini` **不同** ⇒ **本地量出的"能装多少对"不能直接搬到线上**——**Step 5 切换后必须重新量一次**，且 token 预算做成配置项（见 [`../../../docs/open-questions.md`](../../../docs/open-questions.md) **E7**）。
-
-**双预算**：本模块提供 token 计数，但**"槽位数 + token 数双截断"的决策在 [`../rank/`](../rank/)**——本模块只回答"这段文本是多少 token"，不决定截谁。
-
-2026-10-20 起 `O200kCounter` 还提供 `encode_ids` / `decode_ids`：供
-[`../embed/truncate.py`](../embed/truncate.py) 在**发送前**把超长查询压进 embedding 窗口。
-那是**输入适配**（与 instruction 前缀同一层），不是预算决策——`EMBED_MAX_TOKENS` 的
-查询侧消费方就是它，索引侧仍由打包预算与数据门禁守。
-
----
-
-## 3. `config` —— 加载与校验（§15）
-
-配置加载不只是 `yaml.safe_load`。它要承担两件事：
-
-**一条不变的配置纪律**：**不得硬编码**（§12.1 R1 对冲 3）。凡是 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) 里列出的量，代码里只应有读配置的语句。**开关之间的依赖与"关掉时不得改变什么"也在那份文档**——**它是一处声明**，本文件不另列一份。
-
-### 三条结构性质（③-d）
-
-配置入口是**一个包**（2026-10-15 从单文件 `config.py` 拆的），各文件按"改变的理由"分开：
+The QA template is:
 
 ```text
-config/__init__.py     公共面：重新导出（`__all__` 31 个名字）＋包级加载顺序说明
-config/constants.py    全部 `DEFAULT_*` / `ENV_*` / `RRF_K` / 取值域常量（**环境变量名的唯一声明处**）
-config/model.py        `ConfigError` ＋ 全部配置 dataclass（值与 `config-reference.md` 的点分键逐段对应）
-config/env.py          `.env` 语法解析与"真实环境变量 ＋ `.env`"的来源合成
-config/yaml_source.py  yaml 读取 / 深合并 / 类型强制 / 各段构造器（`_group` 的可接受键表在这里）
-config/validate.py     `validate` ＋ 逐段校验 ＋ `assert_single_process`
-config/loader.py       `load_config` —— **加载顺序的唯一实现**
+Q: {question}
+A: {answer}
 ```
 
-拆分是**纯搬迁**：三个 profile 的 `load_config()` 输出逐字相同（改前/改后 diff 为空），
-公共面一个名字都没少。⇒ 下面三条性质的**单位从"那一个文件"变成"那整个包"**：
+Omit an empty side. Add role labels to every non-user answer segment. Keep content self-delimiting and free of leading or trailing whitespace.
 
-| 性质 | 由谁保证 |
-| --- | --- |
-| **只有配置包访问 `os.environ` / `os.getenv`** | `tests/test_config.py::test_only_config_reads_the_environment`——**AST 扫描** `src/tianximem/**/*.py`，不是靠自觉。⚠ 它按**包**豁免（`_config_files()`），且**算不出文件就响亮失败**——否则豁免集合会是空的、用例静默空过 |
-| **只有配置包解析 yaml** | 同上的 `test_no_module_reads_config_files_directly` |
-| **每个键只有一个家**（env 或 yaml，不重叠） | `test_thresholds_are_not_overridable_from_env` + `test_env_owned_keys_are_rejected_in_yaml` |
+When absolute-date injection is enabled, prefix each indexed block with `[YYYY-MM-DD] `.
 
-> ⚠ **那条 AST 检查对别名盲**（2026-10-15 实测）：它只认 `os.environ` / `os.getenv`
-> 与 `from os import environ|getenv`——写 `import os as _o` 再 `_o.environ` 能绕过去。
-> 它挡的是**手滑直接读**，不是**蓄意绕过**；要堵这一条得把检查做成"任何名字绑定到 os 模块"。
-> （`yaml.safe_load` 那条同理，但那条是**文本**匹配，换个名字就查不到了。）
+Relative-time annotation is presentation-only. It may add a deterministic absolute date after a relative expression in returned `content`. The original words remain, and removing the annotation restores the indexed text exactly. This path must not affect embeddings, reranking, IDs, scores, or segment counts.
 
-**两层分工**（一处声明在 [`../../../configs/CLAUDE.md`](../../../configs/CLAUDE.md)）：
+The harness may keep a separate annotation implementation because evaluation code is forbidden from importing service internals. Tests must prove the two implementations produce equivalent annotations.
 
-| 层 | 拥有 | 例子 |
-| --- | --- | --- |
-| **环境变量**（`.env`） | 密钥、端点、**路径**、worker 数 | `AML_EMB_BASE_URL` / `TIANXIMEM_SQLITE_PATH` / `TIANXIMEM_WORKERS` |
-| **`configs/<profile>.yaml`** | 阈值、权重、模型名、集合名 | `retrieval.rrf.k` / `models.embedder` / `storage.qdrant.collection` |
+## Token Counting
 
-**`.env` 也由本模块读取**——它排在真实环境变量**之下**（`export` 过的值压过它），
-且**只在 `env=None`（生产路径）时读**：测试传 `env` dict 就完全不碰磁盘。
-换位置用 `TIANXIMEM_ENV_FILE`。
+`tokens.py` uses `o200k_base`, matching the submission answer model.
 
-> ⚠ **不认识的键一律报错**（env 的那几项写进 yaml 也算）：拼错的键被静默忽略 ⇒ 跑的是默认值，
-> 而**没有任何人会发现**——这正是本项目反复要避免的那一类失败。
+- Use the real tokenizer; do not approximate with characters or whitespace words.
+- The configured answer-context ceiling is `117,760` tokens.
+- `tokens.py` reports counts. `rank/packaging.py` decides which segments fit.
+- Query truncation uses token-id encoding and decoding to fit the embedding model window. It must not truncate indexed documents.
 
-**⚠ 配置化 ≠ 可调**。`rrf.k = 61` 这类**正确性常量**写进配置是为了追溯与切换，**不是为了调**——分组见 config-reference 的 A / B / C 三分类。**不合法的值在启动阶段就拒绝**（`rrf_k != 61`、`workers != 1` 都是硬错误，不是警告）。⚠ `top_k = 100` **不是配置键**：它来自请求，代码**不写死 100**（见 [`../retrieve/fusion.py`](../retrieve/fusion.py)——写死会在 AML 传更小值时变成"返回超限"，那是**契约错误**，不是截断）。
+## Configuration
 
-**一条 v2 才落地的开关**：**`checker.enabled` 与它的三个判据阈值都必须是配置项**（§15 / D15）——⚠ 但 `checker.*` 是 **v2 再接**（**D26 / D13**：接线的唯一理由本来是 A4，而 A4 已移出 v1），**别写成"待接线"**。逐项**接线状态**以 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §2 的表为准，**键的落点在 §4**。
+`config/` is the only package allowed to read environment variables or YAML.
 
-> **只收"今天有代码消费方"的键**——**收一个没有消费方的键等于预留字段**（§6.1 对 DDL 的同一条纪律）；**哪些开关还没接线，逐项以 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §2 的表为准**。
-> **但已接线的键仍不可随手调**（`neighbor.*` / `budget.*`，消费方 `rank/neighbor.py` + `service/pipeline.py`）——哪些能调见 `configs/default.yaml` 的 A / B / C 类注释。
+```text
+__init__.py      public exports
+constants.py     environment names and built-in constants
+model.py         configuration data classes and errors
+env.py           dotenv parsing and environment merging
+yaml_source.py   YAML loading, merging, and section construction
+validate.py      semantic validation and single-process assertion
+loader.py        load order
+```
 
----
+Rules:
 
-## 依赖方向
+- Environment variables own endpoints, credentials, model IDs, paths, and process shape.
+- YAML owns thresholds, weights, collection names, and feature switches.
+- Unknown keys are errors.
+- Configuration keys require runtime consumers.
+- Prompt versions and endpoint envelopes are identity assertions, not tuning knobs.
+- `.env` is read only through the configuration package and sits below real environment variables.
 
-**本目录不依赖任何业务层**——它被所有层依赖。若你发现 `common/` 里 import 了 `store/` 或 `retrieve/`，那是分层错了。
+## Boundaries
+
+`common/` must not depend on business modules such as `store/`, `retrieve/`, or `service/`. Business modules depend on `common/`, not the reverse.

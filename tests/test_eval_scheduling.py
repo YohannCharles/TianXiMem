@@ -11,7 +11,7 @@ import pytest
 from eval.datasets import Message, Question, Sample, Session
 from eval.experiments import run as runner
 
-#: run_round 与它调用的协作者住在 runner.py（2026-10-16 拆的）。
+#: run_round 与它调用的协作者住在 runner.py。
 #: ⚠ 补丁必须打在「调用点解析的那个模块」上：打在 runner（= run.py）上的是名字快照，
 #: 而真调用发生在 runner.py 里 ⇒ 补丁静默失效（表现是真去加载数据、真发请求，不是报错）。
 from eval.experiments import runner as runner_impl

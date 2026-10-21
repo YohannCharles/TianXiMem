@@ -1,229 +1,99 @@
-# 官方采集的数据集分类与版本对比
+# Official Capture Evaluation
 
-> 最后核对：2026-10-19，对应 PRD §2.2、§6.4、§12.3、§13。
+Official capture evaluation replays captured Add and Search requests in their original timeline, then answers and scores the selected Search requests.
 
-入口为 `uv run python -m eval.experiments.official_dataset`，依次提供 `prepare`、
-`run`、`summarize`、`compare`。分类统计见
-[当前分类报告](../eval/reports/runs/official-dataset-20260929/coverage.md)。
-
-## 一键入口（2026-10-19）
-
-全量 **8,783 条可评分题**（1,361 条无公开金标的不进入分母）用
-[`tools/run_official_eval.py`](../tools/run_official_eval.py) 驱动；它只做
-**预检 → 调用 `official_dataset.run/summarize/compare`**，重放逻辑仍只有
-`official_dataset.py` 一份：
+## Prepare
 
 ```bash
-# 跑前检查：清单/timeline 覆盖、14 个家族的判分分派、裁判依赖、端点、/health
-uv run --env-file .env python tools/run_official_eval.py check --base-url http://127.0.0.1:8000
-
-# 正式跑；中断后用完全相同的命令续
-uv run --env-file .env python tools/run_official_eval.py run \
-  --run-id official-v1 --service-revision v1 --base-url http://127.0.0.1:8000
-
-# 离线看进度
-uv run python tools/run_official_eval.py status --run-id official-v1
+uv run python -m eval.experiments.official_dataset prepare \
+  --capture-dir <capture-dir> \
+  --report-dir eval/reports/runs/official-dataset
 ```
 
-**不要按数据集重新整理一份 add/search 再拼回去**：采集的 Add 是 AML 原文，user 内
-add/search 按真实时间交错（全量 41% 的题在"该 user 最后一条 add"之前就问），
-按家族拆开会同时丢掉**跨语料干扰项**与**防未来泄漏**。逐题分派已经在
-[`official_capture_pipeline.py`](../eval/harness/official_capture_pipeline.py) 里完成。
+Preparation joins Search records with available gold data and writes a manifest containing:
 
-长跑韧性（2026-10-19 加）：
+- selected Search sequence identifiers;
+- user and dataset assignment;
+- source file hashes;
+- scoring-family assignment;
+- whether a record is scorable.
 
-`run --replay-only` 只执行 Add/Search，不创建答案/裁判任务，且不要求预先准备裁判
-依赖和答案端点。每次成功 Search 的有序 `id` / `content` / `created_at` / `score`
-保存在 `<run>/<user>/checkpoint.json` 的 `hits[seq]`，先原子落盘再执行后续事件。
-退出时 `retrieval-status.json` 记录已保存题数和用户游标完整度。
-`--judge-scheduling after-replay` 会在重放后自动开始旧版作答，不能替代此开关。
-已有检索完整时可直接复用快照；仅修改 answer/judge 提示词或评分规则无需重放服务。
-新口径须使用独立的答案/标签输出目录，保留检索来源和新评分指纹，不能静默复用旧答案。
+Records without reliable gold data remain available for analysis but are excluded from accuracy denominators. The original capture files are never modified.
 
-`run` 可加 `--judge-workers N`（正数）启用逐题流水线：每个用户原时间线的 Add/Search
-保持串行，每题 Search 先写检查点，再将该题冻结输入交给后台作答/判分；
-下一题及下一用户的检索无需等待答案。`0` 保留原用户整批执行方式。
-worker 同时处理的题数有界，待办只在内存保存路径，正文保存在
-`<run>/<user>/questions/<seq>/`。每题仍调用相同的 answer/evaluate 分派，
-模型、提示词、上下文预算和评分规则保持原口径。
+The suite may select all scorable questions or use `--per-dataset N` for a deterministic probe.
 
-每题独立目录防止裁判子进程相互覆盖，用户级 `input.jsonl`、`answers.jsonl`
-与 `labels.jsonl` 在同一锁内按 ID 去重聚合。续跑用检查点中的历史 Search 快照
-补齐待办，不重问历史；原整批模式留下的答案会先复制到对应任务中直接复用。
-后台题目失败写 `errors.jsonl` 并保留任务文件；`--retry-errors` 同时重新打开
-对应的技术错误任务缓存。后台汇总会定期刷新，`judging-progress.json` 记录队列状态。
-两臂须使用相同的 `--judge-workers`，该调度方式会进入 `evaluation.scheduling` 指纹。
+## Run
 
-共享 GPU 时可使用 `--judge-scheduling after-replay --judge-workers N`：Search 仍逐题保存，
-先按原始用户时间线完成本轮 Add/Search，再启动磁盘中的答案/判分任务。不会先灌完全部
-Add 再 Search，也不会让历史问题看到未来内容。`overlap` 保持默认重叠行为。
-`OFFICIAL_LLM_INFLIGHT_PER_SLOT` 可限制每个 LLM 端点槽位同时运行的题数；重复端点槽位
-表示容量权重，限制为正时等待不消耗模型请求超时，策略冻结到评测执行指纹。
+```bash
+uv run --env-file .env python tools/run_official_eval.py check \
+  --base-url http://127.0.0.1:8000
 
-`--ingest-workers N` 启用跨用户 Add/Search 重放，缺省为串行。一个任务独占一个用户，
-线程独享 HTTP 客户端；同时在飞用户数有界，用户完成后直接补下一个，日志与状态
-文件写入串行化。Search 失败仍阻断该用户的未来 Add，其他用户可继续；致命错误
-先通知在飞用户在请求边界停下，再关闭客户端。服务保持单进程。
+uv run --env-file .env python tools/run_official_eval.py run \
+  --run-id official-v1 \
+  --service-revision <git-sha> \
+  --base-url http://127.0.0.1:8000
+```
 
-若长跑已完成一段串行重放，切换并发时用 `--serial-prefix <json>` 保存有序的
-`[{"source_user_id": "…", "next_event": …}]`。前缀只约束列出的用户：这些用户按边界
-逐阶段复现；不在前缀中的用户立即进入 `--ingest-workers` 主并发池，不等待前缀完成。
-前缀用户越过最后一个冻结边界后再进入主池。同一用户始终只有一个任务持有其时间线。
-前缀内容与并发数冻结进评测指纹，调度迁移另行记账。跨用户并发的实际到达顺序仍会
-变化，可能影响共享索引统计；这不是对逐题 Search 排名必然与串行一致的保证。
-`ingest-progress.json` 记录当前在飞用户、调度阶段与本轮完成用户数。
+The runner checks the manifest, family dispatch, judge dependencies, endpoints, and `/health` before sending requests.
 
-多次调整并发时，前缀也接受 `{"stages": [{"workers": N, "users": [边界记录]}]}`：
-前缀用户依次重放各阶段，保留当时的并发度；其他用户同时走主池；各用户事件边界只能向前移动。
-若允许改变跨用户调度，使用 `--prefix-scheduling independent`：全部用户共用
-`--ingest-workers`（或独立精排用户池）的并发额度，每个用户独立经过自己的前缀阶段后
-继续剩余事件，不等待其他用户。保留每个用户的事件顺序、阶段边界和精排路由标记，
-失败仍停在当前 checkpoint，已完成 Search 不重查。原阶段的 workers 不再限制用户间并发，
-这项调度变化写入执行指纹；两臂历史到达顺序不同的限制须随比较结果披露。
-Add 失败时还保存未经截断的完整 HTTP 请求到 `failed-adds/`，由 `skipped.jsonl`
-的 `payload_file` 指向；原始采集正文不修改，后续处理可按请求 ID 溯源。
+For every user, Add and Search events are replayed in captured order. Search results are checkpointed after each successful request. A failure blocks later events for that user when the timeline would otherwise expose future memory.
 
-| 失败 | 处置 |
+Use `--replay-only` to collect Search results without answer or judge work. Use `--judge-workers N` to overlap answer and judge tasks after each Search checkpoint. Use `--ingest-workers N` to overlap independent users while preserving each user's internal order.
+
+When resuming a run with changed concurrency, `--serial-prefix` accepts either a list of user
+boundaries or `{"stages": [{"workers": N, "users": [...]}, ...]}`. Staged prefixes replay each
+listed user's captured timeline through its recorded boundary before entering the main pool. Use
+`--prefix-scheduling independent` when users may continue their prefix stages independently in the
+shared user pool. Each user's event order and checkpoint boundary remain serialized; completed
+Search requests are not repeated. The scheduling choice and prefix are recorded in the execution
+fingerprint, and comparisons must disclose that cross-user arrival order may differ.
+
+After an Add failure, the full untruncated request is written below `failed-adds/`; the corresponding
+`skipped.jsonl` entry contains `payload_file` for traceability. Captured source files are unchanged.
+
+## Failure Handling
+
+| Failure | Behavior |
 | --- | --- |
-| `/add` 5xx / 网络层（已重试 3 次） | **跳过该批并记 `skipped.jsonl`**，游标继续——线上那一批同样会丢；4xx 仍响亮失败 |
-| `/search` 5xx / 网络层 | `ServiceClient` **有界重试 3 次**（只读，无副作用）；4xx 不重试 |
-| 某个用户的 answer/judge 子进程失败 | 记 `errors.jsonl`、**继续下一个用户**；同 run-id 重跑从该用户的检查点续 |
-| 某题判成 `JUDGE_ERROR`（网关抖动） | 默认保留并在 `summary.md` 的「技术错误」列可见；加 `--retry-errors` 重跑会先清掉这些行再重判（`CORRECT` / `WRONG` 等真实判定不动） |
-| 中断后重跑 | 已完成的 Add/Search 不重发；run record 的 `overall` 从**磁盘上的全部** `labels.jsonl` 重建，不会只统计最后一轮 |
+| Add 5xx or network error after bounded retries | Skip the batch, record it in `skipped.jsonl`, and continue. |
+| Add 4xx | Fail loudly. This indicates a client or service defect. |
+| Search 5xx or network error | Retry with a bound; fail the user timeline if it remains unavailable. |
+| Answer or judge subprocess failure | Record the error and continue other queued work. |
+| Judge dependency error | Keep the error visible in the technical-error column. |
+| Interrupted run | Resume from checkpoints with the same command and run ID. |
 
-### 两版比较（v1.0 vs 最新）
+## Compare
 
-用**同一份当前 harness** 分别驱动两个服务；只有服务侧版本、配置目录、端口和
-`run-id` 不同（`--memory-date` / `--annotate-mark` / `--max-tokens` 与答案/裁判
-端点必须一致，否则 `compare` 会拒绝）：
+Run both service versions against the same manifest and identical answer/judge settings:
 
 ```bash
-uv run --env-file .env python tools/run_official_eval.py run \
-  --run-id official-v1.0 --service-revision v1.0 \
-  --base-url http://127.0.0.1:8010 --configs-dir /path/to/v1.0/configs --profile local
-uv run --env-file .env python tools/run_official_eval.py run \
-  --run-id official-latest --service-revision main \
-  --base-url http://127.0.0.1:8020 --configs-dir /path/to/latest/configs --profile local
-
 uv run python tools/run_official_eval.py compare \
-  --left-run-id official-v1.0 --right-run-id official-latest \
-  --left-name v1.0 --right-name latest
+  --left-run-id official-a \
+  --right-run-id official-b \
+  --left-name a --right-name b
 ```
 
-⛔ **不要**用 v1.0 的 harness checkout 跑一臂、最新 checkout 跑另一臂：
-`compare` 核对 `evaluation` 指纹（答案/裁判模型、端点、预算、评分源码），
-源码不同会拒绝比较。产品版本与产品配置可以不同——那正是要比较的东西。
+Comparison rejects runs with incompatible question selection, scoring source, answer/judge model, endpoints, context budget, or result schema. Service version and product configuration are expected to differ.
 
-### 金标审计（只读）
+## Audit
 
 ```bash
 uv run python tools/verify_official_gold.py --sample-per-family 3
 ```
 
-它**只证明来源与搬运**：8,783 条里每条都能追到 `official-gold-extra*` 或
-`public_gold`，且 `gold_answers` / `gold_rubric` / `gold_native` 与来源行逐字段相同；
-审计报告按族给出「extra 来源 / public_gold 来源 / 无来源 / 不一致」计数，并抽 N 条
-列出 `source_locator` 供人工复核。报告默认写到 `eval/reports/runs/official-gold-audit.md`
-（`runs/` 已 gitignore——里面有题目与金标原文，不随仓库分发）。
+The audit confirms that every scored question has a traceable gold source and that copied gold fields match the source record. It does not prove that the upstream label is semantically correct.
 
-⛔ **它不证明上游金标语义正确**：公开题库/上游 rubric 可能本身有歧义，LLM 裁判也可能
-与人工判断不一致。已声明的口径偏离（PersonaMem 的 0.5 二值化阈值、FEVEROUS 只判
-label、BEAM/MemTrapBench 的阈值等）在报告的「已声明口径偏离」一节逐条列出。
-⛔ 需要逐条语义确认时，必须回到 `source_locator` 指的上游行人工复核——那不是这个
-脚本能替代的。
+## Output
 
+Run artifacts are written under `eval/reports/runs/<run-id>/`. They include:
 
-## 分类与固定题目
+- the selected manifest;
+- configuration and execution fingerprints;
+- per-user request checkpoints;
+- answer inputs;
+- generated answers;
+- judgments;
+- aggregate summaries;
+- technical errors and skipped requests.
 
-```bash
-uv run python -m eval.experiments.official_dataset prepare \
-  --capture-dir official-dataset-2026-09-29 \
-  --report-dir eval/reports/runs/official-dataset-20260929
-```
-
-按原始 Search 的 `seq` 与 `official-eval-kit.jsonl` 联接。只采用题级可靠归属
-（采集标签、官方回写、公开金标或补金标），未知归属统一为 `other`，不凭语料形态猜测。
-同一道题的重复 Search 记录均保留，原始文件不改写。
-
-产物在采集目录的 `grouped/`：`searches/<dataset>.jsonl` 包含该类所有原始 Search 字段、
-金标、`source_dataset` 和 `scorable`；`manifest.json` 包含全部源文件 SHA-256、覆盖统计
-及固定评分题目的 seq、用户和数据集。没有可靠金标的记录保留供分析，不进入正确率分母。
-
-全量清单默认选中所有可评分记录。先做小规模验证时，可以生成独立清单：
-
-```bash
-uv run python -m eval.experiments.official_dataset prepare \
-  --output official-dataset-2026-09-29/grouped-probe \
-  --report-dir eval/reports/runs/official-dataset-probe \
-  --per-dataset 2
-```
-
-`--per-dataset` 是每个数据集的题数上限，按用户确定性轮转取题。
-可用 `--datasets mquake-remastered halumem` 限定评分家族；分类导出仍保留所有记录。
-已有分类目录不覆盖；两次版本运行必须复用同一份清单。
-
-## 跑一个版本
-
-先启动要测的服务，并确认服务的 Git SHA/标签和实际配置目录。答案/裁判模型由
-`.env` 的现有 `AML_*` / `JUDGE_*` 配置控制，参见
-[harness 说明](../eval/harness/CLAUDE.md)。`--service-revision` 是调用者声明，
-pipeline 会保存它，但无法通过 HTTP 验证服务的真实 Git 版本。
-
-```bash
-uv run --env-file .env python -m eval.experiments.official_dataset run \
-  --manifest official-dataset-2026-09-29/grouped/manifest.json \
-  --run-id official-v1.0 \
-  --service-revision v1.0 \
-  --base-url http://127.0.0.1:8000 \
-  --configs-dir /path/to/v1.0/configs \
-  --profile local
-```
-
-使用新 run-id 跑另一版本，例如 `official-v1.1.1`；指定另一服务的端口、版本与配置目录。
-两版依次运行，保持答案/裁判模型、输出预算、评分源码和固定清单一致。
-产品版本与产品配置可以不同，配置字节会保存到运行目录。
-`--offline` 禁止下载裁判依赖；缺失依赖或端点配置在发 Add/Search 前报错。
-
-语料按原始时间线交错重放，正文、会话和批界保留；只改服务侧用户 ID 为本次 run 的
-隔离命名空间，防止版本之间串用记忆。所选最后一道题之后的 Add 不再发送。
-沿用 Search 的 top_k 契约及平台上下文前缀预算（PRD §2.2、§6.4）。
-
-执行复用逐事件检查点：历史 Search 快照落盘后才继续 Add。**服务端/网络层的 Add 失败**
-按 `--on-add-error` 处理（缺省 `skip`：记入 `skipped.jsonl` 并继续，等价于"线上那一批
-也丢了"；**4xx 永远不跳过**，因为那是系统性我方 bug）；Search 有界重试后仍失败、
-或答案/裁判子进程失败，则记入 `errors.jsonl` 并继续下一个用户。
-修复服务后重跑同一命令从检查点续上，不在已经灌入未来记忆的用户中重问历史题；
-缺题与跳过批在报告中保留（`summary.md` 的缺题列 + 技术错误列）。
-续跑须保留原服务存储和隔离用户；服务存储丢失时使用新 run-id 完整重放。
-**wire 身份 / 答案·裁判模型、端点、预算 / 服务版本**变化必须使用新 run-id；
-**代码哈希、配置目录、base URL** 漂移会写进 `execution-drift.jsonl` 后继续
-（与 `plan_driver.freeze_run` 同口径）——否则改一行注释就会锁死一条几十小时的长跑。
-
-每题按现有 `official_capture_pipeline.py` 的家族规则生成答案和判分。
-该输入属于采集重放，不能与截图中先前的 native 抽样成绩直接比较。
-各家族评分范围及本地偏离见 [采集说明](../official-dataset-2026-09-29/README.md) §9。
-
-## 进度与对比表
-
-运行产物在 `eval/reports/runs/<run-id>/`，其中 `summary.md`、`summary.json` 在每个用户
-完成后刷新。用户目录保留检查点、`input.jsonl`、`answers.jsonl` 与 `labels.jsonl`。
-中断后可独立离线汇总：
-
-```bash
-uv run python -m eval.experiments.official_dataset summarize \
-  --run-dir eval/reports/runs/official-v1.0
-
-uv run python -m eval.experiments.official_dataset compare \
-  --left eval/reports/runs/official-v1.0 \
-  --right eval/reports/runs/official-v1.1.1 \
-  --left-name v1.0 --right-name v1.1.1 \
-  --output eval/reports/runs/official-version-comparison
-```
-
-输出 `comparison.md`、`comparison.csv`（Excel 可读）和 `comparison.json`。
-主表列为「数据集、两版正确/题数（正确率）、变化（百分点）」，按变化降序排列，
-另有加权总计、缺题和技术错误统计。
-
-分母始终为固定清单题数，技术错误保留并单列，缺题不会静默缩小分母。
-某数据集未判完时显示完成数，不给出该行正确率或百分点变化；`other` 显示无评分。
-源文件、题目清单或答案/裁判口径不同的两次运行会拒绝比较（PRD §13）。
+Captured requests and per-question outputs contain evaluation data. Do not commit or share them.

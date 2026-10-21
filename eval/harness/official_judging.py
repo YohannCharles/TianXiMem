@@ -74,7 +74,7 @@ class StreamingOfficialJudge:
                 indexed = {str(row["id"]): row for row in rows}
                 if len(indexed) != len(rows):
                     raise ValueError(f"duplicate {name} IDs in {directory}")
-                # 不把整份检索上下文留在内存；答案供迁移已有批量作答时复用。
+                # 不把整份检索上下文留在内存；答案供已有批量作答复用。
                 files[name] = indexed if name == "answers" else set(indexed)
             self.users[user] = files
         return self.users[user]
@@ -109,7 +109,7 @@ class StreamingOfficialJudge:
                 with (user_dir / "input.jsonl").open("a", encoding="utf-8") as handle:
                     write_line(handle, item)
                 files["input"].add(qid)
-            # 迁移原串行 runner 已经生成的答案，不为同一道题再次调用模型。
+            # 复用已经生成的答案，不为同一道题再次调用模型。
             if qid in files["answers"]:
                 (job / "answers.jsonl").write_text(
                     jsonl_line(files["answers"][qid]), encoding="utf-8"

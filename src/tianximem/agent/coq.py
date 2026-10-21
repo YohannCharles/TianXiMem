@@ -1,40 +1,33 @@
-"""Chain-of-Query 多跳检索执行器（`MULTI_HOP` 那条路）。
+"""Chain-of-Query 多跳检索执行器（`MULTI_HOP` 路径）。
 
-**它不是一个"通用 Agent"**：没有工具调用、没有自主规划、不生成答案。
-它只做一件事——**把同一条查询问好几轮，每轮换一个说法**，并把每轮的证据攒起来。
+它没有工具调用或自主规划，也不会生成答案。每一轮使用当前查询检索和轮内精排，
+模型据此判断证据是否充分、选择证据并给出下一轮查询，直到停止条件成立。
 
 ```text
 原始 Query
    │
    ├─→ ① 本轮 Query → 现有混合召回（BM25 + Dense + RRF）→ 候选
    │                   → 现有 Reranker → Top-N（`per_round_top_k`）
-   ├─→ ② 攒证据：本轮 Top-N ＋ 此前已选中的证据（按稳定 ID 去重、重新编号）
-   ├─→ ③ 一次 LLM：充分性判断 ＋ 选证据 ＋ 下一跳 Query（原版 CoQ 提示词）
+   ├─→ ② 攒证据：本轮 Top-N ＋ 已选中的证据（按稳定 ID 去重、重新编号）
+   ├─→ ③ 一次 LLM：充分性判断 ＋ 选证据 ＋ 下一跳 Query（冻结的 CoQ 提示词）
    └─→ ④ 停？（充分且置信 ≥ 阈值 / 轮数用尽 / Query 重复或为空 / 发生故障）
          否 ⇒ 换 Query 回 ①
          是 ⇒ 把所有轮次的 Top-N 去重合并，交回调用方
 ```
 
-## 三条边界（写在这里，因为越界不会报错）
+## 边界
 
 1. **最终精排不在这里做。** 调用方（[`../service/pipeline.py`](../service/pipeline.py)）
-   对"合并后的那一份列表"精排**恰好一次**——本执行器只把**该用哪个 Query 去精排**
-   交上去（`rerank_query` = 原问题 ＋ 实际执行过的改写，§9.1）。
-   ⛔ 这样安排**不是**省事：它让"精排恰好一次"这条纪律**结构性地**成立，
-   而不是靠"我记得不要在最后一轮再排一次"（§9.4 明确点出了这个陷阱）。
-   ⚠ 每轮内部那次精排是**另一件事**：它的作用是把交给 LLM 的证据筛干净，
-   产出物**不进响应**。两者共用同一个 `Reranker` 对象，不是两套精排。
-2. **不生成答案**（§2.1 的红线）。产出物是候选 + 名次。
+   对合并后的候选列表精排恰好一次。本执行器只提供 `rerank_query`：原问题加上
+   实际执行过的改写。这样最终精排只发生一次的结构由调用边界保证。
+   每轮内部精排只用于筛出交给 LLM 的证据，结果不进入响应。
+2. **不生成答案**。产出物是候选和名次。
 3. **它不改任何一条记忆的原文**：文档文本一律走
-   [`../common/render.py`](../common/render.py) 的 `render_pair`（不变式 I1），
-   与索引侧、精排输入是同一份渲染。模型给出的 `new_query` **只当检索词**用，
-   ⛔ **绝不把它当成一条记忆内容**（§8.3）。
+   [`../common/render.py`](../common/render.py) 的 `render_pair`，与索引侧、精排输入
+   使用同一份渲染。模型给出的 `new_query` 只作为检索词使用，不会成为一条记忆内容。
 
-## 与 PRD §9 的关系（**这里的参数与 §9 不同，是刻意的**）
-
-PRD §9 给的是 ReFind 的形状（最多 4 轮、每轮 `top_k=5`、三个工具）。本阶段**不用那套**：
-方案要求 `max_rounds`(默认 4) 轮、每轮 Top20、**没有工具**（工具集那一块属于通用 Agent，本阶段明确不做）。
-⚠ 因此**不要**拿 §9 的每轮 `top_k=5` 来"校正" `per_round_top_k`——两者描述的不是同一件事。
+当前参数由 `AgenticConfig` 管理：`max_rounds` 限制轮数，`per_round_top_k`
+限制每轮交给模型的精排候选数，每轮召回深度始终使用请求的 `top_k`。
 """
 
 from __future__ import annotations
@@ -65,8 +58,7 @@ __all__ = [
     "render_coq_prompt",
 ]
 
-#: 停止原因。**它们要能在 §14 里分开数**——"轮数用尽"与"LLM 挂了"是两回事，
-#: 混成一个"没找到完整证据"会让失败归因整个失效。
+#: 停止原因分别计数，避免把"轮数用尽"、"LLM 不可用"等不同失败混在一起。
 STOP_REASONS: Final[tuple[str, ...]] = (
     "sufficient",
     "low_confidence",
@@ -80,7 +72,7 @@ STOP_REASONS: Final[tuple[str, ...]] = (
     "prompt_budget_exceeded",
 )
 
-#: 最终精排 Query 的两种构造方式（§9.1 与 §12.6 的对照项）。
+#: 最终精排 Query 的两种构造方式。
 FINAL_QUERY_MODES: Final[tuple[str, ...]] = ("combined", "original")
 
 #: 三个占位符的**一遍扫描**匹配器。见 `render_coq_prompt` 的第一条说明——
@@ -91,10 +83,10 @@ _PLACEHOLDER_RE: Final[re.Pattern[str]] = re.compile(
 
 
 def normalize_query(query: str) -> str:
-    """Query 的**程序侧**去重口径（§7.5）：小写 + 折叠空白。
+    """Query 的程序侧去重口径：小写并折叠空白。
 
-    ⚠ 它是**确定性保险**，不是"语义去重"：原版提示词已经要求模型自己避免重复，
-    这里只挡住"字面一模一样"的那种。**不为它再加一次 LLM 调用**（§7.5 明说第一版不做）。
+    这是确定性检查，不是语义去重：提示词要求模型避免重复，这里只处理
+    字面相同的查询，不调用 LLM。
     """
     return " ".join(query.casefold().split())
 
@@ -102,7 +94,7 @@ def normalize_query(query: str) -> str:
 def render_coq_prompt(
     *, original_query: str, used_queries: Sequence[str], documents: Sequence[str]
 ) -> str:
-    """把三样东西填进原版提示词。**不改提示词本身**。
+    """把三样东西填进冻结的 CoQ 提示词，不改变提示词正文。
 
     ⚠ **一遍扫描、绝不重扫替换结果**（`re.sub` 而不是连续三次 `str.replace`）：
     Query 是**不可信输入**。连续替换的话，一句含字面 `{used_query}` 的 Query 会在
@@ -128,7 +120,7 @@ def render_coq_prompt(
 
 @dataclass(frozen=True, slots=True)
 class RoundRecord:
-    """一轮的**完整过程**（§11）。实验模式下要用它重建"模型当时看到了什么"。"""
+    """一轮的完整过程，用于重建模型在该轮看到的输入。"""
 
     index: int
     #: **这一轮实际执行的 Query**（不是下一轮要跑的）。
@@ -136,20 +128,20 @@ class RoundRecord:
     #: 本轮混合召回的候选数。⚠ `HybridRetriever` 已经按请求的 `top_k` 截过 ⇒
     #: 它是**融合池的下界**，不是池子本身的大小。
     recalled_candidates: int
-    #: 本轮发给模型的文档 ID，**顺序即索引序**（§5.1 的临时索引映射）。
+    #: 本轮发给模型的文档 ID，顺序即模型看到的索引顺序。
     document_ids: tuple[str, ...]
-    #: 本轮精排 Top-N 的稳定 ID（§8.1 的 `all_candidate_ids` 那一轮的贡献）。
+    #: 本轮精排 Top-N 的稳定 ID。
     candidate_ids: tuple[str, ...]
-    #: 模型指认的证据 ID——**已由数字索引换成稳定 ID**（§5.3 第 5 条）。
+    #: 模型指认的证据 ID，已由数字索引换成稳定 ID。
     selected_ids: tuple[str, ...]
-    #: 因为提示词 token 预算没进文档列表的候选数。**不为 0 就要能看见**（§9.3）。
+    #: 因提示词 token 预算未进入文档列表的候选数。
     dropped_documents: int
-    #: `disabled` / `called` / `degraded`（D12 的三分口径）。
+    #: `disabled` / `called` / `degraded`。
     rerank_status: str
     is_sufficient: bool | None = None
     confidence_score: float | None = None
     new_query: str | None = None
-    #: `direct` / `recovered`（§6.1 的日志标记）。
+    #: JSON 提取方式：`direct` / `recovered`。
     extraction: str | None = None
     stop_reason: str | None = None
     retrieval_latency_ms: float = 0.0
@@ -161,12 +153,12 @@ class RoundRecord:
 
 @dataclass(frozen=True, slots=True)
 class AgenticStats:
-    """一次多跳 Search 的汇总（§11 的"最终记录"那一段）。**不进响应。**"""
+    """一次多跳 Search 的汇总。**不进响应。**"""
 
     rounds: tuple[RoundRecord, ...]
     stop_reason: str
     fallback_reason: str | None
-    #: 去重**前**的候选出现次数（三轮最多 60）与去重后的条数（§8.1 / §9.2）。
+    #: 去重前的候选出现次数与去重后的条数。
     candidate_count: int
     unique_candidate_count: int
     selected_evidence_count: int
@@ -181,7 +173,7 @@ class AgenticResult:
     """执行器交给编排层的全部东西。
 
     `fallback_reason is not None` ⇒ **调用方改走混合检索**：执行器在拿到任何证据之前
-    就失败了（§10.1 第 6 条）。那是"回退"这个动作**唯一**的触发条件——
+    就失败了。那是回退这个动作唯一的触发条件——
     一旦已经攒到候选就**不再回退**：手上已有的证据比丢掉它们重来一遍更有价值。
     """
 
@@ -193,19 +185,19 @@ class AgenticResult:
 
 @dataclass(slots=True)
 class _State:
-    """一次 Search 的临时状态（§7.1）。**不持久化，也不跨请求共享。**"""
+    """一次 Search 的临时状态。**不持久化，也不跨请求共享。**"""
 
     #: 实际执行过的 Query，**按顺序**（第一轮就是原始问题）。既喂给提示词，
-    #: 也用来拼最终的精排 Query（§9.1）。
+    #: 也用来构造最终精排 Query。
     executed: list[str] = field(default_factory=list)
     normalized: set[str] = field(default_factory=set)
     #: 各轮 Top-N 的稳定 ID，**保序去重**（用 `dict` 的插入序）——第一轮的名次最先。
     ordered_ids: dict[str, None] = field(default_factory=dict)
-    #: 模型选中的证据 ID，保序去重（§8.1 的 `selected_evidence_ids`）。
+    #: 模型选中的证据 ID，保序去重。
     selected: list[str] = field(default_factory=list)
-    #: 稳定 ID → 文档正文（`render_pair` 的产物）。**原文只从这里或真源来**（§8.3）。
+    #: 稳定 ID → 文档正文（`render_pair` 的产物）。原文只从这里或真源读取。
     bodies: dict[str, str] = field(default_factory=dict)
-    #: 稳定 ID → 日期串（**只到日**，D21）。
+    #: 稳定 ID → 日期串。
     days: dict[str, str] = field(default_factory=dict)
 
 
@@ -304,13 +296,13 @@ class CoqAgent:
             round_started = monotonic()
 
             # ① 本轮融合召回。⚠ 深度用请求的 `top_k`：那是**当前默认 Search 的既有口径**
-            #    （混合链也是先取 top_k 条再精排）⇒ 不为多跳另造一套检索参数（§3.2）。
+            #    （混合链也是先取 top_k 条再精排）⇒ 不为多跳另造一套检索参数。
             #    于是"融合池 → 精排 → Top-N"这条顺序是结构性成立的，而不是
             #    "先 RRF 截 20 再精排 20"——那两件事的结果不一样，而且不会报错。
             try:
                 recalled = self._retriever.search(user_id=user_id, query=round_query, top_k=top_k)
             except Exception:  # noqa: BLE001 —— 见下
-                # §10.2：**检索调用失败 ≠ 没有相关记忆**。这里刻意捕得宽：
+                # 检索调用失败不等于没有相关记忆。这里刻意捕得宽：
                 # `HybridRetriever.search` 的下游是远端 embedding 与 Qdrant，
                 # 它们的异常类型不是本模块该知道的。**吞掉它不等于掩盖它**——
                 # ① 一条候选都没攒到时，`fallback_reason` 让调用方去跑原混合链，
@@ -336,7 +328,7 @@ class CoqAgent:
                 break
             retrieval_ms = _ms(round_started)
 
-            # ② 每轮内部精排（只为了提高交给 LLM 的证据质量，§2.3）
+            # ② 每轮内部精排，只用于提高交给 LLM 的证据质量。
             rerank_started = monotonic()
             ranked, rerank_status = self._rerank_round(query=round_query, candidates=recalled)
             if rerank_status == "called":
@@ -352,7 +344,7 @@ class CoqAgent:
                 state.ordered_ids.setdefault(memory_id, None)
 
             # ④ 本轮真正执行过的 Query 记进历史。**必须在调用 LLM 之前**：
-            #    §4.3 要求第一轮的 `used_query` 里就有原始问题。
+            #    第一轮的 `used_query` 必须包含原始问题。
             state.executed.append(round_query)
             state.normalized.add(normalize_query(round_query))
 
@@ -390,20 +382,20 @@ class CoqAgent:
 
             picked: tuple[str, ...] = ()
             if decision is None:
-                # §10.1 第 4、5 条：**保留已经取得的合法候选**，不回退、不重试。
+                # 保留已经取得的合法候选，不回退、不重试。
                 stop_reason = failure or "llm_error"
                 # ⚠ **失败的那一轮不许报 token 数**：`last_usage` 是**客户端上的残留值**
                 #   （成功过一次之后它一直留着），照抄会把**上一轮**的用量记到这一轮头上
-                #   ——那是 §14 里一个看不出来的假数。
+                #   ——那会在指标中形成一个看不出来的假数。
                 input_tokens = output_tokens = None
             else:
-                # ⑦ 索引 → 稳定 ID（每轮重建，§5.2）
+                # ⑦ 索引 → 稳定 ID（每轮重建）。
                 picked = tuple(document_ids[i] for i in decision.evidence_indices)
                 for memory_id in picked:
                     if memory_id not in state.selected:
                         state.selected.append(memory_id)
 
-                # ⑧ 停？——顺序有讲究（§7.4 / §7.5）
+                # ⑧ 判断停止条件。
                 sufficient = decision.is_sufficient
                 confident = decision.confidence_score >= self._sufficiency_threshold
                 if sufficient and confident:
@@ -416,9 +408,9 @@ class CoqAgent:
                         #     交界处，是个真实状态，混进 `duplicate_query` 会让它看不见）；
                         #   * 下一跳是空 ⇒ `empty_query`；
                         #   * **原样回吐原问题 ⇒ `duplicate_query`**。
-                        #     ⚠ 最后这条**不是异常**：原版提示词在证据不足却提不出更好
+                        #     ⚠ 最后这条**不是异常**：冻结提示词在证据不足却提不出更好
                         #     Query 时就是这么做的。⛔ **不要**把这里实现成
-                        #     "置信度不够就必须继续"（§7.5 明确禁止那种读法）。
+                        #     "置信度不够就必须继续"。
                         if sufficient:
                             stop_reason = "low_confidence"
                         elif not next_query:
@@ -471,7 +463,7 @@ class CoqAgent:
     ) -> tuple[list[Candidate], str]:
         """对**本轮候选**精排一次；返回 `(候选, 状态)`。
 
-        ⚠ 状态三分（D12 的口径）：`disabled` = 没打算调（没配 reranker / 关掉了 /
+        ⚠ 状态三分：`disabled` = 没打算调（没配 reranker / 关掉了 /
         没有候选）；`called` = 真调了；`degraded` = 打算调但没成。
 
         ⛔ **降级回原顺序，不中断本轮**：本轮的产出物是"交给 LLM 的证据"，
@@ -512,29 +504,24 @@ class CoqAgent:
 
         两个约束同时成立：
 
-        * **历史已选证据不能因为本轮名次低就丢掉**（§4.4）⇒ 先按预算给历史**留够**位置；
+        * **历史已选证据不能因为本轮名次低就丢掉**⇒ 先按预算给历史留够位置；
         * 本轮 Top-N 是这一轮的目的 ⇒ 剩下的预算按名次补。
 
-        ⚠ 顺序是 **本轮优先、历史在后**（§4.4 的图）。索引映射随后**一次性**建立，
-        之后**不再改动文档顺序**（§5.3 第 3 条）——顺序一动，模型给的索引就指向别的证据。
+        ⚠ 顺序是 **本轮优先、历史在后**。索引映射随后一次性建立，
+        建立后不再改动文档顺序——顺序一动，
+        模型给的索引就指向别的证据。
 
-        ## 那个 `budget_exceeded` 出口（**今天是不可达的，而且这是可证的**）
+        ## `budget_exceeded` 出口
 
-        论文式的证明：每一轮都有 `history ⊆ 上一轮的文档`，而上一轮的文档总量
-        `≤ max_prompt_tokens`（`fresh` 被 `budget = max_prompt_tokens - history` 卡住）
-        ⇒ **归纳可得 `history_tokens ≤ max_prompt_tokens` 恒成立**，
-        前提是"只从**发出去的**那份列表里选证据"——那正是第 ⑤ 步做的事。
-
-        ⇒ 它**今天**不可能触发。留着它不是为了兜底某种输入（那不存在），
-        而是**为了一个将来才会出现的改动**：一旦有人让模型选中一条**没出现在本轮
-        文档里**的记忆，这个归纳就不成立，那时正确的行为是**响亮地停下**，
-        而不是安静地交出一份被截断的输入。⛔ 别为了让这个分支"有覆盖"去构造假场景。
+        正常循环只允许模型选择当前轮实际发送的文档，因此历史文档总量应始终落在
+        提示词预算内。该出口处理状态不一致或历史本身超出预算的情况：停止并返回失败，
+        不组织一份被截断的输入。
         """
         history_ids = [memory_id for memory_id in state.selected if memory_id in state.bodies]
         history = [(memory_id, self._document_body(state, memory_id)) for memory_id in history_ids]
         history_tokens = sum(self._document_cost(state, memory_id) for memory_id in history_ids)
         if history_tokens > self._max_prompt_tokens:
-            # 连历史证据都放不下 ⇒ **不组织一个残缺的输入**，安全停下（§4.4 最后一段）
+            # 连历史证据都放不下 ⇒ **不组织一个残缺的输入**，安全停下。
             return [], (), len(top_ids), True
 
         budget = self._max_prompt_tokens - history_tokens
@@ -544,7 +531,7 @@ class CoqAgent:
         dropped = 0
         for memory_id in top_ids:
             if memory_id in selected_set:
-                continue  # 同一轮里同一条只能出现一次（§5.3 第 6 条）
+                continue  # 同一轮里同一条只能出现一次。
             if memory_id not in state.bodies:
                 dropped += 1  # 真源缺行 ⇒ 它进不了文档，也就不能被选中
                 continue
@@ -585,7 +572,7 @@ class CoqAgent:
             #   由它决定，而不是由 Top-N 或任何常量决定。
             return parse_coq_decision(raw, document_count=len(documents)), None
         except InvalidCoqOutput:
-            # ⛔ 绝不"补默认值再当作合法决策"（§6.2）⇒ 本轮无效，带着已有候选停下。
+            # ⛔ 绝不"补默认值再当作合法决策"⇒ 本轮无效，带着已有候选停下。
             return None, "invalid_output"
 
     def _finish(
@@ -666,9 +653,9 @@ class CoqAgent:
 
 
 def _render_document(index: int, body: str, day: str = "") -> str:
-    """一篇文档。**索引是模型看到的那一个**（§5.1）。
+    """一篇文档。**索引是模型看到的那一个**。
 
-    ⚠ 头部只放**真源里真有的**元数据（日期，且**只到日**，D21）。⛔ 不要为了
+    ⚠ 头部只放**真源里真有的**元数据。⛔ 不要为了
     凑成"Time / Role / Content"三行去编 `Role`：本项目的一条记忆是一个 QA 块，
     它的正文自己就带着 `Q:` / `A:` 两个前缀，**编出来的字段就是在给模型假信息**。
     """
@@ -697,7 +684,7 @@ def _as_tokens(value: object) -> int | None:
     """`usage` 里的一个计数 → `int`；形状不对就 `None`。
 
     ⚠ **排除 `bool`**：`True` 是 `int` 的实例，不排除的话一次
-    `"prompt_tokens": true` 会被读成 1 个 token，而这在 §14 的汇总里**看不出来**。
+    `"prompt_tokens": true` 会被读成 1 个 token，从而污染用量汇总。
     """
     if isinstance(value, bool) or not isinstance(value, int):
         return None

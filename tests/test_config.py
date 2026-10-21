@@ -1,4 +1,4 @@
-"""`common/config/`（包）—— 配置的唯一入口（§15 / §12.1 R1 对冲 3）。
+"""`common/config/`（包）—— 配置的唯一入口。
 
 ## 这个文件里最重要的一条
 
@@ -77,8 +77,8 @@ def _load(config_dir: Path, **env: str) -> AppConfig:
 def test_missing_cache_dir_uses_the_dataclass_default(tmp_path: Path) -> None:
     """缺 `TIANXIMEM_EMBED_CACHE_DIR` 时，加载器与 `EmbedCacheConfig` 必须同值。
 
-    ⚠ 这条挡的是"同一个缺省值写两份"：loader 曾把 `var/embed_cache` 又写了一遍，
-    改 dataclass 默认值在生产路径上**静默不生效**。
+    ⚠ 这条挡的是“同一个缺省值写两份”：loader 不得重复声明 `var/embed_cache`，
+    否则修改 dataclass 默认值在生产路径上会**静默不生效**。
     """
     from tianximem.common.config.model import EmbedCacheConfig
 
@@ -88,7 +88,7 @@ def test_missing_cache_dir_uses_the_dataclass_default(tmp_path: Path) -> None:
 
 # ── 1. 唯一入口：**结构性质，不是约定** ────────────────────────────────
 
-#: 配置入口是**一个包**（2026-10-15 拆的：`config.py` → `config/`）。
+#: 配置入口是**一个包**。
 _CONFIG_PACKAGE = _SRC / "common" / "config"
 _CONFIG_FILES: frozenset[Path] = frozenset(_CONFIG_PACKAGE.rglob("*.py"))
 
@@ -138,7 +138,7 @@ def test_only_config_reads_the_environment() -> None:
     """**除配置入口那个包之外，全包不得访问环境变量。**
 
     这不是洁癖：读取点一多，"这次跑的是哪套值"就无法从一个地方回答，
-    而 §13 的每一条对照实验都依赖那个回答。
+    而每一条对照实验都依赖那个回答。
     """
     config_files = _config_files()
     offenders: list[str] = []
@@ -251,7 +251,7 @@ def _documented_dotted_keys() -> set[str]:
 
 
 def _switch_table_wired_keys() -> list[tuple[str, str]]:
-    """§2 开关表里标 ✅ 的行 → `(开关名, 它声称接线的键)`。
+    """配置文档开关表里标 ✅ 的行 → `(开关名, 它声称接线的键)`。
 
     表格**最后一格**是"接线"列：`✅ \\`rerank.enabled\\`` 表示那个开关真的能关。
     """
@@ -281,7 +281,7 @@ def test_every_yaml_key_the_code_accepts_is_declared_in_config_reference() -> No
     """**代码接受的每个 yaml 键都必须在 `docs/config-reference.md` 里出现。**
 
     那份文档是配置键的**唯一声明处**。新增一个键却不写文档，
-    下一个人就只能在代码里考古——而 §13 的每条对照都要回答"这次跑的是哪套值"。
+    下一个人就只能在代码里考古——而每条对照都要回答"这次跑的是哪套值"。
 
     ⚠ 这与上面 `.env.example` 那条是**同一种漂移**，只是对象换成 yaml。
 
@@ -300,13 +300,13 @@ def test_every_yaml_key_the_code_accepts_is_declared_in_config_reference() -> No
 
 
 def test_switch_table_only_claims_wired_keys_that_the_code_accepts() -> None:
-    """**§2 开关表里标 ✅ 的键，代码必须真的接受。**
+    """**配置文档开关表里标 ✅ 的键，代码必须真的接受。**
 
     那张表的"接线"列是**唯一一处声明"哪个消融开关真的能关"**的地方，而且是机器可读的
     （`✅ \\`rerank.enabled\\``）。标了 ✅ 而代码不认，就等于**承诺了一个做不到的消融**——
     它的表现是"照文档改了配置、行为一点没变"，**不报错**。
 
-    ⚠ 只覆盖 §2：文档其余部分在 heading 上标 ✅/⬜，粒度更粗也更易变，**没有自动化**。
+    ⚠ 只覆盖开关表：文档其余部分在 heading 上标 ✅/⬜，粒度更粗也更易变，**没有自动化**。
     """
     wired = _switch_table_wired_keys()
     assert wired, "§2 表里一个 ✅ 都没解析出来 —— 这条用例是空过的"
@@ -334,11 +334,9 @@ def test_default_profile_loads_the_repo_yaml(config_dir: Path) -> None:
     assert cfg.retrieval.query_instruction == ""
     assert cfg.retrieval.grounded_evidence is True
     assert cfg.server.workers == 1
-    # 2026-09-25 起默认为 True（**D21 推翻了 §11.3 的"不加"**，有 346 题的反例）——
-    # 这条断言是那个决定在本仓的**回归位**：谁把它改回去，这里立刻红。
+    # 当前默认启用日期前缀，这条断言固定该配置行为。
     assert cfg.packaging.inject_abs_time is True
-    # 2026-10-01 起默认为 0（**D31：扩窗 + 段合并未挣到自己的位置**）——同上，
-    # 这是那个决定在本仓的**回归位**：谁把它改回非 0，这里立刻红。
+    # 当前默认半径为 0，这条断言固定该配置行为。
     # ⚠ 与 `common/config/` 的 `DEFAULT_RADIUS` **必须相等**（两处不等就又分叉了）；
     # 代码常量那一侧由 `test_reranker.py` 的 `_MAX_RADIUS_UNDER_TEST` 注释说明为何解耦。
     assert cfg.neighbor.radius == 0
@@ -381,7 +379,7 @@ def test_grounded_evidence_can_be_disabled_in_yaml(config_dir: Path) -> None:
 def test_config_dir_env_redirects_where_yaml_is_read(config_dir: Path) -> None:
     """`TIANXIMEM_CONFIG_DIR` **重定向 yaml 的读取目录**。
 
-    ⚠ 这条不只是"多测一个变量"：它是**替代集合**能不能做的前提——§13 的每个 arm
+    ⚠ 这条不只是"多测一个变量"：它是**替代集合**能不能做的前提——每个 arm
     都需要一份冻结的配置（`configs/runs/`），而"指定另一份配置跑"靠的就是这个变量。
     """
     other = config_dir / "frozen_run"
@@ -453,7 +451,7 @@ def test_profile_overlays_only_what_it_names(config_dir: Path) -> None:
 
 
 def test_submit_profile_changes_only_the_embedder(config_dir: Path) -> None:
-    """`submit.yaml` **只换模型**——这是 Step 5 能归因的前提（§12.1 R1 对冲 4）。
+    """`submit.yaml` **只换模型**——这是结果可归因的前提。
 
     ⚠ 它同时是"提交口径没被悄悄改过"的回归位：**基线本来就是提交口径**
     （集合 `memories`，精排开关由 `default.yaml` 定），submit 只该在上面加模型名，
@@ -527,7 +525,7 @@ def test_thresholds_are_not_overridable_from_env(config_dir: Path) -> None:
     "跑出来的结果和 yaml 里写的不一样，而没人知道为什么"。
     """
     # 采集的开关也在 yaml（只有**路径**归 env）。⚠ 断言要**与 yaml 当前的取值无关**：
-    # 这个开关会被有意拨动（跑 Smoke 前打开、跑完关回去，见 `deploy/CLAUDE.md` §0.6），
+    # 这个开关会被有意拨动（跑 Smoke 前打开、跑完关回去，见 `deploy/CLAUDE.md`），
     # 写死 `is False` 会在有人合法地把它打开时误报 ⇒ 让环境变量说**相反**的话，再看它有没有用。
     yaml_enabled = _load(config_dir).capture.enabled
     cfg = _load(
@@ -540,9 +538,7 @@ def test_thresholds_are_not_overridable_from_env(config_dir: Path) -> None:
 
     assert cfg.retrieval.prefetch_limit == 200  # yaml 说了算
     assert cfg.retrieval.rrf.k == RRF_K
-    # ⚠ **与 yaml 当前的取值无关**（同 `capture.enabled` 那条的口径）：模型名会随网关换
-    #   （2026-10-13：`-8B` → `-4B`），写死字面值会在换模型那天变成一条**假的**回归。
-    #   这里要证明的是"env 说的不算、yaml 说的算"。
+    # 模型名会随端点变化，因此不写死字面值；这里验证环境变量不能覆盖 YAML。
     assert cfg.models.embedder == _load(config_dir).models.embedder
     assert cfg.capture.enabled is yaml_enabled  # ← env 说的是相反的值，但一点用都没有
 
@@ -558,7 +554,7 @@ def test_env_is_not_mutated_by_loading() -> None:
 
 
 def test_illegal_rrf_k_is_rejected(config_dir: Path) -> None:
-    """**`rrf.k` 不是可调项**（D5）——填错必须拒绝启动，而不是警告后照用。
+    """**`rrf.k` 不是可调项**——填错必须拒绝启动，而不是警告后照用。
 
     填错的后果是"不报错但结果错"：两种写法的名次都看起来正常，只有分数差一个数量级。
     """
@@ -575,7 +571,7 @@ def test_rrf_k_is_the_same_constant_in_both_places() -> None:
     """`RRF_K` 在 `common/config/` 与 `retrieve/fusion.py` 各有一份 ⇒ **必须相等**。
 
     两份是**有意**的：配置层拒绝非法值（启动时），策略层拒绝非法参数（直接调用方）。
-    但值本身只能有一个——这条用例就是那道保险。见 D5。
+    但值本身只能有一个；本用例固定这一约束。
     """
     from tianximem.retrieve.fusion import RRF_K as STRATEGY_K
 
@@ -590,7 +586,7 @@ def test_model_default_is_the_same_in_both_places() -> None:
 
 
 def test_workers_must_be_one(config_dir: Path) -> None:
-    """**`workers != 1` 拒绝启动**（§15）。
+    """**`workers != 1` 拒绝启动**。
 
     ⚠ 拒的是**"放开多 worker 需要的验证一件都没做"**（并发写压力、`busy_timeout` 争用、
     多进程各自的 Qdrant 客户端）——**不是**"多 worker 会静默撞车"（位置是请求的纯函数，
@@ -653,7 +649,7 @@ def test_bad_weights_are_rejected(config_dir: Path) -> None:
 def test_missing_required_secret_names_the_variable(config_dir: Path, missing: str) -> None:
     """缺密钥/端点时，错误里必须**点名那个变量**。
 
-    "配置错误"这种消息等于没报——§2.15 的单请求预算是 30 分钟，
+    "配置错误"这种消息等于没报——单请求预算是 30 分钟，
     而这类错在启动时就该被消灭。
     """
     env = {k: v for k, v in _MIN_ENV.items() if k != missing}
@@ -837,7 +833,7 @@ def test_dotenv_parses_our_own_file_format(config_dir: Path, tmp_path: Path) -> 
 def test_real_env_vars_beat_dotenv(config_dir: Path, tmp_path: Path, monkeypatch) -> None:
     """**真实环境变量压过 `.env`**——`.env` 只是"这台机器的环境"的本地副本。
 
-    顺序反了的话，`export AML_EMB_API_KEY=...` 会被 `.env` 里的旧值悄悄盖掉。
+    顺序反了的话，`export AML_EMB_API_KEY=...` 会被 `.env` 中的值悄悄盖掉。
     """
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -853,7 +849,7 @@ def test_real_env_vars_beat_dotenv(config_dir: Path, tmp_path: Path, monkeypatch
     cfg = load_config(config_dir=_REPO / "configs", env_file=env_file)
 
     assert cfg.embed_api_key == "sk-from-shell"  # shell 说了算
-    assert cfg.embed_base_url == "https://from-dotenv/v1"  # 只有 .env 有的那个照旧生效
+    assert cfg.embed_base_url == "https://from-dotenv/v1"  # 只有 .env 有的那个仍会生效
 
 
 def test_missing_dotenv_is_fine_but_missing_keys_is_not(config_dir: Path, tmp_path: Path) -> None:

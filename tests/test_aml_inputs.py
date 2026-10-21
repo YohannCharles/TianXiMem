@@ -23,7 +23,7 @@ from eval.datasets.preprocess import Message, Question, Sample, Session
 from eval.datasets.registry import _sources, benchmark_dir
 from eval.experiments import run as runner
 
-#: run_round 与它调用的协作者住在 runner.py（2026-10-16 拆的）。
+#: run_round 与它调用的协作者住在 runner.py。
 #: ⚠ 补丁必须打在「调用点解析的那个模块」上：打在 runner（= run.py）上的是名字快照，
 #: 而真调用发生在 runner.py 里 ⇒ 补丁静默失效（表现是真去加载数据、真发请求，不是报错）。
 from eval.experiments import runner as runner_impl
@@ -175,14 +175,14 @@ def test_damaged_history_fails_before_http(tmp_path: Path, damage: str):
 
 
 def test_run_manifest_warns_on_code_drift_but_guards_data_and_checkpoints(tmp_path: Path):
-    """B（2026-10-14）：**代码/配置漂移**（`execution`）只警告 + 记进 `execution-drift.jsonl`
+    """B：**代码/配置漂移**（`execution`）只警告 + 记进 `execution-drift.jsonl`
     后**继续**（改判分/配置不必重跑十几小时）；**题单/数据/wire 漂移**（`data_fingerprint`）
     与**缺 checkpoint** 仍**响亮拒绝**（那才是真不兼容）。"""
     plan = compile_plan(_timeline(), namespace="manifest")
     options = {"top_k": 100, "model": "offline"}
     freeze_run(tmp_path, [plan], execution=options)
     freeze_run(tmp_path, [plan], execution=options)
-    # ① execution 漂移 ⇒ **不 raise**；写 drift 记录；manifest 更新成新的（下次不再误报）。
+    # ① execution 漂移 ⇒ **不 raise**；写 drift 记录；manifest 更新后，后续检查以新值为准。
     freeze_run(tmp_path, [plan], execution=options | {"model": "another"})
     drift = json.loads(
         (tmp_path / "execution-drift.jsonl").read_text(encoding="utf-8").splitlines()[0]

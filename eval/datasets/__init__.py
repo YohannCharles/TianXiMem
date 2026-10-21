@@ -1,4 +1,4 @@
-"""评测数据加载层（PRD §12.2 / §12.3，D16 / D35）。
+"""评测数据加载层。
 
 导出按需加载：仅下载或校验数据不需要先安装 pyarrow 等评测依赖。
 loader/import 不联网；评测 CLI 在执行前显式调用 prepare.ensure_dataset。

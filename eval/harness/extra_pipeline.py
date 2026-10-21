@@ -19,14 +19,14 @@ CLI 与归档 pipeline **同形**（harness 的 `run_judge` 就是按这个形�
 
 1. **这是"我们自己的契约"，不是官方口径。** 官方那 6 份的 answer/judge prompt 在
    `dataset/.upstream/aml/pipeline_*.py` 里逐字可查；这五份没有 ⇒ **分数只能在本仓内部前后对比**，
-   别拿去和官方分数对齐（§12.4：跨数据集的裁判不同，横向比没有意义）。
+   别拿去和官方分数对齐：跨数据集的裁判不同，横向比没有意义。
 2. **裁判分两种**：MQuAKE / CorporateBench / TempReason 是**纯函数**（字符串 / 集合匹配，不花钱、
    确定性强、可离线重算），MedMemoryBench 照上游发布的 `metrics/`；**MemTrapBench 必须 LLM**——
    官方只给 4 维 0–5 的**均分**、没有过/不过线，所以：
    * 阈值 `MEMTRAP_PASS_MEAN` 是**我们定的**；
    * **四个原始分原样写进 `judge_response`** ⇒ 换阈值**不用重跑裁判**。
    **MuSiQue 两套并存**（默认走快速规则判分）：
-   `--musique-judge rule`（默认）走原来那套归一化精确匹配，`--musique-judge llm`
+   `--musique-judge rule`（默认）走归一化精确匹配，`--musique-judge llm`
    显式启用模型判"语义是否等价"。
 3. **失败不静默**：判分出错时 `label` 带 `JUDGE_ERROR`、`is_correct=False`，
    原始响应留着——与 CL-Bench"API/JSON 失败一律记 0"同一处置，但**在 label 里说明白**。
@@ -40,14 +40,14 @@ import json
 import sys
 from pathlib import Path
 
-# ⚠ 归档目录走 D16 的唯一入口（`benchmark_dir()` 读 `TIANXIMEM_BENCHMARK_DIR`，
+# ⚠ 归档目录走  的唯一入口（`benchmark_dir` 读 `TIANXIMEM_BENCHMARK_DIR`，
 #   默认 `dataset`）。subprocess 的 `sys.path[0]` 是本目录 ⇒ 补一条仓库根，
 #   与 `tools/*.py` 同一处置。
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-# ── façade：`official-extra` 已按家族拆开（2026-10-15），这里**重新导出**搬走的名字 ──
+# ── façade：`official-extra` 按家族拆分，这里**重新导出**各模块的名字 ──
 # `from eval.harness.extra_pipeline import X` 全线照旧（消费方遍布 tests/、tools/、
 # `corpusqa_pipeline.py` 与 `official_capture_pipeline.py`——后者按模块属性取名字）。
 #
@@ -218,7 +218,7 @@ def _mmb_answer_metadata(item: dict, config: tuple[str, str, str], max_tokens: i
 def _validate_mmb_answers(
     items: list[dict], answers: dict, config: tuple[str, str, str], max_tokens: int | None = None
 ) -> None:
-    """Reject old or changed clinical answers before any answer/judge API call."""
+    """Reject stale or mismatched clinical answers before any answer/judge API call."""
     for item in items:
         previous = answers.get(item["id"])
         if previous is None:

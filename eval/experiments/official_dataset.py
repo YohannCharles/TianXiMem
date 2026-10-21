@@ -70,7 +70,7 @@ def checkpoint_plan(plan: UserPlan, namespace: str) -> InputPlan:
 
 
 def serial_prefix(args: argparse.Namespace) -> list[dict] | dict:
-    """两臂共用已执行前缀，兼容单个串行前缀及多阶段并发历史。"""
+    """两臂共用已执行前缀，兼容单个串行前缀及多阶段并发记录。"""
     path = getattr(args, "serial_prefix", None)
     if not path:
         return []
@@ -158,7 +158,7 @@ def evaluation_fingerprint(args: argparse.Namespace) -> dict:
 
 
 def _append_jsonl(path: Path, row: dict) -> None:
-    """逐条追加并 flush——长跑被打断时，"已经跳过了哪一批"必须留在磁盘上。"""
+    """逐条追加并 flush——长跑被打断时，跳过记录必须留在磁盘上。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         write_line(handle, row)
@@ -431,7 +431,7 @@ def run(args: argparse.Namespace) -> int:
         """服务端/网络层失败 ⇒ **像线上那样跳过这一批并记账**；4xx 立刻抛。
 
         线上那一批 add 若注定 500（例如单块超过 embedding 上限），AML 重试 32 次
-        之后同样会丢——本地继续重投只会让整轮永远停在同一个用户上。4xx（尤其 409
+        重试后仍会丢失——本地继续重投只会让整轮永远停在同一个用户上。4xx（尤其 409
         "同 request_id 不同 payload"）是我方 bug，必须响亮失败，不能吞。
 
         ⚠ `AddEvent` 本身**没有 `seq`**（那是采集 timeline 的字段，编译后只剩

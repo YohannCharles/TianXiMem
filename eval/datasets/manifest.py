@@ -1,7 +1,7 @@
-"""公开评测材料的下载清单：URL、固定版本、上游与本地 sha256（PRD §12）。
+"""公开评测材料的下载清单：URL、固定版本、上游与本地 sha256。
 
 这是唯一清单；本地目录映射在 layout.py，下载与校验在 prepare.py。
-name 保留旧归档的标识，避免改变数据指纹与历史出处；不代表当前本地路径。
+`name` 是稳定清单标识，不是当前本地路径；路径映射由 layout.py 负责。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import re
 #    contract matches, including the benchmark release and pipeline version."
 #   ⇒ 升级上游不是"顺手拉个新版本"，是一次需要留痕的更换。
 AML_REPO = "https://raw.githubusercontent.com/AML-memory/agent-memory-leaderboard"
-# "Publish public evaluation pipelines"，2026-08-27
+# "Publish public evaluation pipelines"，
 AML_REV = "1b8142bfe0f20f1c5218d6b554aa0012de34e504"
 LOCOMO_REPO = "https://raw.githubusercontent.com/mem-eval-suite/LoCoMo_refined"
 LOCOMO_REV = "887091190789e8d6760e70b9edd696539923dc4f"
@@ -39,7 +39,7 @@ HYBRID_CORPUS_REV = "dc066e1a6d5281511d8b73a6107d5ad2824cc2b2"
 
 # `required` 的判据：**跑代理评测（LoCoMo-Refined + LongMemEval）需要的最小集**
 # + 契约权威（pipeline 代码）+ 许可出处（readme）。其余四份数据集的数据属 `optional`——
-# §12.4 明确代理评测覆盖不到它们，不拉不卡任何 Step，但留着省一次重下。
+# 代理评测不覆盖它们，因此不拉取、也不阻塞任何流程，但保留清单以复用已有下载。
 MANIFEST: list[dict[str, str]] = [
     # ── AML 评测 pipeline（契约与裁判 prompt 的唯一来源）──────────────────
     {
@@ -126,7 +126,7 @@ MANIFEST: list[dict[str, str]] = [
         "url": f"{LOCOMO_REPO}/{LOCOMO_REV}/data/public/questions.jsonl",
         "sha256": "4dd84cf65a28ece0ed6b2a1b7b2700ea639f4e7b2c5e1afcc511e47e81732790",
         "note": "1,382 题 + evidence_messages + gold。**Add 的对话源是同一仓的 "
-        "data/public/conversations.jsonl，本清单不收录**——它属 eval/datasets/ 的 clone（D16）",
+        "data/public/conversations.jsonl，本清单不收录**——它属于 eval/datasets/ 的本地 clone",
     },
     {
         "name": "locomo_refined_readme.md",
@@ -240,10 +240,10 @@ MANIFEST: list[dict[str, str]] = [
     },
 ]
 
-# ── official-extra：官方 2026-09-29 那轮真实流量里出现过、公开 6 管线之外的数据集 ──
+# ── official-extra：官方  那轮真实流量里出现过、公开 6 管线之外的数据集 ──
 #
-# 判据与出处：那轮流量的语料普查（`official-dataset-2026-09-29/README.md` §4.2.2）。
-# ⚠ 这份清单**不改**「代理评测只覆盖 LoCoMo-Refined + LongMemEval」那条边界（§12.4）：
+# 判据与出处：那轮流量的语料普查。
+# ⚠ 这份清单**不改**「代理评测只覆盖 LoCoMo-Refined + LongMemEval」那条边界：
 # 它记录的是"官方实际在跑什么"，用于复盘与补标签，**不是新的评测基线**。
 #
 # `_OFFICIAL_EXTRA_FILES` 是紧凑表：**一条两行**（路径一行、缩进 4 格的 sha256 一行）。

@@ -1,6 +1,6 @@
-"""CoQ 输出的**两阶段解析 + 严格校验**（方案第六章）。
+"""CoQ 输出的**两阶段解析 + 严格校验**。
 
-模型回的不一定是干净的 JSON。实测里它经常先吐一段思考，再吐对象：
+模型回的不一定是干净的 JSON。里它经常先吐一段思考，再吐对象：
 
 ```text
 <think>
@@ -25,7 +25,7 @@
 
 > ⛔ **"解析出来"与"能用来做决策"是两件事。** 缺字段不是"用默认值补上"，
 > 而是**这条输出不可用**——补默认值等于**让模型的一次胡话变成一个看似正常的决策**，
-> 而它会静默地改变检索（§10.1 第 1、2 条直接禁止这件事）。
+> 而它会静默地改变检索。
 
 ⚠ **`extraction` 这个字段要留着**（`direct` / `recovered`）：模型输出的稳定性是
 提示词健康的探针，而"要抠一次才拿到"正是它开始退化的第一个信号。
@@ -53,7 +53,7 @@ COQ_DECISION_KEYS: Final[frozenset[str]] = frozenset(
 
 
 class InvalidCoqOutput(ValueError):
-    """模型的输出**不能**被当作一条决策使用。**调用方必须降级**（§10.1）。
+    """模型的输出不能被当作一条决策使用。**调用方必须降级**。
 
     ⚠ 异常消息里**只有原因，没有原文**：原文是模型读着不可信输入写出来的东西，
     把它塞进日志等于让 Query 里的内容进日志（与 `LlmUnavailable` 同一条纪律）。
@@ -68,7 +68,7 @@ class CoqDecision:
     evidence_indices: tuple[int, ...]
     new_query: str
     confidence_score: float
-    #: `direct` = 整串就是 JSON；`recovered` = 抠出来的（§6.1 要求的日志标记）。
+    #: `direct` = 整串就是 JSON；`recovered` = 从文本中提取得到。
     extraction: str
     #: 模型的原始输出。**只用于诊断**，不进响应。
     raw: str
@@ -152,7 +152,7 @@ def _require_indices(payload: dict[str, Any], key: str, *, document_count: int) 
     indices: list[int] = []
     for item in value:
         # ⚠ **排除 bool**：`True` 在 Python 里是 `int` 的实例，不排除的话
-        #   `[true]` 会被读成索引 `[1]`——**布尔值不该通过整数索引的校验**（§6.2）。
+        #   `[true]` 会被读成索引 `[1]`——**布尔值不该通过整数索引的校验**。
         if isinstance(item, bool) or not isinstance(item, int):
             raise InvalidCoqOutput(f"`{key}` 里必须是整数，收到 {type(item).__name__}")
         if item < 0 or item >= document_count:
@@ -192,7 +192,7 @@ def parse_coq_decision(text: str, *, document_count: int) -> CoqDecision:
 
     `document_count` 是**本轮真正发给模型的文档数**——`evidence_indices` 的合法上界
     由它决定。⚠ 这个参数刻意是必填的：把"上界"写成常量或省略，就等于放弃了
-    "索引必须落在我发出去的那份列表里"这条不变式（§5.3 第 4 条）。
+    "索引必须落在我发出去的那份列表里"这条不变式。
     """
     found = extract_json_object(text)
     if found is None:

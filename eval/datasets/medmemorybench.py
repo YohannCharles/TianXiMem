@@ -1,6 +1,6 @@
 """MedMemoryBench（中文档）的加载层——**检查点式**，记忆只喂到该次问诊为止。
 
-## 这份数据长什么样（2026-09-30 实测，`dataset/medmemorybench/`）
+## 这份数据长什么样
 
 ```text
 data/zh/dialogues.parquet    31,976 轮 / 2,020 次问诊 / 20 个 persona
@@ -104,7 +104,7 @@ def _sessions(turns: list[dict], persona: int, *, up_to: int) -> tuple[Session, 
     """该 persona 到 `up_to` 为止的每一次问诊一个 `Session`（时间戳取 `event_info.date`）。
 
     ⚠ 日期是**会话级**的（同一次问诊共享一个 `event_info`）⇒ 会话内没有区分度，
-    与 LoCoMo / LongMemEval 同一条形（§6.1）。
+    与 LoCoMo / LongMemEval 同一条形：session 内的时间没有区分度。
     """
     grouped: dict[int, list[dict]] = {}
     for row in turns:
@@ -167,7 +167,7 @@ def load_medmemorybench(
         by_checkpoint.setdefault((persona, checkpoint), []).append(
             Question(
                 # ⚠ **必须带 `persona` 前缀**：parquet 里的 `query_id` **只在 persona 内唯一**
-                #   （实测 1,939 题只有 **100 个**唯一 `query_id`——20 个 persona × 100 个检查点题，
+                #   （ 1,939 题只有 **100 个**唯一 `query_id`——20 个 persona × 100 个检查点题，
                 #   `(persona_id, query_id)` 才唯一）。这与 `personamem` 的 `pm-{persona}-{index}`
                 #   是同一条约定：**id 必须全局唯一**。
                 # 不带前缀的后果**不报错**：产物按 `sample.user_id` 分目录 ⇒ 批内恰好不撞，
@@ -190,7 +190,6 @@ def load_medmemorybench(
     if limit is not None:
         # ⚠ 抽样键是 **`persona`**（`item[0]`）——`ordered` 的元素已经是 `(persona, checkpoint)`
         #   这个元组本身，再写 `item[0][0]` 是对 int 取下标 ⇒ `TypeError`。
-        #   本加载器此前没有 `--spread` 的用例，所以这条路径一直没被跑过。
         # ⚠ **不 `--spread` 时偏得比别的数据集厉害**：`sorted(by_checkpoint)` 先按 persona 排，
         #   所以 `ordered[:limit]` 取到的是**同一个 persona 的最前面几个检查点**
         #   （`--limit 4` ⇒ persona 1 的检查点 10/20/30/40）——“跑一部分”变成“跑一个人”。

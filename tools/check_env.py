@@ -3,7 +3,7 @@
 它回答一个问题：**"现在能不能真的跑一轮？"** 每件事各自独立地报告，
 **一件不通不掩盖其他件**（一次看全比反复试省时间）。
 
-## 对话端点有**多个**（D39），每一个都要探
+## 对话端点有**多个**，每一个都要探
 
     `memory` 与 `memory2` 提供同一个 `Qwen/Qwen3.5-9B`，但**各有各的 key**（对调都是 401）
 ⇒ 端点按序号后缀列（`AML_BASE_URL` / `AML_BASE_URL_2` …），**逐个探**。
@@ -18,7 +18,7 @@
 
 ## 为什么 LLM 那一项额外看"思考泄漏"
 
-§17.3 的 **V7** 问的是"**网关默认开不开思考**"。归档的 7 个 pipeline 里
+这里要确认"**网关默认开不开思考**"。归档的 7 个 pipeline 里
 只有 `pipeline_beam.py` 传了 `enable_thinking: False`，而 **LoCoMo-Refined 与
 LongMemEval 都没传**——若网关默认开着，thinking 会混进 `generated_answer`，
 **裁判读到的就是推理过程而不是答案**（且不报错）。
@@ -48,7 +48,7 @@ import httpx
 
 TIMEOUT = 20.0
 
-#: 只回一个词的探针——**thinking 开着时回来的是一整段推理**（实测 167 vs 2 token）。
+#: 只回一个词的探针——**thinking 开着时回来的是一整段推理**（167 vs 2 token）。
 _THINKING_PROBE = {
     "messages": [{"role": "user", "content": "Return exactly the word OK."}],
     "max_tokens": 512,
@@ -89,7 +89,7 @@ def check_keys() -> list[Check]:
 
 
 def check_qdrant(url: str) -> Check:
-    """§6.3 要求 **server 模式**——local 模式会静默丢弃 payload 索引。"""
+    """检查 **server 模式**——local 模式会静默丢弃 payload 索引。"""
     try:
         response = httpx.get(f"{url.rstrip('/')}/collections", timeout=TIMEOUT)
         response.raise_for_status()
@@ -143,7 +143,7 @@ def _discover_model(base: str, key: str, *, prefer: str = "") -> str:
 #: ⚠ **两件事都是它要紧的地方**：① 窗口是 **8,192**（不是 8B 模型的原生 32,768）；
 #: ② 超限时官方是**静默截断**，而本地网关（vLLM）是**响亮 400**
 #: ⇒ **本地这个 400 是门禁**：线上不会替我们报这个错，只会把尾巴砍掉。
-#: 所以这里盯的是"网关窗口**比提交口径宽**"——那会让本地跑出线上跑不通的东西（V16）。
+#: 所以这里盯的是"网关窗口**比提交口径宽**"——那会让本地跑出线上跑不通的东西。
 SUBMIT_WINDOW: int = 8_192
 
 
@@ -171,7 +171,7 @@ def _model_window(base: str, key: str, model: str) -> int | None:
 def check_embedding(base: str, key: str, model: str) -> Check:
     """**Embedding 在另一个网关上**（与 LLM 不同 host、不同 key）——调错域名只会 404。
 
-    顺带验 V10（`last_token_pool` + L2 normalize）：**返回向量的 L2 范数应 ≈ 1**。
+    顺带验证 `last_token_pool` + L2 normalize：**返回向量的 L2 范数应 ≈ 1**。
 
     ⚠ 模型 id 由 `_discover_model` 问出来（或由 `AML_EMB_MODEL` 指定）——
     **不写死**，理由见那个函数的 docstring。
@@ -219,15 +219,15 @@ def check_embedding(base: str, key: str, model: str) -> Check:
 def check_reranker(base: str, key: str, model: str = "") -> Check:
     """Reranker 与 Embedding 在**同一个网关**上。
 
-    它**不作规定**，是唯一能自己投算力的组件（§2.3）。
+    它是唯一能自行分配算力的可选组件。
 
-    ⚠ **必须带上 `model`**（2026-09-28 加）。不带的话网关会**用它的默认模型**替你跑——
-    实测新网关（vllm）在只列了 `qwen3-embedding-8b` 的情况下，**不带 `model` 的
+    ⚠ **必须带上 `model`**。不带的话网关会**用它的默认模型**替你跑——
+    新网关（vllm）在只列了 `qwen3-embedding-8b` 的情况下，**不带 `model` 的
     `/rerank` 仍然返回了 2 条结果**（`"model": "qwen3-reranker-4b"`）。
     ⇒ 那样测出来的是"网关上有**某个** reranker"，而不是"**我们要用的那个 id** 可用"——
     **一次假绿**。而 `RemoteReranker` 是**会带 `model` 的**：id 填错就是 404 + 降级。
 
-    ⚠ **请求字段名两种都试**（2026-10-09）：`query`（自研封装，`memory.021130.xyz`）与
+    ⚠ **请求字段名两种都试**：`query`（自研封装，`memory.021130.xyz`）与
     `queries`（vLLM 原生）**互斥**，没有"都对"的写法。写死哪一个都会在另一半部署上**永远红**，
     而"永远红"和"真的坏了"在屏幕上一样，最后会被人关掉（那正是本项存在的理由）。
     两种都被拒才算不通，且报告里写明**实际生效的是哪个**。
@@ -239,7 +239,7 @@ def check_reranker(base: str, key: str, model: str = "") -> Check:
     for field in ("query", "queries"):
         # ⚠ 请求形状要**跟着 `RemoteReranker` 走**（见 `rank/reranker.py` 的 `_post`）：
         #   那边**刻意不传 `top_n`**——传了会静默截断，返回的就不再是全部候选，
-        #   于是"集合有没有被改动"就验不出来了（那是 §11.2 的一条不变量）。
+        #   于是"集合有没有被改动"就验不出来了。
         #   探针若传了它，测的就不是我们真正会发的那个请求。
         payload: dict[str, object] = {
             field: "q" if field == "query" else ["q"],
@@ -298,9 +298,9 @@ def check_reranker(base: str, key: str, model: str = "") -> Check:
 
 
 def check_llm(base: str, key: str, model: str) -> Check:
-    """**一个**对话端点 + V7 那个探针（见模块 docstring）。
+    """**一个**对话端点 +  那个探针（见模块 docstring）。
 
-    ⚠ **每个端点各调一次**（D39）：`memory` 与 `memory2` 是同一个模型、**两把 key**，
+    ⚠ **每个端点各调一次**：`memory` 与 `memory2` 是同一个模型、**两把 key**，
     只探第一个的话，"第二个端点 key 填错了"要等到判分轮转到它才炸——那时前面几题
     与整轮的 Add / Search 都已经付出去了。名字里带上 host，屏幕上才分得清是哪一台。
     """

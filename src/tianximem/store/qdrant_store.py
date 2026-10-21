@@ -1,4 +1,4 @@
-"""Qdrant 派生索引（§6.3 / §7.1 / §7.3 / §10）。
+"""Qdrant 派生索引。
 
 **Qdrant 是可重建的派生索引，不是真源**——索引损坏时可从 SQLite 的正文全量重建
 （`index_pairs()` 就是那条路径）。**正文不进 Qdrant**：`Search` 返回时按检索到的
@@ -8,16 +8,15 @@
 `session_id` / `local_index` / `event_time` 与**已渲染好的文本**。渲染由
 [`../common/render.py`](../common/render.py) 负责，本模块不拼字符串。
 
-## 两路向量从哪来（这是 §7.1 的硬规定）
+## 两路向量的来源
 
 | 向量 | 来源 | 说明 |
 | --- | --- | --- |
 | `dense` | **外部 Embedder** 算好传进来 | 只认 canonical 的 `list[float]`，不关心哪家模型 |
 | `bm25` | **Qdrant 服务端**从文本现算 | **真 BM25**，不用学出来的稀疏权重 |
 
-⚠ 用 `qdrant/bm25` 是因为**配正经分词器的** BM25 更强，而不是"BM25 天然更强"：它的分数
-对分词器高度敏感，而用哪个分词器是我们没有文档的一条 ⇒ **它的分词行为要实测一次**，
-别默认等价于 Lucene Analyzer（§7.1，`open-questions.md` V1）。
+BM25 分数对分词器高度敏感。Qdrant 负责该模型的分词，不能假定其结果等价于 Lucene
+等分析器；改动模型或服务端分词配置会改变检索结果。
 """
 
 from __future__ import annotations
@@ -46,13 +45,13 @@ __all__ = [
 
 COLLECTION_DEFAULT: Final[str] = "memories"
 
-# 命名向量（§6.3）：dense（外部算）+ bm25（Qdrant 服务端算，距离固定 Dot）
+# 命名向量：dense（外部计算）和 bm25（Qdrant 服务端计算）。
 DENSE_VECTOR: Final[str] = "dense"
 SPARSE_VECTOR: Final[str] = "bm25"
 BM25_MODEL: Final[str] = "qdrant/bm25"
 
-# payload 键。§6.3 只列了过滤与溯源需要的；`memory_id` 是 SQLite 的 canonical id，
-# 加上它让"point ↔ 真源行"的对应关系**显式可读**（point id 本身是它的 UUID 形式）。
+# Payload 键覆盖过滤和溯源需求。`memory_id` 是 SQLite 的 canonical ID，使
+# point 与源记录的对应关系显式可读；point ID 是其 UUID 形式。
 KEY_MEMORY_ID: Final[str] = "memory_id"
 KEY_USER_ID: Final[str] = "user_id"
 KEY_SESSION_ID: Final[str] = "session_id"
@@ -63,14 +62,11 @@ KEY_EVENT_TIME: Final[str] = "event_time"
 def point_id_for(memory_id: str) -> str:
     """SQLite 的 `memory_id`（64 位十六进制）→ Qdrant 接受的 **UUID 字符串**。
 
-    ⚠ **Qdrant 的 point id 只接受 uint64 或 UUID**，而 §6.1 的 `id` 是
-    `hash(user_id, session_id, request_id, local_index)` 的十六进制串——两者形状不同，
-    所以需要这一层映射。
+    Qdrant point ID 只接受 uint64 或 UUID，而 memory ID 是
+    `hash(user_id, session_id, request_id, local_index)` 的十六进制串，因此需要映射。
 
-    取哈希的**前 128 位**当 UUID：128 位对十万级的点而言碰撞概率可忽略，
-    且映射是**纯函数**——同一个 `memory_id` 永远得到同一个 point id，
-    因此"重放同一位置时 **upsert 覆盖原 point**、而不是留下孤儿 point"成立
-    （§6.5：`id` 不变 ⇒ point id 不变）——`tools/reindex.py` 的全量重建依赖这一点。
+    取哈希前 128 位作为 UUID。映射是纯函数：同一 memory ID 总是得到同一 point ID，
+    重放会覆盖原 point，不会留下孤儿；`tools/reindex.py` 也依赖该确定性。
     """
     if len(memory_id) < 32:
         raise ValueError(f"memory_id 太短，无法当 UUID 用：{memory_id!r}")
@@ -91,16 +87,16 @@ def memory_id_from_point_id(point_id: Any) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class HybridParams:
-    """混合检索的三个**各自独立**的量与融合常量（§7.3）。
+    """混合检索的三个独立参数与融合常量。
 
     ⚠ **`rrf_k` 是正确性常量，不是调参项。** Qdrant 的默认 `k` 是 **2**
     （官方文档逐字："k is a constant (set to 2 by default)"），不设就会得到一个
     与所有参考实现都不同的融合行为、**且极难排查**。`k = 61` 才等价于 RRF 文献里的 60：
     Qdrant 的秩是 **0-based**，公式 `1/(rank + k)`，首位即 `1/(0+61) = 1/(1+60)`。
-    **已在 v1.17.0 上实测**：`rrf:{k:61}` 给出 `0.032786883 = 2/61`，默认给出 `0.5 = 1/2`。
+    在 Qdrant v1.17.0 中，`rrf:{k:61}` 返回 `0.032786883 = 2/61`，默认配置返回
+    `0.5 = 1/2`。
 
-    ⚠ `prefetch_limit` **不是**种子数（§10 的 20）、也**不是** Top-K（§2.2 的 100）——
-    它是"进入 RRF 融合的候选池"大小，**三个不同的量，不要混用**。
+    `prefetch_limit` 是每路进入 RRF 融合的候选池大小，不是扩窗种子数，也不是请求的 `top_k`。
     """
 
     #: ⚠ 三个默认值**都引用 [`../common/config/constants.py`](../common/config/constants.py) 的单一来源**
@@ -108,8 +104,7 @@ class HybridParams:
     #: 免得直接构造 `HybridParams()` 时又散出第二份字面量。
     #: **正常路径上它们由 [`../service/app.py`](../service/app.py) 的装配从配置注入。**
     prefetch_limit: int = DEFAULT_PREFETCH_LIMIT
-    # 顺序与 §7.3 的 prefetch 顺序**一一对应**：先在 `prefetch` 里给 bm25 还是 dense，
-    # 权重就得按同一顺序给。这里固定 (bm25, dense)。
+    # 顺序与 `prefetch` 顺序一一对应；这里固定为 (bm25, dense)。
     weights: tuple[float, float] = DEFAULT_WEIGHTS
     rrf_k: int = RRF_K
 
@@ -121,7 +116,7 @@ class MemoryRecord:
     memory_id: str
     user_id: str
     session_id: str
-    #: 它在**那一次 Add** 里的序号（D28）——**只用于溯源与调试**，检索不按它排序或过滤
+    #: 它在**那一次 Add** 里的序号——**只用于溯源与调试**，检索不按它排序或过滤
     #: （排序是 Qdrant 的相似度、筛选只按 `user_id`；"Add 内顺序"是 SQLite 那边的事）。
     local_index: int
     event_time: int | None
@@ -130,7 +125,7 @@ class MemoryRecord:
 
 @dataclass(frozen=True, slots=True)
 class ScoredMemoryId:
-    """检索结果：**只回 `memory_id`**（正文回 SQLite 取，§6.3）。"""
+    """检索结果只返回 `memory_id`；正文回到 SQLite 读取。"""
 
     memory_id: str
     score: float
@@ -139,9 +134,8 @@ class ScoredMemoryId:
 class QdrantStore:
     """单一 `memories` collection 的建/写/查。
 
-    ⚠ **不允许一用户一个 collection**——`user_id` 放 payload 并建 tenant 索引（§6.3）。
-    理由不只是"collection 太多管不过来"：跨 collection 无法做**根级融合**，
-    而 §7.3 的 RRF 是在一个 collection 内部的两路 `prefetch` 上做的。
+    **不按用户拆分 collection**。`user_id` 存在 payload 中并建立 tenant 索引，
+    RRF 在同一个 collection 内对 BM25 和 dense 两路 `prefetch` 做融合。
     """
 
     def __init__(
@@ -199,7 +193,7 @@ class QdrantStore:
         幂等：已存在则只做校验。**维度不一致直接抛错**——两个不同维度的向量混进
         同一个集合只会表现为"检索结果很差"，**不会报错**（`embed/CLAUDE.md`）。
 
-        ⚠ payload 索引**必须在写入数据之前**建（§6.3）：否则 HNSW 需要重建才有过滤感知。
+        payload 索引在写入数据前创建；否则过滤优化需要重建 HNSW 索引后才生效。
         这里在建集合的同一个方法里紧接着建索引，就是不让调用方有机会漏掉。
         """
         if dim <= 0:
@@ -220,10 +214,10 @@ class QdrantStore:
                 DENSE_VECTOR: models.VectorParams(size=dim, distance=models.Distance.COSINE)
             },
             sparse_vectors_config={
-                # 真 BM25：sparse + IDF（§7.1）。距离固定 Dot，不需显式声明。
+                # BM25 使用 sparse + IDF；距离由 Qdrant 的 BM25 模型确定。
                 SPARSE_VECTOR: models.SparseVectorParams(modifier=models.Modifier.IDF)
             },
-            # 分片数 = 1：根级融合跨分片合并，**分片数变化会改变排名且无报错**（§6.3）
+            # 固定单分片：跨分片融合会改变排名，而这一变化不会报错。
             shard_number=1,
         )
         self._create_payload_indexes()
@@ -231,7 +225,7 @@ class QdrantStore:
 
     def _create_payload_indexes(self) -> None:
         # user_id：keyword + is_tenant——Qdrant 为租户过滤专门优化的索引类型。
-        # ⚠ is_tenant 只支持 keyword / uuid，别把 user_id 建成 integer（§6.3）
+        # is_tenant 只支持 keyword 或 uuid，因此 user_id 使用 keyword 索引。
         self._client.create_payload_index(
             collection_name=self._collection,
             field_name=KEY_USER_ID,
@@ -278,10 +272,10 @@ class QdrantStore:
     ) -> int:
         """写入一批记忆。`dense` 由调用方算好；`bm25` 由 Qdrant 从 `text` 现算。
 
-        ⚠ **`wait=True` 是契约要求**：`Add` 必须"持久化完成且立即可搜索"后才能响应，
-        默认的异步索引不保证（§2.1）。本方法**默认就是 True**，不要为了吞吐关掉它。
+        `wait=True` 是必要行为：Add 只能在索引持久化并立即可搜索后返回。本方法默认启用，
+        不应为了吞吐关闭。
 
-        **一个 point 同时带** `dense` + `bm25` + payload（§6.3）。
+        每个 point 同时包含 `dense`、`bm25` 和 payload。
         """
         if len(records) != len(dense_vectors):
             raise ValueError(f"记录 {len(records)} 条、向量 {len(dense_vectors)} 个，数量不符")
@@ -298,7 +292,7 @@ class QdrantStore:
                 id=point_id_for(r.memory_id),
                 vector={
                     DENSE_VECTOR: list(v),
-                    # 传文本而不是向量：Qdrant 服务端用 qdrant/bm25 现算（§7.1）
+                    # 传文本：Qdrant 服务端使用 qdrant/bm25 计算稀疏向量。
                     SPARSE_VECTOR: models.Document(text=r.text, model=BM25_MODEL),
                 },
                 payload={
@@ -322,19 +316,16 @@ class QdrantStore:
         renderer: Any = render_pair,
         wait: bool = True,
     ) -> int:
-        """**从 SQLite 全量重建**这条路（§6.3：Qdrant 是派生读存储）。
+        """从 SQLite 记录批量写入 Qdrant 派生索引。
 
         `pairs` 用**鸭子类型**取字段（`id` / `user_id` / `session_id` /
         `local_index` / `event_time` / `question` / `answer`），所以本模块**不必 import `store`**：
         它只要求"像 QA 对一样可读"，不要求那是哪一类对象。
 
-        文本用 `renderer` 生成——**同一个渲染函数**既是 embedding 的输入，
-        也是将来返回给 AML 的 `content`（§7.2 的同一份渲染）。
+        文本由 `renderer` 生成。同一渲染函数用于 embedding 输入和返回给 AML 的 `content`。
 
-        ⚠ **`renderer` 收的是"一个对"，不是 `(question, answer)` 两个值**：渲染要用的第三个
-        量是 `event_time`（T1 的日期前缀，§11.3 的对照臂），签名只给两个值的话调用方**拿不到
-        它**，于是索引侧只能自己拼一个日期口径——那正是"同一份渲染"被撕成两半的开始。
-        默认值 `render_pair` 就是 v1 定稿口径（不带日期）；要开 T1 的"带"臂由**上层**传
+        `renderer` 接收完整的 QA 对象而不是两个字符串，因为渲染还需要 `event_time`。
+        默认 `render_pair` 不注入日期；启用绝对日期时，上层传入
         `functools.partial(render_pair, inject_abs_time=True)`。
 
         维度从 `embedder.dim` 取（**第一次调用之后才有值**，见 `embed/base.py`）。
@@ -386,7 +377,7 @@ class QdrantStore:
         ——截断由调用方在**按 `(-score, memory_id)` 排完之后**做。
 
         **为什么**：RRF 的分数是离散的，**并列是常态**。而 Qdrant 在 `limit` 处**截在并列
-        中间**时，**谁进谁出是随机的**——实测同一个请求连打 12 次，返回都是 100 条，
+        中间**时，**谁进谁出是随机的**——同一个请求连打 12 次，返回都是 100 条，
         但**第 100 位的 id 有 2 种**，而两条的 `score` 完全相同（都是 0.01）。
         ⇒ 在 Qdrant 里截，等于把"哪 100 条"交给了一个不确定的选择；
         在本地排完再截，**边界也确定**（同分按 `memory_id` 升序，纯确定性）。
@@ -394,14 +385,12 @@ class QdrantStore:
 
         ⚠ **`user_id` 过滤加在【每个 `prefetch` 上】，不是加在融合之后。**
         融合后过滤会让别的用户的候选**先占掉名次**再被丢弃——既污染分数、又浪费名额，
-        而且一旦有人把过滤写漏，泄漏是静默的（§2.2：`user_id` 是唯一的隔离字段，
-        跨 user 检索被禁止）。
+        而且过滤遗漏会造成静默越权。`user_id` 是唯一隔离字段，禁止跨用户检索。
 
-        ⚠ **契约的 `top_k` 不在这里执行**（它在调用方，见上）——
-        但**"不写死 100"那条规则照旧**：这里取的 `2 × prefetch_limit` 是"融合结果的上界"，
-        与请求的 `top_k` 无关；AML 传更小的 `top_k` 时由调用方截，**不会有"返回超限"**。
+        请求的 `top_k` 由调用方执行；这里返回至多 `2 × prefetch_limit` 条融合结果，
+        与请求的 `top_k` 无关。调用方完成确定性排序后按 `top_k` 截断。
 
-        查询文本**原样送入**，不做任何改写——v1 没有 Query Analyzer（§7.2）。
+        查询文本原样送入，不做改写。
         """
         if not query_text.strip():
             raise ValueError("query_text 不得为空（§2.1：query 是必填字段）")

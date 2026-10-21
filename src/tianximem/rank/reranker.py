@@ -1,4 +1,4 @@
-"""Rerank —— **远端 cross-encoder 的接入点**（§11.2 / D12）。
+"""Rerank —— **远端 cross-encoder 的接入点**。
 
 ```text
 Hybrid Retrieval → RRF → memory_id 稳定去重 → 【rerank（恰好一次）】 → 扩窗 → 合并 → 打包
@@ -9,21 +9,17 @@ Hybrid Retrieval → RRF → memory_id 稳定去重 → 【rerank（恰好一次
 * [`RemoteReranker`][RemoteReranker] —— 主网关（`memory.021130.xyz`）的 HTTP 客户端
 * [`RerankUnavailable`][RerankUnavailable] —— "可降级"的唯一信号
 
-⚠ **线格式与踩过的坑的完整表格在 [`./CLAUDE.md`](./CLAUDE.md) §1**——
-改客户端之前先读它。本文件只保留三条**不读就会写错**的：
+线格式与边界条件见 [`./CLAUDE.md`](./CLAUDE.md)。本文件保留三条关键约束：
 
 1. **`top_n` 是静默截断旋钮**：传了就只回 k 条 ⇒ 其余候选没有分数。
    本实现**不传**，并**无条件校验 `index` 集合恰好等于输入集合**。
-2. **`score()` 返回按输入位置对齐的分数**，重排留给调用方 ⇒ 候选集合**结构上**不可能被改变
-   （§13 的开关纯度、§2.2 的精确计数都依赖这一条）。
-3. **`rerank.envelope` 与 `TIANXIMEM_RERANKER_BASE_URL` 是同一件事的两半**：填错的表观
-   与 D12 降级**一模一样**（每次检索都不精排、服务不报错、响应照旧合法）。
+2. **`score()` 返回按输入位置对齐的分数**，重排留给调用方，因此候选集合不会改变。
+3. **`rerank.envelope` 与 `TIANXIMEM_RERANKER_BASE_URL` 是同一端点身份的两部分**；
+   两者不匹配会表现为每次检索静默降级。
 
 ## 为什么 rerank 只调用**一次**
 
-它是**唯一一次**模型调用（§7.2 的"每查询恰好一次"同款纪律）。**不做第二次 rerank**——
-包括"扩窗之后再排一遍"：那会让名次依赖扩窗的结果，而扩窗的输入又是名次，
-成了一个没有不动点的循环。
+最终 rerank 只调用一次。扩窗之后不再重排；否则名次依赖扩窗结果，而扩窗又依赖名次。
 """
 
 from __future__ import annotations
@@ -44,7 +40,7 @@ class RerankUnavailable(RuntimeError):
     """reranker 端点不可用（超时、连接失败、非 2xx、响应形状不符、候选映射失败）。
 
     ⚠ **它是"可降级"，不是"可忽略"**：调用方**必须**捕获它、退回未重排的顺序、
-    **并把这件事记下来**（D12）——而不是让它冒泡成 5xx。
+    **并把这件事记下来**——而不是让它冒泡成 5xx。
     理由：reranker 是**唯一位于提交链路关键路径上、又不被规则保证可用**的组件。
     Full 只有 2 次，一次真机会。
     """
@@ -61,7 +57,7 @@ class Reranker(Protocol):
 
     @property
     def name(self) -> str:
-        """模型标识（进 run record 的配置指纹——**提交时不得更换**，D12）。"""
+        """模型标识。"""
         ...
 
     def score(self, *, query: str, documents: Sequence[str]) -> Sequence[float]:
@@ -75,7 +71,7 @@ class Reranker(Protocol):
 
 
 class RemoteReranker:
-    """主网关上的 Qwen3-Reranker-4B（§11.2；选型见 D12，**提交时不得更换**）。
+    """主网关上的 Qwen3-Reranker-4B。
 
     ⚠ **模型 id 由 `.env` 的 `TIANXIMEM_RERANKER_MODEL` 给**，而且**必须填对**：
     网关（vllm 直服）**校验**它——**填错就拿到 404 并降级，而服务不报错**。
@@ -100,8 +96,7 @@ class RemoteReranker:
     ) -> None:
         if not base_url or not api_key:
             raise ValueError("base_url 与 api_key 都不得为空")
-        # ⚠ **构造期就拒绝未知信封**（而不是发出去等对面回 400/422）：它写错的表现是
-        #   每次检索都静默降级，那种失败只在 §14 的计数里看得见（见 config 侧的同一条注释）。
+        # 构造期拒绝未知信封；否则错误配置会表现为每次检索静默降级。
         if envelope not in RERANK_ENVELOPES:
             raise ValueError(f"envelope 只能是 {sorted(RERANK_ENVELOPES)}，收到 {envelope!r}")
         self._base_url = base_url.rstrip("/")
@@ -111,7 +106,7 @@ class RemoteReranker:
         self._envelope = envelope
         self._client = client
 
-        #: 诊断量（§14）。**不进响应**——响应只有 §2.1 那四个字段。
+        #: 诊断量，不进入 Search 响应。
         self.calls = 0
         self.last_latency_ms: float | None = None
         self.last_error: str | None = None
@@ -142,7 +137,7 @@ class RemoteReranker:
     def score(self, *, query: str, documents: Sequence[str]) -> list[float]:
         """给每篇文档打分，**按输入位置对齐**返回。
 
-        **整批候选一次发送**（§7.2 的"每查询恰好一次"同款纪律），不做按候选的循环。
+        **整批候选一次发送**，不按候选循环调用端点。
 
         ⚠ **空输入在本地短路**：端点对空 `documents` 返回 400，
         而"没有候选"根本不是错误（它是合法的检索结果）。
@@ -158,13 +153,8 @@ class RemoteReranker:
             self.last_error = str(exc)
             raise
         except Exception as exc:  # noqa: BLE001 — 见下
-            # ★ **兜底捕获是 D12 的要求，不是偷懒**：reranker 是唯一不被规则保证可用的组件，
-            #   "端点失败或超时时退回未重排的 RRF 顺序，而不是报错"。
-            #   一次没排上序 vs 整个 Search 500——后者的代价是 Full 的一次真机会。
-            #
-            # ⚠ **但它必须留下痕迹**：`last_error` 里带着**异常类型**，
-            #   所以"未预期的 bug"与"端点不可用"在诊断上分得开——
-            #   这正是本项目反复强调的"静默失败比失败更坏"。
+            # reranker 是可选远程组件；端点失败或超时时退回未重排的 RRF 顺序。
+            # 同时把异常类型写入 last_error，使端点不可用与未预期缺陷仍可区分。
             message = f"rerank 未预期的失败（{type(exc).__name__}）：{exc}"
             self.last_error = message
             raise RerankUnavailable(message) from exc
@@ -179,8 +169,7 @@ class RemoteReranker:
         }
         # ⚠ **查询字段的名字与类型都跟着端点变**（`rerank.envelope`，见 `CLAUDE.md` 的信封表）：
         #    `queries`（数组）是 vLLM 原生 score 形状，`query`（单个字符串）是自研封装的。
-        #    两者**互斥**，而发错的表现是一样的：对面回 400 / 422，D12 再把它吞成降级
-        #    ⇒ 每次检索都不精排，而服务不报错、响应照旧合法。
+        #    两者互斥；字段不匹配会收到 400 / 422 并转为降级，响应本身仍然合法。
         if self._envelope == "queries":
             payload["queries"] = [query]
         else:
@@ -210,7 +199,7 @@ class RemoteReranker:
     def _parse(self, body: object, *, expected: int) -> list[float]:
         """把 `results` 折成**按输入位置对齐**的分数表。
 
-        这里守着 §11.2 的一条不变量：**reranker 只能改变顺序，不能改变候选集合。**
+        这里守住一条不变量：**reranker 只能改变顺序，不能改变候选集合。**
         四条拒绝条件各自对应一种"集合被改动了"的方式：
 
         | 拒绝 | 它其实是 | 不拒绝的后果 |
@@ -221,7 +210,7 @@ class RemoteReranker:
         | 容器不是数组 / 项不是对象 / 分数不是有限数 | 格式非法 | 崩在后面的算术里 |
 
         ⚠ **容器与分数键各收两个**（`results` / `data`，`score` / `relevance_score`）——
-        **四种组合都实测过**，信封表在 `CLAUDE.md`。收两个不是"猜"——**同一台网关上的
+        **四种组合都过**，信封表在 `CLAUDE.md`。收两个不是"猜"——**同一台网关上的
         信封并不稳定**（它随网关侧的部署变）；
         `index` 集合校验把它们的**共同不变量**守住了，所以多认一个键**不会削弱任何检查**。
 
@@ -230,7 +219,7 @@ class RemoteReranker:
         把额外字段当错误会让实现**对着真端点反而失败**。
         """
         # ⚠ **容器名收两个**：`results`（自研封装）与 `data`（vLLM 原生 score 形状——
-        #   2026-09-28 的 nginx rewrite 之后走的就是它，见 `CLAUDE.md` 的信封表）。
+        #    的 nginx rewrite 之后走的就是它，见 `CLAUDE.md` 的信封表）。
         #   与分数键收两个同理：**共同的不变量由下面的 `index` 集合校验守住**，
         #   多认一个容器名**不削弱任何检查**。
         results = body.get("results", body.get("data")) if isinstance(body, dict) else None

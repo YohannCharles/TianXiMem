@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:  # Direct script execution keeps the historical imports.
+try:  # Direct script execution resolves sibling modules without the package prefix.
     from fact_entity_smoke import _score_triples, load_cases
     from fact_llm_extract import _load_env_file, _relation_vocabulary
     from fact_llm_gate import _scopes, _trigger_supported

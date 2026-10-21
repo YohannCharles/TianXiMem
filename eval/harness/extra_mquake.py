@@ -1,7 +1,7 @@
 """MQuAKE 家族的 answer / evaluate：答案 prompt ＋ 别名表纯函数判分。
 
-拆自 `extra_pipeline.py`（2026-10-15，只搬位置）：那层现在是薄 façade、把本模块的名字
-全部重新导出。**"这是我们的契约、不是官方口径"**（分数只在仓内前后对比）那条边界见
+`extra_pipeline.py` 是薄 façade，重新导出本模块的名字。
+**"这是我们的契约、不是官方口径"**（分数只在仓内前后对比）那条边界见
 `extra_pipeline.py` 的模块 docstring 第 1 条。
 """
 
@@ -34,20 +34,13 @@ def judge_mquake(generated: str, gold: object) -> tuple[bool, str]:
     return False, f"MQuAKE：{len(aliases)} 个别名一个都没出现"
 
 
-#: **MQuAKE 专用**的答案 prompt（2026-10-03 加）。
+#: **MQuAKE 专用**的答案 prompt。
 #:
 #: ⛔ **不要对它用通用 `ANSWER_PROMPT`。** 那份有两条对 MQuAKE **有害**的规则：
 #:   · 「只用记忆、不用外部知识」——而 **MQuAKE-CF 的"未编辑跳"本来就要求世界知识**
 #:     （那是它的设计），禁掉就答不出；
 #:   · 「记忆里没有就逐字回 `Cannot determine from the memories.`」——记忆里
 #:     **旧值与 "…is X (this replaces the earlier value)" 并存**，模型一看到冲突就引用这条拒答。
-#:
-#: 实测（768 题，**只重答那 201 条拒答、其余 567 条不动**，四个候选同条件对照）：
-#:
-#:     B0 现状（含拒答条款）  新答对  0  ⇒ 总分 0.3997
-#:     B1 只删拒答条款        新答对 66  ⇒ 总分 0.4857
-#:     B2 +改写优先           新答对 88  ⇒ 总分 0.5143
-#:     B3 本份（三条都给上）   新答对 93  ⇒ 总分 0.5208
 #:
 #: ⚠ **这是 MQuAKE 的接法问题，不是"通用 prompt 该改"**：通用那份还被
 #: medmemorybench / CorporateBench 的单值查询仍沿用；CorporateBench 聚合任务已独立。

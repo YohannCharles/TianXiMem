@@ -1,6 +1,6 @@
 """`eval/smoke/preflight.py` 的静态一致性（**不联网、不起服务**）。
 
-真正"打真 HTTP"的那部分由 `make contract-check` 跑（`contract.md` §4 的清单），
+真正"打真 HTTP"的那部分由 `make contract-check` 跑（清单见 `contract.md`），
 这里只钉住三件**可以离线断言**的事：
 
 1. `eval/` 的边界——**不 import `src/`**（否则契约层就退化成进程内调用了）
@@ -48,8 +48,8 @@ def test_preflight_does_not_import_src() -> None:
 
     理由两条（[`../../eval/CLAUDE.md`](../../eval/CLAUDE.md)）：
 
-    * §13 要求 B1（ReFind 原版）在我们自己的 harness 里重跑，而它只以"另一个服务"的形式
-      存在 ⇒ 若 harness 走进程内调用，B1 就成了特例，两条基线不可比；
+    * B1（ReFind）必须在 harness 里作为**另一个服务**重跑；若 harness 走进程内调用，
+      B1 就成了特例，两条基线不可比；
     * **契约层只有走 HTTP 才碰得到**——进程内调用根本看不到 `/add` 的 422
       与 `data` 的序列化。
 
@@ -111,7 +111,7 @@ def test_preflight_uses_a_collection_nobody_else_uses(preflight) -> None:
     """预检的集合名**必须与开发期、提交期的都不同**。
 
     否则预检写进去的记忆会**永久留在 `memories_dev` 里**，污染之后每一次检索——
-    而那正是 `open-questions.md` **V9** 的形状（遗留 point 按 id upsert，静默不报错）。
+    遗留 point 按 id upsert 时会静默污染检索，且不报错。
     """
     used = {preflight._PREFLIGHT_COLLECTION}
     assert preflight._PREFLIGHT_COLLECTION not in {"memories", "memories_dev"}
@@ -212,7 +212,7 @@ class FakeService:
     def __call__(self, request: httpx.Request) -> httpx.Response:  # noqa: ANN001
         if request.url.path == "/add":
             payload = json.loads(request.content)
-            # ⚠ 真的服务按 `request_id` **幂等**（§2.2）；假服务必须照样做，
+            # ⚠ 真的服务按 `request_id` **幂等**；假服务必须照样做，
             #    否则"重放不重复写入"那条检查**没有阳性对照**可言。
             #    `merged_duplicate` 是那条检查的违规模式：重放被当成新的一批。
             if self.mode == "merged_duplicate" or not self._already(payload["request_id"]):
@@ -327,7 +327,7 @@ def _run_one(mode: str, method: str) -> None:
         ("fused_score", "check_score_is_rank_derived", "rank=0 的 score 必须是 1.0"),
         ("fused_tail", "check_score_is_rank_derived", "量级像融合分数"),
         ("generated", "check_content_properties", "问题原文"),
-        # ⚠ 段模型下"重复写入"**不再表现为多一项**，而是**同一段变宽**——
+        # ⚠ 段模型下"重复写入"**不表现为多一项**，而是**同一段变宽**——
         #    所以这条违规模式刻意让检索侧照段模型合并（见 `FakeService._search`）。
         ("merged_duplicate", "check_replay_does_not_write_again", "正文变了"),
     ],

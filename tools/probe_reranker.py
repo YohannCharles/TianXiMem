@@ -113,10 +113,10 @@ class _StubQdrant:
 
     ⚠ 顺序是**倒着给的**（最相关的排最后）——理由见模块 docstring。
 
-    ⚠ **分数必须两两不同**：给成同一个值会触发 V13 的并列 tie-break
+    ⚠ **分数必须两两不同**：给成同一个值会触发  的并列 tie-break
     （`(-score, memory_id)`），检索层于是**按 id 重排**、桩给的顺序不再等于
     "RRF 顺序"——而探针下面还印着"RRF 给的顺序：[…]"。那是**探针自己的前提不成立**
-    （第一次实测就是这么发生的：关精排那一臂的顺序既不是桩序、也没报错）。
+    （第一次就是这么发生的：关精排那一臂的顺序既不是桩序、也没报错）。
     """
 
     #: 首名与末名的分数差——只要两两不同即可，量级无关（RRF 分数**不是**校准量）。
@@ -130,7 +130,7 @@ class _StubQdrant:
         return True
 
     def hybrid_search(self, *, user_id: str, query_text: str, dense_vector):  # noqa: ANN001, ANN201
-        # ⚠ **不收 `top_k`**：V13（2026-09-26）之后截断在 `HybridRetriever.search` 里、
+        # ⚠ **不收 `top_k`**：之后截断在 `HybridRetriever.search` 里、
         # 在 `(-score, memory_id)` 排完之后做，store 这一层回**全部**融合结果。
         # 桩跟着真实签名走——否则本探针第 ② 段会直接 `TypeError`（而第 ① 段照样绿，
         # 屏幕上看起来像"探针过了"）。
@@ -281,7 +281,7 @@ def _seed_corpus(store: SqliteStore) -> tuple[str, str, list[str]]:
     于是"候选 7 条"实际只有 1 条，两遍输出一模一样
     ——**探针自己把自己测成了空过的**。
 
-    ⚠ **★ 与 context 必须在同一次 Add 内相邻**（D28）：扩窗只沿 `prev` / `next` 走，
+    ⚠ **★ 与 context 必须在同一次 Add 内相邻**：扩窗只沿 `prev` / `next` 走，
     分两次 Add 的话 context **永远扩不到**——那会让本探针测不到"扩窗把 ★ 提前"。
     """
     match_id = make_pair_id(_USER, "s-match", "probe-match", 0)

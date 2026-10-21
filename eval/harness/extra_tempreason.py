@@ -1,7 +1,6 @@
 """TempReason 家族的 answer / evaluate：A/B 定版的答案 prompt ＋ 可接受答案串纯函数判分。
 
-拆自 `extra_pipeline.py`（2026-10-15，只搬位置）：那层现在是薄 façade、把本模块的名字
-全部重新导出。
+`extra_pipeline.py` 是薄 façade，重新导出本模块的名字。
 """
 
 from __future__ import annotations
@@ -36,27 +35,10 @@ def judge_tempreason(generated: str, gold: object) -> tuple[bool, str]:
     return False, f"TempReason：{len(wants)} 个可接受答案都没出现"
 
 
-#: **TempReason 专用**的答案 prompt（2026-10-04 加，A/B 定版）。
+#: TempReason 使用的专用答案 prompt。
 #:
-#: ⛔ **不要对它用通用 `ANSWER_PROMPT`。** 那份第 2 条写的是「记忆里**没有**答案就逐字回
-#: `Cannot determine from the memories.`」——而 **TempReason 的答案从来不在记忆里字面出现**：
-#: 记忆给的是**区间**（`Raúl Servín plays for Atlas F.C. from Jan, 1991 to Jan, 1992.`），
-#: 问题问的是**一个时点**（`… in May, 1991?`），要读完区间再落到点上。
-#: 9B 的模型把 "contain" 读成字面匹配 ⇒ 一律拒答。
-#:
-#: ⚠ 第 2 条在这里**是准确的**：这份数据集的 gold 恒在上下文里（`tr-splitfix` 的 332 题，
-#: 逐字拒答的 76 道**全部**"证据就在眼前"；校准口径下判对的题 212/212 都认得出 gold）。
-#: ⇒ "必须作答"不是鼓励瞎猜，而是**去掉一条它误触发的弃权出口**。
-#:
-#: 实测（`tr-splitfix` 的 332 题，**只重答那 76 条逐字拒答、其余 256 条不动**，
-#: 三个候选同条件对照；旧总分 0.6386）：
-#:
-#:     B1 只删拒答条款        新答对 44/76  ⇒ 0.7711
-#:     B2 B1+「区间说明」     新答对 43/76  ⇒ 0.7681   ← 看起来更"对症"，实测**反而差一点**
-#:     B3 本份（+必须作答）   新答对 52/76  ⇒ **0.7952**
-#:
-#: ⚠ **B2 那次是"想当然更对症"的反例**：单题探针上它就答错了（把 May 1991 答成
-#: `Real Madrid Fc`），76 条上仍然不如 B1。**别按"哪份 prompt 更贴近任务"选，按数字选。**
+#: 通用 `ANSWER_PROMPT` 在找不到字面答案时要求拒答，但 TempReason 的答案通常需要从
+#: 原文时间区间中推导。此处的规则要求模型在证据支持时给出简洁答案。
 TEMPR_ANSWER_PROMPT = (
     "You are an assistant that answers a question using the memories provided below.\n"
     "\n"

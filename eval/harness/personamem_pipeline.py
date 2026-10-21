@@ -23,9 +23,9 @@ official.evaluate_mcq(namespace)
 
 ## 本地检索评测口径
 
-归档原版只读 `chat_history`；本适配器将其替换成逐题 Search 返回的片段。
+本适配器用逐题 Search 返回的片段构造 `chat_history`。
 空检索保留为空，不回填原始对话；缺检索字段直接报错。选项与 MCQ 判分复用归档。
-这改变了答案输入口径，旧完整历史成绩不能直接比较，旧答案必须换 run-id 重跑。
+答案输入包含检索结果，因此必须使用新的 run ID，且不能与直接注入完整历史的分数比较。
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ MEMORY_INPUT_VERSION = "personamem-search-memory-v1"
 
 
 def retrieved_history(item: dict) -> list[dict[str, str]]:
-    """只用检索字段生成官方认的历史；显式空结果不得回退到原始历史。"""
+    """只用检索字段生成官方认的历史；显式空结果不得使用原始历史。"""
     context = item.get("retrieved_context", item.get("speaker_1_memories"))
     if context is None:
         raise ValueError("PersonaMem-v2 缺少检索记忆字段；不能使用原始 chat_history 代替")
@@ -92,8 +92,8 @@ def _fold_trailing_system(messages: list[dict]) -> list[dict]:
 
     ⚠ 为什么需要这一步：官方 `official_mcq_messages()` 把选项说明作为**第二条 system**
     **追加在 user 提问之后**，而本项目的网关要求 *"System message must be at the beginning."*
-    ——2026-09-30 实测：原样发 ⇒ **HTTP 400**，去掉 system ⇒ 200。
-    ⇒ 折叠**保住了顺序与文字**（选项仍在问题之后），只把 role 从 `system` 换成 `user`。
+    ⇒ 原样发送会得到 **HTTP 400**。折叠**保住了顺序与文字**（选项仍在问题之后），
+    只把 role 从 `system` 改成 `user`。
     两臂（任何 A/B）用的是同一份折叠，所以相对比较不受影响。
     """
     folded: list[dict] = []
@@ -115,7 +115,7 @@ def build_mcq_messages(item: dict) -> tuple[list[dict], dict[str, str], str]:
 
 
 def cmd_answer(args: argparse.Namespace) -> int:
-    """Search 片段 → 官方 MCQ 消息 → 模型选字母；拒绝复用旧口径答案。"""
+    """Search 片段 → 官方 MCQ 消息 → 模型选字母；拒绝复用不兼容口径的答案。"""
     # 官方的选项构造与判分保持不变；答案消息改用逐题检索历史。
     from pathlib import Path as _Path
 
@@ -147,8 +147,8 @@ def cmd_answer(args: argparse.Namespace) -> int:
         import httpx
 
         with output.open("a", encoding="utf-8") as handle:
-            # ⚠ 600s（原 120s，2026-10-15）：答案输出上限提到 8,192（平台 Answer 窗口口径）后，
-            #    长答案的生成时间远超 120s——实测网关 TTFT≈12s + ≈65 tok/s ⇒ 满额约 137s。
+            # ⚠ 600s：答案输出上限提到 8,192（平台 Answer 窗口口径）后，
+            #    长答案的生成时间远超 120s——网关 TTFT≈12s + ≈65 tok/s ⇒ 满额约 137s。
             #    不改这里的话，**截断会变成超时失败**（更糟：finish_reason 都没了）。
             async with httpx.AsyncClient(timeout=600.0) as client:
                 for index, item in enumerate(items):

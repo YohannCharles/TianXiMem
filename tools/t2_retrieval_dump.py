@@ -1,15 +1,14 @@
 """T2 的**机器半边**：133 道 multi-session 题的**纯 BM25** 检索结果 → 待填的标注表。
 
-> **T2 是一次"归因"实验**（§13）：失败样本要由人分成三类——
+> **T2 是一次"归因"实验**：失败样本要由人分成三类——
 > (i) 没召回 · (ii) 召回了但被 top-100 截断 · (iii) 在里面但排序靠后。
 > 本工具只负责把"人需要看的那几个事实"摆出来（**证据 session 的名次**），
 > **分类留空**——判读是人的动作，机器代填等于把结论伪造出来。
 
 ## 为什么是"直查 Qdrant"而不是打服务
 
-T2 的口径是**纯 BM25**，而 D15 决定**服务只有混合检索一种形态**（没有裸 BM25 模式）。
-给服务加一个单路查询是 [roadmap](../../docs/roadmap.md) 里**登记过但未实现**的切片
-（它顺带能拿到 A4 的反事实分布），本工具刻意不走那条路：
+T2 的口径是**纯 BM25**，而当前服务只提供混合检索（没有裸 BM25 模式）。
+给服务增加单路查询会扩大服务接口；本工具刻意直接在工具层查询：
 
 * 它只服务一次归因分析，**不是被判分的 arm**——`eval/experiments/CLAUDE.md` 明说
   "纯 BM25 检索是本目录的 T2 手段，不是一条被评分的 arm"；
@@ -51,7 +50,7 @@ EXIT_OK: Final[int] = 0
 EXIT_FAILED: Final[int] = 1
 EXIT_PRECONDITION_FAILED: Final[int] = 2
 
-#: T2 的目标类别（§13）。LongMemEval 的 `question_type` 里就是这个字符串。
+#: T2 的目标类别。LongMemEval 的 `question_type` 里就是这个字符串。
 MULTI_SESSION: Final[str] = "multi-session"
 
 #: 取多深的名次。**要深到"没进这个表"就等于"根本没召回"**：LongMemEval 每个 haystack
@@ -70,10 +69,10 @@ LABELS: Final[tuple[str, ...]] = ("not_retrieved", "truncated", "ranked_low", "o
 def bm25_rankings(
     client: Any, *, collection: str, user_id: str, query: str, depth: int
 ) -> list[dict]:
-    """**单路 BM25**（Qdrant 的 `qdrant/bm25`，§7.1）取该用户的前 `depth` 条。
+    """**单路 BM25**（Qdrant 的 `qdrant/bm25`）取该用户的前 `depth` 条。
 
     ⚠ `user_id` 过滤**加在这一路查询上**（与 `hybrid_search` 同一条纪律）：
-    过滤放晚了会让别的用户的候选先占名次（§2.2 的隔离）。
+    过滤放晚了会让别的用户的候选先占名次，破坏用户隔离。
     """
     from qdrant_client import models
 
@@ -171,7 +170,7 @@ def dump(*, collection: str, out_path: Path, depth: int, bench_dir: Path) -> int
     print(f"（{empty} 道在该集合里查不到任何命中）")
     print(
         "\n下一步是**人**的活：把每行 `label` 填成 "
-        f"{' / '.join(f'`{label}`' for label in LABELS)} 之一（口径见 docs/experiments.md 的 T2）。"
+        f"{' / '.join(f'`{label}`' for label in LABELS)} 之一（判据见 `LABELS` 常量）。"
     )
     print("填完跑 `make t2` 看分布。⚠ 别用脚本代填——T2 的结论全靠这一步没被伪造。")
     return EXIT_OK

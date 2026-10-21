@@ -1,4 +1,4 @@
-"""`observability/` —— §14 指标的**出口**（**V12** 那条静默失败的口子）。
+"""`observability/` —— 指标的**出口**。
 
 三类断言，各自挡一类不会再报错的错：
 
@@ -92,7 +92,7 @@ def test_a_write_failure_does_not_raise(tmp_path: Path) -> None:
     """
     sink = SnapshotMetricsSink(path=tmp_path)  # 目录，不是文件
     sink.record(_obs())  # 不该抛
-    assert sink.snapshot()["searches"] == 1  # 进程内的计数照旧累计
+    assert sink.snapshot()["searches"] == 1  # 进程内计数仍会累计
 
 
 def test_null_sink_records_nothing() -> None:
@@ -180,7 +180,7 @@ def test_concurrent_metrics_snapshot_does_not_lose_records(tmp_path):
 
 
 def test_rerank_calls_and_name_reach_the_snapshot(wired: Wired, tmp_path: Path) -> None:
-    """**V12 要的两样东西**：精排到底有没有在跑、跑的是哪个模型。
+    """** 要的两样东西**：精排到底有没有在跑、跑的是哪个模型。
 
     ⚠ 必须先落种子：**没有候选时 `_maybe_rerank` 走的是 `disabled`**
     （"没有可排序的东西，调用是没有意义的"）——那一路与"接上了精排"长得不一样。
@@ -202,7 +202,7 @@ def test_rerank_calls_and_name_reach_the_snapshot(wired: Wired, tmp_path: Path) 
 
 
 def test_no_configured_path_means_null_sink() -> None:
-    """**没配就是不记**——缺省不是错误（与 reranker 同一套口径，D12）。"""
+    """    **没配就是不记**——缺省不是错误，与 reranker 使用同一套降级口径。"""
     assert isinstance(build_metrics_sink(AppConfig()), NullMetricsSink)
 
 
@@ -274,7 +274,7 @@ def test_runner_is_quiet_when_rerank_ran_clean(capsys) -> None:
     assert capsys.readouterr().out == ""
 
 
-# ── 字段转发：新增一个 §14 字段时，漏接线必须响 ──────────────────────────
+# ── 字段转发：新增一个指标字段时，漏接线必须响 ──────────────────────────
 
 
 def test_search_observation_forwarding_is_complete() -> None:
@@ -282,7 +282,7 @@ def test_search_observation_forwarding_is_complete() -> None:
 
     两个 dataclass 之间没有编译期关联：给 `_SearchTrace` 加字段、忘了在
     `SearchPipeline.run` 里写进 `SearchObservation(...)`，发射就会**静默少一个量**
-    （V12 类失败）。这里用 AST 读源码里的关键字实参，断言：
+。这里用 AST 读源码里的关键字实参，断言：
     (a) 每个请求局部 trace 字段都被显式转发；
     (b) 每个 `SearchObservation` 字段都被显式接线。
     """
@@ -317,7 +317,7 @@ def test_search_observation_forwarding_is_complete() -> None:
 
 
 def test_agentic_snapshot_exports_every_aggregated_counter(tmp_path: Path) -> None:
-    """§14 的 agentic 出口：聚合到的量必须**全部**出现在 snapshot 里。
+    """agentic 指标出口：聚合到的量必须**全部**出现在 snapshot 里。
 
     只聚合不导出 = 量算出来了但 run record 里看不见，且**不会报错**。
     """

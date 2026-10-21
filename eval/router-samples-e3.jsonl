@@ -1,16 +1,14 @@
-# ⚠ 第三批样本（E3，2026-10-10）：**与 `router-samples.jsonl`(46) 和 `router-samples-e2.jsonl`(37)
-# 零重叠**（已断言），全部从 LoCoMo-Refined / LongMemEval-S 里另取。
+# Router evaluation samples drawn from LoCoMo-Refined and LongMemEval-S.
 #
-# 目的：用户要求"换一批问题再测一次，看路由效果"——即**同一版提示词在没见过的问题上的表现**。
-# ⚠ `expected_route` 仍是**人读提示词逐条判的**，数据集自带的 `category` / `question_type`
-# 一个都没用（它们描述答案类型，不是检索依赖结构）。
+# This manifest has no `(dataset, question_id)` overlap with the other router sample
+# manifests. `expected_route` is human-labelled from the current router prompt; dataset
+# `category` and `question_type` fields are not used because they describe answer types,
+# not retrieval dependency structure.
 #
-# 这一批刻意压了几种**判据边界**进去：
-#   * 属有关系链（`Melanie's daughter's birthday` / `John's cousin's dog`）——
-#     v3/v4 的提示词把 `"X's spouse's company"` 明列为依赖，这一类最容易被过判成 MULTI_HOP；
-#   * `Which <X> did <人> <动词> on <日期>` ——单条事实（DEFAULT）还是名单（COUNT）？
-#   * `how often` / `how many <时间单位> passed between …` ——v4 明写 `how often` 是 COUNT 信号、
-#     但"时间单位"属被排除的 measurement。
+# The set includes boundary cases:
+# * possessive dependency chains such as `Melanie's daughter's birthday`;
+# * questions of the form `Which <X> did <person> <verb> on <date>`;
+# * `how often` and duration-between-event questions that are not dependency anchors.
 {"dataset": "locomo-refined", "question_id": "conv-26#q0067", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「慈善赛跑」——先取事件，再取之后 Melanie 想通了什么。"}
 {"dataset": "locomo-refined", "question_id": "conv-26#q0103", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "两级链：先解出「Melanie 的女儿」是谁、再定位她的生日会，才能问那场演出。属有关系链的**强形状**。"}
 {"dataset": "locomo-refined", "question_id": "conv-47#q0132", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "**双重属有**（John 的堂/表亲 → 那个人的狗）——中间实体必须逐级解开。"}

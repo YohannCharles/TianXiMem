@@ -1,4 +1,4 @@
-"""`rank/neighbor.py` —— 扩窗与段合并（§10 / §11.2），以及**它们在整条链上的位置**。
+"""`rank/neighbor.py` —— 扩窗与段合并，以及**它们在整条链上的位置**。
 
 ```text
 ranked（已去重、已 rerank）
@@ -10,7 +10,7 @@ ranked（已去重、已 rerank）
 > （锚点、`best_rank`、连续性）**只由它定义**，链上别处不存在第二处——见
 > [`../src/tianximem/rank/CLAUDE.md`](../src/tianximem/rank/CLAUDE.md)。
 
-⚠ **D28：邻接只在一次 Add 内**。所以本文件的脚手架分两种：
+⚠ **邻接只在一次 Add 内**。所以本文件的脚手架分两种：
 
 * `_line(store, ...)` —— 在**一次 Add 内**落满 `0..max(indices)`，返回选中那几个的 `id`。
   **相邻性来自这一次 Add 的链**（库里存着 `prev` / `next`）。
@@ -70,7 +70,7 @@ def _expand(
 ) -> tuple[SelectedMemory, ...]:
     """⚠ **半径在这里显式给（默认 1），不要吃 `DEFAULT_RADIUS`。**
 
-    本文件测的**就是**扩窗，而产品默认是 **`radius=0`（= 不扩窗）**（**D31**）——
+    本文件测的**就是**扩窗，而产品默认是 **`radius=0`（= 不扩窗）**——
     继承它会让整个文件**静默地什么都不测**：返回的段照样合法、`id` 照样对，
     只有"邻居有没有进来"这一件事没了。要关扩窗的用例**自己写 `radius=0`**。
     """
@@ -99,7 +99,7 @@ def _set_qa(store: SqliteStore, memory_id: str, question: str, answer: str) -> N
 
 
 def _set_event_time(store: SqliteStore, memory_id: str, event_time: int) -> None:
-    """给一对设上 `event_time`——锚点的 `created_at` 靠它（§11.3）。"""
+    """给一对设上 `event_time`——锚点的 `created_at` 靠它。"""
     with store.transaction() as conn:
         conn.execute("UPDATE qa_pairs SET event_time = ? WHERE id = ?", (event_time, memory_id))
 
@@ -149,7 +149,7 @@ def test_only_the_top_seed_limit_candidates_expand(store: SqliteStore) -> None:
 
 
 def test_candidates_after_the_seed_limit_are_kept_but_not_expanded(store: SqliteStore) -> None:
-    """`rank31+`：**保留但不扩**——它们的邻域不许被拉进来（§10 的种子数）。
+    """`rank31+`：**保留但不扩**——它们的邻域不许被拉进来。
 
     构造：0…63 连续落库（一条链）。候选 = 块 20…49（名次 0…29，种子）
     + 块 0…9（名次 30…39，尾巴）。两组邻域不相交。
@@ -232,7 +232,7 @@ def test_new_neighbors_carry_no_rank(store: SqliteStore) -> None:
 
 
 def test_radius_widens_the_hop_count(store: SqliteStore) -> None:
-    """`radius` 的**单位是记忆块**：`±2` 沿链前后各跳两跳（§10 的粒度提醒）。"""
+    """`radius` 的**单位是记忆块**：`±2` 沿链前后各跳两跳。"""
     ids = _line(store, range(9))
     got = expand_neighbors(_ranked(ids[4]), store=store, seed_limit=30, radius=2)
 
@@ -248,7 +248,7 @@ def test_radius_zero_means_no_expansion(store: SqliteStore) -> None:
 
 
 def test_expansion_stops_at_a_break_in_the_chain(store: SqliteStore) -> None:
-    """**链上缺一环就停**（D28）：`0` 的 `next` 指着 `1`，而 `1` 不在库里。
+    """**链上缺一环就停**：`0` 的 `next` 指着 `1`，而 `1` 不在库里。
 
     ⚠ 这正是"读指针、不数下标"的正面证据：`0` 与 `2` 的下标看着像只差 2，
     但它们在**对话结构上**不相邻——中间少的那块是**永远补不回来的**。
@@ -267,7 +267,7 @@ def test_expansion_stops_at_a_break_in_the_chain(store: SqliteStore) -> None:
 
 
 def test_expansion_never_crosses_sessions_or_users(store: SqliteStore) -> None:
-    """**邻接只在一次 Add 内**（D28）⇒ 跨 session / 跨 user 的**结构上就到不了**。
+    """**邻接只在一次 Add 内**⇒ 跨 session / 跨 user 的**结构上就到不了**。
 
     构造：同一个 `request_id`、同一个 `local_index` 的链在三个 (user, session) 组合下
     各落一条。三条候选各自只该看到**自己那条链**上的邻居。
@@ -287,8 +287,8 @@ def test_expansion_never_crosses_sessions_or_users(store: SqliteStore) -> None:
 def test_expansion_never_crosses_adds(store: SqliteStore) -> None:
     """**不同 Add 之间永不相邻**——即使 user / session 都一样、`local_index` 也接得上。
 
-    ⚠ 这是 D28 的核心断言：`Add1` 的末尾与 `Add2` 的开头**在位置上看不出边界**
-    （各自从 0 起），但链上就是断的。老的"下标 ±1"写法会在这里静默跨过去。
+    ⚠ 这是 Add 边界隔离的核心断言：`Add1` 的末尾与 `Add2` 的开头**在位置上看不出边界**
+    （各自从 0 起），但链上就是断的。不能按数组下标 ±1 推断邻接。
     """
     add1 = _line(store, range(3), session_id="s1")  # r-line
     add2 = seed_line(store, range(3), session_id="s1", request_id="r-other")
@@ -363,7 +363,7 @@ def test_negative_parameters_are_rejected(store: SqliteStore, seed_limit: int, r
 def test_the_spec_example_merges_into_three_segments(
     store: SqliteStore, counter: FakeCounter
 ) -> None:
-    """**规格里那个例子**：块 `8,9,10,11,15,16,30` ⇒ `8..11` / `15..16` / `30`。
+    """**典型缺口形状**：块 `8,9,10,11,15,16,30` ⇒ `8..11` / `15..16` / `30`。
 
     ⚠ 断言的是一条**规则**（`前一条.next == 这一条.id`），不是一个实现：
     中间缺一个块就说明那段对话**不完整**，硬拼成一整段会让模型读到自己以为连续、
@@ -439,7 +439,7 @@ def test_adjacent_member_extends_the_previous_segment_rather_than_creating_one(
 
 
 def test_two_adds_in_one_session_never_merge(store: SqliteStore, counter: FakeCounter) -> None:
-    """**同一 session 的两次 Add 永不合并**（D28）——即使各自的 `local_index` 接得上。
+    """**同一 session 的两次 Add 永不合并**——即使各自的 `local_index` 接得上。
 
     ⚠ 分组键里带着 `request_id`、而判据读的是存储里的指针——两道都在保证这件事。
     两次 Add 的块**必然**在下标上"接得上"（各自从 0 起），
@@ -469,7 +469,7 @@ def test_different_sessions_never_merge(store: SqliteStore, counter: FakeCounter
 
 
 def test_different_users_never_merge(store: SqliteStore, counter: FakeCounter) -> None:
-    """跨 user 同理——那是 §2.2 的隔离红线，不是排序问题。"""
+    """跨 user 同理——那是隔离红线，不是排序问题。"""
     u1 = _line(store, range(2), user_id="alice", session_id="same")
     u2 = _line(store, range(2), user_id="bob", session_id="same")
 
@@ -482,7 +482,7 @@ def test_different_users_never_merge(store: SqliteStore, counter: FakeCounter) -
 def test_members_within_a_segment_are_ordered_by_local_index(
     store: SqliteStore, counter: FakeCounter
 ) -> None:
-    """段内 = **`local_index` 升序**（那一次 Add 的顺序），**不把种子提到最前**（§11.2）。
+    """段内 = **`local_index` 升序**（那一次 Add 的顺序），**不把种子提到最前**。
 
     ⚠ 种子在段中间是常态（它前面的邻居才是上下文）。
     把种子提到最前会把一段对话**拦腰截断**，而答案阶段按前缀截断。
@@ -532,7 +532,7 @@ def test_best_rank_is_the_minimum_among_real_candidates(store: SqliteStore) -> N
 def test_neighbors_do_not_change_segment_priority(store: SqliteStore) -> None:
     """**邻居不参与排名**：把扩窗关掉，段的 `best_rank` 与锚点**一点不变**。
 
-    这就是 §13"开关只影响它命名的那一件事"在扩窗上的落点：
+    这就是"开关只影响它命名的那一件事"在扩窗上的落点：
     `radius=0`（关掉扩窗）只该**少几条上下文**，**不该动排序**。
     """
     ids = _line(store, range(13))
@@ -562,7 +562,7 @@ def test_anchor_comes_from_the_best_ranked_candidate_not_the_first_member(
 ) -> None:
     """锚点 = **真实名次最好**的那条候选；`anchor_event_time` 跟着它走。
 
-    ⚠ 锚点决定了响应的 `id` 与 `created_at`（§11.2 的组间顺序 = 种子名次序）。
+    ⚠ 锚点决定了响应的 `id` 与 `created_at`；段间顺序由种子名次决定。
     取段内第一条会得到一个"这段对话里其实没被选中"的 `id`。
     """
     ids = _line(store, range(3))
@@ -582,7 +582,7 @@ def test_anchor_comes_from_the_best_ranked_candidate_not_the_first_member(
 def test_segments_are_sorted_by_best_rank(store: SqliteStore, counter: FakeCounter) -> None:
     """**段间按 `best_rank` 升序**——相关性顺序，不是位置顺序，也不是段长。
 
-    ⚠ 段内是"Add 内顺序"、段间是"相关性顺序"（§11.2 的两条规则）。
+    ⚠ 段内是"Add 内顺序"、段间是"相关性顺序"。
     两边搞反不会报错：返回的每一段都完整、合法，只是**最好的一段不在最前面**——
     而答案阶段按前缀截断，于是最相关的那段可能整个被丢掉。
     """
@@ -726,7 +726,7 @@ def test_a_budget_too_small_for_the_first_segment_yields_no_data(
 ) -> None:
     """预算小到装不下**第一段** ⇒ 返回空 `data`，**而不是半个段**。
 
-    ⚠ 空结果是合法的（§2.1）；半个段不合法——它会让模型读到半截对话。
+    ⚠ 空结果是合法的；半个段不合法——它会让模型读到半截对话。
     ⚠ 这里直接改私有字段：`wired` 的预算**刻意给得极大**（见 fixture 的说明），
     好让它自己的用例测别的东西。要测预算就得**在边界上**设一个值。
     """
@@ -757,7 +757,7 @@ def test_expanded_content_is_identical_to_a_direct_render(wired_expanding: Wired
     assert item.content == render_segment([render(f"q{i}", f"a{i}") for i in range(3)])
 
 
-# ── 段内顺序的三个变体（§11.2 的"组内顺序"，可消融项）──────────────────────
+# ── 段内顺序的三个变体（可消融项）──────────────────────────────────────────
 def _segment(store: SqliteStore, ids: list[str], placement: str):
     """**只读**：以第 1 块为唯一候选合并出那一段（种子落在段中间）。"""
     ranked = _ranked(ids[1])
@@ -781,7 +781,7 @@ def test_seed_placement_front_moves_only_the_text(store: SqliteStore) -> None:
     """`front`：种子排到段首，**但 `id` / 段数 / 锚点 / 名次全不变**。
 
     ⚠ 这条纯度是关键：段优先级只看真实候选（`best_rank` / 锚点），
-    若换序顺带改了它们，§13 的对照就不成立了——而**看起来只是"顺序变了"**。
+    若换序顺带改了它们，对照就不成立了——而**看起来只是"顺序变了"**。
     """
     ids = _line(store, range(3))
     keep = _segment(store, ids, "keep")

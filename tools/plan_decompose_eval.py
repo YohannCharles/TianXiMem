@@ -3,7 +3,7 @@
 ```bash
 uv run --env-file .env python tools/plan_decompose_eval.py \
     --manifest eval/coq-musique.jsonl \
-    --out eval/reports/runs/plan-decompose-20261013
+    --out eval/reports/runs/plan-decompose-
 ```
 
 ## 它回答什么
@@ -387,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _report(summary: dict, out_dir: Path, *, seconds: float, reparsed: int = 0) -> None:
-    """打印汇总。⚠ **落盘在调用它之前**（本仓踩过：打印崩了 ⇒ 产物一条都没有）。"""
+    """打印汇总。⚠ **落盘必须在调用它之前**，避免打印失败导致产物缺失。"""
     print("\n════ 汇总 ════")
     print(f"  题数 {summary['n']} · 解析失败 **{summary['invalid']}**")
     print(f"  相等 {summary['exact']} · **少拆 {summary['under']}** · 多拆 {summary['over']}")

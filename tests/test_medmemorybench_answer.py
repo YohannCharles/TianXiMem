@@ -168,7 +168,7 @@ def test_other_medical_qa_formats_remain_unchanged(category: str) -> None:
 
 
 def test_multiple_choice_answer_prompt_asks_only_for_option_letters() -> None:
-    """judge 只解析选项字母 ⇒ MCQ 的 prompt 也只要字母（不再用通用那一份）。"""
+    """judge 只解析选项字母 ⇒ MCQ 的 prompt 也只要字母。"""
     item = {**_item(), "category": "multiple_choice"}
     prompt = ep.render_answer_prompt(item)
     assert "Return only the letters of all selected options" in prompt

@@ -1,22 +1,20 @@
-"""记忆块的组合规则（**D24 起**：一次 `Add` = 组合的唯一边界）。
+"""记忆块的组合规则。
 
 ```text
 一次 Add 的消息（按原序）
   → ① 一段连续 user + **紧随其后的一段连续非 user** ⇒ 配成一个 MemoryBlock
-       ⚠ 但只有该 user 段的**最后一条**进配对块（**D32**）
+       ⚠ 但只有该 user 段的**最后一条**进配对块
   → ② **其余消息：每条各自独立成块**——同 role 相邻也不并
   → 每个 MemoryBlock 恰好一次 embedding
 ```
 
 **不同 Add 之间永不组合**：不拼 QA、不合并连续 assistant、不等下一个 chunk、
-不 repair、不重新 embedding。**D28 起邻接也只在这一个作用域内**（`link_blocks`）。
+不 repair、不重新 embedding。**邻接也只在这一个作用域内**（`link_blocks`）。
 
 本模块是**纯函数**：不认识 SQLite、Qdrant、任何数据集，**没有任何跨 Add 状态**。
 落库在 [`apply.py`](./apply.py)。
 
-⚠ **为什么是这两条而不是"连续同 role 相并"、为什么 ① 只吃最后一条、
-以及那个 38,270 token 的实测反例**，都在 [`./CLAUDE.md`](./CLAUDE.md) 的「组合规则」——
-⛔ 本文件不复制（那是单数来源）。
+完整组合规则和成员顺序见 [`./CLAUDE.md`](./CLAUDE.md)。本模块只实现该规则。
 """
 
 from __future__ import annotations
@@ -38,10 +36,10 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class Message:
-    """一条消息，**只保留 canonical Add 契约的三个字段**（§2.1）。
+    """一条消息，**只保留 canonical Add 契约的三个字段**。
 
     ⚠ 这里**不允许**出现任何数据集专属字段（`dia_id` / `speaker` / `has_answer` …）。
-    加载层负责把各数据集的形状归一化到这三个字段——**核心系统不认识任何数据集**（D16）。
+    加载层负责把各数据集的形状归一化到这三个字段——**核心系统不认识任何数据集**。
     """
 
     role: str
@@ -52,13 +50,12 @@ class Message:
         if not self.role:
             raise ValueError("role 不得为空")
         # 首尾空白在**进入核心之前**去掉：
-        # AML 只用 "\n".join(...) 拼接返回项、不插分隔符（§11.3），
-        # 所以任何一项首尾留白都会让拼接处粘连（契约自查清单 §4）。
+        # AML 使用 "\n".join(...) 拼接返回项且不插分隔符；首尾留白会使拼接处粘连。
         object.__setattr__(self, "content", self.content.strip())
 
 
 def is_user(message: Message) -> bool:
-    """**唯一判据**：这条消息的 `role` 是不是 `user`（§6.2）。
+    """**唯一判据**：这条消息的 `role` 是否等于 `user`。
 
     ⚠ **不要枚举 role 白名单。** AML 传入的取值域**没有文档**，
     白名单会在遇到没见过的 role 时**静默丢消息**。其他 role
@@ -71,13 +68,10 @@ def is_user(message: Message) -> bool:
 def encode_answer(messages: Sequence[Message]) -> str:
     """把一个块里的非 user 消息编码成 `answer` 列的文本。
 
-    §11.3：一个块里有多条非 user 消息时，**每条带 role 标记**——否则这几段在模型
-    眼里连成一片，分不清哪句是助手说的、哪句是工具输出。渲染模板是 `A: {answer}`，
-    所以**标记必须已经存在 `answer` 里**：单个 TEXT 无法在渲染时重建消息边界。
+    一个块里有多条非 user 消息时，每条都带 role 标记，以保留消息边界。渲染模板是
+    `A: {answer}`，因此标记必须在写入 `answer` 时生成。即使只有一条非 user 消息也加标记。
 
-    ⚠ **标记无条件加，即使只有一条非 user 消息**——形状统一，读的人不必分情况。
-
-    ⚠ **空 content 不丢弃**（§2.1 保证非空，这里是防御）：渲染成 `[role]`。
+    空 content 不丢弃，而是渲染成 `[role]`，避免静默丢消息。
     丢掉它是"静默丢消息"，正是本项目要避免的失败模式。
     """
     return "\n".join(f"[{m.role}] {m.content}" if m.content else f"[{m.role}]" for m in messages)
@@ -89,10 +83,10 @@ def join_question(messages: Sequence[Message]) -> str:
     **与 `encode_answer` 相反：这里不加 role 标记。** 两条理由：这段文本是同一个人的
     发言、role 均一（role 由渲染的 `Q: ` 前缀给出）；而拼接的首要用途是**把被物理切开
     的一条原消息拼回去**（AML 可能按句边界拆超长 message），只有不加标记才与原消息
-    **逐字接近**。标记还会**一并进 embedding**（§7.2 要求同一份渲染）⇒ 直接改变检索输入。
+    **逐字接近**。标记会进入 embedding，从而直接改变检索输入。
 
-    §11.3 要求"每条带 role 标记"的只有 `answer` 那一侧（一个块里可能混着 `assistant` /
-    `system` / 工具输出，不标就分不清哪句是谁说的）。
+    只有 `answer` 一侧需要 role 标记，因为一个块里可能混有 `assistant`、`system`
+    或工具输出。
     """
     return "\n".join(m.content for m in messages)
 
@@ -155,7 +149,7 @@ class MemoryBlock:
         """user 段与非 user 段**都**在（= 一个完整的 QA 块）。
 
         `False` 的块是**合法的**、必须照样存——它就是"首尾配不上"的那一类，
-        **不要**去等下一个 Add 把它补齐（那正是 D24 取消的东西）。
+        **不要**去等下一个 Add 把它补齐。
         """
         return self.question is not None and self.answer is not None
 
@@ -180,13 +174,13 @@ def compose_memory_blocks(messages: Sequence[Message]) -> tuple[MemoryBlock, ...
     ⚠ **合并只在"配得上对"时发生**：一段连续 user 后面**没有**非 user 时，那段**不合并**，
     每条各自成块。理由见模块 docstring（判分池全是 `role: user`）。
 
-    ⚠ **配对时也只配这一段 user 的【最后一条】**（**D32**，2026-10-03）——前面的各自独立。
+    ⚠ **配对时也只配这一段 user 的【最后一条】**——前面的各自独立。
     这是被**嵌入窗口**逼出来的：一段长 user 全进一个 question 会到 **38,270 token**
     （窗口 8,192）⇒ 线上静默截断、本地 400。**代价**：`q q q a` 里前面的 `q` 变得
-    **有问无答**（D20 正是为此才合并的）——两条路都错，D32 选了"块不超窗口"那一侧。
+    **有问无答**——两条路都错， 选了"块不超窗口"那一侧。
 
     ⚠ **不判断"是不是超长消息截断"**：配不上的消息**就是**独立块，原因是什么无关紧要。
-    任何"等下一个 Add 来补齐"的设计都会重新引入跨 Add 状态（D24 取消的正是它）。
+    任何"等下一个 Add 来补齐"的设计都会重新引入跨 Add 状态。
 
     ⚠ **空输入返回空元组**——调用方（`apply_batch`）在此之前就该抛错，见那里的注释。
     """
@@ -204,20 +198,20 @@ def compose_memory_blocks(messages: Sequence[Message]) -> tuple[MemoryBlock, ...
             end += 1
         if end > i + 1:
             # 后面跟着非 user ⇒ 配对。**但只有这一段 user 的【最后一条】配上**，
-            # 前面的各自独立（**D32**，2026-10-03）。
+            # 前面的各自独立。
             #
-            # 为什么（实测，见 `eval/reports/ledger.md` 的 V18 一节）：平台的 8,000 **字符**
+            # 为什么：平台的 8,000 **字符**
             # 切分会把**一份长文档**切成十几条连续的 user 消息。而整段 user 全进 question
             # 会涨到 **83,641 字符 / 38,270 token**，远超 `text-embedding-v4` 的 **8,192 token**
             # 窗口 ⇒ 线上**静默截断**（尾巴搜不到）、本地开发网关 **400**（跑批直接死）。
             # CL-Bench 全量：**14/12,793 个块超窗口**，最大 **45,160 token**。
             #
-            # **只配最后一条**（同一份全量实测）：**最大块 5,541 token**，
+            # **只配最后一条**（同一份全量）：**最大块 5,541 token**，
             # 块数只涨 **+2.2%**（12,793 → 13,080）。
             #
             # ⚠ **代价是 `q q q a` 产出 `[q] [q] [q+a]`**，前面那些 `q` **有问无答**——
             # 而全进同一个 question 则**块大到嵌不进去**。两条路都错，只是错的地方不同
-            # ⇒ 选"块小"这一侧，理由在 D32。
+            # ⇒ 选"块小"这一侧，理由在。
             head = role_blocks[i]
             blocks.extend(
                 _standalone(
@@ -244,18 +238,16 @@ def compose_memory_blocks(messages: Sequence[Message]) -> tuple[MemoryBlock, ...
 def link_blocks(
     blocks: Sequence[MemoryBlock],
 ) -> tuple[tuple[int | None, int | None], ...]:
-    """**Add 内的邻接链**：每个块的 `(prev_local_index, next_local_index)`（D28）。
+    """**Add 内的邻接链**：每个块的 `(prev_local_index, next_local_index)`。
 
     ⚠ **只连完整 QA**（`MemoryBlock.is_paired`）。A-only / Q-only 照样存、照样 embedding、
     照样能被检索到，但**不进链**——两侧都是 `None`。它们没有"上下文邻居"可言，
     硬连上去只会让段合并把一段不完整的对话当成连续的。
 
-    ⚠ **这条链只在一次 Add 内成立**：跨 Add 不存在可信的全局序（D28），
+    ⚠ **这条链只在一次 Add 内成立**：跨 Add 不存在可信的全局序，
     所以这里**只看传进来的这一批块**，不看库、不看别的 Add（与组合规则同一个作用域）。
 
-    ⚠ 不完整块**只可能出现在两端**（组合规则决定：开头的非 user 段配不上 user、
-    结尾的 user 段配不上非 user），但实现**不依赖**这条性质——它扫一遍、只把完整的串起来，
-    所以将来组合规则变了也不会悄悄错位。
+    不完整块通常出现在两端，但实现不依赖该位置：实现只连接完整 QA，其余块不进入链。
 
     返回值与 `blocks` **等长同序**：第 i 项是第 i 个块的 `(前一块的 local_index,
     后一块的 local_index)`。调用方把它翻成 `memory_id`（`store.make_pair_id`）。
@@ -311,7 +303,7 @@ def _block_from(*role_blocks: RoleBlock) -> MemoryBlock:
     return MemoryBlock(
         question=join_question(user_messages) or None,
         answer=encode_answer(other_messages) or None,
-        # 该块的 **首条**消息的 timestamp（§6.1）——传进来的顺序就是原序
+        # 该块首条消息的 timestamp；传入顺序即原始消息顺序。
         event_time=messages[0].timestamp if messages else None,
         messages=messages,
         source_idxs=source_idxs,

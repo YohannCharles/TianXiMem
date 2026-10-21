@@ -1,9 +1,9 @@
 """MedMemoryBench（zh）家族的 answer / evaluate：照上游 `metrics/` 的判分 ＋ 临床多跳答案 prompt。
 
-拆自 `extra_pipeline.py`（2026-10-15，只搬位置）：那层现在是薄 façade、把本模块的名字
-全部重新导出。上游两份来源（`dataset/.upstream/medmemorybench/` 那份与归档里的
-`utils/prompts_judge.py`）与"逐行照抄 / 直接从归档读"的范围见下面那段注释；
-临床多跳答案的绕行与原始就诊对照见 [`../reports/optimization-20261007.md`](../reports/optimization-20261007.md)。
+`extra_pipeline.py` 是薄 façade，重新导出本模块的名字。
+上游两份来源（`dataset/.upstream/medmemorybench/` 那份与归档里的
+`utils/prompts_judge.py`）。下面的注释说明哪些逻辑逐行复刻、哪些提示词直接读取归档。
+临床多跳答案使用独立格式，且不读取 gold。
 """
 
 from __future__ import annotations
@@ -184,10 +184,10 @@ MMB_LLM_TYPES = (
 #: `self._call_llm(prompt, max_tokens=2000)`（其余三类 500）。
 #:
 #: ⚠ **它的输出比其余三类长一个量级**：要逐节点回 `node_validations`，每个节点还带
-#: `note`。2026-10-03 的 base-mmb 实测——**17 道 mcd 里 15 道**的裁判输出被砍在
+#: `note`。 的 base-mmb ——**17 道 mcd 里 15 道**的裁判输出被砍在
 #: 618–778 字符处，JSON 没收尾 ⇒ 全记 `JUDGE_ERROR`（而 `is_correct` 一律当 False
 #: ⇒ 看起来像"这一类能力为 0"，其实是**判分链路在丢题**）。
-#: 单独按 2000 实测 9 道：输出 1,286–1,801 字符（中位 1,483）、**全部正常收尾并解析**，
+#: 单独按 2000  9 道：输出 1,286–1,801 字符（中位 1,483）、**全部正常收尾并解析**，
 #: 其中一道判 `True` ⇒ 修复后这一类**是可分辨的**，不是结构性 0 分。
 MMB_MCD_MAX_TOKENS = 2000
 
@@ -197,7 +197,7 @@ def judge_mmb_llm_verdict(raw_response: str) -> tuple[bool | None, str]:
 
     ⚠ **不能用非贪婪正则找 `{...}`**：多跳那一类（`llm_judge_mcd`）的裁决是**嵌套** JSON
     （`node_validations` 里还有一层对象），非贪婪匹配只会命中里层的节点对象，永远够不到
-    外层的 `is_correct`——2026-09-30 实测就是这么把一条**判对了的**回答记成 `JUDGE_ERROR` 的。
+    外层的 `is_correct`—— 就是这么把一条**判对了的**回答记成 `JUDGE_ERROR` 的。
     `raw_decode` 从每个 `{` 起尝试解析**完整的** JSON 值，嵌套天然没问题。
     """
     text = raw_response or ""
@@ -265,7 +265,7 @@ def _repair_mmb_judge_strings(text: str) -> str:
 
 
 # Native question category selects the QA format; gold remains judge-only.
-# Evidence and matched-budget comparison: reports/optimization-20261007.md.
+# Evidence and matched-budget comparison: reports/optimization-.md.
 MMB_MCD_ANSWER_CONTRACT = "medmemorybench-clinical-evidence-v1"
 MMB_MCD_ANSWER_PROMPT = (
     "You are an assistant answering from the patient's retrieved visit history.\n"

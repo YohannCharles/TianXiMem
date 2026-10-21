@@ -1,8 +1,7 @@
 """官方采集流量的加载层——**一次 Add 原样重投，不重新切批、不重排**。
 
-> **数据来源**：[`official-dataset-2026-09-29/`](../../official-dataset-2026-09-29/)（不进 git）。
-> 它是我们服务在 2026-09-29 那一轮收到的**全部**官方 add/search 请求原文，
-> 已被 [`tools/build_official_kit.py`](../../tools/build_official_kit.py) 整理成
+> **数据来源**：服务采集的官方 add/search 请求原文（不进 git）。
+> [`tools/build_official_kit.py`](../../tools/build_official_kit.py) 将其整理成
 > `official-eval-kit.jsonl`（一题一行、带归属与金标）。
 
 ## 这个数据集与独立加载器结构不同
@@ -14,7 +13,7 @@
 | 题与语料的对应 | 数据集自带 | 采集的 `prior_adds_for_user` 记着每题之前的 add 数 |
 
 ⇒ 所以这里**故意不接** `add_shape` / `batching`：重投原文再加一遍标签就是加了两遍；
-重切批会改变批界（**D24 下批界直接决定记忆块的形状**）。两处都是静默出错。
+重切批会改变批界。两处都是静默出错。
 
 ⚠ **代价照实说**：别的数据集上"本地发的像不像线上"是个**近似问题**
 （`add_shape` 那 93.9% 就是这么量出来的）；这一份是**逐字节相同**，
@@ -23,15 +22,15 @@
 ## 未来泄漏：为什么必须按 timeline 走
 
 全量 43,272 条 add 里，**88.3% 的 user 是"先 add 完再 search"**，但剩下 12% 是交错的。
-本仓有实测量：6,146 道可评分的题里，**2,507 道（41%）的提问时刻早于该 user 的最后一条 add**
-⇒ 若先把整个 user 的语料灌完再检索，这 2,507 道会**读到未来**（README §5.4 的同一条）。
+本仓有量：6,146 道可评分的题里，**2,507 道（41%）的提问时刻早于该 user 的最后一条 add**
+⇒ 若先把整个 user 的语料灌完再检索，这 2,507 道会**读到未来**。
 
 ⇒ [`replay_plan()`][eval.datasets.official_capture.replay_plan] 按采集里**真实的时间序**
-把 add 与 search 排成一条流——这正是 README §7「顺序只约束 user 内」的落地。
+把 add 与 search 排成一条流；顺序约束只作用于同一个 user 内。
 
 ## 只加载**可评分**的题
 
-`official-eval-kit.jsonl` 中只有带金标的题可以评分（覆盖统计见采集目录 README §9）。
+`official-eval-kit.jsonl` 中只有带金标的题可以评分。
 没标签的题**跑了也没有分数**，而解答+裁判要花真金白银的
 网关时间 ⇒ 缺省只加载可评分的那批。**要全量复放**（例如量检索副作用）传
 `--all-questions`（见 [`replay_official.py`](../../eval/experiments/replay_official.py)）。
@@ -80,7 +79,7 @@ class ReplayEvent:
 
 @dataclass(frozen=True, slots=True)
 class UserPlan:
-    """一个 user 的完整重放计划（**user 间无依赖，可任意穿插**——README §7）。"""
+    """一个 user 的完整重放计划（**user 间无依赖，可任意穿插**）。"""
 
     user_id: str
     events: tuple[ReplayEvent, ...]
@@ -124,7 +123,7 @@ def _messages(record: dict) -> tuple[dict, ...]:
 
     ⚠ 与其余加载器的口径**故意不同**：那边 `normalize_content` 会 `strip()`，
     因为 payload 由我们造；这里 payload 是 AML 造的，`strip()` 就不是原样重投了。
-    全量实测：454,937 条消息里 0 条空正文、3,669 条有首尾空白、21,434 条没有 `timestamp`。
+    全量：454,937 条消息里 0 条空正文、3,669 条有首尾空白、21,434 条没有 `timestamp`。
     """
     return tuple(dict(message) for message in record.get("messages") or [])
 
@@ -151,7 +150,7 @@ def replay_plan(
     """按 timeline 排出一批 user 的重放计划。
 
     **排序 = 可评分题数降序**（并列按 `user_id`）——`--users N` 因此取到的是
-    "分数产出最高的 N 个 user"，而不是"前 N 个 user"。实测这条很陡：
+    "分数产出最高的 N 个 user"，而不是"前 N 个 user"。这条很陡：
     **261 个 user 就覆盖 90% 的可评分题**（14,143 条 add），全量是 1,580 个 user / 43,272 条。
     """
     root = Path(dataset_dir) if dataset_dir is not None else capture_dir()
@@ -178,7 +177,7 @@ def replay_plan(
             continue
         if event["kind"] == "add":
             record = adds.get(event["request_id"])
-            if record is None:  # 只存在于旧导出里的那些（README §2 的边界）
+            if record is None:  # timeline 中存在、但当前导出没有对应 body 的 Add。
                 continue
             per_user[user].append(
                 ReplayEvent(

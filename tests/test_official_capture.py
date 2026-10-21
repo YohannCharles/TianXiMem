@@ -434,7 +434,7 @@ def test_answer_prompt_uses_corpusqa_for_hybridqa() -> None:
 
 
 def test_feverous_capture_prompt_asks_only_for_a_label() -> None:
-    """采集路径只评标签 ⇒ prompt 只要标签，不再要证据 ID（判分也不用它们）。"""
+    """采集路径只评标签 ⇒ prompt 只要标签，不要证据 ID（判分也不用它们）。"""
     from eval.harness.official_capture_pipeline import _answer_prompt
 
     prompt = _answer_prompt(
@@ -702,10 +702,9 @@ def test_halumem_judge_reads_upstream_prompt_verbatim() -> None:
 def test_every_family_gets_its_memories_in_the_answer_prompt() -> None:
     """**一条断言挡住"接错键"这一类**：每个族的答案 prompt 里都必须出现检索到的正文。
 
-    ⚠ 这条是从一次真实事故里长出来的（2026-10-06）：CL-Bench 那一支一开始把我们的项
-    直接交给官方那份 `build_answer_prompt`，而它读的是 `system_prompt` 与
-    `retrieval.selected[*].text`——**我们的项里两个键都没有** ⇒ 渲染出 `(no memories)`
-    ⇒ 模型**盲答**，74 题全 0 **且不报错**（分数看着只是"低"）。
+    ⚠ 官方 `build_answer_prompt` 读取 `system_prompt` 与
+    `retrieval.selected[*].text`。若直接传入缺少这两个键的项，会渲染出 `(no memories)`，
+    使模型盲答且不报错。
     """
     import json
     from collections import defaultdict
@@ -738,7 +737,7 @@ def test_gold_recovery_reads_corpus_rows_with_or_without_a_text_prefix(tmp_path)
 
     ⚠ 两个都会**静默**把改写/原始事实漏掉，进而把 MQuAKE 的 `gold_variant` 判反：
     ① 官方 add 的正文带 `[dataset][session][Dx:y][text] ` 前缀；
-    ② 普通事实行是 `Corpus: {json}`（同一行），照旧实现取最后一行的结果不是 JSON。
+    ② 普通事实行是 `Corpus: {json}`（同一行），只取最后一行会得到非 JSON 结果。
     """
     from tools.recover_official_gold import _corpus_index
 

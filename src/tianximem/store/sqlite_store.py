@@ -1,24 +1,23 @@
-"""SQLite 真源（PRD §6.1 / §6.3）。
+"""SQLite 真源访问。
 
-**这是唯一接触业务真源 SQLite 的模块。** 上层拿到的是领域对象 `QaPair`，不是 `sqlite3.Row`
-——§6.3 的分工表只有在读写收口到一处时才守得住。
-（⚠ `embed/base.py` 的 `DiskVectorCache` 也开 SQLite，但那是可重建的派生缓存。）
+**这是唯一接触业务真源 SQLite 的模块。** 上层只接收领域对象 `QaPair`，不接收
+`sqlite3.Row`。`embed/base.py` 的 `DiskVectorCache` 也使用 SQLite，但它是可重建的派生缓存。
 
-本模块【不认识】Qdrant、embedding、渲染，也【不认识】任何数据集——
-它只认 §2.1 的 canonical Add 契约字段（`user_id` / `session_id` / `request_id` / 消息）。
+本模块不认识 Qdrant、embedding、渲染或数据集；它只处理 canonical Add 字段
+`user_id`、`session_id`、`request_id` 和消息内容。
 
 不变式归属（store/CLAUDE.md 的五条）：
   1. `id` 位置派生 .................... `make_pair_id()` + `schema.sql` 的 PRIMARY KEY
-  2. 邻接是 **Add 内显式链** ............ `prev_memory_id` / `next_memory_id`，**D28** 起
+  2. 邻接是 **Add 内显式链** ............ `prev_memory_id` / `next_memory_id`
                                         （跨 Add 不存在可信的全局序 ⇒ 不推断）
   3. `applied_batches` 只增不改 ....... `record_batch()`（只 INSERT，不 UPDATE）
   4. UNIQUE 索引 = 一次 Add 的排序键 ... `schema.sql` 的 UNIQUE + `fetch_by_request()`
-  5. 缓存键 = 渲染文本哈希 ............ **不在本模块**，属 `embed/`（§7.2）
+  5. 缓存键 = 渲染文本哈希 ............ 属于 `embed/`，不在本模块
 
-⚠ **当前库形状与 D28 之前写的库不兼容**——两者混用会**静默出错**。
-但 `open()` 会**自动搬一次**（`migrate()`，事务内、保正文、重算 id、重连链）。
+⚠ **数据库必须使用当前库形状**——混用其他位置模型会**静默出错**。
+`open()` 会自动执行兼容转换（`migrate()`，事务内、保正文、重算 id、重连链）。
 
-位置 = `(request_id, local_index)`，`request_id` 是 **opaque string**（D28）。
+位置 = `(request_id, local_index)`，`request_id` 是 **opaque string**。
 """
 
 from __future__ import annotations
@@ -47,10 +46,9 @@ _VALID_STATUSES: Final[frozenset[str]] = frozenset({"complete", "pending"})
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
-#: D28 重建表用的 DDL —— **刻意在这里复制一份、刻意不跟 `schema.sql` 走**。
+#: 兼容迁移重建表使用的 DDL，与当前 `schema.sql` 分开维护。
 #:
-#: 它是一次**历史时刻的快照**（"把 D25 的库搬成 D28 的形状"），而不是"当前 schema"：
-#: 将来 schema 再变，这段也不该跟着变——它描述的永远是那个已经发生过的搬移。
+#: 迁移输入是旧位置模型，因此这段 DDL 固定描述迁移目标形状，不跟随 `schema.sql` 的后续变化。
 _MIGRATE_DDL: Final[str] = """
 CREATE TABLE qa_pairs__d28 (
     id             TEXT PRIMARY KEY,
@@ -72,9 +70,8 @@ CREATE TABLE qa_pairs__d28 (
 def _canonical(*parts: str) -> str:
     """把若干个字符串**无歧义**地拼成一个。
 
-    ⚠ **不能只用分隔符 join。** 那样只在"字段本身不含分隔符"时才无歧义——
-    例如 `("a", "b|c")` 与 `("a|b", "c")` 会拼出同一个串（这正是被
-    `test_pair_id_does_not_collide_across_field_boundaries` 抓到过的一个真 bug）。
+    不能只用分隔符 join：字段包含分隔符时，不同字段组合可能得到同一字符串。
+    `test_pair_id_does_not_collide_across_field_boundaries` 固定了这一边界。
 
     这里用长度前缀（netstring 风格）：`len(part):part` 逐个拼接。
     长度数字以 `:` 终结、且后随的正是那么多字符，所以切分是唯一的 ⇒ 拼接**单射**。
@@ -89,7 +86,7 @@ def make_pair_id(user_id: str, session_id: str, request_id: str, local_index: in
     而**重建索引**要求「同一行永远是同一个 point」——做不到就会在 Qdrant 里留下
     **孤儿 point**（旧的还在，新的也写进去，检索命中"不存在的那个版本"，**且不报错**）。
 
-    ⚠ **`request_id` 在这里只是"一个字符串"**（D28）：它作为一个**整体**参与哈希，
+    ⚠ **`request_id` 在这里只是"一个字符串"**：它作为一个**整体**参与哈希，
     **绝不解析**它的内容。于是任意形状的 id（`abc` / `foo:bar` / UUID / 平台实发的
     `r_3115…`）都等价可用——这正是要买的那件事。
 
@@ -106,9 +103,9 @@ def make_pair_id(user_id: str, session_id: str, request_id: str, local_index: in
 
 @dataclass(frozen=True, slots=True)
 class QaPair:
-    """一个记忆块的领域对象（§6.2 的 QA 对 + D24 的块模型 + D28 的 Add 内邻接）。
+    """一个记忆块的领域对象。
 
-    ⚠ **没有"会话内序号"这种字段**（D28）：跨 Add 不存在可信的全局序，所以位置只在
+    ⚠ **没有"会话内序号"这种字段**：跨 Add 不存在可信的全局序，所以位置只在
     一次 Add 内有意义（`local_index`），而"谁跟谁相邻"由 `prev_memory_id` /
     `next_memory_id` **显式**给出。
     """
@@ -116,11 +113,11 @@ class QaPair:
     id: str
     user_id: str
     session_id: str
-    #: 写下这一行的 Add。**opaque**：只做溯源与位置的一半，一律不解析（D28）。
+    #: 写下这一行的 Add。**opaque**：只做溯源与位置的一半，一律不解析。
     request_id: str
     #: 它在**那一次 Add 的块列表**里的 0-based 序号。⚠ 跨 Add 没有意义。
     local_index: int
-    #: Add 内**显式**邻接（D28）：指向前/后**完整的 QA 块**；不完整或链端为 `None`。
+    #: Add 内**显式**邻接：指向前/后**完整的 QA 块**；不完整或链端为 `None`。
     prev_memory_id: str | None
     next_memory_id: str | None
     question: str | None
@@ -132,7 +129,7 @@ class QaPair:
     def is_complete(self) -> bool:
         """两侧都在的块（= 一个完整的 QA）。
 
-        ⚠ **只有它进 Add 内的邻接链**（D28）：A-only / Q-only 照样存、照样 embedding、
+        ⚠ **只有它进 Add 内的邻接链**：A-only / Q-only 照样存、照样 embedding、
         照样能被检索到，但它们**不参与邻接**（`prev` / `next` 恒为 `None`）。
         """
         return self.question is not None and self.answer is not None
@@ -145,10 +142,9 @@ def _now_ms() -> int:
 def _remap_legacy_rows(
     rows: Sequence[sqlite3.Row],
 ) -> list[tuple[str, str | None, str | None, sqlite3.Row]]:
-    """旧库（D25）的行 → `(新 id, prev_memory_id, next_memory_id, 原行)`。
+    """把已有存储行转换为 `(当前 id, prev_memory_id, next_memory_id, 原行)`。
 
-    **邻接规则与 `apply_batch` 逐字相同**（只连完整 QA、只在同一次 Add 内），
-    否则搬完之后"同一个库、两种邻接"——那是最难查的一类不一致。
+    **邻接规则与 `apply_batch` 相同**：只连接完整 QA，且只在同一次 Add 内连接。
 
     ⚠ 分组键里**必须**带 `request_id`：那正是"邻接只在一次 Add 内"这条规则的落点。
     行是按 `(user_id, session_id, request_id, local_index)` 排好序进来的 ⇒ 同组必然连续。
@@ -178,7 +174,7 @@ def _remap_legacy_rows(
 class SqliteStore:
     """`qa_pairs` + `applied_batches` 的读写与事务。
 
-    ## 连接模型：**短生命周期**（D17）
+    ## 连接模型：**短生命周期**
 
     本类**只保存 `db_path` 与存储逻辑**，**不长期持有** `sqlite3.Connection`。
     连接的生命周期恰好是**一次逻辑操作**：
@@ -192,16 +188,16 @@ class SqliteStore:
     **只能被创建它的线程使用**。任何"启动时建一个连接、之后长期复用"的写法，
     到线上就是**每个请求都抛** `sqlite3.ProgrammingError`。短生命周期把这个问题
     **从根上消掉**——连接永远在同一次调用的同一个线程里建与关，
-    于是"连接与线程的约束"**不需要泄漏到任何上层**（完整论证见 D17）。
+    于是"连接与线程的约束"**不需要泄漏到任何上层**。
 
     代价是每次操作多一次 `connect`（约几十微秒）。用 WAL + `busy_timeout` 让
     **SQLite 自己**负责多连接之间的 writer 串行化，**不另加应用层写锁**。
 
     ## 事务边界由调用方持有
 
-    所有方法都要求传入 `conn`，并且**不做 connect、不做 commit/rollback**——
-    只有 [`transaction()`][SqliteStore.transaction] 管这两件事。
-    这样 §6.5 的三步（守卫查表 → 位置恢复 → 挂接 + 记录本批）才能落在**同一个事务**里。
+    所有方法都要求传入 `conn`，并且不负责 connect 或 commit/rollback；
+    只有 [`transaction()`][SqliteStore.transaction] 管理这些操作。这样守卫查表、
+    位置恢复、挂接和批次记录可以落在同一个事务里。
 
     ⚠ **同一事务里的所有 helper 必须复用外层传进来的那个 `conn`**，
     **禁止 helper 自己 connect、也禁止 helper 自己 commit**——否则原子性就破了，
@@ -210,7 +206,7 @@ class SqliteStore:
 
     def __init__(self, db_path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
         self._db_path = str(db_path)
-        #: 抢不到写锁时**等待**而不是立刻抛 `SQLITE_BUSY` 的毫秒数（D17）。
+        #: 抢不到写锁时**等待**而不是立刻抛 `SQLITE_BUSY` 的毫秒数。
         #: 来自 `configs/*.yaml` 的 `storage.sqlite.busy_timeout_ms`——
         #: ⚠ **不要在这里读配置**：本模块只受 `store/` 与 `common/` 的约束，
         #: 由上层的装配点把值传进来（见 `service/app.py` 的 `build_services`）。
@@ -220,7 +216,7 @@ class SqliteStore:
 
     @classmethod
     def open(cls, db_path: str | Path, *, busy_timeout_ms: int = 5000) -> SqliteStore:
-        """建表（幂等）→ **若有旧库就搬一次**（D28）→ 把数据库级设置落一次。
+        """建表（幂等）→ **必要时转换已有存储**→ 把数据库级设置落一次。
 
         ⚠ **`journal_mode = WAL` 只在这里执行一次**（见 `_init_journal_mode` 的理由），
         不在每个短生命周期连接上重复。与之相对，`busy_timeout` / `synchronous` /
@@ -232,17 +228,16 @@ class SqliteStore:
         store._init_journal_mode()
         return store
 
-    # ── 旧库迁移（D28）─────────────────────────────────────────────────
+    # ── 已有存储转换─────────────────────────────────────────────
 
     def migrate(self) -> bool:
-        """把**按旧规则（D25）写过的库**搬到 D28 的形态。返回是否真的搬了。
+        """把已有存储转换为当前形态。返回是否实际执行了转换。
 
         ## 为什么是"重建表"而不是 `ALTER TABLE`
 
-        要做的三件事里有两件只有重建才做得到：**去掉 `chunk_ordinal` 列**，
-        以及**重算 `id`**——`id` 是位置派生的，而位置的定义变了（`chunk_ordinal` 来自解析
-        `request_id`，而 D28 取消解析）。SQLite 的 `ALTER TABLE DROP COLUMN` 还带着一堆
-        版本与索引限制，重建顺带把 UNIQUE 也换成新的。
+        迁移需要移除 `chunk_ordinal`、根据 `(request_id, local_index)` 重算 `id`，
+        并建立当前 UNIQUE 约束。重建表可以一次完成这些操作，也避免 `ALTER TABLE`
+        的版本和索引限制。
 
         ## 搬什么、不搬什么
 
@@ -252,14 +247,13 @@ class SqliteStore:
         | `id` | **重算** = `hash(user_id, session_id, request_id, local_index)` |
         | `prev` / `next` | 按 `(user_id, session_id, request_id)` 分组、组内按 `local_index` 重连，
         只连完整 QA（与 `apply_batch` 同一条规则） |
-        | `payload_hash`（旁表） | **留 NULL**（旧行没有 payload 可核）⇒ 那一批的重放只能放行，
+        | `payload_hash`（旁表） | **留 NULL**（已有行没有 payload 可核）⇒ 那一批的重放只能放行，
         见 `applied_batch_payload_hash` |
 
-        ⚠ **搬完之后 Qdrant 里的 point 全是孤儿**（`id` 变了，point id 由它派生）⇒
-        **必须跑一次 `tools/reindex.py --drop`**。这一步是**免费**的：embedding 缓存按
-        "渲染文本的哈希"作键，而渲染没变 ⇒ 不会重付 embedding 的钱（§7.2）。
+        ⚠ **转换完成后 Qdrant 里的 point 全是孤儿**（`id` 变了，point id 由它派生）⇒
+        **必须运行一次 `tools/reindex.py --drop`**。渲染文本未变时，embedding 缓存仍可复用。
 
-        ⚠ 全程在**一个事务**里：搬一半的库比旧库更糟。
+        ⚠ 全程在**一个事务**里：部分转换的数据库不可用。
         """
         with self.transaction() as conn:
             if not self._needs_migration(conn):
@@ -306,10 +300,10 @@ class SqliteStore:
                 conn.execute("ALTER TABLE applied_batches ADD COLUMN payload_hash TEXT")
 
         logger.warning(
-            "真源库按旧规则（D25：位置来自 request_id 里的 chunk 序号）写过，已搬到 D28 的形态"
-            "（位置 = `(request_id, local_index)`，邻接改成 Add 内显式链）。\n"
-            "  ⚠ **`id` 全变了 ⇒ Qdrant 里的 point 现在是孤儿**：跑一次"
-            " `tools/reindex.py --drop`（embedding 缓存按内容哈希，不会重付）。"
+            "The source database was migrated to request-scoped positions "
+            "`(request_id, local_index)` and explicit Add-local adjacency.\n"
+            "  All memory IDs changed, so existing Qdrant points are orphaned. "
+            "Run `tools/reindex.py --drop`; the content-addressed embedding cache remains reusable."
         )
         return True
 
@@ -340,9 +334,8 @@ class SqliteStore:
         **每连接级**的设置都在这里；**数据库级**的（WAL）在 `open()` 里落一次。
         """
         conn = sqlite3.connect(self._db_path, isolation_level=None)  # 自己管事务
-        # synchronous=FULL：契约要求"持久化完成且立即可搜索"后才能响应（§2.1）。
-        # 用 NORMAL 会在 OS/断电级崩溃下丢掉最后几个已提交事务——那正是"重试"的来源，
-        # 虽然幂等守卫兜得住，但没有理由在这里省。
+        # synchronous=FULL：Add 必须在持久化完成后才能响应。NORMAL 在断电级崩溃下
+        # 可能丢失最后几个已提交事务，因此这里不做该取舍。
         conn.execute("PRAGMA synchronous = FULL")
         # 多连接并发写时，让**输的那一方等待**而不是立刻抛 SQLITE_BUSY。
         # 取自配置的 `storage.sqlite.busy_timeout_ms`（默认 5000）。
@@ -358,8 +351,8 @@ class SqliteStore:
     def db_path(self) -> str:
         """真源文件路径。
 
-        §6.3：**SQLite 是唯一的真源，也是唯一不可重建物**——Qdrant 可以从它全量重建。
-        测试用它来模拟"进程重启后重连同一个库"。
+        SQLite 是唯一真源和唯一不可重建的数据；Qdrant 可以从它全量重建。
+        测试用它模拟进程重启后重连同一个库。
         """
         return self._db_path
 
@@ -402,7 +395,7 @@ class SqliteStore:
     def transaction(self) -> Iterator[sqlite3.Connection]:
         """一个写事务。**这是唯一管 "connect / begin / commit / rollback / close" 的地方。**
 
-        **`BEGIN IMMEDIATE` 而不是默认的 `BEGIN`**（**已实测，不是引文档**）：
+        **使用 `BEGIN IMMEDIATE` 而不是默认的 `BEGIN`**：
 
         * **升级写锁时 `busy_timeout` 不生效**：
           写事务里**先读后写**（守卫 `SELECT` → `INSERT`）。deferred `BEGIN` 让事务
@@ -410,17 +403,16 @@ class SqliteStore:
           SQLite **立刻**返回 `SQLITE_BUSY`（"database is locked"）
           ——它宁可立刻报错也不冒死锁的险，**不应用 `busy_timeout`**。
 
-        实测：把这一行换成 `BEGIN`，`tests/test_store.py` 的两条并发压力用例
-        **双双失败**，报 `OperationalError('database is locked')` ×5——**而且跨 session
+        若把这一行换成 `BEGIN`，`tests/test_store.py` 的两条并发压力用例
+        **双双失败**，报 `OperationalError('database is locked')` ×5——**跨 session
         那条也失败**（不同 `(user_id, session_id)` 一样撞），所以这不只是"位置撞车"的防护。
 
         IMMEDIATE 在事务开头就拿写锁，让并发写事务退化成"排队"而不是"互锁"
-        （完整论证见 D17）。**它是数据库级的写者串行**（键是整个库文件），
+。**它是数据库级的写者串行**（键是整个库文件），
         与"按 session 的业务顺序"**不是一件事**——后者不存在，位置是请求的纯函数。
 
         ⚠ **这一层是并发安全的唯一落点**：同 `(user_id, session_id)` 的 Add 可以并发
-        进入本层，它们在**这里**排队（等待，而不是失败）
-        ⇒ `busy_timeout` 的取值（配置项）比过去更要紧。
+        进入本层，它们在**这里**排队（等待，而不是失败）；`busy_timeout` 决定等待上限。
 
         事务体里的**每一个 helper 都必须复用这里 yield 出去的 `conn`**——
         helper 自己 `connect()` 会落到另一个事务里（拿不到本事务的写锁、也看不到本事务
@@ -447,13 +439,13 @@ class SqliteStore:
             # （若关闭时还有未提交事务，SQLite 会隐式回滚——不会留下半个批次的脏数据。）
             conn.close()
 
-    # ── 第 1 步：幂等守卫（§6.5）────────────────────────────────────────
+    # ── 幂等守卫 ───────────────────────────────────────────────────────
 
     def is_batch_applied(self, conn: sqlite3.Connection, request_id: str) -> bool:
         """本批是否已应用过。
 
         ⚠ 查的是 **`applied_batches`**，**不是 `qa_pairs.request_id`**——
-        后者记的是"哪一批写下了这一行"，与"这批被应用过吗"是两件事（见 D4）。
+        后者记的是"哪一批写下了这一行"，与"这批被应用过吗"是两件事。
         """
         row = conn.execute(
             "SELECT 1 FROM applied_batches WHERE request_id = ? LIMIT 1", (request_id,)
@@ -461,10 +453,10 @@ class SqliteStore:
         return row is not None
 
     def applied_batch_payload_hash(self, conn: sqlite3.Connection, request_id: str) -> str | None:
-        """那批当时写下的 `payload_hash`。**`None` = 没这行，或那行早于 D28（未知）**。
+        """该批写下的 `payload_hash`。**`None` = 没有记录，或来源未知**。
 
         ⚠ 调用方**必须**把这两种 `None` 都当成"核不了"（放行），而**不能**当成
-        "payload 不同"——后者会把**每一个老库里的 request_id 重放**变成 409。
+        "payload 不同"——后者会把**每一个已有存储中的 request_id 重放**变成 409。
         判据是 `is_batch_applied()` 那个布尔，不是这个返回值。
         """
         row = conn.execute(
@@ -483,10 +475,10 @@ class SqliteStore:
     ) -> None:
         """记下"本批已应用"。**只增不改**——没有对应的 UPDATE，也不该有。
 
-        必须在**与业务写入同一个事务**里调用（§6.5 第 1 步的"※"）。
+        必须在与业务写入相同的事务里调用。
         主键冲突会直接抛 `IntegrityError`：那是**调用方漏了守卫**的信号，要响。
 
-        `payload_hash` 是规范化 payload 的 sha256（D28）——它让"同 id 不同 payload"
+        `payload_hash` 是规范化 payload 的 sha256——它让"同 id 不同 payload"
         能被判出来（否则只能静默当成重放，而那是**两份不同的记忆里必有一份消失**）。
         """
         conn.execute(
@@ -502,17 +494,17 @@ class SqliteStore:
             ),
         )
 
-    # ── 位置来自请求，**没有"分配"这一步**（D25 / D28）───────────────────
+    # ── 位置来自请求，**没有"分配"这一步**───────────────────
     #
     # 位置 = `(request_id, local_index)`——**请求的纯函数**：
     #
-    #   * `request_id`  原样来自请求（**opaque，不解析**，D28）
+    #   * `request_id`  原样来自请求
     #   * `local_index` 是这一批组合出的块的 0-based 序号（`compose_memory_blocks` 确定）
     #
     # ⇒ 没有共享计数器、没有读-改-写 ⇒ **不需要串行化**，不同 Add 之间**也不存在
     #   任何顺序关系**（跨 Add 的"谁先谁后"既不表达、也不推断）。
-    # ⚠ **不要在这里加回一个"取下一个位置"的方法**——那是 D25 之前的读-改-写。
-    # ⚠ **也不要加回"从 request_id 里取序号"**——那正是 D28 取消的东西。
+    # ⚠ **不要增加“取下一个位置”的方法**——位置必须保持请求的纯函数。
+    # ⚠ **也不要从 `request_id` 里取序号**——`request_id` 是不透明字符串。
 
     # ── 第 3 步：写 ────────────────────────────────────────────────────
 
@@ -534,12 +526,12 @@ class SqliteStore:
     ) -> QaPair:
         """新建一个块。`id` 由位置派生，调用方通常不必传 `pair_id`。
 
-        ⚠ **位置与邻接都是传进来的、不是这里算的**（D28）：调用方（`pairing/apply.py`）
+        ⚠ **位置与邻接都是传进来的、不是这里算的**：调用方（`pairing/apply.py`）
         从组合结果拿 `local_index`，并按"只连完整 QA"那条规则算出 `prev` / `next`。
-        这里**不许**有"看起来更方便"的默认值——一个默认值就会让调用方悄悄退回旧口径。
+        这里**不许**有"看起来更方便"的默认值——默认值会绕过当前的位置与邻接规则。
 
         ⚠ **邻接在一次 INSERT 里就写死**：没有任何 UPDATE、没有"回填上一条的 next"这种事。
-        这一条是 D24 那条纪律（块在写下那一刻就是最终形状）在邻接上的延伸——
+        块在写下那一刻就是最终形状，因此邻接也无需第二遍写入。
         只要一次 Add 的块列表在写之前就全知道了，就不需要第二遍写。
 
         ⚠ 主键/UNIQUE 冲突会直接抛 `IntegrityError`（同一 `(request_id, local_index)`
@@ -594,7 +586,7 @@ class SqliteStore:
         session_id: str,
         request_id: str,
     ) -> list[QaPair]:
-        """**一次 Add 写下的全部块**，按 `local_index` 升序（D28）。
+        """**一次 Add 写下的全部块**，按 `local_index` 升序。
 
         这是"Add 内"这个作用域在存储层的唯一入口：邻接（`prev` / `next`）只在
         这一批里成立，所以**凡是需要"前后"的代码都从这里出发**，而不是从 session 出发。
@@ -602,12 +594,10 @@ class SqliteStore:
         两个调用方：
 
         * `rank/neighbor.py` 的扩窗（沿 `prev` / `next` 走，见那边的 `expand_neighbors`）
-        * `service/pipeline.py` 的修复路径（守卫命中后按 **request_id** 幂等重建，
-          而不是按 session——那正是 D28 收紧的那一处）
+        * `service/` 的 Add 修复路径（守卫命中后按 `request_id` 幂等重建）
 
-        ⚠ **`user_id` / `session_id` 也在 `WHERE` 里**：`request_id` 虽然是全局唯一的，
-        但隔离契约（§2.2）不该由"调用方记得传对 id"来保证——带上另外两个键之后，
-        跨 user 取数**结构上做不到**。
+        **`user_id` 和 `session_id` 也包含在 `WHERE` 中**：隔离不能依赖调用方记得传对 ID；
+        同时绑定这两个字段后，跨 user 读取在查询结构上不可达。
 
         ⚠ 走的是 `UNIQUE(user_id, session_id, request_id, local_index)` 建出的索引
         （不变式 4）：三列前缀命中 `WHERE`、第四列命中 `ORDER BY` ⇒ **不扫全表、不额外排序**。
@@ -621,13 +611,13 @@ class SqliteStore:
         return [_to_pair(r) for r in rows]
 
     def fetch_pairs_by_ids(self, conn: sqlite3.Connection, pair_ids: Sequence[str]) -> list[QaPair]:
-        """按主键批量取正文（§6.3 的时序：Qdrant 出 `id` → 回这里取正文）。
+        """按主键批量读取正文；检索流程从 Qdrant 得到 ID 后回这里读取源文本。
 
         正文**不进** Qdrant payload；"取正文"这一步没有缓存层，也不应该有——
         正文的可信来源只有这一处。
 
         ⚠ 回来的行带着它们**真实的** `prev_memory_id` / `next_memory_id`（那两列就在表里）
-        ——D28 起邻接是**显式存储的**，不再需要"取回整个 session 再算下标"那一步。
+        —— 起邻接是**显式存储的**，不再需要"取回整个 session 再算下标"那一步。
         """
         if not pair_ids:
             return []
@@ -753,10 +743,10 @@ class SqliteStore:
     ) -> list[EvidenceFact]:
         """共同字段约束 + 去除完全同义重复。超限须回退，不能装作扫描完整。
 
-        ⚠ **第一人称与真名是同一主体**（2026-10-18，D50）：HaluMem 一类记录把自我介绍
+        ⚠ **第一人称与真名是同一主体**：HaluMem 一类记录把自我介绍
         与档案字段拆在不同 Add 里，档案事实的主语停在字面 `"i"`，而题面问的是人名。
         这里在**读取时**把两者并成同一个约束——**不在写入时改写事实**，因为那会让
-        主语依赖 Add 的到达顺序（D28：位置与内容都必须是请求的纯函数）。
+        主语依赖 Add 的到达顺序。
         """
         conditions: list[str] = []
         params: list[str | int] = [user_id, user_id, EVIDENCE_VERSION]
@@ -800,9 +790,9 @@ class SqliteStore:
                     continue
                 clauses.append(f"f.{column}=?")
                 params.append(value)
-            # **`object_terms` 也要在 SQL 里生效**（2026-10-18）：它原来只在
-            # `FactPattern.matches`（Python 侧）里跑，于是带它的计划在**取回阶段**
-            # 会把该 relation 的全部事实拉回来（实测打满 96 条上限，整题回退）。
+            # **`object_terms` 也要在 SQL 里生效**：只在
+            # `FactPattern.matches`（Python 侧）过滤时，带它的计划在**取回阶段**
+            # 会把该 relation 的全部事实拉回来，可能打满 96 条上限并导致整题回退。
             # 词元用 `(?=.*\bX\b)` 的正则串联——SQLite 的 `regexp` 由下面的
             # `create_function` 提供，语义与 `matches` 那一侧逐字相同。
             if pattern.object_terms:
@@ -843,7 +833,7 @@ class SqliteStore:
                 parent_memory_id=row["parent_memory_id"],
                 user_id=row["user_id"],
                 # 第一人称的行在**读取时**归到该 user 的真名（与上面的匹配同一条规则）。
-                # ⚠ 只改返回值，**不改库里的行**——写入侧仍与到达顺序无关（D28）。
+                # ⚠ 只改返回值，**不改库里的行**——写入侧仍与到达顺序无关。
                 subject=(
                     owner_display
                     if owner_display and row["subject_key"] in FIRST_PERSON
@@ -855,7 +845,7 @@ class SqliteStore:
                 source_side=row["source_side"],
                 # ⚠ **`statement` 与 `content` 也要跟着改**：`content` 是写入时由
                 # `statement` 渲染的字符串，只改 `subject` 会让返回给 AML 的正文
-                # 仍然写着 `I's highest education level`（2026-10-18 实测踩到）。
+                # 仍然写着 `I's highest education level`。
                 statement=_rebind(row["statement"], row["statement"], owner_display),
                 content=_rebind(row["content"], row["statement"], owner_display),
                 event_time=row["event_time"],
@@ -883,13 +873,12 @@ class SqliteStore:
         """枚举全部块（可选按 `user_id` 限定），按
         `(session_id, request_id, local_index)` 排序。
 
-        ⚠ **这个顺序不是"会话顺序"**（D28 起不存在这种东西）：它只是"同一 session 的
+        ⚠ **这个顺序不是"会话顺序"**：它只是"同一 session 的
         各次 Add 挨在一起，每次 Add 内部按 `local_index`"——够用，因为调用方
         （`tools/reindex.py` 的全量重建）要的就是"每条都写到"。
 
-        ⚠ **只读访问器**，不改动任何既有语义。存在的理由是 §6.3 那条"Qdrant 可从 SQLite
-        全量重建"：重建需要一次枚举，而让 `qdrant_store.py` 自己写 SQL 会破坏
-        "store/ 是唯一接触 SQLite 的目录"。
+        这是只读访问器，用于从 SQLite 全量重建 Qdrant。枚举操作保留在本模块，
+        使 `store/` 继续成为唯一接触业务 SQLite 的目录。
 
         **不是检索路径**——检索按主键批量取正文走 `fetch_pairs_by_ids`。
         """
@@ -909,8 +898,7 @@ class SqliteStore:
     def assert_isolation(self, conn: sqlite3.Connection, user_id: str) -> list[QaPair]:
         """取某 user 的全部对（供隔离测试断言用）。
 
-        `user_id` 是**唯一**的检索隔离字段；`session_id` 只是分组字段，
-        **不是** Search 的过滤器（§2.2）。
+        `user_id` 是唯一的检索隔离字段；`session_id` 只是分组字段，不作为 Search 过滤器。
         """
         rows = conn.execute(
             f"SELECT {_COLUMNS} FROM qa_pairs WHERE user_id = ?"

@@ -1,7 +1,7 @@
 """MuSiQue 家族的 answer / evaluate：两套答案 prompt ＋ 规则 / 模型两套裁判。
 
-拆自 `extra_pipeline.py`（2026-10-15，只搬位置）：那层现在是薄 façade、把本模块的名字
-全部重新导出。⛔ 拒答题恒走规则那一格的处置在 `judge_musique` 的注释里；
+`extra_pipeline.py` 是薄 façade，重新导出本模块的名字。
+⛔ 拒答题恒走规则那一格的处置在 `judge_musique` 的注释里；
 模型裁判的调用编排留在 façade（补丁点，见那边的注释）。
 """
 
@@ -42,8 +42,8 @@ def judge_musique(
     金标 `California` 会被 `Rio Linda, California` 命中，而那是**比金标更笼统**的答案，
     按 MuSiQue 自己的口径**应当算错**。⇒ **两套口径必须并排报，不许拿宽松那套替换严的那套**。
 
-    ⚠ 实测（2026-10-11 那一批 25 题）宽松口径**只翻 1 道**（`…46196…`，gold `five`）。
-    ⇒ 它**不是**"分数低的原因"。改成它之前先看那份逐题对照。
+    ⚠ 宽松口径只适用于明确要测"是否捞到别名词"的场景；解读分数时
+    必须同时查看逐题对照，不能把它当作默认口径。
     """
     if not isinstance(gold, dict) or not isinstance(gold.get("answerable"), bool):
         return False, "MuSiQue：金标缺 bool 类型的 answerable"
@@ -67,24 +67,12 @@ def judge_musique(
 
 # ── MuSiQue：可选模型裁判────────────────────────────────────────────────────
 #
-# ⚠ **为什么要有这一档**：`judge_musique` 是**归一化精确匹配**，而 MuSiQue 的 gold
-#   **不是规范答案、是原文里的"答案跨度"**（可能是一整个从句），别名表又常常是空的
-#   （本项目那 50 题里 32 题 `answer_aliases` 为 `[]`）。于是"语义正确但措辞不同"的答案
-#   被系统性判错，实测（2026-10-13，MuSiQue 50 题）：
+# ⚠ MuSiQue 的 gold 是原文答案跨度，可能是一整个从句；归一化精确匹配会把
+#   语义正确但措辞不同的答案判错。`rule` 保留为默认规则判分，显式传
+#   `--musique-judge llm` 时使用模型判断语义等价。
 #
-#     E0 混合链 严格 15/50 → 官方 token-F1(≥0.5) 22/50
-#     E1-plan   严格 24/50 → 官方 token-F1(≥0.5) 32/50
-#
-#   ⇒ 少报 7–10 道。人复核那 9/10/9 道"原判错、语义正确"的就是这一批
-#   （`22` ← `22 times`；`rises in northern Minnesota and meanders slowly southwards`
-#   ← `southwards`；`for the conclave in rome` ← `Roncalli left Venice for the conclave in Rome.`)。
-#
-#
-# ⚠ **默认仍是历史规则口径**：`rule` 那套原样保留并作为默认，
-#   台账里的既有分数可以逐位复现。需要语义等价判分时显式传 `--musique-judge llm`。
-#
-# ⛔ **不动拒答那一条**：`answerable=false` 的分支仍走规则（"必须只输出拒答标记"是**输出契约**，
-#   不是语义判断），理由见根 `CLAUDE.md` 那条"不要改别处的 refusal 口径"。
+# ⛔ 拒答仍走规则：`answerable=false` 的分支只接受明确的拒答标记，这是输出契约，
+#   不是语义判断。
 MUSIQUE_JUDGE_LLM = "llm"
 MUSIQUE_JUDGE_RULE = "rule"
 MUSIQUE_JUDGE_MODES: tuple[str, ...] = (MUSIQUE_JUDGE_LLM, MUSIQUE_JUDGE_RULE)
@@ -169,12 +157,11 @@ MUSIQUE_ANSWER_PROMPT = (
 
 #: **链式多跳那一档**（`DIRECT_ANSWER_CONTRACT`）：**不给拒答出口**。
 #:
-#: 与上面那份**只差那一句**——`If the paragraphs are insufficient, return exactly: …`。
-#: ⛔ 那一句在这一档上不是保险，是**出口**：本仓量过两次它的后果（250 题上 160/250 逐字拒答、
-#: 通过 0；TempReason 76 道拒答而证据就在眼前）——只删那句子就分别把 0.3997 拉到 0.4857、
-#: 把 44/76 拉成答对。MuSiQue 链式这 25 题上同样 10/25 是模型自己拒答。
-#: ⚠ 判分**不变**（仍是 v1 的归一化精确匹配）⇒ 拒答在这一档照样算错，只是不再**被提示词邀请**。
-#: ⛔ **只换这一档**：MuSiQue 原生的可答/不可答变体、以及别的数据集，评测口径一个字不改。
+#: 与上面那份**只差拒答指令** (`If the paragraphs are insufficient...`)。
+#: ⛔ 在这一档，该指令会成为绕过证据检索的出口；链式评测要测的是证据是否送达，
+#: 因此 prompt 不提供拒答出口。
+#: ⚠ 判分**不变**（仍是 v1 的归一化精确匹配）⇒ 拒答仍算错，只是不再被提示词邀请。
+#: ⛔ **只作用于这一档**：MuSiQue 原生的可答/不可答变体及其他数据集保持原口径。
 MUSIQUE_DIRECT_ANSWER_PROMPT = (
     "Answer the question using ONLY the retrieved candidate paragraphs below. "
     "Do not use outside knowledge. Return only the short answer, without explanation.\n\n"

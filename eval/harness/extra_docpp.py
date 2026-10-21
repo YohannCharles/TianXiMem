@@ -1,7 +1,7 @@
 """Doc-PP 家族的 evaluate：上游 `prompts/judge_evaluation.py` 两条判据的 prompt 与解析。
 
-拆自 `extra_pipeline.py`（2026-10-15，只搬位置）：那层现在是薄 façade、把本模块的名字
-全部重新导出。走 `with_policy=false` 那两条路的理由见下面那段注释。
+`extra_pipeline.py` 是薄 façade，重新导出本模块的名字。
+走 `with_policy=false` 那两条路的理由见下面那段注释。
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def _docpp_prompts() -> dict[str, str]:
         value = node.value
         if isinstance(value, ast.Call) and getattr(value.func, "attr", "") == "strip":
             # ⚠ `"""…""".strip()` 里字符串是**接收者**（`func.value`），而 `.strip()` **不收参数**
-            #   ——取 `args[0]` 会拿到空、整条抽取静默返回 {}（2026-09-30 实测）。
+            #   ——取 `args[0]` 会拿到空、整条抽取静默返回 {}。
             receiver = getattr(value.func, "value", None)
             if isinstance(receiver, ast.Constant):
                 value = receiver

@@ -1,4 +1,4 @@
-"""`rank/packaging.py` —— **段级打包 + 双预算里的 token 那一半**（§11.3 / §6.4）。
+"""`rank/packaging.py` —— **段级打包 + 双预算里的 token 那一半**。
 
 ⚠ 这里测的是"**段进来之后，响应怎么生成**"。段的构造（扩窗、合并、段内/段间顺序）
 在 [`test_neighbor.py`](./test_neighbor.py)——本文件**直接构造 `ContextSegment`**，
@@ -28,7 +28,7 @@ from tianximem.rank import (
 )
 
 #: 东八区——**只用来演示"如果按本地时区算，这个时间点会落到哪一天"**，
-#: 证明跨日的时间点确实能暴露口径（**不再传给任何被调函数**，见那条用例）。
+#: 证明跨日的时间点确实能暴露口径（**不传给任何被调函数**，见那条用例）。
 CST = timezone(timedelta(hours=8))
 
 #: 2023-05-08 23:30 UTC —— 一个**跨日**的时间点，用来暴露时区口径。
@@ -95,7 +95,7 @@ def test_content_is_taken_from_the_segment_verbatim(counter: TokenCounter) -> No
 
 
 def test_multiple_pairs_in_one_segment_stay_one_item(counter: TokenCounter) -> None:
-    """**段是原子单位**：段里几对，输出里就是**一项**（§11.2）。
+    """**段是原子单位**：段里几对，输出里就是**一项**。
 
     这一条同时是"没有在打包阶段把段拆回单条"的结构性证据。
     """
@@ -126,7 +126,7 @@ def test_packaging_does_not_touch_the_source() -> None:
 
 
 def test_created_at_is_day_granularity(counter: TokenCounter) -> None:
-    """**只给到日粒度**——粒度会被模型看见，秒级会诱发它按秒级回答（§11.3）。"""
+    """**只给到日粒度**——粒度会被模型看见，秒级会诱发它按秒级回答。"""
     seg = _segment(counter, anchor="m0", content="c", event_time=NEAR_MIDNIGHT_UTC)
     created_at = package([seg], top_k=5, counter=counter, max_tokens=1000).items[0].created_at
 
@@ -137,7 +137,7 @@ def test_created_at_is_day_granularity(counter: TokenCounter) -> None:
 
 
 def test_created_at_is_empty_when_event_time_is_null(counter: TokenCounter) -> None:
-    """`event_time` 为 NULL ⇒ **空串**（有定义的降级路径，§11.3）。"""
+    """`event_time` 为 NULL ⇒ **空串**（有定义的降级路径）。"""
     seg = _segment(counter, anchor="m0", content="c", event_time=None)
     assert package([seg], top_k=5, counter=counter, max_tokens=1000).items[0].created_at == ""
 
@@ -152,14 +152,14 @@ def test_created_at_does_not_fall_back_to_write_time(counter: TokenCounter) -> N
     created_at = package([seg], top_k=5, counter=counter, max_tokens=1000).items[0].created_at
 
     assert created_at == ""
-    # 今天（= 写入时间）的日期绝不能出现
+    # 当前日期（= 写入时间）绝不能出现
     assert datetime.now(UTC).strftime("%Y-%m-%d") not in created_at
 
 
 def test_created_at_is_utc_regardless_of_the_machine_timezone(counter: TokenCounter) -> None:
     """时区口径**固定 UTC，没有参数**——同一毫秒在任何机器上都得到同一个日期。
 
-    ⚠ 契约没规定时区（`docs/contract.md` §3 只说日粒度）。固定 UTC 的理由是
+    ⚠ 契约只规定日粒度、没有规定时区。固定 UTC 的理由是
     **与机器无关**：用本地时区会让同一份数据在不同机器上差一天，而本项目最怕的就是
     不可复现。
 
@@ -189,7 +189,7 @@ def test_created_at_is_utc_regardless_of_the_machine_timezone(counter: TokenCoun
 
 
 def test_created_at_comes_from_the_anchor_not_the_first_member(counter: TokenCounter) -> None:
-    """`created_at` 跟着**锚点**走——段里第一条可能是扩窗补进来的邻居（§11.2）。
+    """`created_at` 跟着**锚点**走——段里第一条可能是扩窗补进来的邻居。
 
     照第一条取会得到一个"这段对话里其实没被选中"的时间。
     """
@@ -209,7 +209,7 @@ def test_created_at_comes_from_the_anchor_not_the_first_member(counter: TokenCou
 
 
 def test_score_is_reciprocal_rank(counter: TokenCounter) -> None:
-    """`score = 1/(rank+1)`——单调递减的占位值（§11.3）。
+    """`score = 1/(rank+1)`——单调递减的占位值。
 
     它无论 AML 是否按 `score` 重排，**顺序都不变**，所以是最安全的一侧。
     """
@@ -250,7 +250,7 @@ def test_placeholder_score_rejects_negative_rank() -> None:
 
 
 def test_response_item_has_exactly_the_contract_fields(counter: TokenCounter) -> None:
-    """`data[]` 的一项**就是 §2.1 的四个字段，一个不多**。
+    """`data[]` 的一项**就是响应契约的四个字段，一个不多**。
 
     ⚠ 这条同时是"**没有泄漏 RRF 分数**"的结构性证据：`ResponseItem` 里那个 `score`
     是 `1/(rank+1)` 现算的，而上游 `Candidate` **根本没有**融合分数字段
@@ -262,14 +262,14 @@ def test_response_item_has_exactly_the_contract_fields(counter: TokenCounter) ->
 def test_no_internal_fields_leak_into_the_item(counter: TokenCounter) -> None:
     """`session_id` / 位置 / `status` / `best_rank` 都不该出现在响应项里。
 
-    ⚠ 位置自 **D28** 起是 `(request_id, local_index)` ⇒ 三个内部名都要挡；
-    只挡旧的 `pair_idx` 会**静默放行**它们（那个名字已经不存在了，断言永远为真）。
+    ⚠ 位置是 `(request_id, local_index)` ⇒ 三个内部名都要挡；
+    只挡 `pair_idx` 会**静默放行**当前的位置字段。
     """
     seg = _segment(counter, anchor="m0", content="c")
     item = package([seg], top_k=5, counter=counter, max_tokens=1000).items[0]
     dumped = item.__dict__ if hasattr(item, "__dict__") else {}
     assert "session_id" not in dumped
-    assert "pair_idx" not in dumped  # 旧名，D25 后不该再有人加回来
+    assert "pair_idx" not in dumped  # pair_idx 不属于响应字段
     assert "chunk_ordinal" not in dumped
     assert "local_index" not in dumped
     assert "seq" not in dumped
@@ -301,7 +301,7 @@ def test_top_k_one(counter: TokenCounter) -> None:
 
 
 def test_upstream_giving_more_than_top_k_is_truncated(counter: TokenCounter) -> None:
-    """**即使上游给出更多段，也必须在这里保证 ≤ `top_k`**（§2.2 精确计数）。"""
+    """**即使上游给出更多段，也必须在这里保证 ≤ `top_k`**。"""
     segments = _line(counter, 6)
     for top_k in (1, 2, 3, 5):
         got = package(segments, top_k=top_k, counter=counter, max_tokens=1000)
@@ -338,7 +338,7 @@ def test_empty_segments_returns_empty_response(counter: TokenCounter) -> None:
 def test_order_follows_the_given_segment_order(counter: TokenCounter) -> None:
     """输出的顺序 = **段给来的顺序**（那是 `merge_segments` 按 `best_rank` 排好的）。
 
-    ⚠ 打包层**不重新排序**：段的先后由 `neighbor.merge_segments` 拥有（§11.2 的组间顺序）。
+    ⚠ 打包层**不重新排序**：段的先后由 `neighbor.merge_segments` 拥有。
     这里反过来给一批乱序的段，就是为了证明打包层**照单全收**——
     如果它偷偷按 `best_rank` 再排一次，两处排序就会各自演化。
     """
@@ -367,7 +367,7 @@ def test_dropped_missing_is_passed_through(counter: TokenCounter) -> None:
     assert got.count == 2  # 缺行**不占**输出位置
 
 
-# ── token 预算（§6.4）：段是原子单位，装不下就停 ───────────────────────
+# ── token 预算：段是原子单位，装不下就停 ───────────────────────────────
 
 
 def test_budget_stops_at_the_first_segment_that_does_not_fit(counter: TokenCounter) -> None:
@@ -386,7 +386,7 @@ def test_budget_stops_at_the_first_segment_that_does_not_fit(counter: TokenCount
 def test_budget_never_produces_half_a_segment(counter: TokenCounter) -> None:
     """**超预算不产生半个段**：段要么整段进去，要么整段不进。
 
-    截半个段会让模型读到一段**缺了一环的连续对话**，而 `content` 里看不出来（§11.2）。
+    截半个段会让模型读到一段**缺了一环的连续对话**，而 `content` 里看不出来。
     """
     segments = _line(counter, 3, size=30)  # 每段 60 字符
     # 只装得下第一段（60）+ 分隔（1）；第二段要 62，放不下
@@ -399,7 +399,7 @@ def test_budget_never_produces_half_a_segment(counter: TokenCounter) -> None:
 
 
 def test_budget_uses_the_real_joined_string(counter: TokenCounter) -> None:
-    """预算对**最终拼接好的真实字符串**成立——不是各段数字的和（§6.4）。
+    """预算对**最终拼接好的真实字符串**成立——不是各段数字的和。
 
     ⚠ 分隔符**也要算**。漏掉它会让实际输出比预算多出 `(段数 - 1)` 个 token，
     而 100 个段时那就是 99 个——**正好把前缀截断点推到一段证据的中间**。
@@ -462,7 +462,7 @@ def test_budget_counts_only_what_is_actually_returned(counter: TokenCounter) -> 
 def test_output_tokens_and_count_never_exceed_the_two_budgets(counter: TokenCounter) -> None:
     """两条上界同时成立：`count <= top_k` 且 `output_tokens <= max_tokens`。
 
-    这条是 §2.2 + §6.4 合起来的守门断言——**任何一条被破都是契约错误**。
+    这条是响应计数与 token 预算合起来的守门断言——**任何一条被破都是契约错误**。
     """
     segments = _line(counter, 12, size=7)
     for top_k in (1, 3, 100):

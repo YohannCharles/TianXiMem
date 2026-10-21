@@ -2,7 +2,7 @@
 
 ```text
 eval/reports/runs/<run_id>/<user_id>/
-    input.jsonl     题目 + gold + **实际注入模型的那段记忆**（§11.3 的 content 拼起来的东西）
+    input.jsonl     题目 + gold + **实际注入模型的那段记忆**
     answers.jsonl   模型生成的答案
     labels.jsonl    裁判判语（CORRECT / WRONG + 一句话理由）
 ```
@@ -11,9 +11,9 @@ eval/reports/runs/<run_id>/<user_id>/
 
 | 桶 | 判据（启发式，**不是判决**） | 该动哪儿 |
 | --- | --- | --- |
-| **证据不在上下文里** | gold 的内容词几乎不在记忆里 | 检索 / 打包（§7、§10、§11） |
-| **证据在、但没答对** | gold 的词在记忆里，答案却错/漏 | 答案侧：注入形状、顺序（§11.3） |
-| **答对了但被判错** | 答案与 gold 语义一致、判语却挑别处 | 裁判契约 / 渲染（§11.3） |
+| **证据不在上下文里** | gold 的内容词几乎不在记忆里 | 检索 / 打包 |
+| **证据在、但没答对** | gold 的词在记忆里，答案却错/漏 | 答案侧：注入形状、顺序 |
+| **答对了但被判错** | 答案与 gold 语义一致、判语却挑别处 | 裁判契约 / 渲染 |
 
 ⚠ **它是启发式**：词面命中不等于"模型真读到了"，判语也可能误判。它的用途是**把 138 题分成几堆**，
 好让人集中看那几堆，而不是替代人读。**结论要落到具体案例上。**
@@ -54,7 +54,7 @@ EXIT_PRECONDITION_FAILED: Final[int] = 2
 
 RUNS_DIR: Final[Path] = Path("eval/reports/runs")
 
-#: LoCoMo 的分类 ID（**实测映射**，见 `eval/datasets/CLAUDE.md`——与论文顺序不同）。
+#: LoCoMo 的分类 ID（**映射**，见 `eval/datasets/CLAUDE.md`——与论文顺序不同）。
 CATEGORY_NAMES: Final[dict[str, str]] = {
     "1": "multi-hop",
     "2": "temporal",
@@ -63,7 +63,7 @@ CATEGORY_NAMES: Final[dict[str, str]] = {
     "5": "adversarial",
 }
 
-#: 判语里出现这些词 ⇒ 失败**可能**来自时间表述（§11.3 的两条规则）。
+#: 判语里出现这些词 ⇒ 失败**可能**来自时间表述。
 _TIME_HINTS: Final[tuple[str, ...]] = (
     "granularity",
     "relative",

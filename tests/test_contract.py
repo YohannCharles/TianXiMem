@@ -1,11 +1,11 @@
-"""**契约层**：`Search` / `Add` 的响应形状与计数（§2.1 / §2.2）。
+"""**契约层**：`Search` / `Add` 的响应形状与计数。
 
 * 前半部分走 `pipeline` 层：断言 `SearchPipeline.run()` 的产出 + **真正的 pydantic
   响应模型**（形状与序列化钉死在这里，便于精确控制"返回哪些 id、分数是多少"）。
 * 文件末尾三个用例走**真的 HTTP**（`TestClient`）：覆盖路由、状态码、
   以及"边界校验在真 HTTP 上是 422"。
 
-> **跨层：连接生命周期与线程**（见 `store/sqlite_store.py` 的连接模型一节 + D17）：
+> **跨层：连接生命周期与线程**：
 > FastAPI 的 `def` 路由跑在**线程池**里，而 `sqlite3.Connection` 只能在**创建它的线程**里用
 > ⇒ 必须**短生命周期连接**；长期持有一个连接会让**任何 HTTP 往返**都抛
 > `sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in
@@ -78,7 +78,7 @@ def _idx(i: int) -> int:
     return i * _SPACING
 
 
-# ── Search 响应形状（§2.1）──────────────────────────────────────────────
+# ── Search 响应形状 ─────────────────────────────────────────────────────
 
 
 def test_search_response_has_exactly_the_contract_fields(
@@ -108,7 +108,7 @@ def test_search_preserves_retrieval_order(wired: Wired, seed_pair: Callable[...,
 def test_search_never_exceeds_top_k(
     wired: Wired, seed_pair: Callable[..., str], top_k: int
 ) -> None:
-    """**精确计数**（§2.2 第一条）——返回超过 `top_k` 是契约错误，不会被静默截断。"""
+    """**精确计数**——返回超过 `top_k` 是契约错误，不会被静默截断。"""
     ids = seed_line(wired.store, [_idx(i) for i in range(5)], qa=lambda i: (f"q{i}", f"a{i}"))
     wired.qdrant.by_user["u1"] = ids
 
@@ -118,7 +118,7 @@ def test_search_never_exceeds_top_k(
 
 
 def test_empty_result_is_a_list_not_null(wired: Wired) -> None:
-    """**空结果是 `[]` 而不是 `null`**（§2.1）。"""
+    """**空结果是 `[]` 而不是 `null`**。"""
     wired.qdrant.exists_flag = False  # 集合还不存在 ⇒ 没有数据可检索
 
     assert _as_wire(wired.search()) == {"data": []}
@@ -151,7 +151,7 @@ def test_content_comes_from_sqlite_through_common_render(
 def test_created_at_is_day_granularity_or_empty(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    """`created_at` **始终存在**：日粒度或 `""`（§11.3）。"""
+    """`created_at` **始终存在**：日粒度或 `""`。"""
     with_time = seed_pair_in(wired.store, 0, "q0", "a0", event_time=1683525360000)
     # ⚠ 两条的间隔走 `_SPACING`（由扩窗半径推出，见那里的说明）：位置挨着会被合并成一段
     # ⚠ **中间那些位置要落满**（`seed_line` 的同一道理，见它的 docstring）
@@ -202,7 +202,7 @@ def test_fused_score_never_leaks_into_the_response(
 def test_dense_embedding_called_exactly_once_per_query(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    """**每查询恰好 1 次** embedding 调用（§7.2）。"""
+    """**每查询恰好 1 次** embedding 调用。"""
     wired.qdrant.by_user["u1"] = seed_line(
         wired.store, [_idx(i) for i in range(2)], qa=lambda i: (f"q{i}", f"a{i}")
     )
@@ -213,7 +213,7 @@ def test_dense_embedding_called_exactly_once_per_query(
 
 
 def test_query_is_passed_through_unchanged(wired: Wired, seed_pair: Callable[..., str]) -> None:
-    """**查询原样送**——不改写、不 strip（§7.2 的 v1 规格）。"""
+    """**查询原样送**——不改写、不 strip。"""
     wired.qdrant.by_user["u1"] = [seed_pair(wired.store, 0, "q", "a")]
     raw = "  火车几点开？ "
     wired.search(query=raw, top_k=1)
@@ -236,12 +236,12 @@ def test_pipeline_order_hybrid_then_checker_then_packaging(
     data = _as_wire(wired.search(top_k=2))["data"]
 
     assert len(wired.qdrant.calls) == 1  # hybrid 跑了
-    assert len(wired.instrument.decisions) == 1  # checker 跑了，且每轮记账（D13）
+    assert len(wired.instrument.decisions) == 1  # checker 跑了，且每轮记账
     assert len(data) == 2  # packaging 跑了
 
 
 def test_checker_is_passthrough_in_v1(wired: Wired, seed_pair: Callable[..., str]) -> None:
-    """v1 的 Checker **不做门控**：哪怕候选很少也照样返回（D13）。"""
+    """当前 Checker **不做门控**：哪怕候选很少也照样返回。"""
     wired.qdrant.by_user["u1"] = [seed_pair(wired.store, 0, "q", "a")]
 
     assert len(_as_wire(wired.search())["data"]) == 1
@@ -251,11 +251,11 @@ def test_checker_is_passthrough_in_v1(wired: Wired, seed_pair: Callable[..., str
 def test_top_k_from_request_is_honoured_not_hardcoded(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    """**`top_k` 来自请求、不写死 100**（§7.3）。
+    """**`top_k` 来自请求、不写死 100**。
 
-    ⚠ **断言的是响应条数，不是"转发给 store 的值"**（2026-10-01）：截断从
-    `store.hybrid_search()` 搬到了 `fusion.search`——因为 RRF 并列是常态，而 Qdrant 在
-    并列卡住 `limit` 时**选谁是不确定的**。契约没变，执行点变了。
+    ⚠ **断言的是响应条数，不是"转发给 store 的值"**：store 返回全部融合结果，
+    `fusion.search` 在确定性排序后截断——因为 RRF 并列是常态，而 Qdrant 在
+    并列卡住 `limit` 时**选谁是不确定的**。
     """
     wired.qdrant.by_user["u1"] = [
         seed_pair(wired.store, _idx(i), f"q{i}", f"a{i}") for i in range(5)
@@ -263,7 +263,7 @@ def test_top_k_from_request_is_honoured_not_hardcoded(
 
     assert len(wired.search(top_k=3).items) == 3
     # 传更大的 `top_k` 不会凭空多出来——写死 100 的话这里也不会露馅，
-    # 所以上面那条"精确等于 3"才是真正钉住 §7.3 的断言。
+    # 所以上面那条"精确等于 3"才是真正钉住请求 `top_k` 的断言。
     assert len(wired.search(top_k=100).items) == 5
 
 
@@ -317,7 +317,7 @@ def test_unknown_extra_fields_are_ignored() -> None:
 
 
 def test_add_response_echoes_exactly_three_fields() -> None:
-    """`Add` 的 200 形状：`success: true` + **原样回显**三个字段（§2.1）。"""
+    """`Add` 的 200 形状：`success: true` + **原样回显**三个字段。"""
     body = AddResponse(request_id="r1", user_id="u1", session_id="s1").model_dump()
     assert body == {
         "success": True,
@@ -328,12 +328,12 @@ def test_add_response_echoes_exactly_three_fields() -> None:
 
 
 def test_add_message_schema_shape() -> None:
-    """`messages[]` **只有三个字段**——这就是 canonical 形状（D16）。"""
+    """`messages[]` **只有三个字段**——这就是 canonical 形状。"""
     msg = AddMessage(role="user", content="hi")
     assert msg.model_dump() == {"role": "user", "content": "hi", "timestamp": None}
 
 
-# ── HTTP 往返（§2.1 的最后一跳）────────────────────────────────────────
+# ── HTTP 往返 ───────────────────────────────────────────────────────────
 
 
 def test_http_search_round_trip(wired: Wired, seed_pair: Callable[..., str]) -> None:
@@ -355,7 +355,7 @@ def test_http_add_round_trip_echoes_fields(wired: Wired) -> None:
     from tianximem.service import create_app
 
     payload = {
-        # ⚠ `request_id` 是 **opaque string**（D28）——服务端**不解析它**，任意形状都行。
+        # ⚠ `request_id` 是 **opaque string**——服务端**不解析它**，任意形状都行。
         #    这里用本仓 harness 的形态。
         "request_id": "u1|s1|0",
         "user_id": "u1",
@@ -365,7 +365,7 @@ def test_http_add_round_trip_echoes_fields(wired: Wired) -> None:
     with TestClient(create_app(wired.services)) as client:
         resp = client.post("/add", json=payload)
     assert resp.status_code == 200
-    assert resp.json()["request_id"] == "u1|s1|0"  # 原样回显（§2.1）
+    assert resp.json()["request_id"] == "u1|s1|0"  # 原样回显
 
 
 def test_http_rejects_illegal_request_at_the_boundary(wired: Wired) -> None:
@@ -380,17 +380,13 @@ def test_http_rejects_illegal_request_at_the_boundary(wired: Wired) -> None:
 
 
 def test_blank_query_is_rejected_with_422_and_that_is_deliberate(wired: Wired) -> None:
-    """★ **空白 query 在边界拿到 422——这是 2026-10-10 刻意保留的，并带着一条已知风险。**
+    """★ **空白 query 在边界得到 422——这是刻意保留的，并带着一条已知风险。**
 
-    ⚠ **风险写在用例里，因为它不是没人想过**：官方只说 `query` 必填、
-    **没承诺它永远非空**，而 **AML 不重试 4xx**（§2.2 的重试只覆盖我们的失败）
-    ⇒ 真跑批时遇到一次空 query，**那个评测阶段会直接废掉**。
-    当时比较过两条路（改成 200 + `{"data": []}` / 保持 422），
-    **决定是保持 422**（理由与取舍见 `docs/decisions.md` D40 的第四段补记）。
+    ⚠ 官方只说 `query` 必填、**没承诺它永远非空**，而 **AML 不重试 4xx**
+    （重试只覆盖服务端失败）⇒ 真跑批时遇到一次空 query，
+    **那个评测阶段会直接废掉**。当前实现仍选择 422。
 
-    ⛔ **所以这条用例的作用不是"证明它好"，是钉住"它现在是这样"**：
-    哪天要改成 200 + 空结果，改的人必须同时改这里与那份决策记录，
-    **不能悄悄改**——否则"空 query 会 422"这件事就没人记得了。
+    ⛔ 当前行为固定为 422；测试与路由层的空白 query 守卫必须保持一致，**不能悄悄改**。
 
     ⚠ 另有一条守卫兜住**绕过 HTTP 的调用方**：
     [`test_router.py`](./test_router.py) 的 `test_blank_query_short_circuits_before_the_router`
@@ -410,9 +406,9 @@ def test_blank_query_is_rejected_with_422_and_that_is_deliberate(wired: Wired) -
 
 
 def test_http_health_is_an_unauthenticated_2xx(wired: Wired) -> None:
-    """S4：平台探的是**与 Add 同源的 `/health`**，无需鉴权，任意 2xx 即正常。
+    """    平台探的是**与 Add 同源的 `/health`**，无需鉴权，任意 2xx 即正常。
 
-    这一条的失败模式不是掉分，是**没进场**——所以它必须有测试钉住（`contract.md` §7.2）。
+    这一条的失败模式不是掉分，是**没进场**——所以它必须有测试钉住。
     """
     from fastapi.testclient import TestClient
 

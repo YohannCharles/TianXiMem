@@ -1,320 +1,159 @@
-# 架构：数据流与模块边界
+# Architecture
 
-> 最后核对：2026-10-05。原文存储和 HTTP 契约沿用 PRD v1；Add/Search 内部共同事实索引按本节实现。
-
----
-
-## 当前共同事实取证结构
-
-事实不再按任职、库存、活动等业务类别拆成平行路径。所有派生事实使用同一条记录：
-`主体 / 关系 / 客体 / 原文限定条件 / 来源侧与逐字引句 / 来源记录日期`。
-原文明确给出的数量、容器、时段等放进限定条件；没有来源的推断不入库。
+## Runtime Summary
 
 ```text
-Add 原始记忆 → 配对与幂等事务 → qa_pairs（原文）
-                            └→ facts/grammar → memory_facts + evidence_coverage
-Search 问题 → facts/query → 共同字段计划 → retrieve/evidence
-                                      ├ 条件筛选
-                                      ├ 有限关系连接（只取各条原文边）
-                                      └ 显式时间区间比较
-                                    → 原文/事实投影 → 双预算打包 → 记忆片段
-                 无适用计划、索引未齐、冲突或取证超限 → 原混合检索链
+Add
+  -> fingerprint request
+  -> check applied_batches
+  -> compose blocks within this Add
+  -> write qa_pairs and derived facts in one SQLite transaction
+  -> render and embed changed blocks
+  -> upsert Qdrant points with wait=true
+  -> return
+
+Search
+  -> grounded evidence
+       complete: package evidence and return
+       incomplete: continue
+  -> query router
+       DEFAULT: hybrid retrieval
+       MULTI_HOP: react or plan executor
+  -> hybrid retrieval: BM25 + dense -> weighted RRF
+  -> rerank
+  -> neighbor expansion
+  -> segment merge
+  -> slot/token budgeted packaging
+  -> return at most top_k
 ```
 
-`facts/evidence.py` 定义共同记录与版本，`facts/grammar.py` 处理来源句法，
-`facts/query.py` 处理问题句法，`facts/input.py` 检查当前字面输入是否完整。
-来源的语义词仍需识别，但只用于绑定字段与计划，不创建业务专用执行器。
-`retrieve/evidence.py` 只执行上述共同操作与来源覆盖审查；
-`store/sqlite_store.py` 统一保存、筛选事实，`service/pipeline.py` 统一编排和打包。
+The service owns memory storage and evidence retrieval only. It does not generate final answers or judge them.
 
-当前显式角色归属和容器数量支持中英文句法，共用上述字段与执行器。中文支持
-具名发言、全角冒号和句末标点，以及确切汉字整数、阿拉伯数字和单项量词。
-数量事实保留原文单位，物品定位引句用于保持原文顺序；单位冲突和含糊数量回到
-原文。抽取仍不调用 LLM，自由叙事和未覆盖的问法继续使用原检索。
-来源扫描版本表示抽取器已处理该来源，不代表语义完整；修改抽取表示时升级版本，
-避免旧版空抽取阻止新规则补索引。范围来源审查另行判断未解释声明与冲突。
-例子与验证边界见 [中文事实验证](../eval/reports/retrieval-evidence-20261005.md)。
+## Add Flow
 
-同义事实的来源选择也共用一条规则：明确的本人归属陈述优先于间接同行描述，
-全部原始来源仍保留；不同客体或时段的冲突不据此消失。这个来源标记仅用于去重和
-呈现排序，不当作事件值返回。非数量集合按主体稳定排列，数量观察保持原文物品顺序。
-带引用的事实先返回该陈述，再返回独立的支持事实，不合成关系答案。
+1. Compute a canonical payload fingerprint.
+2. Check `applied_batches`.
+   - Matching payload: treat as a replay and repair missing derived indexes if needed.
+   - Different payload: return a conflict.
+3. Compose memory blocks from this request only.
+4. Link adjacent complete blocks inside this request only.
+5. Atomically write:
+   - `qa_pairs` source rows.
+   - `memory_facts` and `evidence_coverage` when grounded extraction is enabled.
+   - The `applied_batches` guard row.
+6. Synchronously update Qdrant.
+7. Return the echoed request identifiers.
 
-新库只有 `qa_pairs`、`applied_batches`、`memory_facts`、`evidence_coverage` 四张表。
-前两张是真源，后两张可由原文重建。旧库里的历史派生表保持封存，新代码不读写它们。
-Add、重放和有界旧库补索引共用抽取器；索引尚未覆盖当前用户全部来源时沿用原检索。
-物理覆盖标记只表示已扫描，不表示语义已经全部识别。
+SQLite is the source of truth. A Qdrant failure leaves a recoverable derived-index gap; a retry can rebuild it without changing source rows.
 
-名单与计数使用同一证据计划。例如“谁在学校任教”和“有多少人任教”，都选择独立的
-`人物—teacher—学校` 事实，由既有答案模型生成名单或数字。关系连接同样只返回
-独立证据：`Alex 的家乡国家是 Sweden` 与 `Alex 提到从自己的家乡国家搬走` 分开返回，
-不合成为“Alex 从 Sweden 搬走”的新记忆。单项数量保留原文数值，不预先求和。
-2026-10-10 用户批准的交易候选仍走共同条件筛选：每笔只抽原文商品、数量、单价或
-已报告收入，不计算跨记录答案。`common/amounts.py` 在 Search 打包时按配置给明确的
-单价补单笔数量 × 单价括号注解；去掉注解可恢复原引句。计算值不落库，不进入 QA
-渲染、embedding 或精排输入；事实本身不进入向量索引。退款、更正、数量含糊和
-未解释的相关交易声明交回原混合检索。候选开关默认关闭，先做固定子集验证。
-来源日期不冒充实际事件日期；原文区间比较只使用原文明确的起止月份。
-编译器通过 `require_complete_walk` 标记需要完整字面路径的计划：已识别关系缺少可达原文、
-候选分支缺项、相关更正不能解释或原文审查超限时，交回原混合检索。
-新增明确就业问法使用这一约束；既有受控知识补全问题保留原来的证据召回语义。
-这项检查不代表自由问句的全部隐含依赖都已被识别。
+## Block Composition
 
-原文投影不扩邻域，事实投影复用 `common/render` 与原槽位/token 双预算。
-只有当前问题的全部输入已明确且无须历史时返回空记忆，判定器不生成答案。
-对外 Add/Search 请求响应、答案 prompt 与评分流水线保持原接口。
-共同开关及取证上限见 [配置项参考](config-reference.md)。
+A block contains the last user message of a contiguous user segment and the immediately following contiguous non-user segment. Earlier user messages remain independent. Unpaired messages are stored independently and are still searchable.
 
----
+Only one role predicate is used: `role == "user"`. Non-user roles are retained and receive role labels during rendering. No role allowlist is used.
 
-## 1. 两条路径
+Pairing and adjacency never cross an Add boundary.
 
-系统的全部行为都可以拆成两条路径。**Add 路径不调用任何 LLM**（§7.2）——这是 v1 的一个刻意属性：Add 侧的模型成本只有 embedding，且只与内容有关，缓存后即成为一次性成本，与迭代次数无关。
+## Search Flow
 
-### Add 路径（§15 的六步，顺序不可换）
+### Grounded Evidence
+
+The deterministic grounded-evidence path runs first when enabled.
 
 ```text
-1. payload 指纹      canonical(user_id, session_id, messages) → sha256（**D28**）
-2. 幂等守卫         查 applied_batches；命中且指纹相同 → 重放索引修复，不改真源
-                                 命中但指纹不同 → **409**（同 id 不同 payload，不是重放）
-3. 组合 + 连链       compose_memory_blocks(messages)   ← 只看本批，无跨 Add 状态（**D24**）
-                    link_blocks(blocks)               ← Add 内邻接，只连完整 QA（**D28**）
-4. 同一事务         INSERT qa_pairs（每块一行、`(request_id, local_index=i)`、`prev` / `next`、status 恒为 complete）
-                    + memory_facts / evidence_coverage（启用共同取证时）
-                    + 向 applied_batches 插入本批记录（含指纹）
-5. 同步 upsert      Qdrant（wait=true）
-6. 返回 200
+question -> common query plan -> source-backed fact execution
+         -> source coverage and conflict review
+         -> complete evidence: render and package
+         -> incomplete: continue to routing and retrieval
 ```
 
-**第 3 步没有跨批分支**——组合与邻接的边界都是**一次 Add**（D24 / D28）。
-**位置分配不读库**——位置是**请求的纯函数**（D28）：`request_id` 原样（**不解析**）、
-`local_index` 是本批块序号，所以既没有读-改-写，也没有业务锁；同 session 的 Add 可以并发，
-而"到达顺序"**根本没有被表达过**（跨 Add 不存在顺序，也不建立邻接）。
-**第 1 步不能省**：位置虽然幂等了，但 AML 的重试是**正常行为**，不能每次都靠撞 `UNIQUE` 兜
-（那会把正常重试变成 500）；而"同 id 不同 payload"**不是重试**，它必须响亮地冲突
-（静默挑一份落库 = 另一份记忆凭空消失）。
+Supported plan types are `filter`, `walk`, `interval`, and `current`. Lists and counts share the same evidence plan. Final list construction and counting remain AML responsibilities.
 
-**第 4 步与第 5 步的边界**：SQLite 是事务的，Qdrant 不是。因此第 4 步先落真源、第 5 步再同步派生索引；若第 5 步失败，Qdrant 可以从 SQLite 重建（它是派生读存储），而反过来不行。
+The path falls back as a whole when a plan is unsupported, source coverage is incomplete, evidence limits are exceeded, unresolved branches remain, or source review finds conflicts.
 
-### Search 路径（§5 流程图）
+### Routing
+
+After grounded evidence is incomplete, the router may choose:
+
+- `DEFAULT`: normal hybrid retrieval.
+- `MULTI_HOP`: the configured agent executor.
+
+The router only classifies. It does not retrieve, bind fact fields, generate answers, or rewrite stored memory.
+
+### Multi-Hop Executors
+
+`react` repeatedly retrieves, reranks a round-local candidate set, asks the model for sufficiency and the next query, and merges evidence by stable ID.
+
+`plan` first decomposes the original query into one to four ordered steps. Each round answers only the step whose evidence was just retrieved. Program code binds placeholders and decides when to stop. Program code adds one recovery retrieval for `unresolved` or `conflict` outcomes and reranks that recovery pool against the original query.
+
+Both modes share normal retrieval, isolation, and final packaging. Final reranking occurs once in the Search pipeline after candidates from all rounds are merged.
+
+### Hybrid Retrieval
 
 ```text
-（`router.enabled = false`，或路由判成 `DEFAULT` 时从这里开始）
-（共同取证不适用时）
-query → BM25 ┐
-             ├→ Weighted RRF → memory_id 稳定去重 → Evidence Checker
-     dense  ─┘                              ├ 证据足够 → 直接返回
-                                            └ 证据不足 → Agentic Search
-                                                          ↓
-                                          （候选**合并**，不是替换）
-                                                          ↓
-                                              Rerank（远端 cross-encoder）
-                                                          ↓
-                                              Neighbor Expansion（按名次扩窗）
-                                                          ↓
-                                              Context Segment Merge
-                                                          ↓
-                                              Token Budget + Context Packaging
-                                                          ↓
-                                              ≤ top_k（精确计数，**数的是段**）
+BM25 query -----+
+                 +-> weighted RRF -> stable candidate IDs
+Dense query ----+
 ```
 
-#### 共同事实先行，未完成后路由（D40，路由默认开）
+- BM25 uses Qdrant sparse vectors with IDF.
+- Dense retrieval uses the configured embedding backend.
+- RRF uses `k=61`.
+- Final truncation happens after deterministic ordering.
+- `user_id` is the only retrieval filter.
+
+## Module Ownership
+
+| Module | Owns |
+| --- | --- |
+| `service/` | HTTP schemas, request orchestration, degradation boundaries, and service assembly |
+| `pairing/` | Block composition, Add-scoped adjacency, idempotency, and the source write transaction |
+| `facts/` | Deterministic source-backed fact extraction and query-plan compilation |
+| `store/` | SQLite source access, grounded-fact persistence, Qdrant index access, and adjacency queries |
+| `embed/` | Embedding protocol, model adapters, query adaptation, and persistent vector cache |
+| `retrieve/` | Retrieval policy, candidate fusion, grounded-evidence execution, and query routing |
+| `rank/` | Reranking, neighbor expansion, segment merge, and final packaging |
+| `agent/` | `react` and `plan` multi-hop executors |
+| `llm/` | OpenAI-compatible chat client and LLM availability errors |
+| `common/` | Rendering, token counting, and configuration loading |
+| `observability/` | Per-request metrics and aggregated metric snapshots |
+
+## Dependency Direction
 
 ```text
-Search(query, top_k)
-   → 共同事实计划 → 有序依赖查询 → 来源/约束审查 → 双预算打包
-       ├ 完整 ⇒ 返回独立证据，不调用 QueryRouter
-       └ 未完成 ⇒ QueryRouter（开启时）
-                    ├ MULTI_HOP → AgenticSearch → 共用精排/打包尾部
-                    │              执行器未配置或执行失败 ⇒ 混合检索
-                    └ DEFAULT / 路由关闭 → 原混合检索链
+service
+  -> pairing -> facts, store
+  -> retrieve -> facts, store, embed, llm
+  -> rank -> store, common
+  -> agent -> retrieve, rank, llm
+  -> observability
+
+common depends on no business module.
 ```
 
-`walk` 保留有序步骤和重复关系；每条候选分支缺边、存在未解释声明或超限时整体转交。
-打包截断或缺来源时也不算取证完成。`agentic.force` 仍保留直接走多跳的实验语义。
-来源索引已扫描不代表语义完整，有序路径完整也不保证最终模型正确作答。
+`store/` is the only module that accesses the business SQLite database and Qdrant. The embedding cache is the declared exception: it is a rebuildable cache with its own database file and connection policy.
 
-#### 多跳那条路内部（**D41**，`agentic.enabled` **2026-10-14 起默认开**）
+`common/render.py` is the only implementation for QA and fact text rendering. Indexing, reranking, and response packaging use the same rendered representation, with one declared exception: response-only relative-time annotation may add text to `content` as long as removing the annotation restores the indexed text exactly.
 
-```text
-原始 Query
-   ├─→ ① 混合召回（**复用同一条 BM25+Dense+RRF**）→ 现有 Reranker → Top-N
-   ├─→ ② 攒证据：本轮 Top-N ＋ 此前已选中的（按稳定 ID 去重、**每轮重建索引映射**）
-   ├─→ ③ **一次** LLM：充分性 ＋ 选证据 ＋ 下一跳 Query（原版 CoQ 提示词，⛔ 不许改）
-   └─→ ④ 停？（已判定充分且置信 ≥ 阈值 / 轮数用尽 / Query 重复或为空 / 出错）
-         否 ⇒ 换 Query 回 ①
-         是 ⇒ 各轮 Top-N 去重合并 ⇒ 交回上面的共同尾巴
-```
+## Core Invariants
 
-> ⚠ **最终精排仍然只做一次**，而且由 `SearchPipeline` 做——执行器交出的不是"排好的
-> 结果"，而是**候选 + 该用哪句 Query 去排**（原问题 ＋ 实际执行过的改写，§9.1）。
-> ⛔ 让执行器自己排最后一次会造出**两次最终精排**。
-> ⚠ 每轮**内部**还会精排一次：那是为了把交给 LLM 的证据筛干净，产出物**不进响应**。
-> ⚠ 与 PRD §9 的参数**不同**（§9 是 4 轮 / 每轮 5 / 三个工具；这里是 4 轮 / 每轮 20 /
-> **没有工具**）——见 **D41**。
+1. Memory IDs are derived from position, not content.
+2. Batch idempotency is stored in `applied_batches`, not inferred from `request_id` shape.
+3. Block composition and adjacency are scoped to one Add.
+4. Adjacency uses stored `prev_memory_id` and `next_memory_id` links.
+5. Source text is stored only in SQLite.
+6. Grounded facts require verbatim source evidence.
+7. Search isolation is enforced on every retrieval path.
+8. Final item count and token budgets are enforced after packaging.
+9. Optional services degrade observably.
+10. Invalid configuration, invalid model output, and source corruption fail loudly.
 
-> ⚠ **路由不改写查询、不生成答案、不产出事实绑定字段**（§2.1 / §7.2 照旧）：
-> 它只决定走哪条路。⛔ 也**不设置信度阈值**——分类是类别选择，不是打分。
->
-> ⚠ **共同取证不再是"被分类保住"的东西**（2026-10-14 起）：取证**无条件先试**、
-> 在 `router.enabled` 两种取值下都跑 ⇒ 路由即便把一个 `walk` / `interval` / `current`
-> 问法判成 `DEFAULT`，那条确定性短路**照样在它之前就生效了**。
-> ⇒ **2026-10-14 起默认打开**（主流程按模型分类选路）；"路由行为未经代理评测标定"
-> 仍是一条待清的风险。键与口径见
-> [`config-reference.md`](./config-reference.md) **§5.7**；决策见 **D40**（含 2026-10-14 补三）。
+## Storage Boundaries
 
-> **`top_k` 数的是段、不是 raw memory**：扩窗会把 raw 条数抬到 `top_k` 之上，
-> 而相邻块的合并又把它降回来 ⇒ **截断只能在合并之后做**。
-
-> ⚠ **"相邻"是存储里的显式指针 `prev_memory_id` / `next_memory_id`**（D28），
-> 不是算出来的下标：扩窗**沿链跳**，合并**看指针相接**。
-> ⇒ 跨 Add **结构上不可能**相邻（指针只在一次 Add 内连过），
-> 而链上缺一块也**不会**被"下一块"顶上来。
-
-**"合并而非替换"**（§9）：Agent 的产出与初始候选按 `id` 去重后一起进 Rerank。理由——初始那一路往往已经有正确答案，Agent 的价值是**补上它找不到的那部分**，而不是推翻它。
-
----
-
-## 2. 模块 → PRD 映射
-
-| 目录 | 负责什么 | PRD |
+| Store | Role | Loss behavior |
 | --- | --- | --- |
-| `facts/` | 共同事实记录、来源句法、问题计划、当前输入依赖；不分业务表或开关 | 当前共同取证结构 |
-| `service/` | HTTP 层：`POST /add`、`POST /search`（+ `GET /health` 探活）；请求/响应模型；**共同取证分支的编排与整体回退** | §2.1、§15 → **D28** |
-| `pairing/` | **记忆块组合（一次 Add = 唯一边界，D24）**；幂等守卫 + 位置分配 + 落库（+ 同一事务内的**共同事实索引**）；**§15 写入路径的唯一所有者** | §6.2、§6.5（D24 后的口径）、§15 |
-| `store/` | SQLite 真源（`qa_pairs` + `applied_batches`；另有**可重建的派生事实表** `memory_facts` / `evidence_coverage`）；Qdrant 派生索引；邻域查询的 SQL | §6.1、§6.3 |
-| `embed/` | `Embedder` 协议 + 两个实现；**落盘的向量缓存** | §7.4、§7.2 |
-| `retrieve/` | BM25；dense；**混合检索的策略与参数所有权**；Evidence Checker；**共同证据执行器**（计划不适用 / 索引未扫完 / 冲突 / 超限 ⇒ 回原链）（**到 rerank 为止**） | §7.1–§7.3、§8 |
-| `rank/` | rerank → **Neighbor Expansion（§10）** → Context Packaging —— "排序 → 扩窗 → 打包"三连环 | §10、§11 |
-| `agent/` | **多跳执行器的编排**，**两种模式**（`agentic.mode`）：`react` = 一轮一问的 Chain-of-Query（召回/精排复用下层）、证据按稳定 ID 跨轮累积、每轮重建索引映射、批量预算、失败降级；`plan` = **先拆一份固定计划**（1~4 步，含 `{{sN}}` 占位）、每轮只回答"刚检索完的那一步"、下一查询由**程序**按模板绑定；某一步解不出来（`unresolved`）**或报冲突（`conflict`）**时**按请求的 `top_k` 补一次原题检索**（程序侧、最多一次，不额外调 LLM；先精排挑选、再按名次去重补位，补到池子满为止、不够不凑）。⛔ **不是通用 Agent**——没有工具调用、不做最终精排、不生成最终答案 | §9 的**一部分**（见 **D41**） |
-| `llm/` | LLM 后端抽象（`gpt-4o-mini` / qwen3.5-9b） | §2.3、§12.1 |
-| `common/` | **渲染的唯一实现**（QA 对与事实片段）；token 计数；配置加载 + **开关校验** | §11.3、§6.4、§15 |
-| `observability/` | §14 指标（**各层发射、本层聚合**） | §14 |
+| SQLite | Source of truth for blocks, idempotency, facts, and coverage | Source memory is lost; this is the required backup |
+| Qdrant | Derived vector and metadata index | Rebuild from SQLite |
+| Embedding cache | Rebuildable cost cache | Recompute vectors |
 
-### 四处容易摆错的位置
-
-| 东西 | 该在哪 | 为什么不在别处 |
-| --- | --- | --- |
-| **Neighbor Expansion** | **`rank/`** | §10 明确它跑在 rerank **之后**，属"排序 → 扩窗 → 打包"；且它是 SQLite 读，不是 Qdrant 操作。**在 §5 的流程图里它位置很靠上，极易被误读成检索的一环**（§10 开头的顺序说明是权威的） |
-| **向量缓存** | **`embed/`** | 缓存键是"渲染后文本的哈希"（§7.2），属渲染 + embedding 的关注点。且 §6.3 把这层定义为**恰好两样东西**（SQLite 真源 + Qdrant 派生索引，**明确"不可互换"**）——塞进第三个存储会削弱那条规则 |
-| **§15 的六步写入路径** | **`pairing/`** | 它是一个事务，跨"幂等守卫 → 取位置 → 组合 → 写正文 → 记旁表"。若 `service/` 也碰它，**两边会长出半个事务**。`service/` 只负责 HTTP 形状与校验，**不碰 Qdrant** |
-| **检索的"参数"与"执行"** | **参数在 `retrieve/`，执行在 `store/qdrant_store.py`** | `prefetch_limit` / `weights` / `k` / `top_k` 的**取值、校验、标定**是检索策略（要能被配置驱动、能被 ablation 检验）；而把它们翻成 `prefetch` + `rrf` 的**Qdrant 语法**是 `store/` 的事。**分界线**：`retrieve/` 说"用什么参数"，`store/` 说"怎么发给 Qdrant"。⚠ 一份实现**不许两边都写**——`k=61` 的由来见 D5，校验只在 `retrieve/` |
-
----
-
-## 3. 依赖方向
-
-```text
-        service/                     ← 只依赖 pipeline，不直接碰 store
-            │
-            ↓
-        pipeline（编排）              ← §5 流程图的字面实现
-            │
-   ┌────────┼────────┬──────────┐
-   ↓        ↓        ↓          ↓
-pairing  retrieve   rank      agent
-   │        │        │          │
-   │        ├→ facts │          ├→ llm
-   │        ├→ embed │          │
-   │        │        │          │
-   └────────┴────────┴──────────┘
-            ↓
-          store/                     ← 唯一触碰业务真源（SQLite）与 Qdrant 的地方
-            ↑
-        common/                      ← 被所有层依赖，**自己不依赖任何业务层**
-        observability/               ← 被所有层调用（埋点），不反向依赖
-```
-
-> ⚠ 图是简化的：`facts/`（共同事实记录与来源句法、问题计划）还被 `pairing/`（写入时抽取）
-> 与 `service/`（编译计划）调用；它自己**不 import 任何业务层**、不写 SQL、不调模型，
-> 只依赖 `common/render`。
-
-**三条硬性边界：**
-
-1. **`store/` 是唯一接触「业务真源」（SQLite）与 Qdrant 的目录。** §6.3 的分工表（真源 vs 派生索引、谁能做什么谁不能做什么）只有在所有读写都收口到一处时才守得住。上层拿到的是领域对象，不是 `sqlite3.Row` 或 Qdrant `ScoredPoint`。（限定词是必要的——[`../src/tianximem/embed/base.py`](../src/tianximem/embed/base.py) 的 `DiskVectorCache` 也直接开 SQLite。）
-2. **`common/render` 是渲染的唯一实现。** §7.2 与 §11.3 要求 **embedding 的输入**与**返回给 AML 的 `content`** 是**同一份渲染**——两处一旦不一致，"检索命中的是什么"与"模型读到的是什么"就会漂移，**而且这种漂移不会报错**。这是 `common/` 存在的全部理由：它不是工具箱，是一条不变式的落地点。
-3. **`observability` 不反向依赖业务层。** 埋点是被调用的，不是去拉取的。**每个指标由产生它的那一层发射**（embedding 调用数由 `embed/` 发、Agent Trigger Rate 由 `agent/` 发、rerank 的 `degraded`/`disabled` 与 latency/query 由 `service/` 在 Search 的请求边界发——**计数住在 `SearchPipeline`**，因为"降级 / 没开"这个判定就在那里做），本目录只聚合。**接了哪些、没接哪些**逐项见 [`../src/tianximem/observability/CLAUDE.md`](../src/tianximem/observability/CLAUDE.md)。
-
----
-
-## 3.5 七个评分维度 → 机制映射（§3.2）
-
-**官方维度逐字采用**（§3.2）。归档 `aml_readme.md` 的原文（"Textual memory capabilities" 表）：
-
-| # | 维度 | 官方描述 |
-| --- | --- | --- |
-| 1 | Explicit fact recall | Can the system retrieve the right stated facts? |
-| 2 | Relational and multi-hop reasoning | Can it connect evidence distributed across memories? |
-| 3 | Temporal and event understanding | Can it distinguish order, updates, and the latest valid state? |
-| 4 | **Memory governance** | Can it update, retain, and use memory appropriately over time? |
-| 5 | Personalization and care | Can it preserve preferences, identity, and user-specific context? |
-| 6 | Rules and process execution | Can it recall and follow established constraints and procedures? |
-| 7 | **Epistemic safety and privacy** | Can it respect evidence boundaries, uncertainty, and sensitive information? |
-
-其中 **第 4、7 两维**在早期设计里**完全未被覆盖**，是 §3.2 明确要求**在设计里显式回应**的——**所以下表不是装饰，它是那两个维度的唯一落点。**
-
-| # | 维度 | 由什么机制回应 | 在哪 |
-| --- | --- | --- | --- |
-| 1 | Explicit fact recall | 索引单元 = **完整 QA 对**（不是 message）；**原文或逐字来源支持的独立事实**，不生成答案 | `store/` · `rank/packaging` |
-| 2 | Relational and multi-hop reasoning | `agent/` 的多轮检索（**合并而非替换**）；`retrieve/` 的 hybrid + RRF | §9 · §7.3 |
-| 3 | Temporal and event understanding | `event_time` 列负责**筛选**；正文**保留原始时间表述**；`created_at` 日粒度 | §11.3 |
-| 4 | **Memory governance** | ① **批次级幂等守卫**（`applied_batches`）② **块写下即最终**、此后再无改写路径（**D24**）③ 索引损坏时可从真源全量重建（`tools/reindex.py`） | §6.1 · §6.5（**D24** 后的口径） |
-| 5 | Personalization and care | 按 `user_id` 严格隔离；`rank/packaging` 的**原文优先**与窗口内**时间序** | §2.2 · §11.2 |
-| 6 | Rules and process execution | 契约合规本身：精确 `top_k`、双预算截断、原样回显；以及 agent 的**受控工具面**（只能给关键词与日期范围） | `service/` · §9 |
-| 7 | **Epistemic safety and privacy** | ① **`user_id` 是唯一检索隔离字段**，跨 user 检索被禁止 ② **`Search` 不生成答案、不把答案伪装成记忆记录** ③ **冲突消解靠时间可见性**（保留原始时间表述让模型看得出哪个更新） | §2.2 · §2.1 · §11.3 |
-
-### 第 4 与第 7 维值得单独说
-
-**这两维是"不报错就丢分"的类型**，而且**都不体现在检索质量上**：
-
-- **第 4 维（Memory governance）**——官方描述问的是"**能否随时间正确地更新、保留、使用记忆**"。它测的是**写入是否诚实**：重复应用、覆盖旧数据、`status` 回退，**这些都不会让检索变差**，只会让记录与事实不符。本项目的落地就是 §6.5 那套"**两层幂等 + 块写下即最终**"，**其中批次级守卫是唯一防"位置重分配"的机制**（见 [`decisions.md`](./decisions.md) D4、D24）。
-- **第 7 维（Epistemic safety and privacy）**——官方描述问的是"**能否尊重证据边界、不确定性与敏感信息**"。它测的是**边界是否守住**：跨 user 泄漏、越权生成答案、在冲突记忆里选错。**①的落地是"每条路径都带 `user_id` 条件"**（[`../tests/CLAUDE.md`](../tests/CLAUDE.md) §3 要求**按路径逐个测**，因为邻域扩展是 SQL 查询、最容易漏条件）；**③的落地是"时间可见性"**——正文带日粒度锚点、相对表述就地注解成绝对日期（D21 / D22），让模型看得出**哪条更新**，而不是由我们去替它裁决。
-
-> **报告纪律**：`eval/reports/` 的记录 schema **要求七个维度逐维记录**。**这两维为空的 run，等于没测。**
-
----
-
-## 4. 不变式清单
-
-写代码时若发现某处违反下列任一条，**先停下来确认，不要就地绕过**。
-
-| # | 不变式 | 出处 |
-| --- | --- | --- |
-| I1 | `content` 与 embedding 输入来自**同一次渲染调用**（**一个声明式例外**：只改 `content` 的确定性注解，见下） | §7.2 / §11.3 |
-| I2 | 任何返回值都精确 ≤ `top_k`，且**同时按槽位数与 token 数双预算截断** | §2.2 / §6.4 |
-| I3 | 一个 `request_id` 至多被应用一次——守卫查 `applied_batches`，**不是查 `qa_pairs.request_id`** | §6.5 |
-| I4 | 相邻性走**存储里的显式指针** `prev` / `next`（只在一次 Add 内连过）；链上缺一块就断开，**不会被顶上来** | §6.1 → **D28** |
-| I5 | `id` 位置派生；缓存键内容哈希。**两者不能互换** | §6.1 / §7.2 |
-| I6 | **`index_pairs` 失败会留下「SQLite 有、Qdrant 没有」的行，而检索不报错**——修复路径见 `service/pipeline.py` | §6.5 → **D24** |
-| I7 | `Search` 不生成答案、不把答案伪装成记忆记录；reranker 只重排证据 | §2.1 / §11.2 |
-| I8 | 所有消融开关只影响它命名的那一件事 | §13 / §15 |
-| I9 | 每个返回项单件**带 `created_at`**（日粒度；`event_time` 为 NULL 时发 `""`） | §11.3 |
-| I10 | 正文里的绝对时间**只到日粒度**（秒级绝不许出现），且**相对表述原样保留**（日期是额外锚点，不是替换） | §11.3 / **D21** |
-
-> ### ⚠ I1 的**唯一例外**：只改 `content` 的注解（`packaging.annotate_relatives`）
->
-> `true` ⇒ 正文里的相对时间**就地注解**成绝对日期（`last Tues (July 18, 2023)`），
-> 原文一字不动。它**只走 `content` 这一条路**——索引侧与精排输入仍然是 `render_pair`，
-> **一个字都不改** ⇒ 开它**不用重建索引、不用换集合**（这一点与 T1 的
-> `inject_abs_time` 正相反，那个改的正是 embedding 输入）。
->
-> **例外到什么程度**（这句话是 I1 松动的边界，别再往外推）：
-> `content` = 被索引的文本 **+ 一层纯函数注解**，剥掉注解后**逐字相同**——
-> 不是"两份渲染各写各的"，而是**一份渲染 + 一个可逆的确定性后处理**。
-> 实现 [`src/tianximem/common/annotate.py`](../src/tianximem/common/annotate.py)；
-> 投影性质由 [`tests/test_annotate.py`](../tests/test_annotate.py) 的两条断言钉住
-> （"开关不碰索引" + "剥掉注解逐字相同"）。
->
-> ⚠ **"正文与索引必须同形"是纪律，不是物理定律**：I1 的例外与 I10 的日期前缀是**仅有的两处**，
-> 且都以"说清例外到哪为止"为代价换来——**别把松动本身当成先例**。
-
-> **I8 单独强调**：若关掉一个开关却顺带改变了别的量，该对照**就不成立**——"而结果看起来完全正常，只是结论错了"（§13，从零搭建特有的陷阱）。逐开关的"关掉时不得改变什么"见 [`config-reference.md`](./config-reference.md) §2。
-
----
-
-## 5. 为什么正文不复制进 Qdrant payload
-
-（§6.3）那样会有两份正文，一旦不一致**就无法判断该信哪一份**。而按主键批量取正文是微秒级操作，没有性能理由去复制。
-
-因此 `Search` 的时序是：**Qdrant 出 `id` → 回 SQLite 按 `id` 批量取正文 → 渲染 → 打包**。"取正文"这一步没有缓存层，也不应该有：正文的可信来源只有一处。
+Qdrant must run in server mode with persistent storage. Embedded local mode does not provide the required payload-index behavior.

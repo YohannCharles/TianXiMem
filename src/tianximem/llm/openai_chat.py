@@ -9,22 +9,13 @@ Content-Type: application/json
  "temperature": 0.0, "max_tokens": 8}
 ```
 
-## 为什么只有一个实现，而不是 `gpt_4o_mini.py` + `qwen_local.py`
+## 为什么只有一个实现
 
-`llm/CLAUDE.md` 原计划按模型分两个文件。**实测后并成一个**：开发期的
-`Qwen/Qwen3.5-9B`（`memory` / `memory2`）与提交期的 `gpt-4o-mini`（DashScope）
-**说的是同一套线格式**（OpenAI 兼容的 `/chat/completions`），差别只有
-`base_url` / `key` / `model` 三个值——而**那三个值全部来自 `.env`**。
+开发模型与提交模型使用同一套 OpenAI 兼容线格式，差别只在 `base_url`、密钥和模型名。
+这些值都来自环境配置，因此一个客户端实现即可覆盖两种部署。Embedding 适配器则因
+批次上限等模型 API 差异而分开。
 
-⇒ 按模型分文件会造出**两个内容相同的类**，而它们的唯一差别只能靠"哪一行 import 了谁"
-表达；那种差别**看不出来、也 diff 不出来**。R1 的接缝由
-[`base.py`](./base.py) 的协议承担，**不由文件名承担**。
-
-⚠ 这条与 `embed/` 的做法一致：那里也是"按模型名挑实现"，但**判据是模型名本身**
-（`build_embedder`），因为 `text-embedding-v4` 与 Qwen3-Embedding **真的不同**
-（批大小是端点硬限）。**这里没有那类差异**，所以不需要那个判据。
-
-## 端点身份在 `.env`，且**两个对话端点各有一把 key**（D39）
+## 端点身份在 `.env`，且**两个对话端点各有一把 key**
 
 `AML_BASE_URL` / `AML_API_KEY`（主）、`AML_BASE_URL_2` / `AML_API_KEY_2`（次）。
 ⚠ **url 与 key 成对**：混用/对调都是 **401**，而 401 只在真发请求时才出现。
@@ -65,7 +56,7 @@ def _usage(body: object) -> dict[str, int] | None:
 
 
 class OpenAiCompatChat:
-    """OpenAI 兼容的对话端点（§2.3 的 `gpt-4o-mini` / 开发期替代模型）。
+    """OpenAI 兼容的对话端点，用于提交模型和开发期替代模型。
 
     ⚠ **本实现只管一件事：把提示词变成文本。** 它不解析路由、不重试、不做结构化输出——
     解析是 [`../retrieve/router.py`](../retrieve/router.py) 的契约（见 `base.py` 的说明）。
@@ -82,17 +73,14 @@ class OpenAiCompatChat:
     ) -> None:
         if not base_url or not api_key:
             raise ValueError("base_url 与 api_key 都不得为空")
-        # ⚠ **`model` 允许为空、但记一条**：真实网关对它的态度是"校验或忽略"两种
-        #   （`docs/config-reference.md` §9 的表）——**忽略型的网关空着也能跑**。
-        #   这里不抛，是因为"服务起不来"是比"分类降级"更坏的失败（同 `build_reranker` 的口径）；
-        #   而**该不该起**由装配侧决定，不由本类决定。
+        # `model` 允许为空：部分网关会忽略该字段。是否需要强制配置由装配和启动校验决定。
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
         self._timeout = timeout
         self._client = client
 
-        #: 诊断量（§14）。**不进响应**——响应只有 §2.1 那四个字段。
+        #: 诊断量，不进入 Search 响应。
         self.calls = 0
         self.last_latency_ms: float | None = None
         self.last_error: str | None = None
@@ -207,7 +195,6 @@ class OpenAiCompatChat:
             raise LlmUnavailable(f"`message.content` 必须是字符串，收到 {type(content).__name__}")
         text = content.strip()
         if not text:
-            # ⚠ **空白 ≠ 合法输出**：把它放进解析层会变成"分类成功、结果是空串"，
-            #   于是"端点一直在回空"这个故障在 §14 里长得像"模型答得怪"。
+            # 空白不是合法输出；在这里失败可区分端点返回空内容与模型输出无效。
             raise LlmUnavailable("`message.content` 是空白——端点回了空内容")
         return text

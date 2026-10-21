@@ -136,7 +136,7 @@ def _walk(
     if plan.walk_relations:
         if not plan.walk_root or len(plan.walk_relations) > hop_limit:
             return None
-        # 读取期已把第一人称事实的主语换成真名（D50）；walk 的根实体若仍是 `"i"`，
+        # 读取期已把第一人称事实的主语换成真名；walk 的根实体若仍是 `"i"`，
         # 把它解析成 owner，否则整条路径在**有自我介绍的用户**上永远断在第一步。
         frontier = {
             owner if owner and plan.walk_root in FIRST_PERSON else plan.walk_root
@@ -173,8 +173,8 @@ def _walk(
                 selected.setdefault(fact.id, fact)
             frontier = {key(fact.object) for fact in current}
         return list(selected.values())
-    # A keyword set does not describe the order or all dependencies of a question.
-    # Legacy plans cannot certify a completed evidence path.
+    # Keyword-only plans do not describe edge order or all dependencies, so they cannot
+    # certify a completed evidence path.
     return None
 
 
@@ -382,7 +382,7 @@ def walk_sources_supported(
                     actor = "i"
                 if actor in subjects:
                     return False
-                # **点名同一主体的介绍句不算未解释**（2026-10-18）：HaluMem 的
+                # **点名同一主体的介绍句不算未解释**：HaluMem 的
                 # "My name is Barbara Jones, and I am a Female" 只是自我介绍，
                 # 不是与已选事实冲突的另一条声明——它正是把第一人称绑到该主体的那句。
                 if " my name is " in f" {words_key(body)} ":

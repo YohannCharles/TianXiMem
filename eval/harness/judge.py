@@ -9,7 +9,7 @@ harness 要么 subprocess 调它、要么**复制它的逻辑**——后者会�
 
 ## 注入格式：**键名是 `speaker_1_memories`**
 
-§17.3 的 **V3** 记着"用什么键名注入没有明文"。**读 pipeline 源码即可回答**：
+文档没有明确规定注入键名；**读 pipeline 源码即可确认**：
 
 ```python
 fallback_memories = item.get("retrieved_context", item.get("memories", ""))
@@ -27,7 +27,7 @@ memories`）；**`speaker_2_memories` 没有回退，缺即空串**——这条�
 [`../CLAUDE.md`](../CLAUDE.md) 里"退化不对称"的出处。
 
 > ⚠ **仍然未知的是"怎么分"**，不是"用哪个键"：真实 AML 侧按什么把我们的返回列表
-> 切成两个 speaker 块，**归档里看不到**（§17.1 的 S1 是同一类问题的记忆版）。
+> 切成两个 speaker 块，**归档里看不到**。
 > ⇒ 本模块把**全部命中的 `content` 拼成一个字符串放进 `speaker_1_memories`**，
 > `speaker_2_memories` 留空。**这是一个显式的代理假设**，不是事实——
 > `memory_field` 参数就是给它留的出口。**别把它当成已验证的契约。**
@@ -54,7 +54,7 @@ from pathlib import Path
 
 # ── façade：搬去 judge_items / judge_results 的名字在这层**重新导出** ────────
 # `from eval.harness.judge import X` 全线照旧（消费方遍布 tests/ tools/ experiments/）。
-# ⚠ 重新导出的是**名字的快照**：`monkeypatch.setattr(judge, "X", ...)` 打不到搬走后的
+# ⚠ 重新导出的是**名字的快照**：`monkeypatch.setattr(judge, "X", ...)` 打不到移出后的
 #   真实现——要补丁就去补 `judge_items.X` / `judge_results.X`（见 tests/test_harness.py）。
 from eval.harness.judge_items import (  # noqa: F401
     _ADAPTER_PIPELINES,
@@ -119,8 +119,8 @@ def _subprocess_env(endpoint_index: int | None = None) -> dict[str, str]:
     条目，import 继续往后找到这里。归档因此**保持只读**。
 
     `endpoint_index` 非 None ⇒ 一并写进 `AML_ENDPOINT_INDEX`：子进程里 import 的
-    `api_config` 据此选中那一号对话端点（`memory` / `memory2` 是同一个模型、两把 key，
-    **D39**）。⚠ 它是**每个子进程**唯一的端点开关——父进程 `os.environ` 是共享的，
+    `api_config` 据此选中那一号对话端点（`memory` / `memory2` 是同一个模型、两把 key）。
+    ⚠ 它是**每个子进程**唯一的端点开关——父进程 `os.environ` 是共享的，
     在线程池里改不了（见 `api_config` 的模块 docstring）。
     """
     env = dict(os.environ)
@@ -142,7 +142,7 @@ def _run(
 ) -> None:
     """跑一个 pipeline 子命令，**瞬时故障自动重试**。
 
-    ## 为什么必须重试（2026-09-26，一次真实事故）
+    ## 为什么必须重试
 
     LongMemEval 那轮跑到第 47 题时，**判分侧一次 TLS 握手失败**
     （`httpcore ... start_tls` → `httpx.ConnectError`）就把**两小时的跑批整个打死**，
@@ -165,7 +165,7 @@ def _run(
             env=_subprocess_env(endpoint_index),
             capture_output=True,
             text=True,
-            # ⚠ **父进程必须按 UTF-8 解子进程的管道**（2026-10-13 实测踩过）：
+            # ⚠ **父进程必须按 UTF-8 解子进程的管道**：
             #   `text=True` 单独用会走**locale 编码**，Windows 上是 GBK——而 pipeline
             #   子进程写的是 UTF-8（中文与全角标点），于是 `subprocess` 的读线程抛
             #   `UnicodeDecodeError`、`stdout`/`stderr` 双双是 `None`，
@@ -202,7 +202,7 @@ def _run(
 
 
 #: 判分子进程的**上限**（秒）。`run_judge` 的 `timeout=None` 视为取它（见 `run_judge` 的 docstring）。
-#: ⚠ **1200s（20 分钟）**：**不返回就记题号、跳过**（用户 2026-10-14 定，所有数据集统一）。
+#: ⚠ **1200s（20 分钟）**：**不返回就记题号、跳过**。
 #: 口径是「**一个用户的某一步**（`answer` 或 `evaluate`）**整体**超过 20 分钟」——
 #: ⛔ 不是"单题 20 分钟"（归档 pipeline 本来就按用户整批跑）。20 分钟 > 最慢的合法 clbench 子进程。
 DEFAULT_JUDGE_TIMEOUT: float = 1200.0
@@ -225,9 +225,9 @@ def run_judge(
     `mkdir(parents=True)`**（`clb_pipeline.py` 会）。文件不存在时它以 `"a"` 模式打开，
     所以目录缺了就是 `FileNotFoundError`。
 
-    ⚠ **超时默认 `DEFAULT_JUDGE_TIMEOUT`（1200s = 20 分钟）**（2026-10-14 定）：之前是"`None` = 不超时"，
-    但实测一个**真挂住**的子进程会**永久阻塞**那个 worker（clbench 一条 0 字节挂了 57 分钟）。
-    ⇒ 现在 20 分钟不返回就走调用方的「记下题号、跳过」。口径是**一个用户的某一步整体**，
+    ⚠ **超时默认 `DEFAULT_JUDGE_TIMEOUT`（1200s = 20 分钟）**：没有超时时，
+    一个**真挂住**的子进程会**永久阻塞** worker。⇒ 20 分钟不返回就走调用方的
+    “记下题号、跳过”。口径是**一个用户的某一步整体**，
     ⛔ 不是"单题"（归档 pipeline 按用户整批跑）。
 
     **两步之间的不对称**：`answer` 以**追加**模式打开并按 `id` 跳过已完成的题
@@ -235,7 +235,7 @@ def run_judge(
     而两个 pipeline 的 `evaluate` 都在 ID 集合不一致时 **`raise SystemExit`**——
     **漏跑几题是硬失败，不是静默掉分**。
 
-    `endpoint_index` 是**这次调用**用哪一号对话端点（D39）：两步都用同一个
+    `endpoint_index` 是**这次调用**用哪一号对话端点：两步都用同一个
     （同一次调用内不切换），而不同 sample 之间由调用方轮转——派发在
     [`../experiments/run.py`](../experiments/run.py) 的判分线程池。
     """
@@ -249,7 +249,7 @@ def run_judge(
             handle.write(_jsonl_line(item))
 
     # ★ 续跑前先修掉上次被强杀留下的半行——否则 `answer` 步读它就 `JSONDecodeError`，
-    #   而表现是"**卡在同一道题**"（详见 `_sanitize_jsonl` 的事故记录）。
+    #   而表现是"**卡在同一道题**"（详见 `_sanitize_jsonl` 的失败模式说明）。
     _sanitize_jsonl(answers_path)
 
     # `--model` / `--base-url` / `--api-key-env` 都**是死的**：这两个子命令在协程开头
@@ -271,7 +271,7 @@ def run_judge(
     )
     if dataset == "beam":
         # ⚠ 归档 `pipeline_beam.py evaluate` 要求"每个 rubric 索引**恰好一次**"；模型偶尔
-        #   不合规就整批 `ValueError`（2026-10-14 实测：第一个 beam 用户就撞上，整轮中止）。
+        #   不合规就整批 `ValueError`。
         #   逐 rubric 单条模板恢复（`beam_judge.py`，产出与 evaluate **相同的标签行**）
         #   ⇒ 不因一条不合规丢掉整轮；恢复也失败才响亮抛出。
         try:

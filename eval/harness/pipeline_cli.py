@@ -5,12 +5,11 @@
 `judge.run_judge` 按归档那几份的写法，把 `--max-tokens` **在子命令之后**传
 （`… answer --input … --output … --max-tokens 256`）⇒ **两个子命令都要收它**。
 
-⚠ 2026-09-30 的教训：一开始把它挂在**顶层** parser 上，而 argparse 的子解析器不认识它
-⇒ 整轮以 `unrecognized arguments` **死在第一步**（还没跑到任何一道题），
-看起来像别的问题。
+⚠ 该选项不能只挂在**顶层** parser 上：argparse 的子解析器不会继承它，整轮会在
+`unrecognized arguments` 处失败，尚未执行任何题目。
 
-⇒ 所以要复用这一份、而不是各写各的：形状改一处就够，**默认值按调用方给的传**
-（`extra` / `scriptmem` 用 512、归档重放用 1024——那个差别是实测出来的，不要抹平）。
+⇒ 所以复用这一份、而不是各写各的：形状只需维护一处，**默认值按调用方给定**
+（`extra` / `scriptmem` 用 512、归档重放用 1024，不要抹平该差异）。
 """
 
 from __future__ import annotations

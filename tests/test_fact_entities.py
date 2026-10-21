@@ -223,8 +223,7 @@ def test_gold_comparison_reports_rules_model_and_combined() -> None:
         SpacyEntityExtractor(spacy.load("en_core_web_sm")), cases
     )
 
-    # 规则层现在也能抽出这条（2026-10-18 扩了事件/角色动词表）——这条断言原本
-    # 钉的是"规则抽不出、只有 spaCy 抽得出"，那个前提已经不成立。
+    # 规则层与 spaCy 都能抽出这条；断言固定两条路径当前都得到 1.0 的 F1。
     assert report["rules"]["f1"] == 1.0
     assert report["model_sidecar"]["f1"] == 1.0
     assert report["combined"]["f1"] == 1.0

@@ -321,7 +321,7 @@ def test_temporal_hypothetical_and_exclusion_queries_are_not_routed(query):
 
 
 def test_first_person_plan_still_matches_after_the_name_is_known(tmp_path):
-    """D50 的读取期改名不能让**问 "I"** 的计划全部判否（2026-10-19 实测复现）。
+    """ 的读取期改名不能让**问 "I"** 的计划全部判否。
 
     `fetch_evidence` 会把第一人称事实的主语换成真名，而计划侧仍是字面 `"i"`。
     没有 `owner` 等价规则时，同一个问题在"用户有自我介绍"之后静默回退原链。
@@ -363,10 +363,10 @@ def test_first_person_plan_still_matches_after_the_name_is_known(tmp_path):
 
 
 def test_first_person_plan_with_a_guard_literal_keeps_its_evidence(tmp_path):
-    """带 `guard_literal` 的计划也要传 `owner`（2026-10-19 复审发现的漏传）。
+    """带 `guard_literal` 的计划也要传 `owner`。
 
     `sources_supported` 用 `matches(fact, owner)` 算"已解释的主体"；不传 `owner`
-    时，有自我介绍的用户会算成"没有主体"，来源审查随后把整题判回原链。
+    时，有自我介绍的用户会算成"没有主体"，来源审查会把整题判回原链。
     """
     store = SqliteStore.open(tmp_path / "test.db")
     apply_batch(

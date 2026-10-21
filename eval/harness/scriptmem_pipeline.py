@@ -38,7 +38,7 @@ import argparse
 import sys
 from pathlib import Path
 
-# ⚠ 与 `extra_pipeline.py` 同一处置：补仓库根 + 用 D16 的唯一入口拿归档目录。
+# ⚠ 与 `extra_pipeline.py` 同一处置：补仓库根 + 用  的唯一入口拿归档目录。
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 for _candidate in (str(_REPO_ROOT), str(Path(__file__).resolve().parent)):
     if _candidate not in sys.path:

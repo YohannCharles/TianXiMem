@@ -1,4 +1,4 @@
-"""Neighbor Expansion + Context Segment Merge（§10 / §11.2）。
+"""Neighbor Expansion 与 Context Segment Merge。
 
 ```text
 ranked（已去重、已 rerank 的名次）
@@ -14,18 +14,17 @@ ranked（已去重、已 rerank 的名次）
 
 1. **种子数之外的候选只保留、不扩展**
 2. **不给新扩出来的邻居造排名**——否则段优先级与锚点都会指向没被选中的记忆
-3. **禁止跨 session 扩窗**（隔离契约，§2.2）
-4. **禁止跨 Add 扩窗 / 合并**（D28：跨 Add 不存在可信的全局顺序）
+3. **禁止跨 session 扩窗**（隔离契约）
+4. **禁止跨 Add 扩窗 / 合并**
 5. **只有显式相邻才合并**（`前一条.next_memory_id == 这一条.id`，不是下标加一）
 6. **段内顺序只能是 `local_index` 升序**（把种子提到最前会把一段对话拦腰截断）
 
-## 邻接是**存储里的显式指针**，不是算出来的下标（D28）
+## 邻接是**存储里的显式指针**，不是算出来的下标
 
-`prev_memory_id` / `next_memory_id` 在**一次 Add 内**算好、写下时就是最终形状。
-⇒ 扩窗 = 沿指针跳，合并 = 看指针是否相接。⛔ 不再有 `pair_idx ± 1` 或
-"会话内稠密序"这类**推断出来的**相邻性——那在真实（不透明）`request_id` 上根本没有依据。
+`prev_memory_id` / `next_memory_id` 在一次 Add 内生成并持久化。扩窗沿这些指针移动，
+合并也以指针相接为准；不能用数组下标推断相邻性，因为 `request_id` 是不透明的。
 
-**为什么扩窗读 SQLite 而不是 Qdrant**：§6.3 的分工——正文不进 Qdrant，邻接指针也在 SQLite。
+扩窗读取 SQLite，因为正文和邻接指针都不存储在 Qdrant。
 """
 
 from __future__ import annotations
@@ -50,16 +49,9 @@ __all__ = [
     "merge_segments",
 ]
 
-#: 主动扩窗的种子数与半径（§10）——**从 `common/config/constants.py` 再导出**。
-#:
-#: ⚠ **值的家不在这里**：`common/` 不得 import 本层（分层要求），所以默认值住在配置层。
-#: 各写一份会出现"代码默认值与配置里写的不是同一个数"这种没人会发现的漂移——它只会表现为
-#: "扩窗比预期少了几条"，**不报错**。
-#:
-#: ⚠ 半径的单位是 **记忆块**：`±1` 拿回前后各**一整块**（最多 4 条消息），
-#: 不是各一条消息——**扩窗比 message 粒度时更贵**（值见 config-reference §6）。
-#: ⚠ **D28 起它就是"沿链跳几跳"**：链上只有完整 QA，所以 A-only / Q-only 永远不作为
-#: 邻居出现（它们没有链）。
+#: 主动扩窗的种子数与半径，从 `common/config/constants.py` 再导出。
+#: 默认值只在配置层维护；重复定义会造成代码默认值与配置默认值漂移。
+#: 半径单位是 QA 记忆块，`±1` 会沿链取得前后各一个完整块。
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +70,7 @@ class SelectedMemory:
     def local_index(self) -> int:
         """它在**那一次 Add** 的块列表里的序号。
 
-        ⚠ 只在一次 Add 内有意义（D28）——所以它**只**用来给同一条链上的成员排序，
+        ⚠ 只在一次 Add 内有意义——所以它**只**用来给同一条链上的成员排序，
         任何"跨 Add 比大小"的用法都是错的。
         """
         return self.pair.local_index
@@ -89,7 +81,7 @@ class SelectedMemory:
 
     @property
     def chain_key(self) -> tuple[str, str, str]:
-        """**邻接链的作用域** = 一次 Add（D28）。
+        """**邻接链的作用域** = 一次 Add。
 
         ⚠ 段合并必须按它分组：换成 `session_key` 就会把**两次 Add** 的记忆放进同一组，
         而"它们恰好下标相接"这件事在下标是**每批各从 0 开始**的数时**毫无意义**。
@@ -126,10 +118,10 @@ def expand_neighbors(
     """把 `ranked` 全部保留，并对**前 `seed_limit` 条**扩窗 `± radius`。
 
     **一次 `store.read()` 里做完所有查询**：短生命周期连接模型下每次开连接都要付一次
-    `connect`（D17）。跳 `radius` 跳 ⇒ 至多 `radius` 次批量查询（每跳把所有前沿节点
+    `connect`。跳 `radius` 跳 ⇒ 至多 `radius` 次批量查询（每跳把所有前沿节点
     的 `prev` / `next` 收成**一次** `IN`），不是"每个种子各跳各的"。
 
-    ⚠ 读操作**不拿写锁**（D17：不要为读拿 `BEGIN IMMEDIATE`）。
+    ⚠ 读操作**不拿写锁**。
     """
     if seed_limit < 0:
         raise ValueError(f"seed_limit 不得为负：{seed_limit}")
@@ -180,7 +172,7 @@ def expand_neighbors(
                 if pair is None:
                     continue
                 for neighbour in (pair.prev_memory_id, pair.next_memory_id):
-                    # ⚠ `prev` / `next` 只会在**同一次 Add 内**连过（D28）⇒
+                    # ⚠ `prev` / `next` 只会在**同一次 Add 内**连过⇒
                     #    "不跨 Add 扩窗"是**结构性**的，这里不需要再判断 request_id。
                     if neighbour is not None and neighbour not in selected:
                         wanted.setdefault(neighbour, None)
@@ -210,9 +202,9 @@ def expand_neighbors(
 
 @dataclass(frozen=True, slots=True)
 class ContextSegment:
-    """一段**连续**对话（§11.2 / §11.3）。**它是 v1 打包与预算的原子单位。**
+    """一段**连续**对话，是打包与 token 预算的原子单位。
 
-    ⚠ **"连续"的判据是显式指针**（D28）：段内相邻两条必须满足
+    ⚠ **"连续"的判据是显式指针**：段内相邻两条必须满足
     `前一条.next_memory_id == 后一条.id`。所以一个段**整体落在一次 Add 内**，
     自带它的 `request_id`。
     """
@@ -223,7 +215,7 @@ class ContextSegment:
     user_id: str
     session_id: str
     request_id: str
-    """这一段来自**哪一次 Add**（D28）。段是 Add-local 的，所以这个字段是**唯一值**。"""
+    """这一段来自**哪一次 Add**。段是 Add-local 的，所以这个字段是**唯一值**。"""
 
     start_local_index: int
     end_local_index: int
@@ -231,7 +223,7 @@ class ContextSegment:
 
     anchor_memory_id: str
     """**段优先级的来源**：段内真实名次最好的那条候选的 `id`。
-    最终响应的 `id` 用它（§11.2 的组间顺序 = 种子名次序）。"""
+    最终响应的 `id` 使用该候选的 ID。"""
 
     best_rank: int
     """段内**最小的真实 rerank 名次**。**邻居不参与**。"""
@@ -243,7 +235,7 @@ class ContextSegment:
     """`common/render` 拼好的正文（`render` 逐块 + `render_segment` 连接）。"""
 
     token_count: int
-    """**对 `content` 这个真实字符串**数的 token（§6.4）——不是各对 token 之和。"""
+    """对 `content` 这个真实字符串计数的 token 数，不是各对 token 之和。"""
 
     rerank_member_count: int
     """段里有几条是真实候选（其余是扩窗补的）——诊断用。"""
@@ -278,7 +270,7 @@ def merge_segments(
     中间缺一个块就说明那段对话**不完整**，硬拼成一整段会让模型读到自己以为连续、
     实际缺了一环的上下文——而 `content` 里**看不出来**。
 
-    ⚠ 段内顺序 = `local_index` 升序（**不把锚点提到最前**，§11.2）。
+    ⚠ 段内顺序按 `local_index` 升序，不把锚点提到最前。
     """
     # ── 分组：chain_key → 该 Add 的成员，组内按 local_index 升序 ──
     groups: dict[tuple[str, str, str], list[SelectedMemory]] = {}
@@ -312,7 +304,7 @@ def merge_segments(
                 )
             )
 
-    # 段间按 best_rank 升序（= 相关性顺序，§11.2 的组间顺序）
+    # 段间按 best_rank 升序，即相关性顺序。
     segments.sort(key=lambda s: s.best_rank)
     return segments
 
@@ -343,9 +335,9 @@ def _build_segment(
     )
     best_rank = anchor.rerank_rank if anchor.rerank_rank is not None else _NO_RANK
 
-    # ── 段内顺序（§11.2 的"组内顺序"，明文列为**可消融项**）─────────────────────
-    # 默认 `keep`：纯位置（`local_index`）时间序。它被选中的理由是"窗口是一段连续对话，
-    # 按时间序读才成立"——所以另两个变体**都要用数据说话**，不能凭直觉换。
+    # ── 段内顺序 ───────────────────────────────────────────────────────
+    # 默认 `keep`：按 `local_index` 保持时间序。连续对话窗口按时间序阅读；
+    # 其他变体用于对照评估。
     # ⚠ 它们**只改渲染顺序**：`source_memory_ids` / `start_local_index` / 锚点 / `best_rank`
     #   一个都不动（否则"段优先级只看真实候选"这条不变式就破了）。
     ordered = run
@@ -355,7 +347,7 @@ def _build_segment(
     elif seed_placement == "echo" and anchor in run:
         echoed = [anchor]  # 段首重复一份；下面的时间序块**原样保留**
 
-    # ⚠ 逐块渲染，且**日期口径与索引侧、精排输入侧完全一致**（不变式 I1 / T1）：
+    # ⚠ 逐块渲染，且日期口径与索引侧、精排输入侧完全一致：
     #    `inject_abs_time` 由 `packaging.inject_abs_time` 传下来，三处读的是同一个值。
     #
     # ⚠ 而 `annotate_relatives`（`packaging.annotate_relatives`）**只在这一处生效**——

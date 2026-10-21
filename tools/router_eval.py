@@ -9,7 +9,7 @@ uv run --env-file .env python tools/router_eval.py --repeat 3 --boundary-only   
 
 | 测 | 不测 |
 | --- | --- |
-| **分类准确性**：混淆矩阵 + 逐类 P/R/F1 | ⛔ **多跳的效果**（执行器不存在，D40） |
+| **分类准确性**：混淆矩阵 + 逐类 P/R/F1 | ⛔ **多跳的效果** |
 | **成本**：耗时（均值 / P50 / P95）与 token | ⛔ 端到端分数（那要 `eval/experiments/`） |
 | **可复现性**：`--repeat N` 看分类稳不稳 | ⛔ 校准（不设阈值正因没有校准集） |
 
@@ -17,7 +17,7 @@ uv run --env-file .env python tools/router_eval.py --repeat 3 --boundary-only   
 
 **`eval/router-samples.jsonl` 里的 `expected_route` 是人工标注的，不是数据集自带的类目。**
 数据集那套标注（LoCoMo 的 `category`、LongMemEval 的 `question_type`）
-描述的是**答案类型**，**不是检索依赖结构**——实测里 LoCoMo 标成 `category=1`（multi-hop）
+描述的是**答案类型**，**不是检索依赖结构**——里 LoCoMo 标成 `category=1`（multi-hop）
 的一大半题目按本判据其实是 `DEFAULT`（`What did Caroline research?` 就是一次直取）。
 ⇒ **直接拿数据集类目当路由真值会得到一份假分数**，所以每条都是人读着
 `router.py` 提示词里的定义判的，判据写在每条的 `label_note` 里，**可以逐条反驳**。
@@ -28,12 +28,12 @@ uv run --env-file .env python tools/router_eval.py --repeat 3 --boundary-only   
   （`after the roadtrip`、`the friend who wrote Deborah ...`、
   `the day before I had a doctor's appointment`）；
 * `DEFAULT` —— 其余，含**多实体比较**与普通时间 / 数值问题；
-* ⚠ **`COUNT` 已取消**（2026-10-14）：路由收成二分类后它不再是合法取值。数据里仍留着
-  人标的 `COUNT` 历史行——它们是"计数 / 名单"问法，现在由**共同取证**（先于路由器运行、
-  确定性）处理、**根本到不了路由器** ⇒ 本工具在装载时**显式跳过**并数出来（见下）。
+* ⚠ **`COUNT` 不是合法路由值**。标注清单中可能仍有这类行，它们是"计数 / 名单"
+  问法，由**共同取证**先于路由器处理、**根本到不了路由器**；本工具在装载时
+  **显式跳过**并数出来（见下）。
 * 我判得**真的有争议**的题带 `"boundary": true`——单列一节，**不混进主矩阵的结论里**。
 
-⚠ **样本只覆盖 LoCoMo-Refined 与 LongMemEval**（代理评测那两份，§12.4）。
+⚠ **样本只覆盖 LoCoMo-Refined 与 LongMemEval**（当前代理评测的两个数据集）。
 **这类准确率不能外推到全赛道**：其余数据集的问法分布不同。
 
 ## 它不发 Add / Search
@@ -60,12 +60,12 @@ sys.path.insert(0, str(ROOT))
 
 #: 混淆矩阵的行列顺序。**写死在这里**：按字母序排会把 `DEFAULT` 排在 `MULTI_HOP` 前，
 #: 读的人每次都要在脑子里重排一遍。
-#: ⚠ **只有两条**（2026-10-14）：路由收成二分类，`COUNT` 已从 `Route` 枚举删除。
+#: ⚠ **只有两条**：路由器是二分类，`COUNT` 不属于 `Route` 枚举。
 ROUTES = ("MULTI_HOP", "DEFAULT")
 
-#: ⚠ **只有两个**：2026-10-10 起提示词里**没有 `NONE`** 了（空 / 无效输入归入口，
-#: 不归路由器）；2026-10-14 起 `COUNT` 也删了 ⇒ 本文件只认这两个期望值。
-#: 数据里遗留的 `COUNT` 行在装载时被跳过（路由到不了它们——归共同取证）。
+#: ⚠ 提示词里没有 `NONE`（空 / 无效输入归入口，不归路由器），
+#: `COUNT` 也归共同取证 ⇒ 本文件只认这两个期望值。
+#: 输入清单中的 `COUNT` 行在装载时被跳过，因为路由器不会处理它们。
 LEGACY_ROUTES = ("COUNT",)
 
 DEFAULT_MANIFEST = ROOT / "eval" / "router-samples.jsonl"
@@ -75,7 +75,7 @@ def _questions(root: Path) -> dict[tuple[str, str], str]:
     """`(dataset, question_id) -> question`，**只读**两份代理评测数据。
 
     ⚠ 路径经 [`eval.datasets.registry.benchmark_dir()`](../eval/datasets/registry.py)，
-    **不硬编码**（D16）。
+    **不硬编码**。
     """
     from eval.datasets.registry import benchmark_dir
 
@@ -107,7 +107,7 @@ def load_manifest(path: Path, questions: dict[tuple[str, str], str]) -> list[dic
 
     `#` 开头的行是注释（探针文件用它写判据口径）。
 
-    ⚠ **遗留的 `COUNT` 行被跳过并数出来**（不静默）：那些"计数 / 名单"问法现在归
+    ⚠ **`COUNT` 行被跳过并数出来**（不静默）：那些"计数 / 名单"问法归
     **共同取证**（先于路由器运行）处理、到不了路由器 ⇒ 拿它们当路由器的测试用例
     只会得到必然的"错"。
 
@@ -242,7 +242,7 @@ def token_summary(rows: list[dict]) -> dict:
 
 
 def stability(first: list[dict], later: list[dict]) -> dict:
-    """`--repeat` 的判据：**同名题在多次调用间的分类是否一致**（§6 的可复现性）。
+    """`--repeat` 的判据：**同名题在多次调用间的分类是否一致**。
 
     ⚠ 报的是**不一致的题**本身，不是一个比率——"3/40 不稳"没法行动，
     而"这 3 条是什么"能直接读。
@@ -486,7 +486,7 @@ def report(records: list[dict], *, writer=print) -> dict:
 
 
 def _snapshot_dict(path: Path) -> dict:
-    """读一次 §14 快照；**文件还不存在时给一份"零"的形状**（第一题之前它确实没有）。"""
+    """读一次指标快照；**文件还不存在时给一份"零"的形状**（第一题之前它确实没有）。"""
     zero = {
         "router": {"routes": {}, "fallbacks": {}},
         "grounded_evidence": {"operators": {}, "outcomes": {}},
@@ -506,7 +506,7 @@ def _delta(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
 
 
 def smoke(runner: Runner, *, out: Path | None) -> int:
-    """§5.3 的端到端冒烟：**真模型 + 真 `SearchPipeline`**，逐条查 §5.3 的检查项。
+    """端到端冒烟：**真模型 + 真 `SearchPipeline`**，逐条检查路由与响应形状。
 
     ⚠ 它**不建 Qdrant、不碰网络除 LLM 外的东西**：检索那一路用"把库里全部行当候选"
     的桩（与 `tests/test_grounded_evidence.py` 同一个形状），
@@ -522,18 +522,18 @@ def smoke(runner: Runner, *, out: Path | None) -> int:
     from tianximem.service.pipeline import SearchPipeline
     from tianximem.store.sqlite_store import SqliteStore
 
-    #: §7 的回归清单：每条 = `(query, 期望路由, 期望取的算子)`。
+    #: 路由回归清单：每条 = `(query, 期望路由, 期望取的算子)`。
     #: ⚠ **期望路由是"按冻结提示词的判据应该走哪条"，不是"我希望它走哪条"**——
     #: 对不上就是要报的回归，不许改期望值把它糊过去。
     #: `operator=None` 表示"这一条编译不出计划"（期望回退）。
-    #: ⚠ **共同取证现在先于路由器**（2026-10-14）：凡是被取证接住的题，**路由器根本不被调用**
+    #: ⚠ **共同取证现在先于路由器**：凡是被取证接住的题，**路由器根本不被调用**
     #: ⇒ `want_route` 写 `None`（不查路由；硬写 `"DEFAULT"` 会误报），只查算子。
     #: 只有"取证编译不出计划、回落到路由器"的那条才有 `want_route`。
     cases = [
         # —— 计数 / 名单：**归共同取证**（不是路由器）——必须真的进取证 ——
         ("Who are the coaches at North Athletics?", None, "filter"),
         ("How many coaches are there at North Athletics?", None, "filter"),
-        # —— 共同取证支持的**非计数**问法：路由器会不会把它们分流掉？（§7 末段）——
+        # —— 共同取证支持的**非计数**问法：路由器会不会把它们分流掉？——
         ("Which events did Rosa Quinn participate in?", None, "filter"),
         ("Who is the spouse of Rosa Quinn?", None, "walk"),
         ("Who was the head of state of France after 1995?", None, "interval"),
@@ -546,7 +546,7 @@ def smoke(runner: Runner, *, out: Path | None) -> int:
         ),
         ("What is Rosa Quinn's role?", "DEFAULT", None),
         ("What are Rosa's and Dana's roles?", "DEFAULT", None),
-        # —— 多跳 ⇒ 执行器不存在 ⇒ 必须响亮降级 ——
+        # —— 多跳 ⇒ 本冒烟未配置执行器 ⇒ 必须可观察地降级 ——
         ("Where did the person who introduced me to Rosa later work?", "MULTI_HOP", None),
         # —— 编译不出计划 ⇒ **回落到路由器**，按二分类判 DEFAULT（无依赖链）——
         ("List all the things that happened lately", "DEFAULT", None),
@@ -620,7 +620,7 @@ def smoke(runner: Runner, *, out: Path | None) -> int:
         failures: list[str] = []
         for query, want_route, want_operator in cases:
             # ⚠ **每个指标都取"前后差"**：快照里那些 dict 是**进程累计**的，
-            #   直接读会把前面几题的结局算进这一题（§14 那条"增量不是累计值"的老坑）。
+            #   直接读会把前面几题的结局算进这一题，因此必须取差值。
             before = _snapshot_dict(metrics_path)
             result = pipeline.run(user_id="u", query=query, top_k=100)
             after = _snapshot_dict(metrics_path)
@@ -636,14 +636,14 @@ def smoke(runner: Runner, *, out: Path | None) -> int:
             checks: list[str] = []
             got_route = ",".join(sorted(route)) or "?"
             if want_route is not None and got_route != want_route:
-                # ★ §7 的核心断言：路由对不对
+                # ★ 核心断言：路由对不对
                 checks.append(f"路由期望 {want_route} 得到 {got_route}")
             if want_operator == "current":
                 # `current` 的合法产物就是**空结果**（不检索、只判输入齐不齐）
                 if outcomes.get("current_input") != 1:
                     checks.append(f"current 未走 current_input：{outcomes}")
             elif want_operator is not None and want_operator not in operators:
-                # ★ §7 的核心断言：**原有取证查询有没有被路由器分流掉**
+                # ★ 核心断言：**共同取证查询有没有被路由器分流掉**
                 checks.append(f"算子期望 {want_operator} 得到 {sorted(operators) or '-'}")
             if len(result.items) > 100:
                 checks.append("top_k 违约")
@@ -688,8 +688,8 @@ def smoke(runner: Runner, *, out: Path | None) -> int:
     else:
         print("\n✅ 全部通过")
     print(
-        "\n⚠ 这条冒烟**不构成多跳效果证据**：执行器不存在（D40），"
-        "凡 `MULTI_HOP` 都在报告里记了 `agentic_unavailable`。"
+        "\n⚠ 这条冒烟**不构成多跳效果证据**：本流程未配置执行器，"
+        "`MULTI_HOP` 会记录为 `agentic_unavailable` 并回退。"
         "\n⚠ 也**不宣称计数正确率提升**：这里只验路由与证据行为，没有金标答案可评。"
     )
     if out:
@@ -726,7 +726,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repeat", type=int, default=1, help="每题调用几次（>1 则报稳定性）")
     parser.add_argument("--boundary-only", action="store_true", help="只跑边界子集")
     parser.add_argument("--limit", type=int, help="只跑前 N 题（冒烟用）")
-    parser.add_argument("--benchmark-dir", type=Path, help="覆盖数据根目录（默认见 D35）")
+    parser.add_argument("--benchmark-dir", type=Path, help="覆盖数据根目录（默认由数据集注册表解析）")
     parser.add_argument(
         "--smoke",
         action="store_true",
@@ -764,8 +764,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     records = evaluate(runner, rows, repeat=args.repeat)
 
-    # ⛔ **先落盘、再打印**（2026-10-12 修）。打印只是显示，而它**会崩**——
-    #    实测：在 Windows 控制台上 `report()` 打了一个 `⚠` ⇒
+    # ⛔ **先落盘、再打印**。打印只是显示，而它**会崩**——
+    #    ：在 Windows 控制台上 `report()` 打了一个 `⚠` ⇒
     #    `UnicodeEncodeError: 'gbk' codec can't encode character '⚠'`，
     #    而 `summary.json` / `rows.jsonl` 写在它**后面** ⇒ **200 次真实调用一条没落盘**。
     #    ⚠ 这正是本仓最忌讳的那类失败：跑了一小时、每次调用都成功、只是没写下来。
@@ -786,7 +786,7 @@ def main(argv: list[str] | None = None) -> int:
             "note": (
                 "样本的 `expected_route` 是**人工标注**的（见 tools/router_eval.py 顶部）；"
                 "`query` 列是数据集原文，遵循与 `dataset/` 相同的**不外传**口径。"
-                "本报告**不构成多跳效果证据**——执行器不存在（D40）。"
+                "本报告**不构成多跳效果证据**——该冒烟流程未配置执行器。"
             ),
         }
         (args.out / "summary.json").write_text(

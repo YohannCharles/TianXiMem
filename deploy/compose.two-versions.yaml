@@ -1,32 +1,8 @@
-# 同机并排跑**两个版本**的检索服务（官方采集 8,783 题的两版对比）
-#
-# 用法（在仓库根）：
-#   docker compose -f deploy/compose.yaml -f deploy/compose.two-versions.yaml up -d --build
-#
-# 它只**增加**一个 `app-v10` 服务，不覆盖 `app`（= 当前版本）。两个服务共用同一个 Qdrant
-# 容器（不同 collection）与同一个 `deploy/.env`（模型端点相同），但：
-#
-#   · SQLite 真源分开（`/data-v10` 与 `/data`）——真源是唯一不可重建物，不能混；
-#   · collection 分开（`memories_v10` / `memories`）——上一套 point 会静默留在旧集合里（V9）；
-#   · 端口分开（`${TIANXIMEM_V10_PORT:-8001}` vs `${TIANXIMEM_PORT:-8000}`）。
-#
-# ⚠ **v1.0 的镜像要单独构建**（它的代码不在当前工作树里）：
-#
-#   git worktree add /srv/tianximem-v1.0 v1.0
-#   docker build -f /srv/tianximem-v1.0/deploy/Dockerfile \
-#                -t tianximem:v1.0 /srv/tianximem-v1.0
-#
-#   然后 `TIANXIMEM_V10_IMAGE=tianximem:v1.0` 传给 compose（缺省就是这个名字）。
-#
-# ⚠ **判分口径必须一致**：两臂的答案/裁判模型、端点、输出预算、`memory_date`、
-#   `annotate_mark` 要完全相同，否则 `run_official_eval.py compare` 会拒绝比较。
-#   产品版本与产品配置可以不同——那正是要比较的东西。
+# Optional second application container for version comparison.
 
 services:
   app-v10:
     image: "${TIANXIMEM_V10_IMAGE:-tianximem:v1.0}"
-    # ⚠ v1.0 的镜像里没有本仓现在这批配置键。它的 `configs/` 随它自己的工作树构建，
-    #   所以这里**不要**挂当前的配置目录，也不要用当前的 profile 名去覆盖它的集合。
     container_name: tianxi-app-v10
     restart: unless-stopped
     stop_grace_period: 60s
@@ -38,18 +14,10 @@ services:
       - .env
     environment:
       TIANXIMEM_QDRANT_URL: "${TIANXIMEM_QDRANT_URL:-http://qdrant:6333}"
-      # ⚠ 两臂**必须各用各的集合**：v1.0 的 `local.yaml` 与当前版本一样写 `memories_dev`，
-      #   两臂都用 local 就会写进同一个集合（V9：旧 point 静默留着、污染检索）。
-      #   ⇒ v1.0 用一个**专属 profile**（服务器上另放一份 configs 目录，见下面的注释）。
       TIANXIMEM_PROFILE: "${TIANXIMEM_V10_PROFILE:-v10}"
       TIANXIMEM_SQLITE_PATH: /data/tianxi.db
       TIANXIMEM_EMBED_CACHE_DIR: /data/embed_cache
       TIANXIMEM_WORKERS: "1"
-      # v1.0 的镜像里烘着**它自己那份 configs/**。要换集合（或任何配置）而不重建镜像，
-      # 按 deploy/CLAUDE.md §0.5 挂一份目录，里面放 v1.0 的 `default.yaml` +
-      # 一个 `v10.yaml`（只写 `storage.qdrant.collection: memories_v10`），
-      # 再把 `TIANXIMEM_V10_CONFIG_DIR` 指过去（compose 会把它挂到 `/configs`）。
-      # ⚠ 不设它就**不设**这个环境变量——空串会让配置层去读 `/`，启动即失败。
       TIANXIMEM_CONFIG_DIR: "${TIANXIMEM_V10_CONFIG_DIR:-/configs}"
     volumes:
       - tianxi_data_v10:/data

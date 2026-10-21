@@ -1,178 +1,100 @@
-<!--
-维护者注释（HTML 注释在注入 context 前会被剥离，不花 token）：
-  本文件是 Claude Code 每次会话启动时唯一必然加载的文档。
-  内容准则：只放「任何动作都要守」的约束 + 路由指针。
-    · 模块专属的约束 → 该模块的 CLAUDE.md（Claude 读该目录下文件时按需加载）
-    · 论证、依据、实验数据 → PRD 与 docs/（不要搬进这里）
-    · 数字 → 只住 eval/reports/（见 docs/README.md 维护约定）
-  本文件已按官方建议控制篇幅（<200 行）——超了会降低遵循度。
--->
+# TianXiMem
 
-# TianXiMem — AML 参赛系统
+TianXiMem is an AML Agentic Memory service. It exposes two business endpoints:
 
-**只提供 `Add` / `Search` 两个 HTTP 端点**（外加一个探活用、不碰下游的 `GET /health`——平台默认探它，S4）；答案生成、评判、聚合全部由 AML 完成。本系统的输出是**按名次排列的证据**，不是答案。
+- `POST /add`: persist one request's memory blocks and make them searchable before returning.
+- `POST /search`: return at most `top_k` evidence items in relevance order.
 
-**权威规格**：[`AML Agentic Memory 增强框架 PRD.md`](./AML%20Agentic%20Memory%20增强框架%20PRD.md)。本文件与各模块 `CLAUDE.md` 只做导航与速查；**冲突时一律以 PRD 为准**。
+`GET /health` is a side-effect-free liveness endpoint. The service never generates a final answer, judges an answer, or writes generated text back as memory.
 
-**当前配置事实源**：[`docs/active-spec/config-defaults.md`](docs/active-spec/config-defaults.md)。产品 profile 的默认行为以 `configs/default.yaml` 为准；代码中的 dataclass 默认值只用于旧快照和直接构造配置对象的兼容场景。
-**跨平台开发入口**：[`docs/active-spec/development.md`](docs/active-spec/development.md)。Python CLI 是 Linux/Windows 共用命令的事实入口，Makefile 仅作兼容别名。
+## Source of Truth
 
-**当前状态**：**实现已开工，不是空脚手架。** 本表是模块级状态的**唯一权威**（别处一律指回这里）。
+- Product and system requirements: [`AML Agentic Memory 增强框架 PRD.md`](AML%20Agentic%20Memory%20增强框架%20PRD.md)
+- Architecture and dependencies: [`docs/architecture.md`](docs/architecture.md)
+- HTTP contract: [`docs/contract.md`](docs/contract.md)
+- Configuration keys: [`docs/config-reference.md`](docs/config-reference.md)
+- Active defaults: [`configs/default.yaml`](configs/default.yaml) and [`docs/active-spec/config-defaults.md`](docs/active-spec/config-defaults.md)
+- Cross-platform commands: [`docs/active-spec/development.md`](docs/active-spec/development.md)
 
-| 状态 | 模块 |
-| --- | --- |
-| ✅ **已实现** | [`store/`](src/tianximem/store/)（SQLite 真源 + **派生事实表**（`memory_facts` / `evidence_coverage`，可由正文重建）+ Qdrant + schema）· [`pairing/`](src/tianximem/pairing/)（**记忆块组合 / 一次 Add = 唯一边界，D24**；共同事实索引在同一写事务内写入）· [`facts/`](src/tianximem/facts/)（**有逐字来源的确定性事实记忆**：来源句法抽取 + 问题计划 + 当前输入检查——不调 LLM、不生成答案、不做名单与计数）· [`embed/`](src/tianximem/embed/)（`Embedder` 协议 + `Qwen/Qwen3-Embedding-4B`（开发期）+ **`text-embedding-v4`**（提交口径，2026-09-28）+ 落盘缓存 + 查询侧 instruction 兼容层 + **查询侧超长输入的前置截断**（2026-10-20；超 `EMBED_MAX_TOKENS` 的 query 在发送前截到窗口内，索引侧不截））· [`llm/`](src/tianximem/llm/)（**LLM 协议 + `LlmUnavailable` + OpenAI 兼容 `/chat/completions` 客户端**，2026-10-10 建；**三个消费者**：共同事实计划器、查询路由器与多跳执行器）· [`agent/`](src/tianximem/agent/)（**多跳执行器，两种模式**（`agentic.mode`，2026-10-12）：`react`（**代码内置缺省**）= Chain-of-Query 一轮一问、每轮复用下面的召回与精排、证据按稳定 ID 跨轮累积；`plan`（**`default.yaml` 提交口径**，2026-10-14 起）= **先拆一份固定计划**、每轮只回答"刚检索完的那一步"、下一查询由**程序**按模板绑定占位，某一步 `unresolved` 或 `conflict` 时**按请求的 `top_k` 补一次原题检索，经精排后按名次去重补位**（程序侧、最多一次、不加 LLM 调用）——两套提示词/解析/停止判据**各自独立**，**2026-10-14 起默认开**，**D41**）· [`common/`](src/tianximem/common/) 的 **`render.py`**（渲染唯一实现）、**`annotate.py`**（**相对时间就地注解**，只改 `content`、不碰索引，**D22**）、**`config/`**（**全包唯一读环境变量的地方**，③-d；2026-10-10 起也读 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`，**不另起一套名字**）与 **`tokens.py`**（`o200k_base` 计数，§6.4）· [`retrieve/`](src/tianximem/retrieve/)（**策略与参数所有权** + §8 判据 + `dedup_candidates` + **共同证据执行器 `evidence.py`**——计划不适用 / 索引未扫完 / 存在未解释的相关声明或冲突 / 超限 ⇒ 回退原混合检索 + **二分类查询路由器 `router.py`**——MULTI_HOP / DEFAULT，**默认开**（2026-10-14 起；代码内置缺省仍 `false`），**D40**；⚠ 它的 `MULTI_HOP` 那一支的真正执行器在 [`agent/`](src/tianximem/agent/)，**D41**）· [`rank/`](src/tianximem/rank/) 的 **`reranker.py`**（**远端精排接入**）、**`neighbor.py`**（**扩窗 + 段合并**，§10/§11.2）与 **`packaging.py`**（**段级打包 + 双预算**）· [`service/`](src/tianximem/service/)（HTTP 层 + **Add/Search 端到端编排**（Search 先试**共同取证分支**（无条件、确定性），不适用则整体回退原链；**未完成后才分类**——D40；分类到多跳则交给 [`agent/`](src/tianximem/agent/)——**D41**），③-c + **`GET /health` 探活**，S4 + **请求原文采集**（诊断旁路；`default.yaml` 默认开，代码内置缺省仍 `false`；**S6** 的唯一直接观察口））· [`observability/`](src/tianximem/observability/) 的 **`metrics.py`**（**§14 的出口**：latency + rerank 计数 + **路由的分布与耗时** → run record；⚠ **`embed/` 的发射方还没接；`agent/` 指标由 `service/` 汇总**）· [`configs/`](configs/) 的 `default.yaml` + `local.yaml` + **`submit.yaml`**（提交期 profile，2026-09-28 建；**由模型派生的阈值待 Step 5 重标定**） · [`eval/smoke/preflight.py`](eval/smoke/preflight.py)（**契约预检，③-e**）· [`eval/datasets/`](eval/datasets/)（**加载层 + schema 落差预处理**，含 `halumem.py` / `musique.py` / `hybridqa.py` / `feverous.py` 等新接入的加载器、`corpus_prepare.py`（语料解压）与 **`official_capture.py`**——官方采集的重放计划，以及 **`aml/`** 的版本化公开输入计划）· [`eval/harness/`](eval/harness/)（**HTTP 驱动（含 `Add` / `Search` 的有界重试）、`plan_driver.py` 的有序事件与历史快照续跑 / 切批 / **正文形态 `add_shape.py`** / 裁判包装（含 `extra_pipeline.py`、**`corpusqa_pipeline.py`** 等适配器，以及**官方采集的分派 pipeline `official_capture_pipeline.py`**）/ run record + `api_config.py` + `annotate.py` 注解原型**）· [`eval/reports/schema.py`](eval/reports/schema.py)（**run record 的形状**）· [`tools/check_env.py`](tools/check_env.py)（**环境自检，含 V7 探针**）、[`tools/probe_reranker.py`](tools/probe_reranker.py)（**精排探针**）、[`tools/t2_retrieval_dump.py`](tools/t2_retrieval_dump.py)（**T2 的纯 BM25 转储**）与 [`tools/reindex.py`](tools/reindex.py)（**从 SQLite 全量重建 Qdrant**）、[`tools/diagnose_run.py`](tools/diagnose_run.py)（**跑批诊断：把「低分」与「模型不行」分开**——判读树 + **「证据在不在」那条判据的自校准**）与 [`tools/ab_answer_prompt.py`](tools/ab_answer_prompt.py)（**答案 prompt 的 A/B：只重答拒答题**）、[`tools/targeted_eval.py`](tools/targeted_eval.py)（**固定失败案例的小样本 HTTP 评测**：manifest 驱动、逐题落盘可续跑、复用 harness 的答案与裁判）与 [`tools/router_eval.py`](tools/router_eval.py)（**路由分类的小样本评测**：manifest 驱动、混淆矩阵 + 逐类 P/R/F1 + 延迟分位，2026-10-10 建）与一批**诊断探针**：[`tools/error_report.py`](tools/error_report.py)（**错误案例归因：错在哪一环**）、[`tools/reorder_probe.py`](tools/reorder_probe.py)（换**注入顺序**重判错题）、[`tools/truncation_probe.py`](tools/truncation_probe.py)（**从后往前截断**的逐题因果探针）、[`tools/order_probe.py`](tools/order_probe.py)（**乱序 + 并发 vs 顺序**投喂的真源一致性）、[`tools/replay_official_adds.py`](tools/replay_official_adds.py)（回放**官方真跑抓的 `POST /add`**——S6 的收口验证）、[`tools/corporatebench_oracle_context.py`](tools/corporatebench_oracle_context.py)（CorporateBench 的**记忆上下文 oracle 诊断**）与**官方采集那一条链**：[`tools/build_official_kit.py`](tools/build_official_kit.py)（把采集与金标合成**判分套件** `official-eval-kit.jsonl`，**一题一行、加载与判分的唯一入口**）、[`tools/run_official_eval.py`](tools/run_official_eval.py)（**8,783 条可评分题的一键入口**：预检 → 固定清单重放 → 汇总；2026-10-19 建）、[`tools/verify_official_gold.py`](tools/verify_official_gold.py)（**只读金标审计**：逐条追回 extra/public_gold 来源并比对字段；**不证明上游金标语义正确**）、[`tools/recover_official_gold.py`](tools/recover_official_gold.py) 与它的四个姊妹脚本 `recover_{docpp,clbench,halumem,corpusqa}.py`（**逐族补公开金标**，10,144 条里 **8,783 条可评分**）· [`eval/experiments/`](eval/experiments/)（**通用 runner `run.py`** + **冻结口径 [`recipes.py`](eval/experiments/recipes.py)** + T1/T2/A3 三个 arm + **官方采集重放 [`replay_official.py`](eval/experiments/replay_official.py)（按 timeline 交错，`make replay-official`）** 与 **`official_dataset.py`（固定清单 + 逐事件检查点，8,783 条的全量入口）**）· [`eval/reports/ledger.md`](eval/reports/ledger.md)（**结果台账**）· [`eval/baselines/`](eval/baselines/) 的 [`refind/`](eval/baselines/refind/)（MIT 的 **B1——已跑通并留数**；[`invmem-candidate/`](eval/baselines/invmem-candidate/) 只读、不是基线）· [`configs/runs/README.md`](configs/runs/README.md)（**新实验快照入口；旧分支实验已清理**）· [`deploy/`](deploy/) 的 `Dockerfile` + `compose.yaml`（**整栈容器：服务 + Qdrant**）+ `.env.example`（**服务器形态，2026-09-28 起**）——测试在 [`tests/`](tests/) |
-| ⬜ **未实现** | **`llm/` 的工具调用**（只到"一次调用"——没有消费者）· **PRD §9 的通用 Agent**（工具集 / 会话级 rank fusion / 时间收窄 / 已见 session 去重——⚠ **`agent/` 里只有 Chain-of-Query 那一小块**，见 **D41**）· **`eval/` 还没写的**：`datasets/contracts.py`、`experiments/` 的 **A0 一个 arm**、`smoke/` 的 S1/S2/S3 探针与 `quota.py` · 尚未接线的消融开关（**逐项状态以 [`docs/config-reference.md`](docs/config-reference.md) §2 的表为准**——`checker.*` 未接；`neighbor` 只有 `radius` 可关，而它**默认就是 0**（**D31**，2026-10-01）；`rrf` / `dense` 是**无下游依赖**，不是待办） |
-| ⛔ **v1 不做**（**历史口径，已被 D41 越过**） | agentic 检索（D13）。⚠ 2026-10-10 起 [`agent/`](src/tianximem/agent/) **已存在**（Chain-of-Query，**D41**，**2026-10-14 起默认开**）⇒ 这条只描述 v1 当时的范围，**不要再拿它当现状** |
+If documents disagree, the PRD defines behavior; the code and tests define the implemented state.
 
-> **⚠ 状态描述是本仓最易过期的东西**：改动状态时，**连同搜一遍所有声称"未实现 / 未开始"的地方**——本表是唯一权威，别处只应指回这里。
+## Architecture
 
-**目标**：AML 榜分优于 ReFind 的 44.97。核心判断是**检索不是瓶颈（LongMemEval 召回已接近天花板，数字见 §4）、选择与排序才是**，所以主线是 Rerank + Context Packaging（§4 / §11），外加**有来源的共同事实取证**（[`facts/`](src/tianximem/facts/) + [`retrieve/evidence.py`](src/tianximem/retrieve/evidence.py)：把原文明示的关系 / 容器 / 时段编译成可逐条取证的独立事实，名单与计数共用同一证据计划；§2.1 的红线照旧）。
+```text
+Add
+  -> canonical payload fingerprint and applied_batches guard
+  -> compose memory blocks inside this Add only
+  -> write qa_pairs and grounded facts in one SQLite transaction
+  -> upsert Qdrant points with wait=true
+  -> return
 
----
-
-## 路由：动 X 之前先读 Y
-
-| 要动的东西 | 先读 |
-| --- | --- |
-| `src/tianximem/<模块>/` 下任何代码 | 该目录的 `CLAUDE.md`（要写什么、边界在哪、本层的坑） |
-| 共同事实取证（`facts/`、`memory_facts`、`retrieval.grounded_evidence`） | [`src/tianximem/facts/CLAUDE.md`](src/tianximem/facts/CLAUDE.md) + [`docs/architecture.md`](docs/architecture.md) 的「当前共同事实取证结构」 |
-| 契约层（service、Add/Search 形状） | [`docs/contract.md`](docs/contract.md) |
-| 任何阈值 / 权重 / 开关 | [`docs/config-reference.md`](docs/config-reference.md)（**开关的唯一声明处**）+ [`configs/CLAUDE.md`](configs/CLAUDE.md)（**每个键住在 `.env` 还是 yaml**）。**全包只有 [`common/config/`](src/tianximem/common/config/) 读环境变量**——有静态测试钉住 |
-| 一个"已锁定"的决定 | [`docs/decisions.md`](docs/decisions.md)（逐条 `Dn` + 待决事项——**编号别在这里列范围，它会过期**） |
-| 跑对照实验 | [`docs/experiments.md`](docs/experiments.md)（协议）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（怎么跑） |
-| **运行共享固定题单 / `selection_suite`** | [`docs/fixed-selection-suite.md`](docs/fixed-selection-suite.md)（固定清单、运行、续跑与 AI 提示词）+ [`eval/experiments/CLAUDE.md`](eval/experiments/CLAUDE.md)（入口选择） |
-| 数据集加载 / harness | [`docs/benchmark-data.md`](docs/benchmark-data.md) + [`eval/datasets/CLAUDE.md`](eval/datasets/CLAUDE.md) |
-| 读参考实现（InvMem 候选 / ReFind / MemMachine——**代码在哪、什么别学**） | [`docs/reference-implementations.md`](docs/reference-implementations.md) |
-| **准备 / 校验 `dataset/`**（按需下载、旧目录迁移） | [`dataset/CLAUDE.md`](dataset/CLAUDE.md) + [`docs/benchmark-data.md`](docs/benchmark-data.md) 的准备流程、出处链与本地修订；清单 / 映射 / 准备逻辑在 `eval/datasets/{manifest,layout,prepare}.py`。`make fetch-data DATASET=<名称>` / `make data-check DATASET=<名称>`（D35） |
-| 提交周期与截止日 | [`docs/submission.md`](docs/submission.md) §0（**第二期 09-20 已开，材料截止 10-31**） |
-| 发 Smoke / Full | [`docs/submission.md`](docs/submission.md)（配额与版本冻结） |
-| **部署到服务器**（镜像 / 整栈 / 服务器上要满足什么） | [`deploy/CLAUDE.md`](deploy/CLAUDE.md) **§0** + [`deploy/Dockerfile`](deploy/Dockerfile) 的文件头 |
-| **取官方请求原文 / 清 S6**（打开采集 → 取文件 → 怎么读 → 关回去） | [`deploy/CLAUDE.md`](deploy/CLAUDE.md) **§0.6**（配置语义在 [`docs/config-reference.md`](docs/config-reference.md) §12） |
-| 模块边界 / 谁依赖谁 / 七个评分维度各由谁回应 | [`docs/architecture.md`](docs/architecture.md) |
-| 每个 Step 的交付与进度 | [`docs/roadmap.md`](docs/roadmap.md) |
-| 还有哪些未知没清掉 | [`docs/open-questions.md`](docs/open-questions.md) |
-
----
-
-## 硬约束（AML 契约，违反通常**不报错**）
-
-| 约束 | 后果 | 出处 |
-| --- | --- | --- |
-| **`top_k` 由 AML 固定为 100** | 返回超过它是**契约错误**，**不会被静默截断**——必须**精确计数** | §2.2 |
-| **答案阶段按返回顺序取 117,760 token 前缀** | 排在后面的证据**整段作废**，白白占名额 | §2.2 / §6.4 |
-| **`user_id` 是唯一的检索隔离字段** | 跨 user 检索被禁止。`session_id` 只是分组字段，**不是 Search 的过滤器** | §2.2 |
-| **Add 最多被重试 32 次**（`request_id` 与 payload 不变） | 必须幂等 | §2.2 |
-| **响应前必须持久化完成且立即可搜索** | 不允许异步建索引 | §2.1 |
-| **`Search` 不得生成最终答案**，也不得把答案伪装成记忆记录 | reranker 只重排证据 | §2.1 / §11.2 |
-| **Add 仍必须 `--workers 1`** | `BEGIN IMMEDIATE` 与 `applied_batches` 都在单进程内；**放开多 worker 需要的验证一件都没做**（并发写压力、`busy_timeout` 多进程争用、每进程各一份 Qdrant 客户端） | §15 / **D28** |
-| **单请求最长 30 分钟；Full run 连续跑 0.5–2 天** | 阻塞调用会互相饿死，问题直到 Full 才炸 | §2.2 / §15 |
-
-### 三个静默出错的重灾区
-
-| 陷阱 | 为什么静默 | 在本文件之外 |
-| --- | --- | --- |
-| **幂等现在是纯内容层的**：块写下即最终形状（D24），位置是**请求的纯函数**（D28）⇒ 重试必然算出**同一位置**。但**批次级仍必须查 `applied_batches` 旁表**：AML 的重试是正常行为，不能每次靠撞 `UNIQUE` 来兜（那会让正常重试变成 500）。⚠ **D28 起它还要比对 payload 指纹**：同 `request_id` **不同 payload** ⇒ **409**（那不是重试；静默挑一份落库 = 另一份记忆凭空消失） | 写入是 upsert；D28 之后撞 `UNIQUE` **不再静默**，而"同 id 不同 payload"**响亮冲突** | [`pairing/CLAUDE.md`](src/tianximem/pairing/CLAUDE.md) |
-| **Qdrant RRF 的 `k` 默认是 `2`**，不是文献里的 60。**必须显式设 `k=61`** | 不设会得到一个与所有参考实现都不同的融合行为，极难排查 | [`docs/decisions.md`](docs/decisions.md) D5（换算推导） |
-| **Qdrant local 模式会静默丢弃 payload 索引** | 而 `user_id` / `session_id` / `event_time` 三个筛选**全依赖**它 | [`deploy/CLAUDE.md`](deploy/CLAUDE.md) §1（机制与后果） |
-
-### 两个 ID / 缓存键，方向正好相反
-
-| 用途 | 键 | 理由 |
-| --- | --- | --- |
-| 记录 `id` | **位置派生** `hash(user_id, session_id, request_id, local_index)`（D28，`request_id` 整体参与、**不解析**） | 用内容哈希会在内容变时变 `id`，留下**孤儿 point** |
-| embedding 缓存键 | **渲染后文本的哈希**，**不能用 `id`** | 同一位置的内容若变了而 `id` 不变，用 `id` 会拿到**陈旧向量** |
-
-**两者互换都会静默出错。** 缓存**必须落盘**，且要能在 Step 5 切模型时整体失效（§7.2 / §12.1 R1）。
-
-### 时间处理：**content 里带日粒度会话日期，但绝不许出现秒级**（D21）
-
-> **实测依据**（3 段 346 题，[`eval/reports/ledger.md`](eval/reports/ledger.md)）：日期**写在段首**毫无作用，
-> 写到**每一对旁边**后 multi-hop +8.9pt、temporal +3.5pt，整体 0.601 → **0.633**。机制：LoCoMo-Refined
-> 的时间 gold 是**锚定式相对**形式（`The Friday before 22 October 2023`），模型只有把锚点放在那句话**旁边**
-> 才会接上去（答成 `Last Friday (relative to March 6, 2023)`）。
->
-> **规则（两条边界照旧）**：
->
-> 1. **粒度**：正文前缀**只给到日**（`[2023-10-22]`）——**秒级绝不许出现**（那正是「粒度变细」判负的来源；
->    [`preflight`](eval/smoke/preflight.py) 有检查钉着，**不许放宽**）。
->    ⛔ **也别加星期**：试过（`2023-10-22 Sun`），整体 −3.2pt 且三段全降，见 **D21**；
-> 2. **相对↔绝对**：原文的相对表述**原样保留**，日期是**额外锚点**，不是替换。
->
-> **代价**：正文变了 ⇒ embedding 输入也变 ⇒ **整个向量索引要重建**（[`tools/reindex.py`](tools/reindex.py)）。
-> **边界**：证据只来自 LoCoMo-Refined 3 段；其余数据集契约不同（BEAM 的时间规则甚至相反），**不要外推**。
->
-> **`created_at` 照旧**：必须带、只给到日粒度（如 `2026-07-26`），**不带星期**——CL-Bench 那条路径靠它渲染时间。
-
-> **2026-09-26 再加一层（D22）：正文里的相对时间就地注解成绝对日期**——
-> `last Tues` → `last Tues (July 18, 2023)`，**原文一字不动**（同一份 D21 口径：日期是额外锚点）。
-> 它把答案 prompt 第 7 条**要求模型做的那步日历换算替它做掉**，而**只改 `content`、不进索引**
-> ⇒ **不用重建索引**（这是它与上面那条日期前缀的根本区别）。
-> 实测 3 段 346 题：temporal **0.200 → 0.800**、overall 0.639 → **0.795**（逐题赢 58 / 输 4；
-> 只看"两臂检索逐字相同"的 321 道，赢 51 / 输 4）。⚠ **它替模型做的正是模型最弱的一步**
-> ⇒ Step 5 换 `gpt-4o-mini` 后**必须重测这一类**。开关：`packaging.annotate_relatives`（默认 `true`）。
-
-> 这条来自 LoCoMo-Refined / LongMemEval 共用的契约，**不是全赛道规则**：BEAM 的裁判正好相反（允许等价形式），CL-Bench 由 AML 侧主动注入时间戳。**代理评测按"不加"执行，但不要外推。**
-
-### 模型规定（§2.3，不可协商）
-
-| 组件 | 规定 |
-| --- | --- |
-| **Embedding** | **只能用 `text-embedding-v4`** |
-| **LLM 相关组件** | **只能用 `gpt-4o-mini`** |
-| **Reranker** | **不作规定**——整份规则里唯一不限模型的组件 |
-
-由此推出一条设计约束：**架构必须 embedder-agnostic**。开发期的 Qwen3-Embedding 与提交期的 `text-embedding-v4` **都不提供** sparse 或 ColBERT 输出，因此**任何依赖多向量能力的代码都是死重**。向量维度**由接口提供、不能写死**。
-
-**开发期用自建网关上的 Qwen3-Embedding-4B + qwen3.5-9b 替代**（§12.1 风险 R1，团队已接受）——代价是**所有阈值、权重、排序策略在切换后都不保证成立**。四条对冲见 D2；与写代码直接相关的两条：**阈值一律配置化**、**切换单独占一个阶段**。
-
-### 法律约束（§12.5 / §17.3 P2）
-
-**数据不得用于训练。「微调模型」不是暂不实现，是不允许**——AML 数据条款 + CLBench 许可证双重封死，**无对冲余地**。
-
-两处最容易伸手的地方：`gpt-4o-mini` 不能微调，但**本地 qwen3.5-9b 可以**；**reranker 也是自托管开放权重的**。**都不允许。**
-
-> 归档里没有这两条条款的出处（属单边来源，引用前须回原始页面复核），**但结论不变**。数据集许可表见 [`eval/datasets/CLAUDE.md`](eval/datasets/CLAUDE.md)。
-
----
-
-## 评测机会成本（§2.4）——本项目最大的约束
-
-**AML 不提供本地评测**（不给 gold answer、不给评分标准、不提供批量数据下载）。真实信号只有两条路：
-
-| 层 | 用途 | 次数限制 |
-| --- | --- | --- |
-| **代理评测**（本地，`eval/`） | **全部迭代、消融、调参** | 无限 |
-| **Smoke** | 验证契约合规、端到端连通 | 每轨道 **≤30 次**，每小时 1 次，**不进榜** |
-| **Full** | 最终定稿 | 每 Key 每轨道 **2 次**，第二次隔 30 天；**一旦接受即版本冻结** |
-
-**没有"跑一遍看看"的余地。** 任何能在代理评测上回答的问题，都不该花 Smoke 的额度。Smoke 只做两件事：验证契约合规、消除本地无从验证的未知（§17.1 的 S 系列——逐条现状见 [`docs/open-questions.md`](docs/open-questions.md)）。
-
-**代理评测的边界**：只覆盖 LoCoMo-Refined + LongMemEval——这两份恰好是全部数据集里**唯一共用同一套契约**的。其余各份的记忆注入字段与裁判规则各不相同（PersonaMem 的本地答案输入适配见 [`eval/harness/CLAUDE.md`](eval/harness/CLAUDE.md)），所以**代理分数不能线性外推到全赛道**（§12.4）。只在代理上做**相对**比较。
-
----
-
-## 文档与代码纪律
-
-- **引用 PRD 一律带 § 号**（如 `§6.5`）。不带 § 号的断言视为未经验证。
-- **"待验证"必须显式标注**，不要写成已知。
-- **数字只住在 [`eval/reports/`](eval/reports/)**——其余文档引用数字时**指回去**，不要复制。
-- **单数来源**：一条约束只有一个家。写了第二遍就是漂移的开始——发现重复，改成指针。
-- **配置化 ≠ 可调**。`rrf.k = 61` 与 `top_k = 100` 都是**正确性常量**，写进配置是为了追溯与切换，**不是为了调**。
-- **编号纪律**：`S1`–`S5` 属 §17.1（**`S6`–`S8` 是按同一系列增补的**，逐条出处见 [`docs/open-questions.md`](docs/open-questions.md)——**别以为 `S6+` 是空的**）、`P1`–`P3` 属 §17.3、`R1` 属 §12.1、`E1`–`E7` 属 §17.2（**E2 已随 D15 删除，该号不再启用**），**不要挪作他用**；Step 5 专属事项用 `S5-*`。
-- **事实必须由原文支持**：`facts/` 产生的是**有逐字来源的独立事实**（引句必须存在于声明的 `question` / `answer` 侧；确定性解析、**不调用 LLM**、不生成答案、不做名单 / 计数 / 汇总）。**任何"让模型在写入时抽摘要 / 归并实体"的想法仍然属于 v2**——它会同时破坏 Add 侧的成本属性与 §11.3 的"原文优先"。边界见 [`src/tianximem/facts/CLAUDE.md`](src/tianximem/facts/CLAUDE.md)。
-
-```bash
-cp .env.example .env      # 填密钥与路径
-make sync                 # uv sync --all-extras
-make help                 # 看全部目标
+Search
+  -> deterministic grounded-evidence plan
+       -> complete evidence: render and package evidence
+       -> incomplete: continue
+  -> optional query router
+       -> MULTI_HOP: react or plan executor
+       -> DEFAULT: hybrid retrieval
+  -> hybrid retrieval: BM25 + dense -> weighted RRF
+  -> optional rerank
+  -> optional neighbor expansion and segment merge
+  -> package with slot and token budgets
+  -> return at most top_k segments
 ```
 
-> **部署到服务器**：`cp deploy/.env.example deploy/.env` → `make up` → `make deploy-check`。
-> 容器形态（单进程、真源卷、无 GPU、不需要外网）见 [`deploy/CLAUDE.md`](deploy/CLAUDE.md) §0。
+- SQLite is the source of truth. Qdrant is a rebuildable derived index.
+- `pairing/` owns the Add write boundary and block composition.
+- `facts/` derives source-backed facts without calling an LLM.
+- `retrieve/` owns retrieval policy and grounded-evidence execution.
+- `rank/` owns rerank, expansion, segment merge, and packaging.
+- `service/` owns HTTP models, orchestration, and degradation boundaries.
+- `common/` owns rendering, token counting, and configuration loading.
 
-> `Makefile` 里**尚未实现**的模块对应的目标会**明确失败**——这是有意的，**避免误以为某一步已经实现**。
->
-> ⚠ **Windows 那台机器上 `uv run pytest` 会报 111 个 `PermissionError`**：`%TEMP%\pytest-of-r0304`
-> 的 ACL 损坏，**与代码无关**。绕法见 [`docs/roadmap.md`](docs/roadmap.md) Step 0 的环境项
-> （`PYTEST_DEBUG_TEMPROOT=<一个新建目录>`）。
+## Hard Invariants
+
+- `user_id` is the only Search isolation boundary. `session_id` is grouping metadata, not a filter.
+- `request_id` is opaque. Never parse business meaning from it.
+- A memory ID is derived from `(user_id, session_id, request_id, local_index)`. An embedding cache key is derived from rendered text, never from the memory ID.
+- One Add is the only block-composition and adjacency boundary. Messages from different Adds are never paired or linked.
+- `applied_batches` owns batch idempotency. The same `request_id` with the same canonical payload is a replay; the same `request_id` with a different payload is a conflict.
+- Add must be fully persisted and searchable before a successful response. Qdrant writes use `wait=true`.
+- Search returns evidence only. It must not generate or disguise an answer.
+- The response contains at most the requested `top_k` items. Count the final packaged segments, not raw candidates.
+- The final answer context is consumed as a prefix. Order is part of correctness.
+- `created_at` is always present as `YYYY-MM-DD` or `""`; never use second-level timestamps.
+- `content` is independently readable and has no leading or trailing whitespace.
+- The service runs with one worker. Multi-worker operation has not been validated.
+- Embedding and LLM endpoints use OpenAI-compatible HTTP clients. Add never calls an LLM.
+- Training or fine-tuning on AML data is prohibited.
+
+## Configuration Rules
+
+- Environment variables own secrets, endpoints, model IDs, paths, and process shape.
+- YAML profiles own thresholds, weights, collection names, and feature switches.
+- `common/config/` is the only package allowed to read environment variables or YAML.
+- Unknown keys are errors.
+- A key is configuration only when a runtime consumer exists.
+- `rrf.k = 61`, the `117,760` token ceiling, and `top_k` from the request are correctness constraints, not tuning knobs.
+- `configs/default.yaml` is the product profile. `configs/local.yaml` contains only development overrides.
+
+## Working Rules
+
+1. Read the nearest module `CLAUDE.md` before editing that module.
+2. Keep one owner for each rule, key, and record shape. Link to the owner instead of copying prose.
+3. Preserve original memory text. Derived facts must retain a verbatim source quote.
+4. Fail loudly on corrupt inputs, unknown configuration, invalid model output, and contract violations.
+5. Treat degraded optional services as observable fallbacks, not silent success.
+6. Add or update focused tests for behavior changes. Run the narrowest relevant test first, then broader checks when shared behavior changes.
+
+## Common Commands
+
+```bash
+cp .env.example .env
+uv sync --all-extras
+uv run python -m tianximem.dev help
+uv run python -m tianximem.dev test
+uv run python -m tianximem.dev serve
+uv run python -m tianximem.dev check
+```
+
+`Makefile` targets are compatibility aliases for `tianximem.dev`.

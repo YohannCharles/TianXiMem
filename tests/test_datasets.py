@@ -1,4 +1,4 @@
-"""`eval/datasets/` —— schema 落差预处理层（§12.2 / §12.3 第 9 条 / D16）。
+"""`eval/datasets/` —— schema 落差预处理层。
 
 **大部分用例是合成 fixture**：归档不入库（`dataset/` 被 gitignore），
 所以逻辑用例不能让"归档在不在"决定跑不跑。真数据的事实另开一组，归档缺席时 skip。
@@ -168,7 +168,7 @@ def test_time_parsers_raise_instead_of_returning_none(bad):
 
 
 def test_to_epoch_ms_is_milliseconds():
-    """§2.1 的 `timestamp` 是**毫秒**——发成秒会让时间退回到 1970 年附近。"""
+    """`timestamp` 是**毫秒**——发成秒会让时间退回到 1970 年附近。"""
     moment = datetime(2023, 5, 8, 13, 56, tzinfo=UTC)
     assert to_epoch_ms(moment) == 1_683_554_160_000
 
@@ -186,7 +186,7 @@ def test_normalize_content_rejects_empty():
 
 # ── LoCoMo：两条来源路径必须产出同一结果 ───────────────────────────────────
 def test_locomo_two_source_layouts_are_identical(tmp_path):
-    """**本文件最重要的一条**（D16 的推论）。
+    """**本文件最重要的一条**。
 
     归档没有 `conversations.jsonl`，只有 `locomo_refined.json`。而后者每条 text **带首尾空白**
     （真实数据里 209 条）。断言两条路径产出**逐字相同的 `Message` 流**——
@@ -235,7 +235,7 @@ def test_locomo_unknown_speaker_raises(tmp_path):
 def test_locomo_category_is_normalized_to_str(tmp_path):
     """`questions.jsonl` 里是 `"4"`、`locomo_refined.json` 里是 `4`。
 
-    不归一化会**静默筛出 0 条**（§12.3）。
+    不归一化会**静默筛出 0 条**。
     """
     sample = load_locomo(_write_locomo(tmp_path, layout="dev"))[0]
     assert [q.category for q in sample.questions] == ["2", "4"]
@@ -320,10 +320,10 @@ def test_lme_parallel_arrays_must_match(tmp_path):
 
 
 def test_lme_skips_blank_turns_and_says_so(tmp_path, capsys):
-    """**V14**：`lme_s_cleaned.json` 里真有一条空正文的消息（`sharegpt_ADHo6Ob_0:9`）。
+    """`lme_s_cleaned.json` 里可能有一条空正文的消息（例如 `sharegpt_ADHo6Ob_0:9`）。
 
-    照旧抛 ⇒ **全量 500 题根本跑不起来**（Step 5 的大跑批直接崩）；
-    静默放行 ⇒ 空正文进 `join`、相邻两项粘连。⇒ **跳过 + 告警**。
+    直接抛错会让全量 500 题无法运行；静默放行会让空正文进入 `join`、相邻两项粘连。
+    因此加载器**跳过并告警**。
     """
     bench = _write_lme(tmp_path, n_sessions=1)
     entries = json.loads((bench / LME_JSON).read_text(encoding="utf-8"))
@@ -338,7 +338,7 @@ def test_lme_skips_blank_turns_and_says_so(tmp_path, capsys):
 
 
 def test_lme_abstention_flag(tmp_path):
-    """拒答题是**横切标记**（`question_id` 以 `_abs` 结尾），不是第 7 类（§12.2）。"""
+    """拒答题是**横切标记**（`question_id` 以 `_abs` 结尾），不是独立类别。"""
     samples = load_longmemeval(_write_lme(tmp_path, n_questions=2))
     assert [q.is_abstention for s in samples for q in s.questions] == [False, True]
     assert samples[1].questions[0].category == "multi-session"
@@ -350,7 +350,7 @@ def test_lme_limit_and_evidence(tmp_path):
     assert samples[0].questions[0].evidence == ("s0_0",)
 
 
-# ── 路径口径（D16）──
+# ── 路径口径──
 def test_benchmark_dir_reads_env_only():
     """**唯一读取点**：默认归档，`.env` 可改指（本地开发指到 `eval/datasets/...`）。"""
     assert benchmark_dir({}) == Path("dataset")
@@ -358,7 +358,7 @@ def test_benchmark_dir_reads_env_only():
 
 
 def test_loaders_take_path_from_argument_not_cwd(tmp_path, monkeypatch):
-    """D16：**加载器只认传进来的 `Path`**，不自己去猜数据在哪。
+    """    **加载器只认传进来的 `Path`**，不自己猜数据在哪。
 
     行为断言而不是扫源码：换个 cwd、并把 `TIANXIMEM_BENCHMARK_DIR` 指到别处，
     传绝对路径的结果必须**一个字节都不变**。硬编码路径出错时不会报错，
@@ -378,20 +378,20 @@ def test_loaders_take_path_from_argument_not_cwd(tmp_path, monkeypatch):
 
 
 def test_data_fingerprint_records_batching_and_files(tmp_path):
-    """§13 要求数据指纹含 **数据集 + 版本 + 切批口径**——少一样，两次 run 就不可比。"""
+    """数据指纹必须含 **数据集 + 版本 + 切批口径**——少一样，两次 run 就不可比。"""
     bench = _write_lme(tmp_path, n_questions=2)
     fp = data_fingerprint(bench, "longmemeval-s", n_samples=2, n_questions=2)
     assert fp["dataset"] == "longmemeval-s"
     assert [f["name"] for f in fp["files"]] == [LME_JSON]
     assert len(fp["files"][0]["sha256"]) == 16
-    # 切批口径必须写明"本地复现"——S2 没清掉之前，线上真实口径未知（§17.1）
+    # 切批口径必须写明"本地复现"——线上真实口径尚未登记时，不能把它当成已知
     assert "local repro only" in fp["batching"]
 
 
 def test_data_fingerprint_rejects_unknown_dataset(tmp_path):
-    # ⚠ 例子要真是**没登记**的名字，且**别用真实存在的数据集名**——这条已经踩过两次：
-    #   先是 `beam`、后是 `personamem-v2`，两个后来都真的接上了，用例随即变红。
-    #   ⇒ 用一个明确不存在的名字，别再让它随别的改动一起翻。
+    # ⚠ 例子要真是**没登记**的名字，且**别用真实存在的数据集名**：
+    #   真实数据集会注册，测试会失去拒绝未知名称的覆盖。
+    #   ⇒ 用一个明确不存在的名字。
     with pytest.raises(ValueError, match="未知数据集"):
         data_fingerprint(tmp_path, "no-such-dataset", n_samples=0, n_questions=0)
 
@@ -411,7 +411,7 @@ def test_archive_locomo_counts():
 def test_archive_locomo_matches_conversations_jsonl():
     """归档与 clone **只在首尾空白上不同**（209 条）——两个来源必须逐字等价。
 
-    只在 clone 也在场时跑：归档不收录 `conversations.jsonl`（D16 / 出处链）。
+    只在 clone 也在场时跑：归档不收录 `conversations.jsonl`。
     """
     clone = Path("eval/datasets/LoCoMo-Refined/data/public")
     if not (clone / CONVERSATIONS_JSONL).exists():
@@ -428,9 +428,9 @@ def test_archive_lme_head_shape():
     assert all(s.message_count > 0 for s in samples)
 
 
-# ── LongMemEval 的**分层抽样**（2026-09-26）──────────────────────────────
+# ── LongMemEval 的**分层抽样**──────────────────────────────
 def _write_grouped_lme(tmp: Path) -> Path:
-    """按类型**分块**排的 fixture——**这正是真文件的样子**（实测 7 个连续块）。"""
+    """按类型**分块**排的 fixture——**这正是真文件的样子**（7 个连续块）。"""
     bench = tmp / "lme-grouped"
     bench.mkdir(parents=True, exist_ok=True)
     entries = []
@@ -496,7 +496,7 @@ def test_lme_spread_noop_when_limit_covers_everything(tmp_path):
     ] == [e["question_id"] for e in entries]
 
 
-# ── CL-Bench 的加载层（2026-09-27）──────────────────────────────────────
+# ── CL-Bench 的加载层──────────────────────────────────────
 def _write_clbench(tmp: Path) -> Path:
     """按真实形状造一份：`system` + 装着文档与任务的 `user` + rubrics + metadata。"""
     bench = tmp / "clb"
@@ -548,7 +548,7 @@ def test_clbench_one_sample_per_task(tmp_path):
 def test_clbench_task_text_is_the_tail_window(tmp_path):
     """**任务文本 = 末条 user 的尾部窗口**——CL-Bench 没有独立的 question 字段。
 
-    实测规律：任务指令写在末条 user 的**最末尾**（`…what do Sightings Cards do?`）；
+    规律：任务指令写在末条 user 的**最末尾**（`…what do Sightings Cards do?`）；
     而末段中位只有 434 字符、最长的却有 13.4 万（整本手册塞成一段）⇒ 取尾部固定窗口。
     """
     from eval.datasets import load_clbench
@@ -593,7 +593,7 @@ def test_clbench_rejects_a_record_without_rubrics(tmp_path):
 def test_clbench_reader_survives_u2028(tmp_path):
     """**这份文件里真的有 `U+2028`** ⇒ 必须按 `"\\n"` 切，不能用 `splitlines()`。
 
-    实测：`clbench.jsonl` 用 `splitlines()` 读会在 char 22463 处 `JSONDecodeError`。
+    `clbench.jsonl` 用 `splitlines()` 读会在 char 22463 处触发 `JSONDecodeError`。
     """
     from eval.datasets import load_clbench
 
@@ -612,7 +612,7 @@ def test_clbench_reader_survives_u2028(tmp_path):
 
 # ── BEAM（`official-extra` 那份、但裁判用官方 pipeline）──────────────────────
 def _beam_row(conversation_id: str = "1") -> dict:
-    """一行 BEAM——**`time_anchor` 只挂在每个 session 的第一条上**（实测形状）。"""
+    """一行 BEAM——**`time_anchor` 只挂在每个 session 的第一条上**。"""
     import pyarrow as pa
 
     def message(text: str, role: str, anchor: str | None, index: str) -> dict:
@@ -762,7 +762,7 @@ def test_beam_group_order_is_fixed_not_dict_order(tmp_path: Path) -> None:
 def _max_block_tokens(
     bench_dir: Path, dataset: str, limit: int, *, max_words: int | None = None
 ) -> int:
-    """跑一遍"加载 → 渲染 → 打包 → 按 D24 组块"，返回最大的那一块的 token 数。
+    """跑一遍"加载 → 渲染 → 打包 → 按  组块"，返回最大的那一块的 token 数。
 
     **用的是真的 `pairing` 与真的 `render`**（不是近似）：这两个决定了模型最终读到什么，
     自己写一份复制品只会让门禁守着一个不存在的形状。
@@ -801,10 +801,8 @@ def _max_block_tokens(
     [
         ("locomo-refined", 2),
         ("longmemeval-s", 2),
-        # ⚠ clbench 必须扫**够大**：出事的块在**第 7 与第 52 个样本**上，
-        # `limit=3` 只扫前 3 个 ⇒ 门禁是真的、却从来没盖到会失败的地方
-        # （2026-10-03 实测：`limit=300` 下有两个块 38,270 / 9,824 token）。
-        # ⇒ 这一格是**真门禁**：它盖的是冻结口径的 **299 个样本**，别调小。
+        # ⚠ clbench 必须扫**够大**：会失败的块位于第 7 与第 52 个样本；
+        # `limit=3` 无法覆盖这些位置。⇒ 这一格必须覆盖冻结口径的 **299 个样本**，别调小。
         ("clbench", 300),
         ("beam", 3),
         ("personamem-v2", 2),
@@ -822,7 +820,7 @@ def test_no_block_exceeds_the_submit_embedding_window(dataset: str, limit: int) 
     ⇒ 一条"检索得到、但向量只代表前一半"的记忆，**没有任何信号**。
 
     ⚠ **采样要够大**：这条一开始给 clbench 只扫 `limit=3`，而出事的块在**第 7 与第 52 个
-    样本**上——门禁是真的、却从来没盖到会失败的地方（2026-10-03 才发现）。
+    样本**上——门禁是真的、却从来没盖到会失败的地方。
     "检查能失败"与"检查盖到了会失败的地方"是两件事。
     """
     from tianximem.common.tokens import EMBED_MAX_TOKENS
@@ -837,18 +835,12 @@ def test_no_block_exceeds_the_submit_embedding_window(dataset: str, limit: int) 
 def test_the_embedding_window_gate_can_actually_fail(tmp_path: Path) -> None:
     """**门禁必须能失败**（[`CLAUDE.md`](./CLAUDE.md) 的那条纪律），**并且失败点要指对**。
 
-    ⚠ 这条改过**三次**，每次都是被实现教会的：
+    ⚠ 当前块组合规则下，全 user 批次会逐条成块，超长 user 也会按 8,000 字符切片，
+    因此这些形状不会撞破 embedding 窗口。
 
-    1. 第一版塞了一条**全 user** 的超长语料，没红——它被**打包预算**摊成多批救回来了；
-    2. 改配对规则之后（同 role 不再合并），**全 user 的批根本不会合并** ⇒ 同一个夹具
-       更救得回来（最大块 674 token）；
-    3. **D32 之后**（一段 user 只配最后一条），"超长 user + 回答"也不再撞破
-       ——user 那一侧被 8,000 字符切分**逐片摊开**了。
-
-    ⇒ **能撞破窗口的只剩一个形状：答案侧**——`U` 后面跟着**一长串连续的非 user**。
-    它们在 ① 里被并成**一个 RoleBlock**，而 D32 **没有**限制这一侧（只限了 question）
-    ⇒ 整段一起进同一个块。**这是 D32 的已知残留**：全量 clbench 上实测最大 5,541 token
-    （安全），但**结构上并没有封死**。
+    ⇒ **能撞破窗口的形状是答案侧**：`U` 后面跟着**一长串连续的非 user**。
+    它们会并成**一个 RoleBlock**，而当前只限制 question 侧，没有限制 answer 侧。
+    全量 clbench 当前最大块为 5,541 token（安全），但结构上并没有封死。
     ⇒ 夹具用这个形状，**关掉预算必须超限**；而默认预算下它被摊进多批，不超。
     """
     from tianximem.common.tokens import EMBED_MAX_TOKENS

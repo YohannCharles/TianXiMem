@@ -1,7 +1,7 @@
-"""评测材料的本地目录映射（D35）；旧归档标识与字节保持不变。
+"""评测材料的本地目录映射；清单标识与文件字节保持不变。
 
-所有路径相对调用者提供的数据根目录。旧的平铺归档与合成 fixture 仍可只读加载；
-新下载一律写入按数据集组织的路径。
+所有路径相对调用者提供的数据根目录。平铺归档与合成 fixture 是只读兼容路径；
+新下载写入按数据集组织的路径。
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ PIPELINES = {
 
 
 def local_path(name: str) -> Path:
-    """清单中的旧标识 → 新的相对路径；禁止绝对路径和向上逃逸。"""
+    """清单标识 → 当前相对路径；禁止绝对路径和向上逃逸。"""
     parts = PurePosixPath(name)
     if parts.is_absolute() or ".." in parts.parts or "\\" in name:
         raise ValueError(f"非法归档路径：{name!r}")
@@ -71,7 +71,7 @@ def local_path(name: str) -> Path:
 
 
 def archive_file(root: str | Path, name: str) -> Path:
-    """解析一个文件，不联网、不写盘；新目录优先，其次兼容旧平铺目录。"""
+    """解析一个文件，不联网、不写盘；新目录优先，其次使用平铺兼容目录。"""
     root = Path(root)
     current = root / local_path(name)
     legacy = root / name
@@ -79,5 +79,5 @@ def archive_file(root: str | Path, name: str) -> Path:
 
 
 def upstream_aml_dir(root: str | Path, name: str = "pipeline_v2_personamem.py") -> Path:
-    """上游 pipeline 模块的 import 目录；兼容旧归档。"""
+    """上游 pipeline 模块的 import 目录；兼容平铺归档。"""
     return archive_file(root, name).parent

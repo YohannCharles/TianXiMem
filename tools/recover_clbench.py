@@ -5,23 +5,23 @@
 
 CL-Bench 没有单独的 `question` 字段：题目指令写在 user 消息（整份文档）的**末尾**，
 金标是 `rubrics`（**严格全有全无**）。官方采集（`official-eval-questions.jsonl`，
-2026-09-29 那一轮）里有一簇 search 的 query 与 `clbench.jsonl` 某条 user 消息
+ 那一轮）里有一簇 search 的 query 与 `clbench.jsonl` 某条 user 消息
 **逐字相同**（归一化后）——本脚本把它们接上 rubrics，
 供 `tools/build_official_kit.py` 合成评测套件（它收 `official-gold-extra*.jsonl`）。
 
-## 匹配口径（独立重写；与旧试验脚本对拍过条数）
+## 匹配口径
 
 - 归一化：NFKC + 引号/破折号统一 + 小写 + 空白折叠（两侧同一套）;
 - 采集侧形态：全文 / 末段（最后一个空行之后）/ 最后一行 / 采集自带 `question` 字段。
   ⚠ 本轮的 238 条命中**全部来自全文形态**，其余三种是给下一轮采集留的护栏;
 - 题库侧索引：每条 user 消息的**全文**;
-- **定行（本脚本与旧脚本的唯一实质差异）**：同一段文本会同时挂在同 `context_id` 的
+- **定行**：同一段文本会同时挂在同 `context_id` 的
   多个 task 行里（前序轮当历史），但只有"该文本恰是本行**最后一条** user 消息"的那一行
-  在回答这个问题——rubrics 判的就是那一轮的回复。实测 238 条的 owner 行**唯一**，
+  在回答这个问题——rubrics 判的就是那一轮的回复。 238 条的 owner 行**唯一**，
   而"文件序先到先得"有 2 条会定错行：
   seq 41270（应取 1822——rubrics 全是 VLV-R 阀门那道题，而不是 28 行更后的轮次）、
   seq 41283（应取 1730——rubrics 是"拒答并要求上传文档"，而不是 22 行更后的轮次）;
-- 结果：**238 条**（56 个 user、141 个 clbench 行），条数与旧脚本一致。
+- 当前结果：**238 条**（56 个 user、141 个 clbench 行）。
 
 ## 产物字段
 
@@ -37,8 +37,8 @@ CL-Bench 没有单独的 `question` 字段：题目指令写在 user 消息（�
   URL: https://huggingface.co/datasets/tencent/CL-bench/resolve/
        b28a5832a09b0d96c0cf4c22e90d7c60ede25b80/CL-bench.jsonl
   sha256 = `d5fc88d4b2eea75c61dd40862021b6ae2fba26bd21b58e8c5e18377a763943be`
-  （= HF 的 LFS oid，实测相等；本地未改）。
-- 采集：`official-dataset-2026-09-29/official-eval-questions.jsonl`（本地导出，无 URL）。
+  （= HF 的 LFS oid，相等；本地未改）。
+- 采集：`official-dataset-/official-eval-questions.jsonl`（本地导出，无 URL）。
   本轮 sha256 = `5d0bbf4aaacfb10bc466b3ef6a475e3e73b577b402707f0b81a80ecd1864e78f`；
   ⚠ 换一轮采集这份哈希就会变——重跑对照时先比它。
 - 重跑：`uv run python tools/recover_clbench.py`

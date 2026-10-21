@@ -1,12 +1,11 @@
 """TianXiMem 跨平台开发命令（**命令的唯一实现在这里**）。
 
-历史入口是 Unix 向的 `Makefile`；它现在只剩一行转发（`uv run python -m tianximem.dev <cmd>`），
-Windows 上没有 `make` 也能跑同一组命令（见 [`docs/active-spec/development.md`](../../docs/active-spec/development.md)）。
+`Makefile` 只提供兼容别名，实际命令由本模块实现。Windows 上没有 `make` 也能运行同一组命令（见 [`docs/active-spec/development.md`](../../docs/active-spec/development.md)）。
 
 三条约定：
 
 * `python -m tianximem.dev help`（同 `--help`）是**说明的唯一入口**——每个子命令的 `--help`
-  带着原来住在 Makefile 注释里的那些坑、判据与常量出处；
+  带着 Makefile 注释中的边界、判据与常量出处；
 * 多余参数（`ARGS='…'`）**原样下传**给被调用的脚本，清单见 `_PASSTHROUGH_COMMANDS`；
 * 子进程一律 `subprocess.run([...], shell=False)`——不依赖 make / grep / awk / sed / date。
 """
@@ -63,7 +62,7 @@ def _uv_run(*args: str) -> list[str]:
 def _uv_run_env(*args: str) -> list[str]:
     """`uv run [--env-file .env] python …`——需要 `.env` 的评测与自检走这条。
 
-    ⚠ **`.env` 由 [`common/config/`](common/config/) 读**（2026-09-24 起）
+    ⚠ **`.env` 由 [`common/config/`](common/config/) 读**
       ⇒ `serve` **不需要**额外的 `--env-file`，别再加一条会与它打架的注入路径。
       但 `tools/check_env.py` 是**独立进程**、只读 `os.environ`，所以 `check` 那一项
       显式带 `--env-file`——它也刻意**不依赖配置层**（配置层坏了它还得能跑）。
@@ -96,7 +95,7 @@ def _docker(*args: str) -> list[str]:
 def _compose(*args: str) -> list[str]:
     """`docker compose -f deploy/compose.yaml …`（cwd 由 `_run` 钉在仓库根）。
 
-    ⚠ daemon 在 **Windows 侧**（Docker Desktop，D12）：WSL 里 docker CLI 可能因 socket
+    ⚠ daemon 在 **Windows 侧**：WSL 里 docker CLI 可能因 socket
       权限用不了，那就去 **Windows 侧 Git Bash** 跑同一条命令（见 deploy/CLAUDE.md）。
       端口是转发过来的，所以 WSL 里访问 localhost:6333 照样成立。
     """
@@ -105,7 +104,7 @@ def _compose(*args: str) -> list[str]:
 
 
 def _dated_run_dir(prefix: str) -> str:
-    """`eval/reports/runs/<prefix>-YYYYMMDD`（原来由 Makefile 的 `$(shell date)` 算）。"""
+    """返回 `eval/reports/runs/<prefix>-YYYYMMDD`。"""
 
     return f"eval/reports/runs/{prefix}-{datetime.now().strftime('%Y%m%d')}"
 
@@ -341,7 +340,7 @@ def _cmd_clean(args: argparse.Namespace, extra: list[str]) -> int:
 
 def _cmd_smoke(args: argparse.Namespace, extra: list[str]) -> int:
     # `@echo …; @false` 的替代：占位也要**明确失败**，别让它静默成功。
-    print("TODO(Step 6): 加一条只有它能回答的记忆，看分数是否变化")
+    print("NOT_IMPLEMENTED: smoke discriminator is not available")
     return 1
 
 
@@ -454,11 +453,8 @@ def _add_environment_commands(subparsers: argparse._SubParsersAction) -> None:
         "typecheck",
         "类型检查（mypy）",
         notes="""\
-⚠ **只查 `src/`，不查 `eval/` `tests/` `tools/`**（2026-09-25 定）：后三者现在有
-  19 处存量报错（`conftest.py` 的 sys.path 形状、测试里的 float timeout 等），
-  一起纳入等于新门禁一上来就是红的，而"永远是红的门禁"与"没有门禁"是同一个东西。
-  ⇒ 先钉住**唯一进提交链路**的 `src/`；要扩到其余目录时，先清完那 19 处再改这里的路径
-  （`_cmd_lint` 的默认 `paths` 与 `_cmd_typecheck` 里的 `src`）。
+类型检查当前只覆盖进入提交链路的 `src/`。扩展范围前，先确保新增范围在本机可稳定通过，
+避免让门禁长期处于失败状态。
 """,
     )
     _add_command(
@@ -476,34 +472,27 @@ def _add_environment_commands(subparsers: argparse._SubParsersAction) -> None:
         "serve",
         "起 Add/Search 服务（FastAPI + uvicorn，单进程）",
         notes="""\
-⚠ 必须 --workers 1。⚠ **D25 之后原因变了**：旧理由是"按 session 串行化用的是进程内锁，
-   多 worker 会静默失效"——`SessionLocks` 已删，那条不再成立。现在拒的是
-   **"放开多 worker 需要的验证一件都没做"**（并发写压力 / busy_timeout 多进程争用 /
-   各自的 Qdrant 客户端）。⇒ **不要用"反正现在安全了"当理由把它去掉。**
-   两条防线都会拦：`--workers N`（N>1）被 assert_single_process() 拦下，
-   TIANXIMEM_WORKERS != 1 被配置校验拦下（见 src/tianximem/common/config/validate.py）。
-⚠ 用 --factory 而不是模块级 app：模块级 app 会让"导入本模块"就要求环境变量齐备，
-   测试没法只导入工厂函数（见 src/tianximem/service/app.py 的 docstring）。
-⚠ 需要 .env 里的 AML_EMB_BASE_URL / AML_EMB_API_KEY 与 configs/default.yaml；
-   缺了会在启动时响亮失败（不会带着空值跑起来）。
-   开发期建议 TIANXIMEM_PROFILE=local（换用独立的 memories_dev 集合）。
+⚠ 必须使用 `--workers 1`。多进程写入、SQLite 锁争用和每进程 Qdrant 客户端尚未验证；
+   配置校验与进程检查会同时拒绝多 worker 启动。
+⚠ 使用 `--factory`，避免在模块导入阶段读取环境变量。
+⚠ 启动需要 `.env` 中的 embedding 端点和 `configs/default.yaml`；缺失时直接失败。
+   开发期建议设置 `TIANXIMEM_PROFILE=local`，使用独立的 `memories_dev` 集合。
 """,
     )
     _add_command(
         subparsers,
         "check",
-        "环境自检：Qdrant 可达 / 三段模型端点可用 / 密钥已填（含 V7 思考探针）",
+        "环境自检：Qdrant 可达 / 模型端点可用 / 密钥已填",
         notes="""\
-⚠ 不检查 nvidia-smi —— 模型不在本机（D14）。
-⚠ LLM 那一项顺带就是 §17.3 V7 的探针：网关默认开思考时，归档 pipeline 的
-   `generated_answer` 里会混进推理过程，而**裁判读到的就是那个**。
-与 `contract-check` 的分工：本项只看"环境通不通"，不打契约。
+⚠ 不检查本机 GPU；部署依赖远程模型端点。
+⚠ 对话端点检查同时验证回答正文不混入推理过程。
+与 `contract-check` 的分工：本项检查环境和端点可用性，不验证 HTTP 契约。
 """,
     )
 
 
 def _add_data_commands(subparsers: argparse._SubParsersAction) -> None:
-    """`dataset/` 的准备与校验（D35 的 `--dataset` / `--tier all` / `--offline` / `--dir`）。"""
+    """`dataset/` 的准备与校验。"""
 
     for name, help_text, notes in (
         (
@@ -526,14 +515,9 @@ def _add_data_commands(subparsers: argparse._SubParsersAction) -> None:
             "data-fetch",
             "按数据集准备 dataset/；`--tier all` 取全档，默认 locomo-refined",
             """\
-⚠ 它**必须读 `.env`**（2026-10-04）：`TIANXIMEM_BENCHMARK_DIR` 是数据路径的唯一入口，
-   而 `.env.example` 明写"本地开发把它指到开发数据集即可"。以前这条用裸 `python3`、
-   **不读 `.env`**，于是把它改过的人会看到"fetch 下到 benchmark_data/、eval 去别处找"
-   ——报错仍然是"缺文件"（响亮），但两边对不上。
-⚠ **不需要任何凭据**（公开源，请求只带 User-Agent），只要外网直连
-   raw.githubusercontent.com 与 huggingface.co。
-⚠ 目录不存在不用先 mkdir：prepare 会建立暂存路径，校验后才发布数据文件。
-   测试依据所需文件是否存在决定 skip，不再依据顶层目录。
+⚠ 该命令读取 `.env`，因为 `TIANXIMEM_BENCHMARK_DIR` 是数据路径的唯一入口。
+⚠ 下载公开数据不需要凭据，但需要能访问 GitHub 与 Hugging Face。
+⚠ 目标目录不存在时无需预先创建；校验成功后才原子发布数据文件。
 """,
         ),
     ):
@@ -564,10 +548,8 @@ def _add_evaluation_commands(subparsers: argparse._SubParsersAction) -> None:
         "diagnose",
         "跑批诊断：把「低分」与「模型不行」分开（`--run-id RUN`；只读产物，不打网关）",
         notes="""\
-**接完一个新数据集、或看到任何低分时的第一件事**。它报四件事：
-  ① 拒答率（逐字同一句 = 被 prompt 逼的指纹）  ② 拒答 × gold 在不在检索结果里
-  ③ label 分布（含 JUDGE_ERROR）              ④ 逐类分化
-⚠ 2026-10-03 四个数据集的接错缺陷**全是它这套手法找出来的**；判读树在脚本 docstring 里。
+接入新数据集或调查低分时先运行。输出包括拒答率、拒答与检索命中的交叉、
+标签分布（含 `JUDGE_ERROR`）以及逐类表现。详细判读说明在脚本 docstring。
 用法：make diagnose RUN=base-mqk
 """,
     )
@@ -589,17 +571,14 @@ def _add_evaluation_commands(subparsers: argparse._SubParsersAction) -> None:
     router_eval = _add_command(
         subparsers,
         "router-eval",
-        "查询路由的三分类小样本评测（46 题，真端点，**不消耗 Smoke 配额**）",
+        "查询路由的二分类小样本评测（真端点，**不消耗 Smoke 配额**）",
         notes="""\
-落点默认 eval/reports/runs/router-<YYYYMMDD>：`summary.json`（混淆矩阵 + 逐类 P/R/F1 + 成本）
-与 `rows.jsonl`（逐题预测）。
-⚠ 它**只调路由器**——不发 Add / Search、不建集合、不写真源 ⇒ 开发机上可以反复跑。
-⚠ 需要 `.env` 的 `AML_BASE_URL` / `AML_API_KEY` / `AML_MODEL`（缺了在跑之前直说）。
-⚠ **`router.enabled` 的开与关不影响本目标**：工具是"显式要评测路由器"，
-   那个键管的是**服务的默认行为**（**2026-10-14 起 `default.yaml` 里默认开**，D40）。
-常用变体：`ARGS='--boundary-only --repeat 3'`（稳定性）· `ARGS='--smoke'`（端到端冒烟）。
-判据与结论见 eval/reports/router-20261010.md——⚠ **别只读准确率**：那一条在有类别塌缩时
-会给出一个好看的假数（退化解"永远答 DEFAULT"就有 0.47）。
+落点默认 `eval/reports/runs/router-<YYYYMMDD>`：`summary.json` 保存混淆矩阵、
+逐类 precision/recall/F1 和成本，`rows.jsonl` 保存逐题预测。
+⚠ 它只调用路由器，不发 Add/Search、不建集合、不写真源。
+⚠ 需要 `.env` 中完整的对话端点配置。
+⚠ `router.enabled` 控制服务默认路径；本工具独立执行路由评测。
+判读时同时看类别分布和混淆矩阵，避免退化策略产生虚高准确率。
 """,
     )
     router_eval.add_argument(
@@ -622,8 +601,7 @@ def _add_evaluation_commands(subparsers: argparse._SubParsersAction) -> None:
 ⚠ 跑一次要**几十分钟**（4 臂 × 25 题，多跳臂每题最多 3 次 LLM + 4 次精排）。
    续跑：`ARGS='--skip-add'`（复用已经建好的隔离真源）。
 常用变体：`ARGS='--arms e0,e1,e2,a --limit-questions 5'`（先冒烟）·
-   `ARGS='--skip-judge'`（只测检索覆盖，不叫裁判）。
-口径与结论见 eval/reports/coq-multihop-20261010.md。
+   `ARGS='--skip-judge'`（只测检索覆盖，不调用裁判）。
 """,
     )
     coq_eval.add_argument(
@@ -635,32 +613,24 @@ def _add_evaluation_commands(subparsers: argparse._SubParsersAction) -> None:
     _add_command(
         subparsers,
         "coq-decompose",
-        "多跳分解能力探针：**只看问题**，看模型能不能拆出依赖链（2026-10-12）",
+        "多跳分解能力探针：只提供问题，检查模型能否拆出依赖链",
         notes="""\
-⚠ 它**不打检索、不建集合**，只叫对话模型**拆一次/题** ⇒ 很便宜、可反复跑。
-⛔ **判定不由模型做**：`judge` 那一版已作废（它至少错判 4/25，且是事实性错误——连金标几跳都
-   数错）。现在是**人**逐条读候选 vs 金标，填 `eval/coq-decompose-labels.jsonl` 的 `defect`。
-⚠ 结论见 eval/reports/coq-musique-20261011.md §4.6：**模型拆不清**（步数 68%、结构同构 **60%**），
-   失败形态与 CoQ 循环里的"第二轮重述原问题"**同型** ⇒ 病在提示词侧不在检索侧。
-变体：`ARGS='--limit 5'`（冒烟）· `ARGS='--reuse'`（**不调模型**，只拿新标签/新算法重算）。
-⚠ 重判**必须**用 `--reuse`：重新摇一次模型就是换一份候选分解，而标签是逐条读着那一份填的。
-⭐ 产物里的 `decompositions.md` 是**人读的那一份**（原问题 / 模型拆解 / 金标拆解并排），
-   逐条复核时直接复制它——⚠ 它含数据集原文，落在 runs/（gitignored）。
+⚠ 它不执行检索、不创建集合，只对每题调用一次对话模型。
+判定由人工完成：逐条比较模型分解与金标，并填写 `eval/coq-decompose-labels.jsonl` 的 `defect`。
+变体：`ARGS='--limit 5'`（冒烟）· `ARGS='--reuse'`（不调模型，只重算已有分解）。
+重判应使用 `--reuse`，确保标签对应同一份候选分解。
+产物中的 `decompositions.md` 将原问题、模型分解与金标分解并排展示；它包含数据集原文，只写入 ignored 的 `runs/`。
 """,
     )
     order_probe = _add_command(
         subparsers,
         "order-probe",
-        "D25 性质探针：乱序+并发投喂 vs 顺序投喂，断言真源**逐字一致**",
+        "位置性质探针：乱序并发投喂与顺序投喂得到逐字一致的真源",
         notes="""\
-⚠ **它会花掉真实的 embedding 调用**（conv-26 全量 ≈ 216 块）⇒ 不进 `make test`。
-⚠ 需要 8131 与 8140..8140+N-1 这些端口空着；它自己起干净服务、各自一个集合，跑完关掉。
-⚠ `--processes 4`（默认 1）让 B 臂用 **4 个独立进程**共享同一套存储
-   ⇒ 那一条回答的是「`uvicorn --workers N` 安不安全」——与 `--workers 1` 那条约束直接相关。
-   默认 1 时它测的是 D25 本身（乱序/并发 vs 顺序）。
-⚠ 跑完**不会自动清库**：`var/order-a/` `var/order-b/` 留着供比对（都在 gitignore 里）。
-   Qdrant 里那两个 `memories_ab_order_*` 集合也是——要清就手动 drop。
-判据与 D25 的关系见 eval/reports/ledger.md 的「D25」一节。
+⚠ 它会执行真实 embedding，因此不进入 `make test`。
+⚠ 需要空闲端口和独立集合；协议会自行启动并关闭测试服务。
+⚠ `--processes 4` 用四个独立进程共享同一套存储，用于验证多进程写入是否符合约束。
+⚠ 测试结束后保留 `var/order-a/`、`var/order-b/` 与对应 Qdrant 集合供比对；需要时手动清理。
 """,
     )
     order_probe.add_argument(
@@ -679,8 +649,8 @@ def _add_evaluation_commands(subparsers: argparse._SubParsersAction) -> None:
       ＋同名 `.zip`。⚠ **含数据集原文** ⇒ 只进 `var/`（gitignored），⛔ 绝不进 git。
 ⭐ 它**逐条校验后才打包**：可答 / 严格链 / **每一跳的答案（含末答）都在支持段落正文里**
    / 题面不泄中间跳。任一条不过就点名报出并**非零退出**——这种包交出去比不交更糟。
-⚠ 包里那个 `haystack-corpus.jsonl` 是**前提不是附件**：只喂目标题自己那 20 段，
-   证据就全在里面、检索无事可做、链式依赖自动消失（2026-10-10 栽过，见 README）。
+⚠ `haystack-corpus.jsonl` 是评测前提：如果只提供目标题自己的候选段落，
+   检索没有选择空间，链式依赖会消失。
 """,
     )
     eval_command = _add_command(
@@ -693,13 +663,12 @@ def _add_evaluation_commands(subparsers: argparse._SubParsersAction) -> None:
 ⚠ `--env-file` **不是多余的**：裁判那一步起的是 subprocess，它只继承环境变量，而
   `.env` 是 `common/config/` 自己读的。少了它 → Add/Search 全跑完、**裁判才炸**。
   缺哪个名字会在跑之前直说（退出码 2）。
-⚠ 缺 `--embedder` 时 run record 的模型指纹会写"未声明"——**R1 要求记下换没换模型**，
-  所以想留下可比记录就设 `TIANXIMEM_EMBED_MODEL`（或 `ARGS='--embedder ...'`）。
-⚠ 冒烟用 `ARGS='--limit 3'`；**截断跑会在数据指纹的 note 里留警示**，别拿它跟全量比。
+⚠ 缺 `--embedder` 时 run record 的模型指纹会写“未声明”；需要可比记录时显式提供模型标识。
+⚠ 冒烟用 `ARGS='--limit 3'`；截断运行会写入数据指纹警示，不能与全量比较。
 """,
     )
     eval_command.add_argument(
-        "--dataset", default="locomo-refined", help="数据集（只有两个计分数据集有加载器，§12.4）"
+        "--dataset", default="locomo-refined", help="数据集名称"
     )
 
     baseline = _add_command(
@@ -710,8 +679,7 @@ def _add_evaluation_commands(subparsers: argparse._SubParsersAction) -> None:
 **判断"改动值不值"就用这个**：口径（跑多少题、要不要分层）由
 `eval/experiments/recipes.py` 给，不手抄数字——抄错一个数的后果是分数看起来完全正常、却不可比。
 ⚠ 它**拒绝**与手写的 `--limit` / `--spread` 同时给（那两个只在做消融或冒烟时才用）。
-⚠ 墙钟差着量级：locomo ≈44 分（**建议当唯一哨兵**）、mquake ≈4 分、
-  clbench ≈3.5 小时、beam ≈1 小时、lme ≈12–20 小时。见 `eval/reports/ledger.md`。
+⚠ 各数据集的运行墙钟差异很大；按改动影响面选择数据集。
 ✅ 默认按独立用户并行投喂/检索，判分单独并行；可用
   `ARGS='--ingest-workers 4 --judge-workers 4'` 控制两段（单用户批次顺序不变）。
   两项均设 1 恢复串行。⚠ 别同时跑两条不同的评测链。
@@ -721,7 +689,7 @@ def _add_evaluation_commands(subparsers: argparse._SubParsersAction) -> None:
 """,
     )
     baseline.add_argument(
-        "--dataset", default="locomo-refined", help="数据集（只有两个计分数据集有加载器，§12.4）"
+        "--dataset", default="locomo-refined", help="数据集名称"
     )
 
     _add_command(
@@ -757,9 +725,8 @@ def _add_evaluation_commands(subparsers: argparse._SubParsersAction) -> None:
         "t2-dump",
         "T2 的机器半边：133 道 multi-session 题的纯 BM25 名次 → 待填表",
         notes="""\
-⚠ 它**直查 Qdrant**（纯 BM25 单路），不走服务：D15 之后服务只有混合检索一种形态，
-   给服务加单路查询是 roadmap 里登记过但未实现的切片（本实验不需要它）。
-⚠ 前提：语料已经喂进去了（`make eval` 跑过同一批题）。
+⚠ 它直接查询 Qdrant 的 BM25 单路，不走服务；服务主路径仍是混合检索。
+⚠ 前提：同一批语料已经写入目标集合。
 """,
     )
 
@@ -778,9 +745,8 @@ def _add_docker_commands(subparsers: argparse._SubParsersAction) -> None:
         notes="""\
 ⚠ **带服务名 `qdrant`**：compose 里现在还有 `app`（容器形态的那一套，见 `up`），
    不带服务名会把检索服务也一并起起来，和 `make serve` 抢 8000。
-⚠ daemon 在 **Windows 侧**（Docker Desktop，D12）：WSL 里 docker CLI 可能因 socket
-   权限用不了，那就去 **Windows 侧 Git Bash** 跑同一条命令（见 deploy/CLAUDE.md）。
-   端口是转发过来的，所以 WSL 里访问 localhost:6333 照样成立。
+⚠ 如果 WSL 中的 Docker CLI 无法访问宿主机 daemon，请在 Windows 侧运行同一命令。
+   端口转发后，WSL 仍可通过 localhost 访问 Qdrant。
 ⚠ 报 `502 Bad Gateway` 而不是「拒绝连接」= 转发在、**容器没起**——正是该跑这条命令的时候。
 """,
     )
@@ -838,10 +804,9 @@ def _add_housekeeping_commands(subparsers: argparse._SubParsersAction) -> None:
     _add_command(
         subparsers,
         "smoke",
-        "S1 判别实验（§17.1）——Smoke 跑通后第一件事",
+        "AML 端到端判别实验（尚未实现）",
         notes="""\
-⛔ 现在**还不能跑**：这里只有占位实现，跑起来**明确失败**（Step 6 才补真判据）——
-   别让它静默成功，否则会误以为某一步已经实现。
+该命令目前是占位实现并明确返回失败，避免被误认为可用。
 """,
     )
     _add_command(
@@ -849,12 +814,9 @@ def _add_housekeeping_commands(subparsers: argparse._SubParsersAction) -> None:
         "clean",
         "清运行时产物（保留 dataset/）",
         notes="""\
-⚠ 真源是 var/tianxi.db，**不是 data/**（2026-09-24 修正：这条目标原先删的是 data/*.db，
-   而没有那个目录——于是它一直静默地什么也没删）。为什么不叫 data/ 见 var/CLAUDE.md。
-⚠ **tianxi.db 是 var/ 里唯一不可重建的东西**（embed_cache/ 能重建，只是要重付一遍 embedding
-   的钱；Qdrant 卷是 deploy/compose.yaml 的 Docker 命名卷、不在 var/ 下，也能从真源全量重建）
-   ——本命令清得了它，**跑之前想清楚**。
-   刻意不清 embed_cache/：它是"暂时不用"，不是"要扔掉"。
+⚠ 真源是 `var/tianxi.db`，不是 `data/`。
+⚠ `tianxi.db` 是 `var/` 中唯一不可重建的状态；Qdrant 卷和 embedding 缓存均可重建。
+⚠ 本命令可能删除真源，执行前确认。
 """,
     )
 

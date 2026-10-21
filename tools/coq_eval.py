@@ -3,7 +3,7 @@
 ```bash
 uv run --env-file .env python tools/coq_eval.py \
     --manifest eval/coq-multihop.jsonl \
-    --out eval/reports/runs/coq-20261010
+    --out eval/reports/runs/coq-<YYYYMMDD>
 ```
 
 ## 四臂（`--arms` 可挑，默认全跑）
@@ -13,28 +13,27 @@ uv run --env-file .env python tools/coq_eval.py \
 | **E0** | `false` | `false` | —— | —— | 原混合链（**当前默认行为**，也是基线） |
 | **E1** | `false` | `true` | `true` | `true` | 强制走多跳，**绕过路由器** |
 | **E2** | `true` | `true` | `false` | `true` | 路由器 ＋ 多跳（完整系统） |
-| **A** | `false` | `true` | `true` | `false` | §12.4 的消融：每轮**不**精排 |
+| **A** | `false` | `true` | `true` | `false` | 每轮精排消融 |
 
-⚠ **E1 就是消融表的 B 臂**（"每轮精排"那一档）——两臂配置逐字相同，所以**不重复跑**：
-`--arms e0,e1,e2,a` 里的 A 与 E1 构成 §12.4 要求的那对对照，报告里按 B 记。
+⚠ **E1 对应消融表的 B 臂**（"每轮精排"那一档）——两臂配置逐字相同，所以**不重复跑**：
+`--arms e0,e1,e2,a` 里的 A 与 E1 构成每轮精排的对照，报告里按 B 记。
 
 ⚠ **E1 必须绕过路由器**（`agentic.force`）：不绕过，测出来的就是"路由器 × 多跳"的
-合成效果，而"CoQ 本身有没有用"与"路由器分得准不准"就分不开了（§12.3）。
+合成效果，而"CoQ 本身有没有用"与"路由器分得准不准"就分不开了。
 
 ## 它**不**做什么
 
 * ⛔ **不生成答案、不改判分口径**：答案与裁判都走既有的
   [`../eval/harness/`](../eval/harness/)（`build_input_items` + `run_judge`）。
-* ⛔ **不把标准答案或问题当记忆写进去**：只 `ingest` 对话（§12.2 第 2 条）。
+* ⛔ **不把标准答案或问题当记忆写进去**：只 `ingest` 对话。
 * ⛔ **不复用开发库**：默认新建一个隔离 collection ＋ 隔离的 SQLite 真源，
-  跑完**保留**并由你决定删不删（§12.2 的"隔离测试数据"）。
+  跑完**保留**并由你决定删不删。
 
 ## 它与既有基线的口径关系
 
-语料 = LoCoMo-Refined 的**前 3 段对话**（`--limit 3` 的那三段）⇒ 与
-[`../eval/reports/ledger.md`](../eval/reports/ledger.md) 里那条 0.7775 同源。
-但**题目不同**：这里只取 `category == "1"`（多跳）的 25 道 ⇒
-**不要把这里的 overall 与 346 题那条直接比**。
+语料 = LoCoMo-Refined 的**前 3 段对话**（`--limit 3` 的那三段），
+但题目只取 `category == "1"` 的多跳题。因此这里的 overall 不能与全量题集的
+overall 直接比较。
 """
 
 from __future__ import annotations
@@ -70,13 +69,13 @@ from eval.harness.add_shape import DEFAULT_ADD_SHAPE, shape_batch  # noqa: E402
 from tianximem.common.config import AppConfig, load_config  # noqa: E402
 from tianximem.service.app import build_services, create_app  # noqa: E402
 
-#: §2.2：`top_k` 由 AML 固定为 100。**这个工具不拿它当旋钮。**
+#: `top_k` 由 AML 固定为 100。**这个工具不拿它当旋钮。**
 TOP_K = 100
 
 
 @dataclass(frozen=True, slots=True)
 class Arm:
-    """一条实验臂。⚠ **每一项差异都必须是"只影响它命名的那一件事"**（§13）。"""
+    """一条实验臂。⚠ **每一项差异都必须是"只影响它命名的那一件事"**。"""
 
     key: str
     label: str
@@ -102,8 +101,8 @@ DATASETS: dict[str, dict[str, str]] = {
     "locomo-refined": {
         "manifest": "eval/coq-multihop.jsonl",
         "judge": "locomo-refined",
-        "note": '只取 LoCoMo 的 `category == "1"`、25 道 ⇒ **不要与 346 题那条 overall 直接比**。'
-        "⚠ 人工复核发现这 25 道里真正的链式依赖几乎没有（见 coq-multihop-20261010.md §5）。",
+        "note": "只取 LoCoMo 的 `category == \"1\"`。该子集的 overall 不能与全量题集直接比较；"
+        "部分题需要人工复核链式依赖强度。",
     },
     "musique-haystack": {
         "manifest": "eval/coq-musique.jsonl",
@@ -121,14 +120,12 @@ DEFAULT_DATASET = "locomo-refined"
 def _degraded_arms(report: dict, chosen, mode: str = "react") -> list[tuple[str, int, dict]]:
     """哪些臂的多跳循环**被降级过** → `[(标签, 降级题数, 停止原因分布), ...]`。
 
-    ⛔ **存在的理由**（2026-10-12 实测）：`gpt-4o-mini` 那轮 50 题里 **45 题第一轮就
-    `llm_unavailable`**，多跳循环被优雅降级（D12：绝不 500）⇒ 那 45 题返回的其实是
-    **普通混合检索**的结果。而**汇总表照样给了一个看起来正常的准确率**——
-    "降级后的 E1"于是会被读成"E1"。⇒ 判据摆在这里，打印与告警共用它。
+    ⛔ **多跳循环被优雅降级时，返回的可能是普通混合检索结果**，而汇总表仍会给出
+    一个看起来正常的准确率。判据必须显式暴露这种降级，打印与告警共用它。
 
-    ⚠ **判据是 `fallback_reason`，不是某一个停止原因**（2026-10-12 收紧）：
+    ⚠ **判据是 `fallback_reason`，不是某一个停止原因**：
     `fallback_reason is not None` 的**定义**就是"这一题的多跳没跑成、回退走了混合检索"
-    ——那正是这一列要说的事。原来的写法（只数 `llm_unavailable`）漏掉了
+    ——那正是这一列要说的事。只数 `llm_unavailable` 会漏掉
     `llm_error` / `retrieval_error` / Plan 的 `plan_invalid`：它们**同样是没跑成**。
     ⚠ Plan 模式尤其要看它：拆解失败 ⇒ `plan_invalid` ⇒ 那一题其实是混合检索的结果。
     """
@@ -159,7 +156,7 @@ def _recovery_calls(calls: list[dict]) -> list[dict]:
 def _plan_record_texts(calls: list[dict]) -> dict[str, str]:
     """`qid → 前置到答案输入的那一段`。
 
-    ⭐ **恢复分支的题不前置**（2026-10-13）：那些题的最终答案是**拿原题**回答的，
+    ⭐ **恢复分支的题不前置**：那些题的最终答案是**拿原题**回答的，
     带上"某一步 unresolved"的执行记录只会把失败过程塞进上下文。
     ⛔ 记录**没有丢**——它照旧完整躺在 `<臂>-rounds.json` 里。
     """
@@ -175,13 +172,13 @@ def _require_plan_records(
 ) -> dict[str, str]:
     """Plan 那一臂的执行记录：**每一道"该带记录"的题都要有**，缺一条就响亮失败。
 
-    ⚠ **分母要把恢复分支的题排除**（2026-10-13 修）：那些题的答题输入按设计
+    ⚠ **分母要把恢复分支的题排除**：那些题的答题输入按设计
     **只带原题 ＋ 精排后的真实记忆**（见 `_plan_record_texts`）——把它们算进分母，
-    "恢复生效"就会被读成"记录丢了"。实测在 LoCoMo 那 25 题上就有 9 题进了恢复分支，
+    "恢复生效"就会被读成"记录丢了"。在 LoCoMo 那 25 题上就有 9 题进了恢复分支，
     于是这条守卫报了一条**假的** `16/25`，而真正该拦的（`--reuse-hits` 那种"一条记录
     都没有"）反而被淹没在噪声里。
 
-    ⚠ **还要把"被判 `DEFAULT` 的题"排除**（2026-10-16 修）：E2 的**路由器是开着的**，
+    ⚠ **还要把"被判 `DEFAULT` 的题"排除**：E2 的**路由器是开着的**，
     判成 `DEFAULT` 的题**根本不会调执行器** ⇒ 按定义就没有 plan 记录。
     ⛔ **这一条不能靠"跳过守卫"绕过**：执行记录是**前置进答案输入**的
     （见调用点的 `build_input_items(..., execution_record=...)`），少了它判的就是
@@ -214,7 +211,7 @@ def _require_plan_records(
 
 
 def _plan_summary(calls: list[dict]) -> dict:
-    """Plan 那一臂的过程汇总（方案的第六节要求报告的那几项）。
+    """Plan 那一臂的过程汇总。
 
     ⚠ **它是从 `plan_history` 里数出来的**（不是从 `metrics` 快照）：
     这里要的是"计划几步 / 真的跑了几步 / 哪一步停的"，而那些只有逐条记录有。
@@ -287,9 +284,9 @@ def _plan_summary(calls: list[dict]) -> dict:
 def _arm_identity(arm: Arm, mode: str) -> tuple[str, str]:
     """`(报告键, 标签)`。
 
-    ⚠ `react` **不带后缀**：那是默认模式，加了会让本次改动之前的所有
-    `report.json` 键对不上。⚠ `plan` 必须带——两模式的产物要在**同一个 run 目录**里
-    并存（`report[arm_key] = entry` 会互相覆盖，而**汇总表照样打印**）。
+    ⚠ `react` **不带后缀**：它是默认模式，直接使用臂键。⚠ `plan` 必须带后缀——
+    两模式的产物要在**同一个 run 目录**里并存，否则 `report[arm_key] = entry`
+    会互相覆盖，而**汇总表照样打印**。
     """
     if mode == "react":
         return arm.key, arm.label
@@ -297,7 +294,7 @@ def _arm_identity(arm: Arm, mode: str) -> tuple[str, str]:
 
 
 def _load_manifest(path: Path) -> dict[str, list[str]]:
-    """`user_id → [question_id]`。**只读 id**——题目原文从 `dataset/` 现取（§12.5）。"""
+    """`user_id → [question_id]`。**只读 id**——题目原文从 `dataset/` 现取。"""
     wanted: dict[str, list[str]] = {}
     for line in path.read_text(encoding="utf-8").split("\n"):
         if not line.strip() or line.lstrip().startswith("#"):
@@ -343,10 +340,9 @@ def _select(bench_dir: Path, wanted: dict[str, list[str]], *, dataset: str) -> l
 def _require_source_rows(samples, sqlite_path: Path, *, add_shape: str = DEFAULT_ADD_SHAPE) -> None:
     """真源须非空；MuSiQue 须逐条匹配本次候选语料，否则在 Search 前失败。
 
-    ⚠ 这一条是**踩出来的**：`--skip-add` 复用的是 **Qdrant 集合**，而 **SQLite 真源是按
-    `--out` 目录走的**。换一个 `--out` 再 `--skip-add` ⇒ 集合里有 id、真源里没正文
+    ⚠ `--skip-add` 复用 **Qdrant 集合**，而 **SQLite 真源按 `--out` 目录定位**。
+    换一个 `--out` 再 `--skip-add` ⇒ 集合里有 id、真源里没正文
     ⇒ 检索"成功"、返回却全是缺行的空结果 ⇒ **`data: []`，而它看起来像"这题没有相关记忆"**。
-    （2026-10-11 实测：同一个集合，一个 out 目录 25/25 命中，另一个 0/25。）
 
     LoCoMo 只检查用户非空；MuSiQue 是全 user 段落，逐条独立落库，可直接核对
     shape_batch 生成的全部载荷（包括长段切片）。不读 gold；计数相等但正文被替换、
@@ -418,19 +414,18 @@ def _arm_config(
     四处**隔离 / 可观测 / 口径对齐**的改动（它们不是"开关"，见各自的理由）：
 
     * SQLite 真源与 Qdrant collection 都换成这一次实验专用的；
-    * ⛔ **`capture` 强制关掉**。它在 `.env` 里可能是开的（S6 的官方请求采集），
+    * ⛔ **`capture` 强制关掉**。它在 `.env` 里可能是开的，
       而本工具发的 `/add` 与 `/search` **不是官方流量** —— 让它们落进那份文件会把
       "官方请求原文"污染成"官方 + 自测"的混合体，而**采集文件本身没有区分标记**。
     * **`metrics_path` 指向本次实验的产物目录**。⚠ 缺了它 `.env` 里多半**没有**
       `TIANXIMEM_METRICS_PATH` ⇒ `build_metrics_sink` 给的是 `NullMetricsSink`
-      ⇒ **§14 那一段（轮数 / 停止原因 / LLM 与精排调用数 / 耗时）全都不记**，
-      而报告里那几个"多跳到底花了多少"的数字会**整块空着**——且不会报错。
-    * ⛔ **`rerank.enabled` 显式打开**（`--no-rerank` 才能关）。⚠ 这一条是**踩过坑补的**：
-      `.env` 里 `TIANXIMEM_PROFILE=local` ⇒ [`../configs/local.yaml`](../configs/local.yaml)
-      **刻意把精排关掉**（开发期省时间）。于是第一轮四臂**一次精排都没发生**
-      （`rerank.calls = 0`），而 §12.4 要测的"每轮精排值不值"那对对照**两个臂一模一样**
-      ——**分数照样出得来，结论却完全错**。方案 §12.3 要求四臂共用同一个 `Reranker`，
-      所以这里不看 profile，直接钉住。
+      ⇒ **轮数 / 停止原因 / LLM 与精排调用数 / 耗时全都不记**，
+      而报告里那些"多跳到底花了多少"的数字会**整块空着**——且不会报错。
+    * ⛔ **`rerank.enabled` 显式打开**（`--no-rerank` 才能关）：
+      [`../configs/local.yaml`](../configs/local.yaml) 为开发期省时间默认关闭精排。
+      若沿用 profile，四臂都不会发生精排（`rerank.calls = 0`），每轮精排对照
+      会变成相同配置，**分数仍会生成但结论错误**。四臂必须共用同一个
+      `Reranker`，所以这里不看 profile，直接钉住。
     """
     return replace(
         base,
@@ -450,7 +445,7 @@ def _arm_config(
             #   于是"这一臂到底用了哪个 per_round_top_k"永远能从传进来的参数看出来。
             **({} if per_round_top_k is None else {"per_round_top_k": per_round_top_k}),
             **({} if max_rounds is None else {"max_rounds": max_rounds}),
-            # ⚠ 同上：`--mode` 不传就不覆盖 ⇒ **旧配置（不填 mode）逐字跑 React**。
+            # ⚠ 同上：`--mode` 不传就不覆盖 ⇒ **不填 mode 的配置逐字跑 React**。
             **({} if mode is None else {"mode": mode}),
         ),
         capture=replace(base.capture, enabled=False),
@@ -504,7 +499,7 @@ def _free_port() -> int:
 def _force_utf8_stdio() -> None:
     """把 stdout/stderr 切到 UTF-8 + `errors="replace"`。
 
-    ⚠ **这不是洁癖，是一个实测到的崩溃**（就在写这个工具的当下）：本文件的输出通篇是中文，
+    ⚠ **这不是洁癖，是一个到的崩溃**（就在写这个工具的当下）：本文件的输出通篇是中文，
     而 Windows 控制台默认 GBK、`sys.stdout` 的 error handler 是 `strict`
     ⇒ 结尾那几行带 `⚠` 的说明在**打印的时候**抛 `UnicodeEncodeError`，
     于是**跑完了几十分钟的实验，最后在汇报那一行崩掉**。
@@ -545,9 +540,9 @@ def _write_hits(path: Path, hits: dict[str, list]) -> None:
 
 
 def _reuse_hits(out_dir: Path, arm_key: str) -> dict[str, list] | None:
-    """复用上一轮算好的 Search 结果（`--reuse-hits`）；**没有正文就响亮拒绝**。
+    """复用已保存的 Search 结果（`--reuse-hits`）；**没有正文就响亮拒绝**。
 
-    ⚠ 旧格式的 `hits` 只存 `{id, created_at}` ⇒ 那**不能**安全复用：答案步需要正文。
+    ⚠ 不完整的 `hits` 若只存 `{id, created_at}`，则**不能**安全复用：答案步需要正文。
     这种情况下**报错**，而不是从 SQLite 反推一份"看起来一样"的正文——
     那正是"结果依赖它拿到的到底是哪份文本"这类静默错误的温床。
     """
@@ -601,7 +596,7 @@ def _snapshot(services) -> dict:
 
 
 class _RecordingAgent:
-    """把执行器**包一层**，逐轮落盘（方案 §11 的"实验模式下应能重建每轮"）。
+    """把执行器**包一层**，逐轮落盘，使实验能从产物重建每一轮。
 
     ⚠ 为什么是包一层而不是改 `SearchPipeline`：那些 `RoundRecord` **已经在
     `AgenticResult.stats` 里了**，只是编排层把它们**汇总成观测值**之后就不再持有。
@@ -669,10 +664,10 @@ class _RecordingAgent:
             record["decompose_llm_calls"] = result.stats.decompose_llm_calls
             record["step_llm_calls"] = result.stats.step_llm_calls
             record["dependencies_repaired"] = result.stats.dependencies_repaired
-            # ⭐ 恢复分支（`unresolved`）的诊断（2026-10-13）。
-            # ⚠ **这一段曾经被一次"锚点已失效"的替换静默漏掉**，于是汇总里的
-            #   `recovery_statuses` 全是默认值 `not_triggered`——**看起来像"一次都没触发"**。
-            #   ⇒ 用例 `test_the_recorder_really_writes_the_recovery_fields` 钉住它。
+            # ⭐ 恢复分支（`unresolved`）的诊断。
+            # ⚠ 汇总必须读取实际恢复状态；缺失字段会默认成 `not_triggered`，
+            #   使未记录的恢复看起来像"一次都没触发"。
+            #   用例 `test_the_recorder_really_writes_the_recovery_fields` 钉住它。
             record["recovery"] = {
                 "entered": result.recovery.entered,
                 "status": result.recovery.status,
@@ -688,7 +683,7 @@ class _RecordingAgent:
             # ⚠ "最终答题输入折不折执行记录"是**评测层**的决定（服务不碰答案输入）
             #   ⇒ 这里把它算出来记上，免得读报告的人要拿两条规则去推。
             record["answer_input_has_record"] = not result.recovery.entered
-            # ⚠ `history_text` 是**控制模型那一轮实际收到的历史**（方案第六节要求能重建它）
+            # ⚠ `history_text` 是**控制模型那一轮实际收到的历史**，用于重建每一步
             #   ⇒ 与 `query` 一样含数据集原文，只落 `runs/`（gitignored）。
             record["plan_history"] = [
                 {
@@ -734,7 +729,7 @@ PLAN_RECORD_HEADER: str = (
 
 
 def _execution_record_text(call: dict) -> str:
-    """`plan_history` → **答案输入前置的那一段**（方案第七节）。
+    """`plan_history` → **答案输入前置的那一段**。
 
     形状固定：抬头（标明是模型生成的执行记录）＋ 完整计划 ＋ 实际执行过的问答。
 
@@ -762,11 +757,10 @@ def _execution_record_text(call: dict) -> str:
 def _gold_evidence_texts(bench_dir: Path) -> dict[str, tuple[str, ...]]:
     """`question_id → 金标证据那几条消息的**原文**`。
 
-    ⚠ **为什么要读原始 JSONL**：加载器只留 `Question.evidence`（形如 `D2:8` 的
-    **消息 id**），而那个 id 我们**永远不输出**——我们的 `content` 是一段 QA 块的
-    渲染文本，里面没有 LoCoMo 的消息编号。第一版覆盖率就是这么写的，结果四臂
-    一律 `0/25`，看起来像"一条证据都没检索到"，**而那是假的**。
-    ⇒ 改用金标消息的**原文**做包含判定：它在我们这边会原样出现在某条
+    ⚠ **为什么要读原始 JSONL**：加载器只留 `Question.evidence`（**消息 id**），
+    而那个 id 我们**永远不输出**——我们的 `content` 是一段 QA 块的
+    渲染文本，里面没有 LoCoMo 的消息编号。若用消息 id 做覆盖率，会得到错误的 0。
+    ⇒ 使用金标消息的**原文**做包含判定：它在我们这边会原样出现在某条
     `Q:` / `A:` 里（`add_shape` 只在前面加 `<Speaker>: `、`annotate` 只在中间插日期，
     都**不删改原文**）。
 
@@ -795,8 +789,8 @@ def _gold_evidence(samples, bench_dir: Path, *, dataset: str) -> dict[str, tuple
     """`question_id → 金标证据的**可比较文本**`。**按数据集各取各的**（两份口径不可比）。
 
     * **LoCoMo**：读原始 `questions.jsonl` 的 `evidence_messages[].text`——那是**原文**。
-      ⚠ 不能用 `Question.evidence`：那是 `D2:8` 这种**消息 id**，而我们**从不输出**它
-      （第一版覆盖率拿 id 去匹配，四臂一律 0/25，看着像"一条证据都没检索到"，**而那是假的**）。
+      ⚠ 不能用 `Question.evidence`：那是**消息 id**，而我们**从不输出**它；
+      用 id 匹配覆盖率会产生错误的 0。
     * **musique-haystack**：取支持段落正文的**前 60 字**（`supporting_snippets`）。
       ⚠ **不用 `title`**：它是维基文章名，一文多 chunk ⇒ 召回同文章的另一段也会算命中。
 
@@ -810,7 +804,7 @@ def _gold_evidence(samples, bench_dir: Path, *, dataset: str) -> dict[str, tuple
 
 
 def _evidence_coverage(samples, hits: dict[str, list], gold: dict[str, tuple[str, ...]]) -> dict:
-    """金标证据有没有出现在**返回给 AML 的那份文本**里（§12.5 的两个指标）。
+    """金标证据有没有出现在**返回给 AML 的那份文本**里。
 
     | 指标 | 含义 |
     | --- | --- |
@@ -903,10 +897,9 @@ def main(argv: list[str] | None = None) -> int:
     bench_dir = Path(args.bench_dir or os.environ.get("TIANXIMEM_BENCHMARK_DIR", "dataset"))
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    # ⚠ **默认按 `--out` 的目录名取，不是按日期**（2026-10-12 修）：
+    # ⚠ **默认按 `--out` 的目录名取，不是按日期**：
     #    同一天跑两轮（改了语料或口径再跑）会**撞在同一个 collection 上**——
-    #    而旧向量**不会报错**，只会静默混进这次检索。实测踩过一次（822 段那轮的
-    #    向量留在库里，新跑那轮是 912 段的语料）。
+    #    已有向量**不会报错**，只会静默混进这次检索。
     collection = args.collection or f"coq-eval-{Path(args.out).name}"
 
     dataset = args.dataset
@@ -971,7 +964,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     # ⚠ **续跑要合并，不能覆盖**：`--arms e1,a` 这类部分重跑若从头写 `report.json`，
-    #   上一次跑出来的 E0 / E2 会**静默消失**——而汇总表会照常打印，只是少两行。
+    #   已保存的 E0 / E2 结果会**静默消失**——而汇总表会照常打印，只是少两行。
     report: dict[str, dict] = {}
     report_path = out_dir / "report.json"
     if report_path.exists():
@@ -993,7 +986,7 @@ def main(argv: list[str] | None = None) -> int:
             mode=mode,
         )
         services = build_services(config)
-        # ⚠ 逐轮落盘（§11）：包一层，**只在真的接上了执行器时**包。
+        # ⚠ 逐轮落盘：包一层，**只在真的接上了执行器时**包。
         recorder = None
         if services.search.agentic is not None:
             recorder = _RecordingAgent(services.search.agentic, mode=mode)
@@ -1006,7 +999,7 @@ def main(argv: list[str] | None = None) -> int:
                     batches = _ingest(samples, client)
                     print(f"    ADD 共 {batches} 批", flush=True)
                 elif args.skip_add or position > 0:
-                    # ⚠ **不是第一臂就一律不 ADD**：四臂必须读**同一份**记忆状态（§12.3），
+                    # ⚠ **不是第一臂就一律不 ADD**：四臂必须读**同一份**记忆状态，
                     #   再灌一遍既浪费又会改变真源（幂等守卫会挡住重复写，但那是白跑一趟）。
                     print("    （记忆已在：不重复 ADD）", flush=True)
                 if position == 0:
@@ -1017,7 +1010,7 @@ def main(argv: list[str] | None = None) -> int:
                 elif recorder is not None:
                     # ⚠ 复用 hits ⇒ Search 没跑 ⇒ `recorder.calls` 是空的，而 Plan 那一臂的
                     #   答案输入**必须**带上执行记录（见 `_require_plan_records`）。
-                    #   记录本身没丢——上一轮已落在 `<臂>-rounds.json`，这里按写盘顺序读回来。
+                    #   记录本身没丢——已保存在 `<臂>-rounds.json`，这里按写盘顺序读回来。
                     rounds_path = out_dir / f"{arm_key}-rounds.json"
                     if rounds_path.exists():
                         recorder.calls = json.loads(rounds_path.read_text(encoding="utf-8"))
@@ -1026,10 +1019,9 @@ def main(argv: list[str] | None = None) -> int:
                             f"{len(recorder.calls)} 条执行记录）",
                             flush=True,
                         )
-                # ⚠ **必须连正文一起存**（2026-10-12 修）：以前只存 `{id, created_at}`，
-                #   于是"答案步挂了想续跑"只能**重跑 Search**（17 分钟）——
-                #   因为答案步要用正文拼 `retrieved_context`，而从 SQLite 反推正文
-                #   是"看起来一样、其实不是同一份输入"（本项目最忌讳的那类）。
+                # ⚠ **必须连正文一起存**：答案步要用正文拼 `retrieved_context`。
+                #   若只存 `{id, created_at}`，续跑时只能重跑 Search；从 SQLite 反推正文
+                #   可能得到"看起来一样、其实不是同一份输入"的结果。
                 _write_hits(out_dir / f"{arm_key}-hits.json", hits)
                 metrics_snapshot = _snapshot(services)
                 if args.reuse_hits:
@@ -1066,18 +1058,17 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 execution_record: dict[str, str] = {}
                 if recorder is not None:
-                    # §11 的逐轮过程。⚠ **它含数据集原文**（Query 与候选 id）
+                    # 逐轮执行记录。⚠ **它含数据集原文**（Query 与候选 id）
                     #   ⇒ 与 `runs/` 一样**不进 Git**。
                     (out_dir / f"{arm_key}-rounds.json").write_text(
                         json.dumps(recorder.calls, ensure_ascii=False, indent=1), encoding="utf-8"
                     )
                     entry["recorded_requests"] = len(recorder.calls)
-                    # ⛔ **降级必须摆到台面上**（2026-10-12 修）。
-                    #    实测踩过：`gpt-4o-mini` 那轮 50 题里 **45 题第一轮就
-                    #    `llm_unavailable`**（LLM 调用失败），多跳循环**被优雅降级**
-                    #    （D12：绝不 500）⇒ 那 45 题返回的其实是**普通混合检索**的结果，
-                    #    而**汇总表照样给了一个看起来正常的准确率**。
-                    #    ⇒ 只写在 `rounds.json` 里等于没有告警：降级后的 E1 会被当成 E1。
+                    # ⛔ **降级必须摆到台面上**。
+                    #    首轮 `llm_unavailable`（LLM 调用失败）会让多跳循环**优雅降级**，
+                    #    返回的其实是**普通混合检索**的结果，而**汇总表仍会给出一个
+                    #    看起来正常的准确率**。只写在 `rounds.json` 里等于没有告警：
+                    #    降级后的 E1 会被当成 E1。
                     stops = Counter(record["stop_reason"] for record in recorder.calls)
                     entry["agentic_stop_reasons"] = dict(stops)
                     # ⚠ 判据是 `fallback_reason`（= 这一题真的走了混合检索），
@@ -1106,8 +1097,7 @@ def main(argv: list[str] | None = None) -> int:
                     items = []
                     for sample in samples:
                         # ⚠ **只有 Plan 那一臂前置执行记录**：React 的 `execution_record`
-                        #   是空 dict ⇒ `build_input_items` 走的是与本参数存在之前
-                        #   **逐字相同**的那条路（它连截断点都没变）。
+                        #   是空 dict，因此不改变答案输入及截断位置。
                         items += build_input_items(sample, hits, execution_record=execution_record)
                     results = run_judge(
                         pipeline,
@@ -1140,7 +1130,7 @@ def main(argv: list[str] | None = None) -> int:
         entry = report.get(arm_key, {})
         coverage = entry.get("coverage", {})
         # ⚠ **降级那一列只在这里取**：`_degraded_arms()` 已经按同一判据列过一遍
-        #   （⛔ 再 append 一次会让同一臂**打印两遍**——实测踩过，见下面的注释）。
+        #   （⛔ 再 append 一次会让同一臂**打印两遍**）。
         degraded = entry.get("agentic_degraded", 0)
         print(
             f"{arm_label:<28} {entry.get('correct', '-'):>6} {entry.get('judged', '-'):>5} "
@@ -1154,8 +1144,7 @@ def main(argv: list[str] | None = None) -> int:
         for label, count, stops in degraded_arms:
             print(f"    {label}：{count} 题（停止原因 {stops}）")
         print(
-            "  降级 = 这一题的多跳**没跑成**、回退走了**普通混合检索**"
-            "（D12 的'绝不 500'把它兜住了）。\n"
+            "  降级 = 这一题的多跳没有执行成功，已回退到普通混合检索。\n"
             "  ⇒ 这些数**只能用来看'服务没崩'，不能用来回答'多跳有没有用'**。\n"
             "  ⚠ 常见原因：端点额度/限流（实测 OpenRouter 免费档 402）、"
             "Plan 的拆解输出非法（`plan_invalid`）。"

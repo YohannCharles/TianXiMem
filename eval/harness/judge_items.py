@@ -1,6 +1,6 @@
 """把一次检索结果渲染成**喂给裁判的输入项**（裁判输入侧的唯一样子）。
 
-本模块是 `judge.py` 拆出来的第二半（2026-10-15）：那里只剩"跑 pipeline 子进程 + 编排"，
+本模块是 `judge.py` 拆出来的第二半：那里只剩"跑 pipeline 子进程 + 编排"，
 "一次检索结果长什么样、按什么顺序注入、超了平台前缀怎么截"这一层在这里。
 
 ## 它同时拥有"数据集 → pipeline"那张表
@@ -31,11 +31,11 @@ from eval.datasets.musique import ANSWER_CONTRACT as MUSIQUE_ANSWER_CONTRACT
 from .annotate import annotate
 from .driver import SearchHit
 
-#: 命中列表的注入位置（见模块 docstring 的 V3 讨论）。
+#: 命中列表的注入位置。
 MEMORY_FIELD = "speaker_1_memories"
 
 
-#: 数据集 → 归档 pipeline 文件名。**数据集专属文件名的知识止步于 `eval/datasets/`**（D16）
+#: 数据集 → 归档 pipeline 文件名。**数据集专属文件名的知识止步于 `eval/datasets/`**
 #: ——这里的映射就是那条边界在 harness 侧的接口。
 _PIPELINES = {
     "locomo-refined": LOCOMO_PIPELINE,
@@ -100,35 +100,30 @@ def pipeline_for(bench_dir: Path, dataset: str) -> Path:
 #: 而"两处格式必须一致"由 [`../../tests/test_experiments.py`](../../tests/test_experiments.py)
 #: 的等价断言保证——**重复的是常量，不是逻辑**。
 #:
-#: ⚠ 同样的形状也是 AML 自己的约定：[`../../docs/contract.md`](../../docs/contract.md) §3
-#: 记着 CL-Bench 那条路径用 `- [timestamp] text` 渲染我们返回的 `created_at`。
+#: ⚠ 同样的形状也是 AML 自己的约定：[`../../docs/contract.md`](../../docs/contract.md)
+#: 规定 CL-Bench 路径用 `- [timestamp] text` 渲染返回的 `created_at`。
 DATE_PREFIX: str = "[{date}] "
 
 
 #: 注入里怎么带日期（`--memory-date` 的完整取值域）。
 #:
-#: * `none`：完全不带（**基线**，也是"AML 侧只取 content"那条 S1 假设）
+#: * `none`：完全不带
 #: * `per_item`：每条记忆（= 一个段）前面加 `[YYYY-MM-DD] `
 #: * `per_pair`：**每一对**前面都加 `[YYYY-MM-DD] `——同一个日期，但离该句更近。
-#:   动机（2026-09-25）：temporal 的失败里有这么一类——模型**不缺信息**（`[2023-07-15]`
-#:   就在段首、"Last Friday" 就在下面），但不把锚点接到自己那句上（见 `eval/reports/ledger.md`）
-#: * `per_pair_wd`：`per_pair` + **星期**（`[2023-10-22 Sun] `）。⛔ **实测更差，别再跑**：
-#:   动机是"temporal 错的 70 题里 29 道的 gold 是某星期几之前/之后"，但那天**一道都没救回来**，
-#:   整体还从 0.633 掉到 0.601、三段全降
-#:   （见 [`../../docs/decisions.md`](../../docs/decisions.md) **D21**）。
-#:   留在模式表里只为"试过、有据可查"。
+#:   这样时间锚点紧跟对应语句，模型不需要自行把段首日期关联到句内表达。
+#: * `per_pair_wd`：`per_pair` + **星期**（`[2023-10-22 Sun] `）。星期会降低时间题
+#:   的匹配效果，因此不是默认口径；保留该模式仅用于显式对照。
 #: * `header`：在上面的基础上，**记忆块顶部再加一行说明**，明说每块前面的日期是它的会话日期
 #: * `annotate`：**不动结构，只把句子里的相对表达就地注解成绝对日期**
 #:   （`last Tues (July 18, 2023)`）——动机见 [`annotate.py`](./annotate.py) 的模块 docstring
-#:   （2026-09-25：`t1-dated` 的 temporal 79 道里 **27 道卡在"要换算"这一步**）。
 #:   ⚠ **它不加前缀**：索引侧 `packaging.inject_abs_time=true` 已经给每一对加了日期，
 #:   这里再前缀一次会变成两个日期。
 #:   ⚠ **锚点用的是段级 `created_at`，生产侧用的是"每一对自己的 `event_time`"**——
 #:   两者只在**会话跨天**时才不同。LoCoMo 的 3 段 70 个 session **一个跨天的都没有**
-#:   （2026-09-26 核过）⇒ 这份数据上两者等价。**换数据集/换语料时要重核这一条**，
+#:   ⇒ 这份数据上两者等价。**换数据集/换语料时要重核这一条**，
 #:   否则实验量的是 A、上线跑的是 B，而两边都不报错。
 #:
-#: 为什么要有 `header`：`per_item` 实测**没能改变模型行为**（27/35 仍答相对，与基线 26/35 几乎相同）
+#: 为什么要有 `header`：`per_item` **没能改变模型行为**（27/35 仍答相对，与基线 26/35 几乎相同）
 #: ——"看得见日期"≠"用得上日期"。所以 `header` 把语义**写明**，看是提示不够清楚还是模型做不到。
 DATE_MODES: tuple[str, ...] = ("none", "per_item", "per_pair", "per_pair_wd", "header", "annotate")
 
@@ -178,23 +173,22 @@ def render_memories(
 ) -> str:
     """把命中拼成注入文本。
 
-    **只取 `content`**——这是 S1 那条代理假设的落点（"AML 从返回项里取哪个字段"）。
+    **只取 `content`**——这是本地代理对“AML 从返回项里取哪个字段”的假设。
     用 `"\\n"` 拼接而不是别的分隔符：归档的 `memory_text()` 对列表正是 `"\\n".join(...)`，
     所以"我们自己拼"与"把列表交给它拼"**逐字相同**。
 
-    `date_mode` 决定日期怎么带——**逐档的口径都写在 `DATE_MODES` 上**（含每档的实测结论）；
+    `date_mode` 决定日期怎么带——**逐档的口径都写在 `DATE_MODES` 上**（含每档的结论）；
     默认 `"none"`（理由见下）。
 
-    ## 为什么会有这个开关（2026-09-25）
+    ## 为什么会有这个开关
 
     LoCoMo 的时间题 gold 几乎全是**绝对日期**（`2 July 2023`），而对话正文里说的是
     **相对**（"yesterday"）；裁判的 TIME 块要求**单位与 gold 一致、且不许相对↔绝对互转**。
     答案 prompt 第 7 条允许换算，前提是"**记忆的时间戳让它清晰**"——
-    ⇒ 时间戳不可见，那条规则就无法执行，模型只能照抄 "Yesterday"，**必判错**
-    （实测 `eval/reports/ledger.md`：gold 含绝对日期的 35 道里 **26 道答成相对、全部判错**）。
+    ⇒ 时间戳不可见，那条规则就无法执行，模型只能照抄 “Yesterday”，**必判错**。
 
-    ⚠ **`created_at` 服务本来就返回了**（`data[]` 四字段之一），是**本函数必须显式带上它**。
-    但"AML 真实侧往 `speaker_1_memories` 里填什么"仍是 **S1 未知**：
+    ⚠ **`created_at` 服务本来就返回了**（`data[]` 四字段之一），因此本函数必须显式带上它。
+    但“AML 真实侧往 `speaker_1_memories` 里填什么”仍是 **未知**：
     开这个开关是**换一条代理假设**，不是修一个 bug——所以默认关，
     开启时要在 run record 里记明（runner 的 `--memory-date` + `--switches`）。
     """
@@ -256,7 +250,7 @@ def build_input_items(
     归档的 `gold_answer()` 走 `memory_text()`，**列表由它自己用 `\\n` 拼**，
     在这里预先拼会改变那条链路的行为。
 
-    ## `execution_record`（**默认 `None` = 与本参数存在之前逐字相同**）
+    ## `execution_record`（**默认 `None`：不前置执行记录**）
 
     `qid → 一段机器生成的执行记录`。给了就在**记忆原文之前**前置它，再一起过平台前缀截断
     （顺序固定：**前部执行记录、后部真实记忆原文**）。
@@ -313,7 +307,7 @@ def build_input_items(
         text = render_memories(hits, date_mode=date_mode, annotate_mark=annotate_mark)
         text = _prepend_execution_record(text, (execution_record or {}).get(question.qid))
         # ★ 平台的答案阶段是"按返回顺序取 117,760 token 前缀"——**harness 要自己模拟**，
-        #   因为基线未必守预算（实测 ReFind 有一题返回 89.8 万字符）。详见常量的注释。
+        #   因为基线未必守预算（ ReFind 有一题返回 89.8 万字符）。详见常量的注释。
         #   ⚠ 顺序：**先前置执行记录、再截断**——反过来的话执行记录会把已经过预算
         #   的记忆挤出窗口，而"前部是执行记录"这条口径就没意义了。
         text, cut = truncate_to_platform_prefix(text)
@@ -379,7 +373,7 @@ def _build_extra_items(
             from eval.datasets.musique import answer_contract_for
 
             # ⭐ **只挑"链式多跳"那一档**：它没有拒答题 ⇒ 不给拒答出口
-            #    （那句子不是保险，是出口：实测这一档 10/25 是模型自己弃答，
+            #    （那句子不是保险，是出口：这一档 10/25 是模型自己弃答，
             #    而它要测的是"检索有没有把证据送到它面前"）。
             # ⛔ MuSiQue 原生的可答/不可答变体**照旧**——整档大数据评测确实要考拒答。
             items[-1]["answer_contract"] = answer_contract_for(question.category)
@@ -465,16 +459,14 @@ def build_official_items(
     return items
 
 
-#: 平台在**答案阶段**对返回列表做的截断：**按返回顺序取 117,760 token 前缀**（§2.2 / §6.4）。
+#: 平台在**答案阶段**对返回列表做的截断：**按返回顺序取 117,760 token 前缀**。
 #:
 #: ⚠ **harness 必须自己模拟这一步**，不能假设"服务返回的证据自己会守预算"：
-#: 我们自己的服务确实守（`packaging` 的双预算），但**基线不一定**——
-#: 2026-09-26 实测：ReFind 在 LongMemEval 上有一题返回了 **897,838 字符**（≈22–30 万 token），
-#: 判分提示直接爆 128k ⇒ 网关 400 ⇒ **整轮被打死**。而**平台会替它截断**，
-#: 所以正确的模拟是"截前缀"，不是"让整轮炸掉"。
+#: 我们的服务守 `packaging` 的双预算，但外部基线不一定。平台会按顺序截断，
+#: 因此这里也截前缀，避免超长输入导致网关 400 并终止整轮。
 #:
 #: ⚠ 分词器用 **`o200k_base`**（= 平台答案模型 `gpt-4o-mini` 的分词器），与
-#: `budget.tokenizer` 同一口径——**不要用字符数近似**（§6.4）。
+#: `budget.tokenizer` 同一口径——**不要用字符数近似**。
 PLATFORM_TOKEN_PREFIX: Final[int] = 117_760
 
 
@@ -495,12 +487,11 @@ def _encode(encoder, text: str) -> list[int]:
 
     ⛔ **不给这个参数会让整轮跑批崩掉，而且崩在数据上、不是崩在代码上**：
     `o200k_base` 默认把 `<|endoftext|>` 这类**字面字符串**当成特殊 token 并**抛
-    `ValueError`**。而记忆正文里出现它完全正常——**2026-10-02 实测两条链各自死在
-    这里**：LongMemEval 的 haystack（`run-lme.out`）与 CorporateBench 的邮件正文。
-    两者的共同点是"**重跑一次还死在同一题上**"（数据没变），看起来像"这一题特别慢"，
-    **极易被误判成网络/网关问题**。
+    `ValueError`**。而记忆正文里出现它完全正常：LongMemEval 的 haystack 与
+    CorporateBench 的邮件正文都出现过该字面量。失败会稳定发生在同一题上，
+    容易被误判成网络或网关问题。
 
-    ⚠ `src/tianximem/common/tokens.py` 的 `O200kCounter.count` **一直是传的**——
+    ⚠ `src/tianximem/common/tokens.py` 的 `O200kCounter.count` 也显式传入该参数，
     但 harness **不许 import `src/`**（[`../CLAUDE.md`](../CLAUDE.md)），
     所以这两个字面量**故意重复了一份**（同 `PLATFORM_TOKEN_PREFIX` 那条），
     只能靠本注释与 `tests/test_harness.py` 的用例守。
@@ -529,7 +520,7 @@ def _build_clbench_items(sample: Sample, hits_by_qid: dict[str, list[SearchHit]]
     | `question` | 加载器切出来的任务文本（末条 user 的尾部窗口） |
     | `rubrics` | 判分标准；`official_rubrics()` 认 `item["rubrics"]` |
     | `retrieval.selected` | **每项 `created_at` + `text`**——⚠ 读的是 **`text`**，
-    而且**缺 `text` 的项会被直接跳过**（`docs/contract.md` §5） |
+    而且**缺 `text` 的项会被直接跳过**（[`docs/contract.md`](../../docs/contract.md)） |
 
     ⚠ 记忆块**按平台的 117,760 token 前缀截断**，且**按项截**（不切半个段）——
     与 `packaging` 的"段是原子单位"同一条理由。

@@ -1,16 +1,13 @@
 """路由——**薄**。
 
-> `service/CLAUDE.md`：本层只做两件事——**钉死契约形状、保持可重试**
-> （**不串行化 Add**：位置是请求的纯函数，D28）。
-> 所以这里只做 `HTTP/schema → 编排` 的映射，**不重新实现** pairing / embedding /
-> Qdrant / packaging 的任何逻辑（它们全在 `pipeline.py` 往下调）。
+> `service/CLAUDE.md`：本层固定契约形状并保持失败可重试。
+> 这里只做 `HTTP/schema → 编排` 的映射，不重新实现 pairing、embedding、
+> Qdrant 或 packaging 逻辑。
 
-## 两个容易写错的点
+## 同步路由
 
-**路由写成 `def` 而不是 `async def`。** FastAPI 会把 `def` 路由自动下到线程池，
-而下游是**阻塞**的（SQLite 是阻塞调用、远程 embedding 是同步 HTTP）。
-写成 `async def` 再接阻塞调用会**堵住事件循环**，让并发请求互相饿死——
-而 30 分钟的单请求预算会**掩盖这个问题，直到 Full run 跑 0.5–2 天时才炸**（§15）。
+路由使用 `def` 而不是 `async def`。FastAPI 会把同步路由放入线程池，而 SQLite 和远程
+HTTP 调用都是阻塞操作；在事件循环中直接执行会阻塞并发请求。
 """
 
 from __future__ import annotations
@@ -32,7 +29,7 @@ __all__ = ["build_router"]
 
 
 def _to_batch(request: AddRequest) -> AddBatch:
-    """§2.1 的请求 → canonical 的 `AddBatch`。
+    """把 Add 请求转换成 canonical `AddBatch`。
 
     **只做形状映射**：校验已经在 schema 边界做完，这里不做任何业务判断
     （比如"是不是空批次"——那是 `pairing` 的响亮失败）。
@@ -53,8 +50,7 @@ def build_router(*, add_pipeline: AddPipeline, search_pipeline: SearchPipeline) 
 
     @router.get("/health")
     def handle_health() -> dict[str, str]:
-        """探活：**无需鉴权的 GET**，任意 2xx 即视为正常
-        （[`docs/contract.md`](../../../docs/contract.md) §7.2 / S4）。
+        """无需鉴权的 GET 探活端点；任意 2xx 表示进程存活。
 
         平台**未单独配置 Health 地址时探的是与 Add 同源的 `/health`**，404 可能被判为
         不健康 ⇒ **任务根本跑不起来**——不是掉分，是**没进场**。
@@ -67,7 +63,7 @@ def build_router(*, add_pipeline: AddPipeline, search_pipeline: SearchPipeline) 
 
     @router.post("/add", response_model=AddResponse)
     def handle_add(request: AddRequest) -> AddResponse:
-        """§2.1：200 + `success: true` + **原样回显**三个字段。
+        """返回 200、`success: true`，并原样回显三个请求字段。
 
         ⚠ 响应**只有这三个回显字段**：失败时直接抛（5xx），由
         [`errors.py`](./errors.py) 转成明确的可重试错误——**不返回"部分成功"**。
@@ -81,10 +77,9 @@ def build_router(*, add_pipeline: AddPipeline, search_pipeline: SearchPipeline) 
 
     @router.post("/search", response_model=SearchResponse)
     def handle_search(request: SearchRequest) -> SearchResponse:
-        """§2.1：`data` 是**降序数组**，空结果是 `[]`。
+        """返回按相关性降序的 `data` 数组；无结果时返回 `[]`。
 
-        ⚠ **不得生成最终答案，也不得把答案伪装成记忆记录**（§2.1 红线）——
-        这里返回的每一项都是**渲染后的证据原文**。
+        每个条目都是渲染后的证据文本；服务不生成最终答案，也不把答案伪装成记忆。
         """
         packed = search_pipeline.run(
             user_id=request.user_id, query=request.query, top_k=request.top_k

@@ -6,7 +6,7 @@
 这一层错了**不会报错**：注解只是往 `content` 里多写几个字，检索照常返回值、分数照常算。
 所以这里钉三件事：
 
-1. **只加不改**：相对表述原样保留（D21 的口径），注解跟在后面
+1. **只加不改**：相对表述原样保留，注解跟在后面
 2. **推不出就不动**：`a few years ago` 这类**一个字符都不改**——编一个日期比不换算更糟
 3. **它碰不到索引**：开/关这个开关，被 embedding 的文本**逐字相同**（否则它与 T1 就没区别了，
    而"它不用重建索引"正是它存在的理由）
@@ -28,7 +28,7 @@ _ANCHOR = date(2023, 7, 20)
 
 
 def test_annotate_only_adds_and_never_replaces() -> None:
-    """原文一字不动，注解跟在后面（D21："日期是额外锚点，不是替换"）。"""
+    """原文一字不动，注解跟在后面。"""
     out = annotate("Hey Mel! I joined an activist group last Tues.", _ANCHOR)
     assert out == "Hey Mel! I joined an activist group last Tues (July 18, 2023)."
 
@@ -106,8 +106,8 @@ _CASES: tuple[tuple[str, date], ...] = (
 def test_annotate_matches_the_harness_copy(text: str, anchor: date) -> None:
     """[`eval/harness/annotate.py`](../eval/harness/annotate.py) 与 `src/` 这份**必须逐字一致**。
 
-    harness **不许 import `src/`**（[`README`](./CLAUDE.md) §五 的 AST 断言钉着），
-    而那次注解实验（run record 里的 `--memory-date annotate`）是在 harness 侧跑的——
+    harness **不许 import `src/`**（[`README`](./CLAUDE.md) 的 AST 断言钉着），
+    而 run record 的 `--memory-date annotate` 在 harness 侧执行——
     **两份都得留着**，所以重复的是**逻辑**而不是常量。
 
     ⇒ 常量可以靠"抄一遍 + 断言相等"守（`DATE_PREFIX` 就是这么办的），**逻辑只能靠用例**：
@@ -118,7 +118,7 @@ def test_annotate_matches_the_harness_copy(text: str, anchor: date) -> None:
     assert harness_annotate(text, anchor) == annotate(text, anchor)
 
 
-# ── 开关纯度（§13）：两臂**只该差正文**，而且**索引那一侧一个字都不该变** ──────
+# ── 开关纯度：两臂**只该差正文**，而且**索引那一侧一个字都不该变** ──────────
 #: 注解的形状（用来把注解从 `content` 里剥掉，验证"原文一字未改"）。
 _ANNOTATION = re.compile(
     r" \((?:"
@@ -151,7 +151,7 @@ def _dress(chain) -> list[str]:
     pairs = []
     for ordinal, question, answer in _PAIRS:
         with chain.store.transaction() as conn:
-            # 每次 Add 一块（D28：位置 = `(request_id, local_index)`，彼此不相邻）
+            # 每次 Add 一块：位置 = `(request_id, local_index)`，彼此不相邻
             pair = chain.store.insert_pair(
                 conn,
                 user_id="u1",
@@ -167,8 +167,8 @@ def _dress(chain) -> list[str]:
             )
         ids.append(pair.id)
         pairs.append(pair)
-    # ⚠ 索引侧走**生产路径的同一个渲染函数**（`index_pairs` 的 `renderer`）——
-    #   若这里改成 `partial(render_pair, ...)` 之外的东西，"注解不进索引"就验不到了。
+    # ⚠ 索引侧走**生产路径的同一个渲染函数**（`index_pairs` 的 `renderer`）；
+    #   只要换成别的渲染入口，"注解不进索引"就验不到了。
     chain.qdrant.index_pairs(pairs, chain.embedder, renderer=partial(render_pair))
     return ids
 

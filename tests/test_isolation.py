@@ -1,10 +1,10 @@
-"""**隔离**：`user_id` 是唯一的检索隔离字段（§2.2）。
+"""**隔离**：`user_id` 是唯一的检索隔离字段。
 
 > `session_id` 只是分组字段，**不是 Search 的过滤器**。
 
-⚠ Qdrant 侧真正的隔离（payload filter 在**候选阶段**生效）已由 ②
+⚠ Qdrant 侧的隔离由候选阶段的 payload filter 保证，
 `tests/test_qdrant_store.py::test_user_filter_applies_at_candidate_stage_not_after_fusion`
-证明。本文件证明的是**服务层**：请求里的 `user_id` 被原样传到检索、且不跨用户串结果。
+覆盖该行为。本文件证明的是**服务层**：请求里的 `user_id` 被原样传到检索、且不跨用户串结果。
 
 ⚠ 走 `SearchPipeline.run()` 而不是 HTTP：本文件用**假 Qdrant**（`FakeQdrantSearch.by_user`）
 精确指定"每个用户的检索会返回什么"，而 `/search` 的路由那一跳已由
@@ -21,7 +21,7 @@ from tests.conftest import Wired
 def test_search_never_returns_another_users_memories(
     wired: Wired, seed_pair: Callable[..., str]
 ) -> None:
-    """**跨 user 检索被禁止**（§2.2）。"""
+    """**跨 user 检索被禁止**。"""
     alice = seed_pair(wired.store, 0, "alice 的秘密", "a", user_id="alice")
     bob = seed_pair(wired.store, 0, "bob 的秘密", "b", user_id="bob")
     wired.qdrant.by_user = {"alice": [alice], "bob": [bob]}
@@ -58,7 +58,7 @@ def test_isolation_is_owned_by_the_candidate_stage_not_the_service_layer(
     """⚠ **边界归属**：服务层**不做**二次过滤。
 
     这里让假 Qdrant 故意"越界"返回别人的 id，服务层会如实打包两条 ⇒
-    说明**隔离完全依赖候选阶段的 payload filter**（真 Qdrant 已由 ② 证明生效）。
+    说明**隔离完全依赖候选阶段的 payload filter**（真 Qdrant 的候选阶段过滤有独立集成测试）。
 
     **别把这条当成"服务层会兜底"**——它记录的是相反的结论。
     """

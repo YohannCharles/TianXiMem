@@ -25,7 +25,7 @@ uv run python tools/export_router_kit.py --manifest eval/router-samples.jsonl   
 
 `expected_route` 是**人读着提示词的定义逐条判的**，⛔ **不是数据集自带的类目**。
 数据集那套（LoCoMo 的 `category`、LongMemEval 的 `question_type`）描述的是**答案类型**，
-不是**检索依赖结构**——本仓实测：LoCoMo 标成 `category=1`（multi-hop）的题里，
+不是**检索依赖结构**——本仓：LoCoMo 标成 `category=1`（multi-hop）的题里，
 按路由判据**大多数其实是 `DEFAULT`**。
 ⇒ 拿数据集类目当路由真值会得到一份**看不出来的假分数**。
 
@@ -101,8 +101,8 @@ def render_readme(rows: list[dict]) -> str:
   （例：`after the roadtrip`、`the friend who wrote Deborah ...`）；
 * **`DEFAULT`** —— 其余，**含多实体比较与普通时间 / 数值问题**。
 
-⚠ **没有 `COUNT`**（2026-10-14 起）：计数 / 名单类问法改由**共同取证**（先于路由器运行、
-确定性）处理，不经过路由器 ⇒ 本套件里**已剔除** `COUNT` 标注的行。
+⚠ **没有 `COUNT`**：计数 / 名单类问法由**共同取证**（先于路由器运行、确定性）
+处理，不经过路由器 ⇒ 本套件不包含 `COUNT` 标注。
 
 ⚠ 这套判据**抄的是原始提示词自己的定义**，不是数据集类目。判据的完整原文见
 本仓 `src/tianximem/retrieve/router.py` 的 `ROUTER_PROMPT`（**逐字冻结**）。
@@ -173,8 +173,8 @@ def main(argv: list[str] | None = None) -> int:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         row = json.loads(line)
-        # ⚠ 遗留的 `COUNT` 行**不导出**（2026-10-14）：路由收成二分类，这类问法归
-        #   共同取证、到不了路由器 ⇒ 留在套件里会让"正确率"分母无意义。
+        # ⚠ `COUNT` 行**不导出**：这类问法由共同取证处理、不会进入路由器，
+        #   留在套件里会让"正确率"分母无意义。
         if row["expected_route"] == "COUNT":
             legacy += 1
             continue

@@ -38,7 +38,7 @@ _RELATIONS = frozenset(
 #: "The Last Good Year"（musique）里的 `last` 不是时间限制，词级护栏会把整题毙掉。
 #: 时间限制交给 `period` 字段（`_TIME_WORDS` + `missing_period`）承载。
 #: ⚠ 同理，**`hope` 只在作计划动词时才拦**：MQuAKE 有 "where Hope Lange is a citizen"，
-#: 词级护栏把它整题毙成 `unsupported_scope`（2026-10-17 实测）。
+#: 词级护栏把它整题毙成 `unsupported_scope`。
 _UNSUPPORTED_SCOPE = re.compile(
     r"\b(?:not|never|except|unless|without|hypothetical|fictional|"
     r"should|could|would|might|will|plan|since|until|former|previous|"

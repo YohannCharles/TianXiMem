@@ -1,6 +1,6 @@
 """PersonaMem-v2 的加载层：原始对话用于 Add，答案输入由检索适配器构造。
 
-## 这份数据长什么样（2026-09-30 实测）
+## 这份数据长什么样
 
 ```text
 benchmark/text/benchmark.csv     5,000 题 / 200 个 persona（每人 6–42 题）

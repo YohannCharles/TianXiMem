@@ -112,7 +112,7 @@ def test_ensure_collection_is_idempotent(qdrant_store: QdrantStore, emb: FakeEmb
 
 
 def test_collection_uses_single_shard(qdrant_store: QdrantStore, emb: FakeEmbedder) -> None:
-    """分片数 = 1：根级融合跨分片合并，**分片数变化会改变排名且无报错**（§6.3）。"""
+    """分片数 = 1：根级融合跨分片合并，**分片数变化会改变排名且无报错**。"""
     qdrant_store.ensure_collection(emb.dim)
     info = qdrant_store.client.get_collection(qdrant_store.collection)
     assert info.config.params.shard_number == 1
@@ -130,7 +130,7 @@ def test_dimension_change_is_rejected_not_mixed(
 def test_payload_indexes_created_before_any_write(
     qdrant_store: QdrantStore, emb: FakeEmbedder
 ) -> None:
-    """payload 索引**必须在写入数据前建**（§6.3），且 `user_id` 是 keyword + is_tenant。"""
+    """payload 索引**必须在写入数据前建**，且 `user_id` 是 keyword + is_tenant。"""
     qdrant_store.ensure_collection(emb.dim)
     assert {"user_id", "session_id", "event_time"} <= qdrant_store.payload_index_names()
     assert qdrant_store.is_tenant_index() is True
@@ -138,7 +138,7 @@ def test_payload_indexes_created_before_any_write(
 
 
 def test_sparse_vector_uses_qdrant_bm25_not_an_embedder() -> None:
-    """词法那一路用 Qdrant 原生 `qdrant/bm25`（§7.1）——**不是**学出来的稀疏权重。"""
+    """词法那一路用 Qdrant 原生 `qdrant/bm25`——**不是**学出来的稀疏权重。"""
     assert BM25_MODEL == "qdrant/bm25"
     assert SPARSE_VECTOR == "bm25"
     assert DENSE_VECTOR == "dense"
@@ -182,18 +182,18 @@ def test_payload_carries_identity_fields(qdrant_store: QdrantStore, emb: FakeEmb
     assert payload["memory_id"] == mid
     assert payload["user_id"] == "u1"
     assert payload["session_id"] == "s9"
-    # D28：位置里只剩 `local_index`（**只用于溯源**，检索不按它过滤/排序）
-    # ⚠ `chunk_ordinal` **已经不在了**——它随 D28 整个删掉（那时它来自解析 request_id）
+    #：位置里只剩 `local_index`（**只用于溯源**，检索不按它过滤/排序）
+    # ⚠ `chunk_ordinal` 不属于当前存储形状；位置直接使用不透明的 `request_id`。
     assert "chunk_ordinal" not in payload
     assert payload["local_index"] == 3
     assert payload["event_time"] == 123
-    # 正文不进 payload（§6.3）
+    # 正文不进 payload
     assert "text" not in payload
     assert "content" not in payload
 
 
 def test_point_holds_dense_and_sparse_vectors(qdrant_store: QdrantStore, emb: FakeEmbedder) -> None:
-    """一个 point 同时带 `dense` 与 `bm25`（§6.3）。"""
+    """一个 point 同时带 `dense` 与 `bm25`。"""
     mid = _mid("both-vectors")
     _index(qdrant_store, emb, [_rec(mid, "u1", "alpha beta gamma")])
 
@@ -212,7 +212,7 @@ def test_point_holds_dense_and_sparse_vectors(qdrant_store: QdrantStore, emb: Fa
 
 
 def test_wait_true_is_searchable_immediately(qdrant_store: QdrantStore, emb: FakeEmbedder) -> None:
-    """**响应前立即可搜**（§2.1）——`upsert` 返回后同一轮就能查到。"""
+    """**响应前立即可搜**——`upsert` 返回后同一轮就能查到。"""
     _index(qdrant_store, emb, [_rec(_mid("wait"), "u1", "alpha beta")])
 
     hits = _search(qdrant_store, "u1", "alpha beta")
@@ -235,7 +235,7 @@ def test_recall_within_user(qdrant_store: QdrantStore, emb: FakeEmbedder) -> Non
 
 
 def test_users_never_recall_each_other(qdrant_store: QdrantStore, emb: FakeEmbedder) -> None:
-    """**跨 user 检索被禁止**（§2.2：`user_id` 是唯一的隔离字段）。"""
+    """**跨 user 检索被禁止**：`user_id` 是唯一的隔离字段。"""
     a, b = _mid("user-a"), _mid("user-b")
     _index(qdrant_store, emb, [_rec(a, "u1", "alpha"), _rec(b, "u2", "alpha")])
 
@@ -418,7 +418,7 @@ def test_store_returns_every_fused_candidate(make_store, emb: FakeEmbedder) -> N
 
     契约的 `len(data) <= top_k` 仍然成立，但由 `fusion.search` 在**排序之后**执行。
     ⚠ 为什么搬：RRF 并列是常态，而 Qdrant 在**并列卡住 `limit`** 时选谁是不确定的
-    （实测同一请求连打 12 次，第 100 位的 id 有 2 种、两条 `score` 都是 0.01）。
+    （同一请求连打 12 次，第 100 位的 id 有 2 种、两条 `score` 都是 0.01）。
     """
     store = make_store()
     records = [_rec(_mid(f"count-{i}"), "u1", f"alpha beta gamma {i}") for i in range(8)]
@@ -447,12 +447,12 @@ def test_upsert_count_mismatch_rejected(qdrant_store: QdrantStore, emb: FakeEmbe
 
 
 def test_rebuild_from_sqlite_reproduces_search(store, make_store, emb: FakeEmbedder) -> None:
-    """**Qdrant 数据必须能从 SQLite 完全重建**（§6.3）。
+    """**Qdrant 数据必须能从 SQLite 完全重建**。
 
     删掉集合再重建，**每条 `memory_id` 的分数必须相同**——这正是"Qdrant 是派生读存储"的含义。
 
     ⚠ 断言的是"`memory_id → 分数`的映射"，不是**顺序**：分数相同的条目之间名次是
-    未定义的（实测**重建后并列项的顺序会变**），断言顺序会得到一个与实现无关的脆弱测试。
+    未定义的（**重建后并列项的顺序会变**），断言顺序会得到一个与实现无关的脆弱测试。
 
     ⚠ 这里给每条渲染文本**预设互不相同的 dense 向量**。若两路都出现并列，
     名次的抖动会掩盖"重建是否真的复现"这个要测的东西。
@@ -493,9 +493,9 @@ def test_rebuild_from_sqlite_reproduces_search(store, make_store, emb: FakeEmbed
 def test_equal_weights_do_not_change_ranking(make_store, emb: FakeEmbedder) -> None:
     """等权（两路同权重）只是**均匀缩放**，不得改变名次——`top-1` 与结果集都必须一致。
 
-    ⚠ 实测：`weights != 1` 时分数的**绝对尺度**不遵循朴素的 `sum(w/(k+r))`
+    ⚠ ：`weights != 1` 时分数的**绝对尺度**不遵循朴素的 `sum(w/(k+r))`
     （`(0.5,0.5)` 拟合出来是 `sum(0.5/(31+r))`）。所以这里只断言**名次与集合**，
-    **不断言分数**——§8 明文规定"RRF 融合后的分数不是校准量"，任何下游都不得依赖它。
+    **不断言分数**——RRF 融合后的分数不是校准量，任何下游都不得依赖它。
     """
     both = _mid("eq-both")
     docs = [

@@ -1,6 +1,6 @@
 """CL-Bench 的加载层（六份数据集里契约最不同的一份）。
 
-## 这份数据长什么样（2026-09-27 实测）
+## 这份数据长什么样
 
 ```text
 1899 条任务 / 500 个上下文（平均 3.8 题/上下文），每条：
@@ -15,14 +15,14 @@
 
 ### 1. 一道题一个 `Sample`（`user_id = clb-<task_id>`）
 
-同一 `context_id` 下的各条任务**消息并不共享**（实测最长公共前缀 = 0），
+同一 `context_id` 下的各条任务**消息并不共享**（最长公共前缀 = 0），
 差的那些消息就是文档本身 ⇒ 每题自带自己的上下文，像 LongMemEval 那样"1 题 : 1 份记忆"。
 
 ### 2. **任务文本 = 末条 user 消息的最后 6,000 字符**
 
-CL-Bench 没有单独的 `question` 字段：**任务指令写在末条 user 的最末尾**
-（实测：`…what do Sightings Cards do?`、`Write a concise email to my client…`、
-`Component 5: Final Task / Based on …, provide your single response…`）。
+CL-Bench 没有单独的 `question` 字段：**任务指令写在末条 user 的最末尾**，
+例如 `…what do Sightings Cards do?`、`Write a concise email to my client…`、
+`Component 5: Final Task / Based on …, provide your single response…`。
 末**段**中位只有 434 字符，但有的记录把整本手册塞成一段（最长 13.4 万）
 ⇒ 取**尾部固定窗口**比"取末段"稳。
 
@@ -38,7 +38,7 @@ CL-Bench 没有单独的 `question` 字段：**任务指令写在末条 user 的
 | 记忆注入字段 | `speaker_1_memories`（平铺字符串） | 嵌套 `retrieval.selected`，
 每项 `created_at` + **`text`** |
 | 判分 | 二元 CORRECT/WRONG + 严格时间规则 | **rubric 全有全无**（有一条不满足即 0） |
-| 失败口径 | 抛错 | **API/JSON 失败一律记 0**（§12.4） |
+| 失败口径 | 抛错 | **API/JSON 失败一律记 0** |
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ from .sampling import stratified_sample
 
 __all__ = ["CLBENCH_JSONL", "PIPELINE", "TASK_TAIL_CHARS", "USER_PREFIX", "load_clbench"]
 
-#: 归档里的文件名——**数据集专属文件名的知识止步于本模块**（D16）。
+#: 归档里的文件名——**数据集专属文件名的知识止步于本模块**。
 CLBENCH_JSONL = "clbench.jsonl"
 
 #: 归档里的 pipeline 脚本名（harness 侧 `pipeline_for` 用它）。
@@ -94,7 +94,7 @@ def load_clbench(
 
     source = archive_file(bench_dir, CLBENCH_JSONL)
     # ⚠ **按 `"\n"` 切，不用 `splitlines()`**：这份文件里**真的有 `U+2028`**
-    #   （实测：`splitlines()` 会在 char 22463 处把一条记录劈成两半 ⇒ `JSONDecodeError`）。
+    #   例如 `splitlines()` 会在 char 22463 处把一条记录劈成两半 ⇒ `JSONDecodeError`。
     #   它是 `"\n"` 分隔的 JSONL ⇒ **按写它的方式读**。同一条纪律见
     #   [`../harness/judge.py`](../harness/judge.py) 的 `_jsonl_line`。
     entries = [
@@ -129,7 +129,7 @@ def load_clbench(
             Session(
                 session_id=task_id,
                 # ⚠ 这份数据**没有时间戳** ⇒ `timestamp_ms=None` ⇒ `event_time` 为 NULL
-                #   ⇒ `created_at` 发空串（§11.3 那条有定义的降级路径）。**不是漏读**。
+                #   ⇒ `created_at` 按契约发空串。**这不是漏读**。
                 messages=tuple(
                     Message(role=str(m.get("role") or "user"), content=str(m.get("content") or ""))
                     for m in entry.get("messages") or []

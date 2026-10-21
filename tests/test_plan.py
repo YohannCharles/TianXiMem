@@ -8,14 +8,13 @@
 | **占位绑定** | 未绑定的 `{{sN}}` 进检索器 | 程序算的 `canonical_next_query` |
 | **上下文** | 历史里混进旧片段全文 / 看不到本轮文档 | 直接读提示词文本（**逐块断言**） |
 | **索引映射** | `document_index` → 稳定 ID 错位、引句对不上 | 断言文档序与索引逐位对应 |
-| **降级（§10）** | 拆解/逐轮/检索坏了却**变成 500** | 假客户端抛异常 ＋ 断言 `fallback_reason` |
-| **纯度（§13）** | `mode=react`（默认）却构造了 Plan 执行器 | 配置与装配的断言 |
+| **降级** | 拆解/逐轮/检索坏了却**变成 500** | 假客户端抛异常 ＋ 断言 `fallback_reason` |
+| **纯度** | `mode=react`（默认）却构造了 Plan 执行器 | 配置与装配的断言 |
 
-⚠ 假协作者与 [`test_agent.py`](./test_agent.py) **同形但各自独立**：那边测的是另一份实现，
-共享夹具会让"改一边的假件"悄悄改掉另一边的语义。刻意重复的是**测试替身**，不是生产逻辑。
+⚠ 假协作者与 [`test_agent.py`](./test_agent.py) **同形但各自独立**：两个执行器使用各自的测试替身，
+避免修改一边的假件时改变另一边的测试语义。
 
-⚠ 本文件**只测 Plan**。React 的算法与提示词本次一字未改，它的用例在
-[`test_agent.py`](./test_agent.py)（那里有一条钉住"提示词只有原版那一份"）。
+⚠ 本文件**只测 Plan**。React 的用例在 [`test_agent.py`](./test_agent.py)。
 """
 
 from __future__ import annotations
@@ -225,17 +224,17 @@ def _agent(
 
 
 def test_the_two_prompts_are_independent_from_the_frozen_coq_prompt() -> None:
-    """⛔ 两张提示词与冻结的原版 CoQ **没有共享文本**，且**条目数恰好两条**。
+    """⛔ 两张 Plan 提示词与当前 CoQ 提示词**没有共享文本**，且**条目数恰好两条**。
 
-    ⚠ 这不是洁癖：把新提示词塞进原版 CoQ（或反过来）会让"react 跑的是原版"
-    这条前提悄悄失效，而**两边的输出看起来都正常**。
+    ⚠ 这不是洁癖：把 Plan 提示词与 CoQ 混用会让两个执行器读到错误的协议，
+    而**两边的输出看起来都正常**。
     """
     from tianximem.agent import COQ_PROMPT
 
     assert PLAN_DECOMPOSE_PROMPT not in COQ_PROMPT
     assert PLAN_STEP_PROMPT not in COQ_PROMPT
     assert COQ_PROMPT not in PLAN_STEP_PROMPT
-    # 原版冻结的那三个槽位**一个都不许出现在新提示词里**（否则填充会互相吃掉）。
+    # CoQ 的那三个槽位**一个都不许出现在 Plan 提示词里**（否则填充会互相吃掉）。
     for slot in ("{original_query}", "{used_query}", "{retrieved_episodes}"):
         assert slot not in PLAN_DECOMPOSE_PROMPT
         assert slot not in PLAN_STEP_PROMPT
@@ -288,10 +287,10 @@ def test_a_value_containing_a_slot_name_is_not_substituted_twice() -> None:
 
 
 def test_the_first_step_may_not_have_a_placeholder_and_later_steps_must_point_back() -> None:
-    """⛔ **真正的安全判据**：占位必须指向**此前出现过**的步骤（指自己/指后面/指不存在都作废）。
+    """⛔ **真正的安全判据**：占位必须指向**先出现过**的步骤（指自己/指后面/指不存在都作废）。
 
-    ⚠ 2026-10-13 之后这条判据与"声明写没写对"**分开了**：查的是 `query` 里的占位，
-    不是 `depends_on` 里写了什么（后者现在只影响 `dependencies_repaired`）。
+    ⚠ 这条判据与"声明写没写对"**分开**：查的是 `query` 里的占位，
+    不是 `depends_on` 里写了什么（后者只影响 `dependencies_repaired`）。
     """
     with pytest.raises(InvalidPlanOutput, match="不是\\*\\*此前\\*\\*出现过的步骤"):
         parse_plan(_plan_reply([{"id": "s1", "query": "who is {{s2}}?", "depends_on": []}]))
@@ -317,11 +316,10 @@ def test_the_first_step_may_not_have_a_placeholder_and_later_steps_must_point_ba
 
 
 def test_a_declaration_that_disagrees_with_the_placeholders_is_repaired_not_fatal() -> None:
-    """⭐ **依赖以占位为准**（2026-10-13）：声明与占位不一致 ⇒ 规范化并记一笔。
+    """⭐ **依赖以占位为准**：声明与占位不一致 ⇒ 规范化并记一笔。
 
-    实测动因：v2 提示词下 **5/50** 命中，全是"占位合法、**声明写错**"
-    （最后一步把依赖写成"上一步"）。程序只按占位绑定 ⇒ **那份计划可以直接执行**，
-    按旧规则却会整题退回普通混合检索。
+    占位合法而声明写错时（例如最后一步把依赖写成"上一步"），程序只按占位绑定
+    ⇒ **那份计划可以直接执行**，不需要整题退回普通混合检索。
     """
     plan = parse_plan(
         _plan_reply(
@@ -341,7 +339,7 @@ def test_a_declaration_that_disagrees_with_the_placeholders_is_repaired_not_fata
 
 
 def test_a_placeholder_that_is_not_declared_is_no_longer_fatal() -> None:
-    """⚠ 反过来那条也**不再作废**：`{{s1}}` 没写进 `depends_on` ⇒ 补上并记一笔。"""
+    """⚠ 反过来那条**不会作废**：`{{s1}}` 没写进 `depends_on` ⇒ 补上并记一笔。"""
     plan = parse_plan(
         _plan_reply(
             [
@@ -423,7 +421,7 @@ def test_at_most_four_steps_are_allowed_by_the_shipped_prompt() -> None:
 
 
 def test_the_shipped_decompose_prompt_declares_the_parser_contract_verbatim() -> None:
-    """⚠ 提示词里声明的输出契约必须与解析器认的**逐字对上**（v2 起新加的回归位）。
+    """    ⚠ 提示词里声明的输出契约必须与解析器认的**逐字对上**。
 
     提示词说"每个 step 恰好 id / query / depends_on"，而解析器收别的东西（或反之）
     ⇒ **每一份计划都被作废**，而**两边都不会报错**——只看到 `plan_invalid` 一堆。
@@ -617,11 +615,11 @@ def test_the_first_call_has_no_history_and_only_the_first_round() -> None:
 def test_every_round_recalls_the_request_top_k_and_takes_the_top_n_after_rerank() -> None:
     """⭐ Plan 每轮**按请求的 `top_k` 召回**，精排**这 100 条**，再取前 `per_round_top_k`（20）。
 
-    ⚠ **顺序不能反**（§3.2）：先截 20 再精排只会重排一堆**已被提前排除**的候选，
+    ⚠ **顺序不能反**：先截 20 再精排只会重排一堆**已被提前排除**的候选，
     **而结果看起来完全正常**。判据是"进精排的文档数 == 召回数"，不是"给模型的是 20"。
 
-    ⚠ 2026-10-13 之前这里是"只召回 20 条再精排 20 条"——那让 Plan 与 React 在
-    **两个**维度上同时不同（机制 ＋ 每轮深度），50 题对照因此**归不了因**。
+    ⚠ 只召回 20 条再精排 20 条会让 Plan 与 React 在机制和每轮深度上同时不同，
+    对照实验便无法归因。
     """
     # ⚠ 两轮给**不同**的池子：否则"跨轮去重"那条断言会被 `default` 掩盖成"每轮同一批"。
     retriever = FakeRetriever(
@@ -687,7 +685,7 @@ def test_candidates_are_cached_across_rounds_and_deduplicated_by_stable_id() -> 
 
 
 def test_round_rerank_can_be_switched_off_without_changing_the_candidate_set() -> None:
-    """§13 的纯度：关掉每轮精排 ⇒ **候选集合不变**，只是名次不再被改。"""
+    """开关纯度：关掉每轮精排 ⇒ **候选集合不变**，只是名次保持原样。"""
     retriever = FakeRetriever(default=_candidates("m1", "m2", "m3"))
     reranker = FakeReranker()
     agent = _agent(
@@ -705,7 +703,7 @@ def test_round_rerank_can_be_switched_off_without_changing_the_candidate_set() -
 def test_the_next_query_is_bound_by_the_program_from_the_template() -> None:
     """⭐ **下一查询由程序绑定**：固定模板 ＋ 已确立答案 ⇒ 唯一那一句（v2）。
 
-    ⛔ v2 起模型**根本不产出**下一查询（提示词只要三个字段），所以"接受自由改写"
+    ⛔ 模型**不产出**下一查询（提示词只要三个字段），所以“接受自由改写”
     这条路整条没有了——`plan_history` 里记的是**程序算的那一句**。
     """
     llm = _two_round_llm()
@@ -718,7 +716,7 @@ def test_the_next_query_is_bound_by_the_program_from_the_template() -> None:
 
 
 def test_the_step_prompt_never_asks_the_model_for_a_next_query() -> None:
-    """⛔ 提示词里**没有**下一查询的位置：v2 起那件事不是模型的职责。
+    """⛔ 提示词里**没有**下一查询的位置：那件事不是模型的职责。
 
     ⚠ 这条同时钉住"`render_plan_step_prompt` 的形参表 == 提示词的槽位表"——
     多传一个槽位会让 `_fill` **响亮失败**，少一个则会让提示词里**永远缺一段上下文**
@@ -806,7 +804,7 @@ def test_an_unresolved_or_conflicting_step_stops_the_plan_without_guessing(
     assert [c["query"] for c in retriever.calls if c["query"] != "orig?"] == [
         "Where did the trip start?"
     ]
-    # ⚠ `unresolved` **与** `conflict` **都会**多一次**原题兜底**检索（2026-10-15 起两者
+    # ⚠ `unresolved` **与** `conflict` **都会**多一次**原题兜底**检索（起两者
     #   同类：模型明确说"走不通"）——那是恢复分支，**不是"下一跳"**（所以下面那条仍然只
     #   看到第一步被检索）。
     assert len(retriever.calls) == 2
@@ -844,7 +842,7 @@ def test_plan_complete_is_recorded_only_after_the_last_retrieval_was_answered() 
     assert result.plan_history[-1].stop_reason == "plan_complete"
     assert result.plan_history[-1].answer == "Maria"
     assert result.plan_history[-1].executed_query == "Who was born in Lisbon?"
-    assert len(retriever.calls) == len(llm.calls) - 1  # 拆解那次不带检索
+    assert len(retriever.calls) == len(llm.calls) - 1  # 拆解调用不带检索
 
 
 def test_every_stop_reason_used_in_the_code_is_declared() -> None:
@@ -889,12 +887,12 @@ def test_a_plan_longer_than_the_round_budget_stops_at_max_rounds() -> None:
     assert len(retriever.calls) == 2
 
 
-# ── ⑩ 降级（§10）—— 绝不让一次正常 Search 变成 500 ──────────────────────
+# ── ⑩ 降级——绝不让一次正常 Search 变成 500 ─────────────────────────────
 
 
 @pytest.mark.parametrize("reply", [LlmUnavailable("端点挂了"), RuntimeError("意料之外")])
 def test_a_broken_decompose_falls_back_to_hybrid_retrieval(reply: BaseException) -> None:
-    """拆解就失败 ⇒ 一条候选都没有 ⇒ **回退原混合链**（§10.1 第 6 条）。
+    """拆解就失败 ⇒ 一条候选都没有 ⇒ **回退原混合链**。
 
     ⚠ 回退原因是**具名的**（不是笼统的"多跳没帮助"）：端点挂与输出非法要分得开。
     """
@@ -1026,14 +1024,14 @@ def test_construction_refuses_impossible_limits(kwargs: dict, match: str) -> Non
         _agent(llm=FakeLlm(""), **kwargs)
 
 
-# ── ⑬ 装配与配置：内置缺省 React / 提交口径 Plan（§13）────────────────────
+# ── ⑬ 装配与配置：内置缺省 React / 提交口径 Plan ──────────────────────────
 
 
 def test_the_built_in_fallback_still_selects_react() -> None:
-    """⭐ 旧配置（不填 `mode`）⇒ **逐字**走原来的执行器。
+    """    ⭐ 配置不填 `mode` ⇒ **逐字**走 `react` 执行器。
 
     ⚠ **这是代码内置缺省，不是提交口径**：`agentic.mode` 缺席时（直接构造
-    `AgenticConfig()`、或吃一份老 yaml）必须落到 `react`，与加这个键之前逐字相同。
+    `AgenticConfig()`、或不含该键的 yaml）必须落到 `react`。
     提交口径写的是 `plan`，见下一条——两条**故意不同**，同 `retrieval.grounded_evidence`。
     """
     from tianximem.common.config import AgenticConfig
@@ -1043,7 +1041,7 @@ def test_the_built_in_fallback_still_selects_react() -> None:
 
 
 def test_the_shipped_profile_selects_the_plan_executor() -> None:
-    """⭐ 仓库里那份 `default.yaml`（提交口径）选 `plan`（2026-10-14 起）。
+    """⭐ 仓库里那份 `default.yaml`（提交口径）选 `plan`。
 
     ⚠ 与上一条相反是**有意的**：删除这一行会让"跑的是哪套机制"与文档所述不符，
     而两者都能跑、都不报错——只会静默地回到 React。
@@ -1220,15 +1218,15 @@ def test_the_plan_executor_does_not_import_the_http_layer_or_the_router() -> Non
 
 
 def test_the_react_side_is_untouched_by_this_mode() -> None:
-    """⛔ 本次改动**没有**动 React 的提示词与停止原因表（它是冻结的那一份）。"""
+    """⛔ React 使用独立的提示词版本与停止原因表，不与 Plan 的协议混用。"""
     from tianximem.agent import COQ_PROMPT_VERSION, STOP_REASONS
 
     assert COQ_PROMPT_VERSION == "coq-original"
-    assert "sufficient" in STOP_REASONS  # React 的停止原因表**没有被 Plan 改过**
+    assert "sufficient" in STOP_REASONS  # React 的停止原因表保持独立
     assert set(STOP_REASONS).isdisjoint({"plan_complete", "dependency_unresolved"})
 
 
-# ── ⑭ `unresolved` 恢复分支：按剩余名额补一次**原题**检索（2026-10-13）─────
+# ── ⑭ `unresolved` 恢复分支：按剩余名额补一次**原题**检索─────
 
 
 #: 四步计划（每步引用前一步），用来测"第 k 轮 unresolved"的预算。
@@ -1256,7 +1254,7 @@ def _big_retriever(**kwargs) -> FakeRetriever:
 
 
 def test_a_normal_finish_never_touches_the_recovery_branch() -> None:
-    """① 正常完成：**不调兜底**、联合精排照旧、答题输入照旧（不带 recovery）。"""
+    """① 正常完成：**不调兜底**，联合精排与答题输入保持不变（不带 recovery）。"""
     retriever = _big_retriever()
     result = _agent(llm=_two_round_llm(), retriever=retriever).search(
         user_id="u", query="orig?", top_k=100
@@ -1273,8 +1271,7 @@ def test_a_normal_finish_never_touches_the_recovery_branch() -> None:
 def test_the_fallback_always_recalls_the_requests_top_k(answered_rounds: int) -> None:
     """② 任一第 N 轮 `unresolved` ⇒ 原题兜底**一律按请求的 `top_k`** 召回；每题**只一次**。
 
-    ⚠ 2026-10-15 前这里是"`80 − 轮数 × per_round_top_k`"（⇒ 60/40/20/**0**）——
-    现在**与轮数解耦**：兜底和每一轮一样按请求的 `top_k` 召回（**含第 4 轮**）。
+    ⚠ 兜底深度**与轮数解耦**：和每一轮一样按请求的 `top_k` 召回（**含第 4 轮**）。
     """
     llm = _unresolved_at(answered_rounds)
     retriever = _big_retriever()
@@ -1284,7 +1281,7 @@ def test_the_fallback_always_recalls_the_requests_top_k(answered_rounds: int) ->
     assert len(fallback) == 1, "⭐ 每题**最多一次**原题兜底"
     assert fallback[0]["top_k"] == 100, "⭐ 与轮数无关：永远按请求的 `top_k`"
     # ⚠ `executed_rounds` **含刚刚返回 unresolved 的那一轮**（它的候选已经进池子）；
-    #    它仍然如实记下，只是**不再决定补多少**。
+    #    它仍然如实记下，但不决定补多少。
     assert result.recovery.executed_rounds == answered_rounds + 1
     assert result.recovery.target_top_k == 100
     assert result.recovery.status == "success"
@@ -1341,7 +1338,7 @@ def test_the_fallback_does_not_pad_when_it_cannot_fill_the_target() -> None:
 
 
 def test_the_fallback_rerank_runs_even_when_the_per_round_switch_is_off() -> None:
-    """⭐ 兜底那一次精排**不受 `agentic.round_rerank_enabled` 管**（§13 的开关纯度）。
+    """⭐ 兜底那一次精排**不受 `agentic.round_rerank_enabled` 管**（开关纯度）。
 
     那个开关只管"每轮"。若它顺手把兜底也关掉，"每轮不精排"那一臂就同时在
     **两个维度**上变了——而那正是那条消融要避免的。
@@ -1401,7 +1398,7 @@ def test_an_unresolved_last_step_is_never_recorded_as_plan_complete() -> None:
 
     assert result.stats.stop_reason == "dependency_unresolved"
     assert result.recovery.executed_rounds == 2
-    assert result.recovery.target_top_k == 100  # ⚠ 与轮数无关（2026-10-15 起）
+    assert result.recovery.target_top_k == 100  # ⚠ 与轮数无关
     assert result.rerank_query == "orig?"
 
 
@@ -1441,8 +1438,8 @@ def test_tooling_failures_never_trigger_the_recovery_branch() -> None:
 def test_a_binding_conflict_also_triggers_the_fallback() -> None:
     """⭐ **`conflict` 与 `unresolved` 同类**：模型明确说"走不通" ⇒ **也补一次原题兜底**。
 
-    ⚠ 2026-10-15 之前**只有** `unresolved` 触发。放宽的理由：`conflict` 时选池里往往
-    只有前几轮攒下的一小撮，直接收口等于**把"模型已经发现有问题"当成"没事"**。
+    ⚠ `unresolved` 与 `conflict` 都触发恢复。`conflict` 时选池里往往只有前几轮
+    攒下的一小撮，直接收口等于**把“模型已经发现有问题”当成“没事”**。
     """
     llm = FakeLlm(
         [_TWO_STEP, _step_reply(answer="Lisbon"), _step_reply(status="conflict", answer=None)]
@@ -1464,7 +1461,7 @@ def test_a_binding_conflict_also_triggers_the_fallback() -> None:
 
 
 def test_the_fallback_candidates_are_merged_by_stable_id_and_never_truncated() -> None:
-    """⑤⑥ 按稳定 ID 合并去重；兜底结果**不再被截成每轮 Top20**；只补一次。"""
+    """⑤⑥ 按稳定 ID 合并去重；兜底结果**不会被截成每轮 Top20**；只补一次。"""
     retriever = _big_retriever()
     result = _agent(llm=_unresolved_at(0), retriever=retriever).search(
         user_id="u", query="orig?", top_k=100
@@ -1511,7 +1508,7 @@ def test_plan_without_a_recovery_keeps_the_joint_rerank_query() -> None:
 
 
 def test_every_step_and_the_recovery_call_are_isolated_by_user_id() -> None:
-    """用户隔离要带在**每一次**检索上——逐轮一次，恢复分支再一次（§7.3）。
+    """用户隔离要带在**每一次**检索上——逐轮一次，恢复分支再一次。
 
     React 侧有同型用例（`test_agent.py::test_every_round_is_isolated_by_user_id`）；
     Plan 是提交口径，且多了一条恢复检索，两处都必须钉住。

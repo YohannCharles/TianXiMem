@@ -1,11 +1,11 @@
 """判分**产物**那一侧：结果类型 + 逐家族的标签回读（含续跑前的半行清理）。
 
-`judge.py` 拆出来的第三块（2026-10-15）。"结果是什么形状、怎么从磁盘上的
-`answers.jsonl` / 标签文件把它读回来"在这里；"怎么起子进程跑 pipeline"留在 `judge.py`。
+本模块定义结果形状并从磁盘上的 `answers.jsonl` / 标签文件读回结果；
+启动 pipeline 子进程的编排在 `judge.py`。
 
-⚠ `JudgeResult` 的**家在这里**（不是 `judge.py`）：读回函数是构造它的那一层，
-`run_judge` 也要用它 ⇒ 定义放在这里，依赖方向单向（`judge` → `judge_results`）。
-消费方照旧 `from eval.harness.judge import JudgeResult`（facade 重新导出）。
+⚠ `JudgeResult` 定义在这里：读回函数负责构造它，`run_judge` 也依赖它，
+依赖方向保持单向（`judge` → `judge_results`）。
+`eval.harness.judge` 作为 façade 重新导出它。
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ class JudgeResult:
     #:
     #: 为什么需要它：CL-Bench 的官方分是**全有全无**的（`clb_pipeline.py` 的判分 prompt
     #: 原文："strict, all-or-nothing … The final score is binary"）——一道题从 0 翻到 1
-    #: 要**每一条** rubric 都满足，**中间的所有进展都看不见**。实测某题
+    #: 要**每一条** rubric 都满足，**中间的所有进展都看不见**。某题
     #: `score=0.0` 而 `requirement_ratio=0.50`（14 条里满足 7 条）⇒ 它和"一条都没满足"
     #: 在二值分下**完全一样**。
     #:
@@ -101,20 +101,20 @@ def _sanitize_jsonl(path: Path) -> int:
 
     | 症状 | 处置 |
     | --- | --- |
-    | 末尾有**半行 JSON**（上次被强杀留下的） | **丢掉**——对应的题会被重新生成 |
+    | 末尾有**半行 JSON**（进程中断留下的） | **丢掉**——对应的题会被重新生成 |
     | 某行里含 `U+2028` 之类的字符（**归档自己写的**，我们只读不写） | **就地转义**成 `\u2028` |
 
-    ⚠ 第二条是**我们控制不了写入侧**时的唯一办法：`answers.jsonl` 由归档的 `answer()`
+    ⚠ 第二条是**写入侧不可控**时的唯一办法：`answers.jsonl` 由归档的 `answer()`
     以 `json.dumps(..., ensure_ascii=False)` 写、又由它自己的 `rows()`（`splitlines()`）
     读 —— 万一**模型生成的答案**里带 `U+2028`，**归档会在下一次续跑时崩在自己写的文件上**。
     我们改不了归档，所以只能在它读之前把文件修好。转义是安全的：`json.loads` 会解回
     同一个字符，**语义一字不变**。
 
-    ## 为什么需要它（2026-09-26，一次真实事故，比网络抖动更隐蔽）
+    ## 为什么需要它
 
-    那次事故的真实链条是这样的：
+    失败链条如下：
 
-    1. 判分侧**一次 TLS 抖动**把 runner 打死；
+    1. 判分侧**一次 TLS 抖动**终止 runner；
     2. 死的时候 pipeline 正以**追加**模式写 `answers.jsonl`（逐行 `write` + `flush`，
        见 `pipeline_longmemeval-s.py` 的 `answer()`）⇒ 留下**半行 JSON**；
     3. 而同一个 `answer()` 开头会 `rows(output)` **读它来跳过已完成的题**
@@ -224,11 +224,10 @@ def _read_beam_labels(answers_path: Path, labels_path: Path) -> list[JudgeResult
     **均分 == 1.0 才算 CORRECT**（逐条全中），真分原样进 `label`（`SCORE=0.50`）与
     `judge_response` ⇒ **换阈值不用重跑裁判**——与 `extra_pipeline` 里 MemTrapBench 同一条处置。
 
-    ⚠ **`max_tokens` 从 256 提到 1024**（2026-10-03）：256 会把**裁判自己的回答**截断——
-    MemTrapBench 实测 **129/250 条的 JSON 断在中间**（129/129 根括号未闭合），
+    ⚠ **`max_tokens` 从 256 提到 1024**：256 会把**裁判自己的回答**截断——
+    MemTrapBench  **129/250 条的 JSON 断在中间**（129/129 根括号未闭合），
     而解析失败一律记错 ⇒ **那一半分数是截断的产物，不是模型不会**。
     它同时传给 `answer` 与 `evaluate` 两步（见 `run_judge` 末尾）。
-
 
     ⚠ 它的 `evaluate` 以**追加**模式写、按 `llm_judge_score` 跳过已完成（与其余几份
     `"w"` 覆盖不同）⇒ 被强杀会留半行，所以读之前先 `_sanitize_jsonl`。

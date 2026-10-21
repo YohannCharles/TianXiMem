@@ -1,376 +1,89 @@
-# rank/ — 排序、扩窗、打包（§11 主线）
+# rank
 
-**PRD**：§10（Neighbor Expansion）、§11.2（Rerank）、§11.3（Context Packaging）、§6.4（token 预算）
-
-## 要写什么
+`rank/` owns the post-retrieval evidence pipeline:
 
 ```text
-reranker.py   自托管 cross-encoder（`RemoteReranker` → 主网关 `/rerank`）
-neighbor.py   §10 扩窗 + §11.2 段合并（SQL 在 store/）
-packaging.py  §11.3 段级打包 + token 预算
+rerank -> neighbor expansion -> segment merge -> budgeted packaging
 ```
 
-**本目录是"排序 → 扩窗 → 打包"三连环的落地点，顺序不可换。** 在跑的形态：
+The order is part of the design.
+
+## Files
 
 ```text
-Hybrid Retrieval
-→ memory_id 稳定去重
-→ Checker（v1 passthrough；判定被丢弃——D26 后 A4 已移出 v1）
-→ **rerank（恰好一次，`RemoteReranker`）**
-→ Neighbor Expansion（半径默认 0 ⇒ 默认不扩窗，见 §2）
-→ Context Segment Merge
-→ Token Budget + Final Packaging
-→ ≤ top_k 个**段**
+reranker.py   remote cross-encoder client
+neighbor.py   expansion and segment construction
+packaging.py  final slot and token budgeting
 ```
 
-**端点不可用时**按 D12 降级回 RRF 顺序（记 `rerank_degraded`，**不报错**）；
-`rerank.enabled=false` 或没配端点时不构造 reranker（记 `rerank_disabled`）——
-两者**分开计数**，见 §1。
+## Rerank
 
-共同取证命中时**不走排序与扩窗**（不 rerank、半径恒 0），但**打包不另起一套**——
-事实片段与原文投影都收口到本目录的 `package()`（槽位与 token 双预算只有这一份实现；
-编排在 [`../service/`](../service/) 的 `_package_evidence`），其中事实片段的 `content`
-是 `render_evidence` 的渲染、不进向量索引。
+The configured reranker receives candidate documents and returns one score per input position.
 
-> ⚠ **接上之后仍要盯的一件事**：D8 把排序定为主线，**精排的质量就是主线的质量**。
-> "接上了"只说明**链路通**——它值不值是 §13 的 **A3**（§17.2 的 **E3**），要跑代理评测才回答得了。
+- The client maps scores back to the input order.
+- The caller applies ordering to the same candidate list.
+- Reranking must not add or remove candidate IDs.
+- Endpoint errors degrade to RRF order.
+- `disabled` and `degraded` are separate states.
 
----
+The configured request envelope is an endpoint identity. Send one configured envelope; do not probe multiple shapes per request.
 
-## ⚠ `score` 的语义随阶段变——**所以它不固化在任何上游类型里**
+## Neighbor Expansion
 
-返回项里的 `score` **不是**融合分数（那**不是校准量**，§8），也不是 reranker 的原始分，
-而是**最终名次的函数**：`1/(输出位置+1)`。
+Expansion follows stored adjacency links in SQLite.
 
-⇒ **`score` 由本目录在生成响应时现算**，`Candidate` / `retrieve/` 都**不携带** `score`——
-这不是"暂时不传"，是**结构性防止透传**：上游手里根本没有那个值，也就漏不出去。
+- Expansion runs after reranking.
+- Each hop moves to a complete QA block.
+- A missing link ends the walk.
+- Expansion never crosses an Add, session, or user.
+- Expanded neighbors have no fabricated rerank score.
+- Duplicate candidates keep the best existing rank.
 
-> ⚠ "输出位置"在段模型下指**段的位置**、**不是** rerank 名次。
-> 需要改的那种写法（照抄 rerank 名次）会让 `score` 在预算跳段时出现空洞，
-> 而"单调递减"照样成立，**看不出来**。
+When `neighbor.radius` is zero, no expansion occurs.
 
----
+## Segment Merge
 
-## 1. Rerank（§11.2）
+A segment is a maximal run of selected blocks connected by stored adjacency links. Group keys are `user_id`, `session_id`, and `request_id`.
 
-自托管开放权重的 cross-encoder：**`Qwen3-Reranker-4B`**——**已定，提交时不得更换**（D12）。
+- Preserve source order inside a segment.
+- Segment priority and anchor come from the best real candidate in the segment.
+- Expanded neighbors cannot increase segment priority.
+- A gap ends the segment; do not bridge it by array position.
 
-> 它是整份规则里**唯一不限模型**的组件，选型时**不必迁就 `text-embedding-v4`**（§12.2 / §11.1）。
-> **reranker 只重排证据、不生成答案**，不触碰"`Search` 不得生成最终答案"的红线（§2.1 / §11.2）。
+## Rendering
 
-**实现**：[`reranker.py`](./reranker.py) 的 `RemoteReranker` → `POST {base}/rerank`。
-线格式（请求/响应字段）**是实测出来的**，见本节下面的「线格式」表——**改客户端之前先读它**。
-连通性用 `make probe-reranker` 验（真网关、不消耗 Smoke 配额）。
+Use `common/render.py` for QA and factual content. Do not create a second template.
 
-| 选型约束 | 说明 |
-| --- | --- |
-| 数据以英文为主 | **多语言能力非必需但便宜**（§12.2） |
+Response-only relative-time annotation may modify `content` after the indexed rendering. The base text must remain recoverable exactly.
 
-### 线格式（**实测出来的，不是猜的**；探针：`tools/probe_reranker.py`）
-
-**服务端收哪种信封，由 `rerank.envelope` 声明**，两种互斥：
-
-| 信封 | 我们发什么 | 响应容器 | 分数键 | 现役？ |
-| --- | --- | --- | --- | --- |
-| **`query`** | `{"query": "..."}` | `results` | `score` | ✅ 现役主网关 `memory.021130.xyz` + 本机 `127.0.0.1:8082` |
-| **`queries`** | `{"queries": [...]}` | `data` | `score` | ⬜ `memory3.…` 那一档（2026-10-09 起改提供对话模型） |
-
-⚠ **两边各自拒对面那一个**（都实测过）：vLLM 收到 `query` ⇒ **400**；
-自研封装收到 `queries` ⇒ **422**（`body.query Field required`）。
-⚠ **没有回退**——不做"猜两个名字各发一次"：那会让每次 Search 多付一个 4xx 往返。
-⚠ **换服务端 ⇒ 分数不可比**（同一"相关句"在三版上是 0.836 / 0.165 / 0.9989，**没有共同刻度**）。
-
-### 四条**接远端时踩过**的坑（本地写代码时看不出来）
-
-| 坑 | 后果 | 处置 |
-| --- | --- | --- |
-| **`top_n` 是个静默截断旋钮** | 传了 `top_n=k` 就只回 k 条 ⇒ 其余候选**没有分数** | **不传**（缺省 = 全部），且无条件校验 `index` 集合 == 输入集合 |
-| **请求/响应信封不稳定**（同一网关上变过两次） | 名字发错 ⇒ **400**；容器读错 ⇒ 形状非法。**两种表现都是"每次检索都降级"，而服务不报错** | 发**对面网关实测过的那个名字**——由 `rerank.envelope` 挑，**与 `TIANXIMEM_RERANKER_BASE_URL` 是同一件事的两半**；且 `_parse` **两个容器 / 两个分数键都收**（信封表见上） |
-| **`model` 被不被忽略，随服务端变** | 网关可能**忽略**它（响应里回服务端路径），也可能**校验**它 ⇒ 不认识就 **404** | **填对端点声称的那个 id**（现役主网关 = `Qwen/Qwen3-Reranker-4B`，实测它忽略 `model`⇒ 填错也不报错，但那正是"声明与事实不符"）；但**仍然不要拿它做路由**——它只当 run record 的指纹 |
-| **响应顺序不保证** | 直接当"排好序的结果"用 ⇒ 候选集合就有第二条改动路径 | `score()` 折回**按输入位置对齐**，重排留在调用方（集合改动**结构上不可能**） |
-
-> ⚠ **`reranker` 的失败必须是降级，不是 5xx**（D12）：它是唯一不被规则保证可用的组件。
-> `RemoteReranker.score()` 承诺**把一切远端问题转成 `RerankUnavailable`**——
-> 包括未预期的异常（但那一条会在 `last_error` 里**带上异常类型**，
-> 所以"适配器有 bug"与"端点不可用"分得开）。
-> `rerank_disabled` 与 `rerank_degraded` **分开计数**：混为一谈会让"端点一直挂"
-> 看起来像"我们没打算用它"。
-
-### 顺序与预算的配合
-
-**rerank 给出种子名次后，按名次依次扩窗**——牺牲顺序由名次决定：预算不足时丢掉的是
-**名次最低的种子**，而不是随机某一个。
-
-> ⚠ **不是"直到 Top-K 槽位用尽"**——`top_k` 约束的是**段**，而段要扩窗+合并之后才存在
-> ⇒ **`top_k` 只能在合并之后生效**，在扩窗阶段就按它截断会把本该成段的邻居砍掉
-> （见下面 §2 的三条预算约束）。扩窗的量只由 `neighbor.expansion_seed_limit`（种子数）
-> 与 `neighbor.radius`（跳数）决定；**扩窗代价随种子数线性增长**，所以"种子数之外的候选
-> 只保留、不扩展"——名次靠后的种子本就可能在预算里被砍掉。
-
----
-
-## 2. Neighbor Expansion（§10）
-
-**顺序：本步骤在 Rerank 之后执行**，理由见 §11.2。它是"**排序 → 扩窗 → 打包**"三连里的第二环，**不是"扩窗 → 排序"**。
-
-> ⚠ **当前默认 `neighbor.radius = 0`（D31）：扩窗默认不执行**（`expansion_seed_limit`
-> 在半径 0 下**空转**）。扩窗与段合并是**作为一个包**量过的、两者不可分；代码一行未删，
-> 开回来只改配置。依据与数字见 [`../../../docs/decisions.md`](../../../docs/decisions.md) 的 **D31**
-> 与 [`../../../eval/reports/ledger.md`](../../../eval/reports/ledger.md) 的「扩窗为什么是 0」。
-
-```sql
--- 沿显式指针跳：每一跳把所有前沿节点的 prev/next 收成一次 IN 查询
-SELECT * FROM qa_pairs WHERE id IN (…);   -- 指针从上一跳的行走里读
-```
-
-> ⚠ **D28：邻接是存储里的显式指针**（`prev_memory_id` / `next_memory_id`），
-> **不是算出来的下标**。扩窗 = **沿链跳 `radius` 跳**（一跳 = 一个完整 QA）。
-> ⇒ 跨 Add 扩窗**结构上做不到**（指针只在一次 Add 内连过）；
-> 链上缺一块也**不会**被"下一块"补上（那一跳指向一个不存在的 id，走到头就停）。
->
-> ⛔ **不要再写"取回整个 session 再按下标切窗口"**（D25 的写法）——跨 Add 不存在可信的
-> 全局序，按下标切会**跨 Add 拼接**，而 `content` 里看不出来。
-
-> SQL 本身在 [`../store/`](../store/)（`fetch_pairs_by_ids`）；本目录负责**调度与预算**。
-
-**实现流程**（`neighbor.expand_neighbors`，**一步不多**）：
-
-```text
-1. 全部 rerank 候选**一条不删**地进 selected（`rerank_rank` = 真实名次）
-2. 取名次 < `expansion_seed_limit` 的作种子（**按名次取，不是按列表位置**）
-3. 按名次依次扩窗（沿 `prev` / `next` **跳 `radius` 跳**）
-4. 已在 selected 里的邻居**跳过，不覆盖**（覆盖会抹掉那条候选的真实名次）
-5. 新扩出来的进 selected，`rerank_rank = None`（★ **不造排名**）
-```
-
-> ⚠ **第 1 条与第 5 条是最容易被写错的两处**，而且都不报错：
-> 只留前 N 条会让 `top_k=100` **永远填不满**；给邻居编个名次会让段的优先级
-> 指向一条**从没被选中过**的记忆。两条都有专门的用例（`tests/test_neighbor.py`）。
-
-### 三条预算约束
-
-| # | 约束 |
-| --- | --- |
-| 1 | **注意粒度**：单位是 **QA 对**，所以 `±1` 拿回的是前后各**一整对（最多 4 条消息）**，不是前后各一条消息——**扩窗比 message 粒度时更贵** |
-| 2 | **`top_k` 约束的是段数，不是 raw memory 数**：100 个候选 + 40 个邻居 = 140 条 raw，合并后可能只剩 60 段。⇒ **`top_k` 只能在合并之后生效**，在扩窗阶段截断会把本该成段的邻居砍掉 |
-| 3 | **真正先撞上的限制是 token 而不是槽位**（§6.4）：一对的文本量约为单条消息的两倍，117,760 token 的答案窗口可能**比 100 个段更早用尽** |
-
-> ⚠ **PRD §10 的"20 种子 / 60 槽位"是一道示例算术**，与代码里的取值
-> `neighbor.expansion_seed_limit = 1000`（= **全部候选都当种子**）
-> **不是一回事**：前者是 §10 用来演示预算的样例；后者在 `radius: 0` 下**空转**
-> （没有扩窗，种子数就没有含义），取 1000 的那个依据（早于 D28、没有被重跑过）
-> **不再引用**——见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md) §6。
->
-> > **种子数、窗口大小、Top-K、token 预算，是同一道题，任何一项调整都要重算其余三项。**
-> > ⚠ 扩窗的实际读数（覆盖率、上下文代价、值不值）见
-> > [`../../../eval/reports/ledger.md`](../../../eval/reports/ledger.md) 的「扩窗为什么是 0」。
-
-实际通常远小于理论上限——**种子密集时相邻窗口大量重叠，去重会折叠掉大部分**；种子分散时才逼近上限。
-
-**目的**：避免检索到正确的局部信息，却丢失事件背景、原因或状态变化。
-
-### 重叠窗口的归属
-
-重叠窗口在去重后**归属名次更靠前的那个种子**（§11.2）——这决定了段间顺序。
-
-**落地方式**：`SelectedMemory` 里那条候选的 `rerank_rank` **不是 `None`**，
-所以段内取 `min(rerank_rank)` 时它自然胜出 ⇒ **锚点落在名次更靠前的那个种子上**。
-⇒ `neighbor.py` **不只做"去重"**，它把归属信息**编码在名次里**带给了 `packaging.py`
-（`ContextSegment.anchor_memory_id` / `best_rank`）——不需要另一个"归属表"。
-
----
-
-## 2.5 Context Segment Merge（§11.2 的"组"）
-
-**扩窗与合并不是两件事**：`merge_segments` 把"种子 + 它的邻域"变成**段**，
-段的定义就是**沿显式指针相接的最长游程**（D28）。
-
-```text
-按 (user_id, session_id, request_id) 分组 → 组内按 local_index 升序 → 一次线性扫描
-    前一条.next_memory_id == 这一条.id  →  **直接延长，不新建**
-    否则                                  →  收尾当前段，新建一段
-```
-
-| 规则 | 例子 |
-| --- | --- |
-| 指针相接才合并 | `8,9,10,11,15,16,30` ⇒ `8..11` / `15..16` / `30` |
-| 缺一块就断开 | 0 的 `next` 指着 1，而 1 不在 `selected` 里 ⇒ `0` 与 `2` **各自成段** |
-| **跨 Add 永不合并** | 分组键里带着 `request_id`，**而且**判据读的是存储里的指针 ⇒ **两道**，不是靠一句 `if` |
-| 跨 session / user 永不合并 | 同上（`id` 里就带着它们） |
-
-> ⚠ **两道防线都要**：只留判据的话，一次 Add 内部下标为 0 的行会被误判成"接着上一次 Add"；
-> 只留分组的话，一次 Add 里缺的那一块会被硬拼过去（下标看着只差 1）。
-
-**段的优先级只看段内的真实候选**：`best_rank = min(rerank_rank)`，`anchor` 是那条候选。
-**邻居不参与排名**——这正是"扩窗关掉只该少几条上下文、不该动排序"（§13 开关纯度）。
-
-> **段是 v1 打包与预算的原子单位**：不截半个段、不拆回单条、不跳过装不下的段去塞后面的。
-> 理由：段的截断点必须落在**段边界**上，否则模型读到的上下文缺了一环，而 `content` 里看不出来。
-
----
-
-## 3. 顺序（§11.2 的两条规则）
-
-### 组内顺序：按 `local_index` 序，**不把种子提到最前**
-
-理由：窗口是一段连续对话（同一次 Add 内），**按它本来的顺序读才成立**；把种子抽到最前会把一段话**拦腰截断**。而答案阶段按前缀截断——**窗口整体连续，意味着截断点落在窗口边界上**，不会切出半个窗口。
-
-### 组间顺序 = 种子名次序
-
-最终 `data` 数组是"**按种子名次依次排列的各窗口**"。答案阶段按这个顺序取前缀，所以**名次最高的种子及其邻域必须排在最前**——这正是"按名次依次扩窗"的用意。
-
-> **组内与组间顺序都是可消融项**（§11.2）。若实验显示"种子提到最前"更好，**只改组内这一处**，不牵动其他环节——这是 §13"开关必须只影响它命名的那一件事"的一个具体例子。
-
----
-
-## 4. Context Packaging（§11.3）
-
-返回的 `content` 字符串会被**原样注入答案 prompt**（AML 侧仅按 `memory_text()` 做字符串拼接），因此**打包只能做在 content 里**，靠不上任何外部结构。
-
-### 渲染是 `common/render` 的唯一实现
-
-`content` = 该 QA 对的**渲染文本**（共同取证的事实片段走另一条出口：`render_evidence`，见 [`../common/`](../common/)），且**同一份渲染必须同时用作 embedding 的输入**（§7.2）——两处一旦不一致，"检索命中的是什么"与"模型读到的是什么"就会**漂移**，而**这种漂移不会报错**。
-
-**本目录不自己拼字符串**，调 [`../common/`](../common/)。
-
-> ### ⚠ 唯一的例外：`packaging.annotate_relatives`（正文里的相对时间就地注解）
->
-> `true` ⇒ `last Tues` 变成 `last Tues (July 18, 2023)`（原文一字不动）。它接在
-> **本目录的 `neighbor._build_segment._text()`** 上——**只有 `content` 走这条路**，
-> 索引侧与精排输入仍然是 `render_pair` ⇒ **开它不用重建索引、不用换集合**。
->
-> 边界（不变式 I1 的松动范围，声明在 [`../../../docs/architecture.md`](../../../docs/architecture.md) §4）：
-> `content` = 被索引的文本 **+ 一层纯函数注解**，剥掉后**逐字相同**。
-> 实现在 [`../common/annotate.py`](../common/annotate.py)，投影性质由
-> [`../../../tests/test_annotate.py`](../../../tests/test_annotate.py) 钉住。
-> **别把它当先例**——再加一层就要重新回答"它进不进索引"。
-
-### 渲染模板（**v1 定稿 + 日期前缀**）—— **本节是模板的唯一声明处**
-
-> 模板就是下面这两行，**每对前面加日粒度会话日期**（`[2023-10-22] `）。
-> ⛔ **秒级绝不许出现**（那会踩裁判的「粒度变细」），原文的相对表述**原样保留**，日期只是**锚点**。
-> 这条的实测依据是 346 题的反例（[`../../../eval/reports/ledger.md`](../../../eval/reports/ledger.md)，**D21**）。
-> 实现是 [`../common/render.py`](../common/render.py) 的 `render()`；**索引侧与精排输入**
-> 都走 **`render_pair()`**——它是"一个对 → 它的文本"的唯一入口，
-> 免得两处各拼一次日期口径（那正是不变式 I1 被撕开的开始）。
-> ⚠ **`content` 是那个声明式例外**：它由本目录的 `_build_segment._text()` 用
-> `render` + `render_date` 拼出，为的是接上 `annotate()`（见上面 §4 的注解一节）。
-> **日期口径仍然是同一份**——三处不一致会让"检索命中的"与"模型读到的"静默分叉。
-> 开关是 `packaging.inject_abs_time`（**默认 `true`**）。**改它 = 改 embedding 输入 ⇒ 索引要重建**
-> （[`../../../tools/reindex.py`](../../../tools/reindex.py)），且两臂**必须分集合**跑。
+The rendered QA template is:
 
 ```text
 Q: {question}
 A: {answer}
 ```
 
-- `question` 为空的对（§6.2 的"批次以 assistant 开头"）**只输出 `A:` 那一行**
-- `answer` 暂缺的块**只输出 `Q:` 那一行**
-- **模板本身是"贵"消融项**：改模板就等于改变 embedding 输入，**整个向量索引要重建**——**推翻它要付重建索引的钱**
+Omit an empty side. Label each non-user answer segment with its role. Keep content self-delimiting and free of leading or trailing whitespace.
 
-**一个对里有多条非 user 消息时，每条带 role 标记**（示意）：
+## Packaging
 
-```text
-Q: What time does the train leave?
-A: [assistant] Let me check the schedule.
-[system] {"tool": "schedule.lookup", "result": "09:42"}
-[assistant] It leaves at 09:42.
-```
+Final `top_k` and token limits apply to packaged segments, not raw candidates.
 
-> ⚠ 示意里看起来像有空行，**执行值是 `common/render.py` 的 `QUESTION_ANSWER_SEP = "\n"`**
-> ——**规范表述优先于示意**。
+- Treat a segment as atomic.
+- Add segments in priority order.
+- Stop at the first segment that does not fit.
+- Do not split a segment or skip it to fit a lower-ranked segment.
+- Use the joined output length when reporting.
+- Use a safe upper bound when admitting a segment.
+- Use the configured answer-model tokenizer.
 
-- 不加标记的话，这几段在模型眼里**连成一片**，分不清哪句是助手说的、哪句是工具输出
-- **标记会一并进 embedding 输入**（§7.2 要求同一份渲染），所以它**同时影响检索**——这是**有意的，不是副作用**
-- **`role` 的取值域以 AML 实际传入为准，不要硬编码只认 `user` / `assistant`**
+Response fields:
 
-### content 必须自定界（§11.3）
-
-AML 把多个返回项拼进答案 prompt 时只做 `"\n".join(...)`——**不插分隔符、不编号、不重复 `id`**。因此：
-
-- 每项要能**独立读懂**，**不要把跨项才成立的结构（如"接上条"）放进 content**
-- **首尾不要留空白**，否则拼接处会粘连
-- **`Q:` / `A:` 这类行首标记是必要的**——没有它们，两个相邻项在模型眼里就是一段连续文本
-
-### 打包策略
-
-```text
-1. 去重（复述：去重在扩窗**之前**，见 retrieve/fusion.dedup_candidates）
-2. 原文优先，不以任何摘要或合成文本替代
-3. 同一 session 相邻信息尽量连续   ← 已落成 Context Segment（§2.5）
-4. 保留时间信息（原始表述）
-```
-
-> 第 2 条：原文链自动满足；共同取证返回的**独立事实片段带逐字来源**（完整引句存在事实索引里），见 [`../service/`](../service/) 的共同取证分支。
-
-**段级输出的字段来源**（`packaging.package`）：
-
-| 响应字段 | 来自 | ⚠ 不要来自 |
-| --- | --- | --- |
-| `id` | **段的锚点** `anchor_memory_id` | 段里第一条（那可能只是扩窗补的邻居） |
-| `content` | 整段的 `render_segment(逐对 render)`；**共同取证的事实片段**整段直接取用 `render_evidence` 的渲染（[`../common/`](../common/)） | 单条记忆的渲染 |
-| `created_at` | 锚点的 `event_time` → UTC 日粒度 | 段里第一条的、或 Add 的到达时间 |
-| `score` | **输出位置**的函数 `1/(rank+1)` | Qdrant 的 RRF 分数、reranker 的原始分 |
-
----
-
-## 5. 时间处理的**实现要点**
-
-> **总规则在根 `CLAUDE.md`**（**D21**：正文带**日粒度**日期前缀、**绝不许出现秒级**；**D22**：相对时间就地注解成绝对日期），已加载——本节只写本目录要落地的部分。
-
-| 要求 | 说明 |
+| Field | Source |
 | --- | --- |
-| **筛选走 `event_time` 列** | 正文**保留原始时间表述**，另按 D21 加日粒度日期前缀（`inject_abs_time`）、按 D22 就地注解相对时间（`annotate_relatives`）——**前缀进索引、注解不进**（见 §4） |
-| **`created_at` 必须始终带上** | CL-Bench 那条路径靠它渲染时间；不返回就等于放弃该数据集的时间信息 |
-| **只给到日粒度**（如 `2026-07-26`） | **粒度会被模型看见**——给秒级时间戳，模型更容易按秒级回答，从而踩中"粒度变细"规则 |
-| **不要用裸 Unix 毫秒** | 渲染出来是 `- [1753512557000] ...`，**对模型无意义** |
-| `event_time` 为 NULL 时**发空串 `""`** | 渲染代码是 `str(item.get("created_at") or "")`，假值会退化成 `- {text}`，是一个**有定义的降级路径** |
-| **不要拿 Add 的到达时间兜底** | 那是"何时写入"而不是"何时发生"，会给模型**错误信息** |
+| `id` | Segment anchor memory ID |
+| `content` | Complete segment rendering |
+| `created_at` | Anchor event time in UTC day granularity, or `""` |
+| `score` | `1 / (output position + 1)` |
 
-**粒度的收益属待验证**，与 §13 的 T1（时间戳前缀 带/不带）同批测。
-
-### `score` 返回单调递减的占位值
-
-**不要返回原始 RRF 分数**——融合分数**不是校准量**（§8），对我们没有意义；但**万一 AML 按 `score` 重排，省略 `score` 就有风险**。
-
-取最安全的一侧：返回 `1/(rank+1)` 这类单调值——**无论 AML 是否重排，顺序都不变**。
-
----
-
-## 6. Token 预算（§6.4）
-
-| 要求 | 说明 |
-| --- | --- |
-| **双预算截断** | **同时按段数与 token 数**——否则排在后面的段会整段作废，白白占掉名额 |
-| **tokenizer = `o200k_base`** | 用**答案模型自己的分词器**。**不要用字符数或空格切分近似**——单次近似偏差会在 100 个对上被放大到几千 token |
-| 上限 **117,760** | 答案窗口 128k 扣掉输出与安全余量 |
-
-### 怎么执行（`packaging._fit_by_budget`）
-
-```text
-按段的 best_rank 顺序依次加入
-    装得下 → 加进去
-    装不下 → **停**（不截半个段、不拆回单条、不跳过它再塞后面的）
-```
-
-**两条容易写错的地方**：
-
-| 陷阱 | 后果 |
-| --- | --- |
-| 把"各段的 `token_count` 之和"当输出长度 | **漏掉分隔符**；100 个段时少算 99 个 token，正好把 AML 的前缀截断点推进一段证据的中间 |
-| 先按预算、再按 `top_k` | 被 `top_k` 切掉的段**先占了一轮预算**，实际返回的段数会少于该有的 |
-
-⇒ 顺序是 **`top_k` 先、预算后**（`package` 里就三行，但顺序是规格的一部分）。
-
-> **决策用上界、报告用真值**：预算的**判断**用 `Σ token_count + (段数-1)×连接符`，
-> 报告出去的 `output_tokens` 数的是**最终那个真实字符串**。
-> 两者在 BPE 下**不相等**（合并可以跨越拼接边界，和 ≥ 真值）——
-> 用上界决策只会**少装**，而超装的代价是排在后面的证据整段作废。
-
-**token 计数实现在 [`../common/`](../common/)**（`tokens.py`）——本目录只消费它，不自己数。
-分词器**在服务启动时加载**（不是第一次请求时），因为首次使用要联网取 BPE 文件。
-
-> ### ⚠ 又一处 R1 类风险（§6.4）
->
-> 本地 qwen3.5-9b 的分词器与 `gpt-4o-mini` **不同** ⇒ **本地量出的"能装多少段"不能直接搬到线上**——**Step 5 切换后必须重新量一次**（[`../../../docs/open-questions.md`](../../../docs/open-questions.md) **E7**）。
-> **"做成配置项"这一半已落地**（上限 `budget.max_tokens`、分词器名 `budget.tokenizer`，见 [`../../../docs/config-reference.md`](../../../docs/config-reference.md)）；**剩下的是量一次**——要等 Step 5 真的切到 `text-embedding-v4` / `gpt-4o-mini` 之后。
+Do not return raw RRF or reranker scores.

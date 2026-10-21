@@ -1,6 +1,6 @@
 """固定失败案例的小样本 HTTP 评测；答案与裁判复用已有 pipeline。
 
-manifest 显式列出 dataset、user_id、source（历史 input.jsonl）、qids 和 group。
+manifest 显式列出 dataset、user_id、source（已有 input.jsonl）、qids 和 group。
 不加载金标图，不裁剪语料，不改变答案提示词。每题独立保存结果以便中断续跑，
 deadline 为 UTC Unix 秒；到期不再发起检索或模型调用。
 

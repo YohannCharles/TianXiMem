@@ -1,9 +1,8 @@
 """喂 `Add`、调 `Search`——**走 HTTP**。
 
 > **本模块不 import `tianximem` 的任何内部模块**，这是全目录最硬的一条边界
-> （[`../CLAUDE.md`](../CLAUDE.md)）：§13 要求 B1（ReFind）在我们自己的 harness 里重跑，
-> 而 B1 只以"另一个 Add/Search 服务"的形式存在——走进程内调用会让 B1 变成特例、
-> 两条基线不可比；而且**只有打 HTTP 才碰得到契约层**。
+> （[`../CLAUDE.md`](../CLAUDE.md)）：外部基线只以独立 Add/Search 服务的形式存在——
+> 走进程内调用会让基线变成特例、不同基线不可比；而且**只有打 HTTP 才碰得到契约层**。
 
 ## 它故意很薄
 
@@ -11,7 +10,7 @@
 切批在 [`batching`](./batching.py)、注入与判分在 [`judge`](./judge.py)、
 契约全清单在 [`../smoke/preflight.py`](../smoke/preflight.py)——本模块只留**一条**断言
 （`len(data) <= top_k`），因为它是**最便宜且后果最重**的那条：返回超限是**契约错误**
-而不是截断，**AML 不会替我们截**（§2.2）。
+而不是截断，**AML 不会替我们截**。
 """
 
 from __future__ import annotations
@@ -30,32 +29,32 @@ from .batching import batches, request_id_for
 
 __all__ = ["SearchHit", "ServiceClient", "REQUEST_TIMEOUT_S"]
 
-#: 契约允许**单请求最长 30 分钟**（§2.2）。默认取满：Full run 要连续跑 0.5–2 天，
-#: 用一个"看着正常"的短超时会把**慢**伪装成**失败**，直到 Full 才炸（§15）。
+#: 契约允许**单请求最长 30 分钟**。默认取满：Full run 要连续跑 0.5–2 天，
+#: 用一个"看着正常"的短超时会把**慢**伪装成**失败**，直到 Full 才暴露。
 REQUEST_TIMEOUT_S = 1800.0
 
 #: `Add` 的**有界**重试次数与退避基数（秒）。
 #:
 #: **依据是契约本身，不是"想让测试好过"**：AML 对 `Add` 最多重试 **32 次**、
-#: `request_id` 与 payload 不变（§2.2），整套系统就是**按重放安全设计的**
-#: ——D28 之后位置是请求的纯函数、批次级有 `applied_batches` 守卫
+#: `request_id` 与 payload 不变，整套系统就是**按重放安全设计的**：
+#: 位置是请求的纯函数，批次级有 `applied_batches` 守卫
 #: （`tests/test_idempotency.py` 钉着）。
 #:
-#: ⇒ **本地 harness 不重试，得到的不是"更严格"，是"更脆"**。实测：LongMemEval
+#: ⇒ **本地 harness 不重试，得到的不是"更严格"，是"更脆"**。LongMemEval
 #: 一个用户要灌 **140–220 秒**（250 块左右），网关一次抖动
-#: （`peer closed connection without sending complete message body`）就能打死整轮
-#: ——而那一轮可能已经跑了几小时。2026-10-02 实测复现过，同一请求立刻重投即可成功。
+#: （`peer closed connection without sending complete message body`）就能打死整轮，
+#: 而那一轮可能已经跑了几小时；同一请求重投可以恢复。
 #:
-#: ⛔ **4xx 一律不重试**：那是我方 bug（尤其 **409 = 同 `request_id` 不同 payload**，
-#: D28 的响亮冲突），重试只会把它藏起来。判据与 `search_raw` 的兜底一致（`>= 500`）。
+#: ⛔ **4xx 一律不重试**：那是我方 bug（尤其 **409 = 同 `request_id` 不同 payload**
+#: 的响亮冲突），重试只会把它藏起来。判据与 `search_raw` 的兜底一致（`>= 500`）。
 ADD_RETRY_ATTEMPTS: Final[int] = 3
 ADD_RETRY_BACKOFF_S: Final[float] = 2.0
 
 #: `Search` 的**有界**重试次数与退避基数（秒）。
 #:
 #: ⚠ 与 `Add` 的区别只是"要不要幂等"：`Search` 是只读的，重试没有任何副作用。
-#: 而官方采集全量重放要发 **8,783 次 search**、跑几十小时——一次瞬时 5xx 就打死
-#: 整轮（旧版实测过），代价与收益完全不成比例。
+#: 而官方采集全量重放要发 **8,783 次 search**、跑几十小时——一次瞬时 5xx
+#: 不应终止整轮，有限重试的收益高于成本。
 #:
 #: ⛔ **4xx 一律不重试**：那是我方 bug（例如 `top_k` 传错），重试只会把它藏起来。
 SEARCH_RETRY_ATTEMPTS: Final[int] = 3
@@ -64,7 +63,7 @@ SEARCH_RETRY_BACKOFF_S: Final[float] = 2.0
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
-    """`data[]` 的一项——**§2.1 的四个字段**，不做任何加工。"""
+    """`data[]` 的一项——**Search 契约的四个字段**，不做任何加工。"""
 
     id: str
     content: str
@@ -93,7 +92,7 @@ class ServiceClient:
         #: `Add` 正文按哪种形态渲染（[`add_shape`](./add_shape.py)）。**缺省是线上那个**
         #: （`official`）——改它等于换输入，所以它进数据指纹、且**不同形态的分数不可互比**。
         self.add_shape = add_shape
-        #: **超限兜底**（2026-09-26，只为 B1）：同一个问题再问一次**另一个实例**。
+        #: **超限兜底**：同一个问题再问一次**另一个实例**。
         #:
         #: 动机：ReFind 的 agent 把历次观测累加在对话里、**没有输入 token 预算**，
         #: 而 LongMemEval 里有 2.3 万字符的长消息 ⇒ 一次观测就可能超过 128k ⇒ 网关 400
@@ -113,7 +112,7 @@ class ServiceClient:
         session_id: str,
         messages: Sequence[dict],
     ) -> dict:
-        """投一批**已经渲染好的 payload**。**非 200 一律抛**——§15 说非 200 的行为未定义，
+        """投一批**渲染好的 payload**。**非 200 一律抛**——非 200 的行为契约未定义，
         必须假设 AML 会重试，所以 harness 这边**不能把失败当成功继续跑**
         （那会把"漏跑了"伪装成"分数低"）。
 
@@ -121,9 +120,9 @@ class ServiceClient:
         因为渲染会**改变条数**（超长消息要切），先切批会让批界落在错的条数上。
 
         ⚠ **可重试的失败会重投同一 `request_id` + 同一 payload**（`ADD_RETRY_ATTEMPTS`）——
-        这正是 AML 做的事（§2.2 的 32 次）。**4xx 不重试**，直接抛。
+        这正是 AML 的重试方式。**4xx 不重试**，直接抛。
         """
-        # ⚠ **body 只构造一次**：重投必须逐字相同，否则撞 409（D28）——
+        # ⚠ **body 只构造一次**：重投必须逐字相同，否则撞 409——
         # 那正是"同 request_id 不同 payload"的响亮冲突。
         body = {
             "request_id": request_id,
@@ -158,15 +157,15 @@ class ServiceClient:
 
     # ── Search ─────────────────────────────────────────────────────────
     def _checked_search_body(self, payload: dict, top_k: int) -> dict:
-        """§2.1 / §2.2 的两条形状检查——**预检和真检索走同一条**。"""
+        """Search 响应的两条形状检查——**预检和真检索走同一条**。"""
         data = payload.get("data")
         if not isinstance(data, list):
-            # `null` 会让下游静默变成"没有记忆"——§2.1 要求空结果是 `[]`。
+            # `null` 会让下游静默变成"没有记忆"——契约要求空结果是 `[]`。
             raise AssertionError(
                 f"`data` 必须是数组（空结果是 [] 而不是 null），收到 {type(data).__name__}"
             )
         if len(data) > top_k:
-            # §2.2：超限是**契约错误**，AML 不会静默截断。本地抓到死，别等 Smoke。
+            # 超限是**契约错误**，AML 不会静默截断。本地抓到死，别等 Smoke。
             raise AssertionError(
                 f"返回 {len(data)} 条 > top_k={top_k}——§2.2 契约错误（不会被静默截断）"
             )

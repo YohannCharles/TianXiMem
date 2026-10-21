@@ -32,18 +32,18 @@ uv run --env-file .env python tools/run_official_eval.py run \
 # 3) 离线看进度/成绩
 uv run python tools/run_official_eval.py status --run-id official-v1
 
-# 4) 两版对比（v1.0 service vs 当前最新 service）
+# 4) 对比两次运行
 uv run python tools/run_official_eval.py compare \
-  --left-run-id official-v1.0 --right-run-id official-latest \
-  --left-name v1.0 --right-name latest
+  --left-run-id official-baseline --right-run-id official-candidate \
+  --left-name baseline --right-name candidate
 ```
 
-**两版比较的正确姿势**：用**同一份当前 harness**（本仓库）分别打两个服务：
+**运行比较**：用同一份当前 harness（本仓库）分别请求两个服务：
 
 ```bash
-# v1.0 服务：另起端口/库/collection，run-id 与 service-revision 都写 v1.0
+# 基线服务：另起端口/库/collection，并分别记录 run-id 与 service-revision
 uv run --env-file .env python tools/run_official_eval.py run \
-  --run-id official-v1.0 --service-revision v1.0 \
+  --run-id official-baseline --service-revision baseline \
   --base-url http://127.0.0.1:8010 --configs-dir /path/to/v1.0/configs --profile local
 # 最新服务：同一个清单、同样的答案/裁判模型与预算
 uv run --env-file .env python tools/run_official_eval.py run \
@@ -86,7 +86,7 @@ from eval.datasets.registry import benchmark_dir, capture_dir  # noqa: E402
 from eval.harness import api_config, pipeline_for  # noqa: E402
 from eval.harness.official_capture_pipeline import supports  # noqa: E402
 
-#: 采集族名 → 归档清单里的 slug（只有 docpp 一处不同，D35 的目录名是 `doc-pp`）。
+#: 采集族名 → 归档清单里的 slug。
 _ARCHIVE_SLUG = {"docpp": "doc-pp"}
 
 DEFAULT_REPORTS = "eval/reports"

@@ -6,23 +6,8 @@ uv run python tools/diagnose_run.py --run-id base-mqk
 
 ## 它为什么存在
 
-2026-10-03 一天里在**四个**数据集上查出同一类缺陷，**四个全是"我们接错了"**，
-而不是"模型在这个数据集上很差"：
-
-| 数据集 | 表面分数 | 实际病因 |
-| --- | ---: | --- |
-| tempreason | 0.066 | 加载器**丢了一个字段**（`fact_context`），gold 只有 27% 在记忆里 |
-| memtrapbench | 0.144 | **用错了答案 prompt** + 裁判输出被 `max_tokens=256` 截断 |
-| mquake | 0.400 | prompt **少了冲突解决规则**、又禁掉了数据集**设计上就要求**的世界知识 |
-| corporatebench | 0.260 | 覆盖限制 + 聚合作答 + 评测适配（详见下面的修复报告） |
-
-CorporateBench 的修复与重判记录见 `eval/reports/corporatebench-20261004.md`。
-
-修完前三个：**0.551 / 0.424 / 0.540**。
-
-**这四次的诊断手法完全一样**，本脚本把它固化下来——不然下次还得从头敲一遍，
-而**"接错"的表现酷似"方法很差"**（分数低、逐题看也像模型答不上来），
-唯一的区分手段就是**回产物里量**。
+低分可能来自数据集接入错误、答案格式错误、裁判截断，也可能来自模型能力不足。
+本脚本从运行产物中量化这些信号，避免只凭少量错题把接入缺陷误判为模型问题。
 
 ## 判读树（脚本最后会自己给结论）
 
@@ -38,7 +23,7 @@ CorporateBench 的修复与重判记录见 `eval/reports/corporatebench-20261004
 ```
 
 ⚠ **②要先过「自校准」才准读**：它靠**子串匹配**认 gold，而 gold 是不是短实体、
-判分宽不宽容，逐数据集差得很远（实测召回从 **33% 到 100%**）。
+判分宽不宽容，逐数据集差得很远（召回从 **33% 到 100%**）。
 脚本拿**判对的题**当已知有证据的对照组量出这条判据的召回；**低于 80% 就拒绝下结论**
 （并明说"别照它去查语料"）——否则它会把人**送去查错的那一层**。
 
@@ -129,7 +114,7 @@ def memory_text(row: dict) -> str:
 def gold_strings(row: dict) -> list[str]:
     """把金标摊成一组可比字符串。
 
-    ⚠ **`gold_answer` 的形状逐数据集不同，实测四种**（`input.jsonl` 的产物扫过一遍）：
+    ⚠ **`gold_answer` 的形状逐数据集不同，四种**（`input.jsonl` 的产物扫过一遍）：
 
     | 形状 | 数据集 |
     | --- | --- |
@@ -179,10 +164,9 @@ def _is_refusal(answer: str, phrases: tuple[str, ...]) -> bool:
 
 #: "换了措辞的拒答"的**粗启发式**——只用来**报警**，不用来改判。
 #:
-#: ⚠ 这条是为了一次**差点骗过人的假绿**加的（2026-10-04，`tr-promptfix`）：
-#: 换了 prompt 之后模型不再回 `Cannot determine from the memories.`，改成回
-#: `The provided memories do not contain information about …`——**12 条、全判错**，
-#: 而工具当时印的是"**拒答率 0/332 = 0.0%**"。脚本确实把"答案里出现最多的前缀"
+#: ⚠ 这条是为了一次**差点骗过人的假绿**加的：
+#: 模型换用 `The provided memories do not contain information about …` 等措辞时，
+#: 固定拒答短语会漏识别，并让拒答率错误地显示为 0%。脚本确实把"答案里出现最多的前缀"
 #: 打在下面了（那是纪律 1 的设计），**但"0%"那行太好信**。
 #:
 #: ⇒ 命中这里的条数会**单独印一行并要求人工核对**，不计进拒答率
@@ -226,7 +210,7 @@ def _recall_ceiling(calib: collections.Counter[str]) -> float:
     所以"判对的题里它认出几条"就是它的**召回上限**——一旦这个数低，
     "证据不在"里混的主要是**判据自己的漏**，而不是真的没给到。
 
-    ## 实测（2026-10-03，各 run 的产物）
+    ## 判据校准
 
     | run | 判对的题里「证据在」 | 能不能读 |
     | --- | ---: | --- |
@@ -358,7 +342,7 @@ def clinical_report(run_id: str, reports_dir: Path, refusals: tuple[str, ...]) -
     if len(by_cat) > 1 or judge_errors:
         print(f"\n── ③ 逐类（{len(by_cat)} 类）──")
         # ⚠ **ERROR 的那几道必须从分母里剔掉**，否则"判分链路丢题"会伪装成"这一类得 0 分"
-        #   ——2026-10-03 的 base-mmb 就是这样：`multi_hop_clinical_deduction` 看起来
+        #   —— 的 base-mmb 就是这样：`multi_hop_clinical_deduction` 看起来
         #   0/17，其实是 15 道裁在输出被截断、2 道没跑到评委那一步。
         for category, flags in sorted(by_cat.items(), key=lambda kv: -len(kv[1])):
             ok = sum(flags)
@@ -385,7 +369,7 @@ def clinical_report(run_id: str, reports_dir: Path, refusals: tuple[str, ...]) -
     refused_with = table.get("拒答·证据在", 0)
     refused_without = table.get("拒答·证据不在", 0)
     # ⚠ **「证据在不在」这一支先过校准**：召回不到 80% 时说"证据不在 ⇒ 查语料"
-    #   是**把人送去查错的那一层**（mmb 上实测召回只有 33%）。
+    #   是**把人送去查错的那一层**（mmb 上召回只有 33%）。
     trustworthy = _recall_ceiling(calib) >= _CALIB_TRUSTWORTHY
     if refused_total and refused_with / refused_total >= 0.2 and trustworthy:
         verdicts.append(

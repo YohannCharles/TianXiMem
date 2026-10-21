@@ -2,9 +2,9 @@
 
 覆盖三件容易静默出错的东西：
 
-1. **一条记忆 = 一个 session**（`mquake` / `corporatebench`）。写成"多条塞一个 session"不会报错，
-   但在**旧规则**下**会被合并成一个块**（连续同 role 合并）⇒ 检索退化、分数虚高或虚低。
-    ⚠ **D29 之后不会了**——配不上的消息各自独立成块，这条夹具的形状约定因此变成冗余（仍成立）。
+1. **一条记忆 = 一个 session**（`mquake` / `corporatebench`）。写入多条消息不会报错，
+   但检索粒度取决于消息与 session 的对应关系。当前实现让配不上的消息各自独立成块，
+   这条夹具固定该形状约定。
 2. **判分是纯函数**（MQuAKE 别名表 / CorporateBench 的标量·布尔·列表）——这里逐档钉死，
    包括 MQuAKE 那种长度 2 的别名（`de`）不能满屏假阳性。
 3. **MemTrapBench 的均分与阈值分离**：四个原始分进 `judge_response`，换阈值不用重跑裁判。
@@ -122,7 +122,7 @@ def _write_corporatebench(root: Path) -> None:
 def test_mquake_is_one_message_per_memory_in_one_session(tmp_path: Path) -> None:
     """**一条事实 = 一条消息**，而整个样本共用一个 `Session`。
 
-    ⚠ 关键在**消息的条数与顺序**，"几条 session"只是运输方式：D29 之后没有非 user 跟随的
+    ⚠ 关键在**消息的条数与顺序**，"几条 session"只是运输方式： 之后没有非 user 跟随的
     连续 user **每条各自独立成块**，所以挤在一次 Add 里粒度不受影响（Add 次数反而少一个数量级）。
     """
     _write_mquake(tmp_path)
@@ -170,7 +170,7 @@ def test_memtrapbench_one_sample_per_item_and_seed_skipped(tmp_path: Path) -> No
 
 
 def test_memtrapbench_missing_scenario_is_a_loud_failure(tmp_path: Path) -> None:
-    """⚠ **少一个场景目录必须响亮失败**（2026-10-04）——`glob` 对不存在的目录返回空迭代器、
+    """⚠ **少一个场景目录必须响亮失败**——`glob` 对不存在的目录返回空迭代器、
     **一声不吭** ⇒ 少一个场景 = 静默少 150–350 题，而分数看着完全正常、**只是不可比**。
 
     这正是本仓最防的那一类（"分数看起来完全正常、却不可比"），而它在**跑一轮**时
@@ -187,7 +187,7 @@ def test_memtrapbench_seeds_are_skipped_by_content_not_filename(tmp_path: Path) 
     """**判据是内容不是文件名**：种子条目没有 `context_history` ⇒ 跳过。
 
     ⚠ 这条是用真数据踩出来的：`trauma/hurt.json` **只装种子、名字里却没有 `_seed`**，
-    按文件名过滤会在加载阶段直接炸（2026-09-30 冒烟）。
+    按文件名过滤会在加载阶段直接炸。
     """
     _write_memtrapbench(tmp_path)
     base = tmp_path / "memtrapbench" / "memtrapbench" / "trauma"
@@ -398,7 +398,7 @@ def test_extra_pipeline_cli_takes_max_tokens_after_the_subcommand() -> None:
 
     `run_judge` 按官方那几份的写法传参（`… answer --input … --output … --max-tokens 256`）。
     一开始我把这个选项挂在**顶层** parser 上 ⇒ 子解析器不认识它 ⇒ 整轮死在
-    `unrecognized arguments`（2026-09-30 冒烟抓到的）。这条用例就是那个形状的看门狗。
+    `unrecognized arguments`。这条用例就是那个形状的看门狗。
     """
     from eval.harness.extra_pipeline import build_parser
 
@@ -525,13 +525,12 @@ def test_medmemorybench_checkpoint_never_reads_the_future(tmp_path: Path) -> Non
 
 
 def test_medmemorybench_spread_is_reachable(tmp_path: Path) -> None:
-    """**`spread=True` 这条路径此前没有用例，于是它一直是崩的**（2026-10-01 才发现）。
+    """**`spread=True` 这条路径必须被实际覆盖**。
 
     崩法是 `stratified_sample(..., key=lambda item: item[0][0])`——`ordered` 的元素
     已经是 `(persona, checkpoint)` 元组，再取一次下标就是**对 int 取下标** ⇒ `TypeError`。
-    ⚠ **它不是"参数写错了"，是"这条路径从没被跑过"**：加载器只在 `spread` 且 `limit`
-    小于总数时才会走到那个 lambda。**每加一个数据集，都要有一条用例真的把它的
-    `spread` 路径走一遍**——静态看着对的代码不会自己证明自己。
+    ⚠ 加载器只在 `spread` 且 `limit` 小于总数时才会走到那个 lambda。
+    **每加一个数据集，都要有一条用例实际执行它的 `spread` 路径**。
     """
     from eval.datasets import load_medmemorybench
 
@@ -594,7 +593,7 @@ def test_mmb_string_contain_needs_every_correct_answer() -> None:
     ],
 )
 def test_mmb_option_match_is_set_equality(generated: str, expected: bool) -> None:
-    """`multiple_choice`：**集合完全相等**（实测 398 道里 296 道有 2–3 个正确项）。"""
+    """`multiple_choice`：**集合完全相等**（当前 398 道里 296 道有 2–3 个正确项）。"""
     from eval.harness.extra_pipeline import judge_mmb_option_match
 
     gold = {
@@ -627,7 +626,7 @@ def test_mmb_llm_verdict_handles_nested_json() -> None:
     r"""⚠ **多跳那一类的裁决是嵌套 JSON**（`node_validations` 里还有一层）。
 
     非贪婪正则 `\{.*?\}` 只会命中里层的节点对象、永远够不到外层的 `is_correct`
-    ——2026-09-30 实测把一条**判对了的**回答记成了 `JUDGE_ERROR`。这条用例就是那个形状。
+    —— 把一条**判对了的**回答记成了 `JUDGE_ERROR`。这条用例就是那个形状。
     """
     from eval.harness.extra_pipeline import judge_mmb_llm_verdict
 
@@ -670,7 +669,7 @@ def test_mmb_prompt_comes_from_the_upstream_archive() -> None:
 def test_every_dataset_builds_items_with_its_own_contract() -> None:
     """`build_input_items` 必须**按数据集**给出各自那份契约的字段。
 
-    ⚠ 为什么值得一条用例：2026-09-30 加 ScriptMem / PersonaMem 的分支时，
+    ⚠ 为什么值得一条用例： 加 ScriptMem / PersonaMem 的分支时，
     编辑被 `ruff format` 重排过的上下文"吃掉"了——分支**没插进去**，而症状是
     跑完 Add/Search 之后在判分那一步才炸（`unsupported qa_type: ''`）。
     一条"每个数据集都验字段"的用例能让它在**集合阶段**就红。
@@ -892,18 +891,18 @@ def test_personamem_item_contract_matches_the_official_pipeline(tmp_path: Path) 
     assert "我喜欢瑜伽" not in str(item["chat_history"])
 
 
-# ── TempReason：`fact_context` 必须进记忆（2026-10-03）─────────────────
+# ── TempReason：`fact_context` 必须进记忆─────────────────
 def test_tempreason_ingests_the_fact_context():
     """⛔ **`fact_context` 是这份数据集的记忆本体**，不是"每题一份的泄题"。
 
-    三条依据（实测 2026-10-03）：
+    三条依据：
 
     * 同一页的各题**共用同一份事实集**（60 个多题页全部成立）；
     * 正文页**往往没有时间区间**，而问题问的是**某一天的雇主是谁**
       ⇒ 事实句是唯一能推出答案的材料；
     * 那份事实集里**同时含 gold 与 `neg_answers`** —— 要挑对区间才答得出，**不是泄题**。
 
-    不收的后果实测（332 题）：gold 只在 `fact_context` 里、不在正文页的 **239/332**，
+    不收的后果（332 题）：gold 只在 `fact_context` 里、不在正文页的 **239/332**，
     错题里 **259/310 是逐字拒答** ⇒ overall 0.066 量的是"我们没给那份事实"。
     修好后 gold 进记忆的比例 **91/332 → 323/332**。
     """
@@ -947,7 +946,7 @@ def test_facts_first_dedupes_and_keeps_order():
     ]
 
 
-# ── MedMemoryBench：题号必须**全局**唯一（2026-10-04）──────────────────────
+# ── MedMemoryBench：题号必须**全局**唯一──────────────────────
 def _write_medmemorybench_two_personas(root: Path) -> None:
     """两个 persona **用同一个 `query_id`**——parquet 里就是这么写的。"""
     base = root / "medmemorybench" / "data" / "zh"
@@ -981,7 +980,7 @@ def _write_medmemorybench_two_personas(root: Path) -> None:
 
 
 def test_medmemorybench_question_ids_are_unique_across_personas(tmp_path: Path) -> None:
-    """⚠ **parquet 里的 `query_id` 只在 persona 内唯一**（实测 1,939 题只有 **100** 个唯一值）。
+    """⚠ **parquet 里的 `query_id` 只在 persona 内唯一**（ 1,939 题只有 **100** 个唯一值）。
 
     这份数据集是**唯一一个**把原始 id 原样当题号用的（其余各份都前缀了来源单元：
     `pm-{persona}-{index}` / `{stem}-{case_id}-{index}` …）⇒ 跨 persona 撞车。
@@ -1000,15 +999,15 @@ def test_medmemorybench_question_ids_are_unique_across_personas(tmp_path: Path) 
     assert len(ids) == len(set(ids)) == 2, f"题号跨 persona 撞车：{ids}"
 
 
-# ── MedMemoryBench 判分：**多跳那一类要自己的预算**（2026-10-04）──────────
+# ── MedMemoryBench 判分：**多跳那一类要自己的预算**──────────
 def test_mmb_mcd_judge_gets_its_own_token_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     """`multi_hop_clinical_deduction` 的输出**比其余三类长一个量级**（要逐节点回 `note`）。
 
-    2026-10-03 的 `base-mmb` 实测：**17 道 mcd 里 15 道**的裁判输出被砍在 618–778 字符处，
+     的 `base-mmb` ：**17 道 mcd 里 15 道**的裁判输出被砍在 618–778 字符处，
     JSON 没收尾 ⇒ 全记 `JUDGE_ERROR` ⇒ 看起来是"这一类能力为 0"，其实是**判分链路在丢题**。
     上游对它单独给 `max_tokens=2000`（其余三类 500）。
 
-    按 2000 实测 9 道：输出 1,286–1,801 字符、**全部正常收尾并解析**。
+    按 2000  9 道：输出 1,286–1,801 字符、**全部正常收尾并解析**。
     """
     from eval.harness import extra_pipeline as ep
 
@@ -1024,7 +1023,7 @@ def test_mmb_mcd_judge_gets_its_own_token_budget(monkeypatch: pytest.MonkeyPatch
     item = {"question": "?", "gold_answer": {"query_type": "multi_hop_clinical_deduction"}}
     ep._judge_medmemorybench("q1", item, "模型答案", judge=judge, max_tokens=1024)
     assert seen == [ep.MMB_MCD_MAX_TOKENS]
-    # 其余三类**照旧**用 harness 给的那个数（别顺手把它们也抬上去）
+    # 其余三类仍使用 harness 给的那个数（别顺手把它们也抬上去）
     item["gold_answer"] = {"query_type": "state_update"}
     ep._judge_medmemorybench("q2", item, "模型答案", judge=judge, max_tokens=1024)
     assert seen[-1] == 1024
@@ -1115,12 +1114,12 @@ def test_tempreason_sentence_split_survives_abbreviations(text: str, expected: l
     一条记忆块**。问 "May, 1991 他在哪支队"时，检索带回来的是**没有区间的**那半句
     ——答案本来躺在被切走的那一半里，模型只能拒答。
 
-    实测（2026-10-04）：L2 的事实行被切碎 **7,061/44,168（16.0%）**、L3
+    L2 的事实行被切碎 **7,061/44,168（16.0%）**、L3
     **5,255/38,432（13.7%）**；到题目层是 539/5,397（10%）与 360/4,426（8%）的题，
     gold 恰好落在被切碎的那一行上。补上缩写例外后降到 **0.14% / 0.10%**。
 
     ⚠ 剩下的那一点是德语俱乐部的序数（`1. FC Köln`）——**故意不收**：想用
-    "数字 + 点 + 全大写短词"保住它，但实测页面正文里 `数字. 大写词` 有 58,834 处，
+    "数字 + 点 + 全大写短词"保住它，但页面正文里 `数字. 大写词` 有 58,834 处，
     其中 1,684 处的下一个词是全大写且 ≤4 字符，**而 `1909. A year later` 正在其中**
     ⇒ 会把真句界合并掉，代价远大于收益。
     """

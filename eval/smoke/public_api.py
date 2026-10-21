@@ -1,4 +1,4 @@
-"""通过公网验证 Add/Search（§13 契约校验），仅需 httpx 与目标 URL。
+"""通过公网验证 Add/Search 契约，仅需 httpx 与目标 URL。
 
     python eval/smoke/public_api.py
     python eval/smoke/public_api.py --base-url http://127.0.0.1:28088

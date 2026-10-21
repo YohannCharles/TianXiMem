@@ -1,17 +1,10 @@
-# ⚠ 这不是数据集样本，是**当前提示词自带例子的回喂探针**。
+# Router probes built from the examples embedded in the current router prompt.
 #
-# 为什么它是最干净的判据：这些**就是提示词里印着的例子**，连答案都写着。
-# ⇒ 答错 = **它没有在按提示词办事**，与"标签有没有争议"完全无关。
-# ⛔ 所以 `expected_route` 不是我判的，是**提示词原文的箭头**。
+# Each expected route is the route stated by the prompt itself. A failure means the
+# model did not follow the prompt example.
 #
-# 📌 本文件**跟着当前提示词版本走**：2026-10-10 从 v2 的例子换成了 **v3 的例子**
-#    （v2 那一版的结果（10/10）记在 `reports/router-v2-20261010.md` 里，不在这里重跑）。
-#
-# ⚠⚠ **污染警告**：本文件里有 3 条**同时也在本仓的测试样本里**
-#    （`How many children does Melanie have?` / `Who are the coaches at North Athletics?` /
-#    `What type of car did Evan get after his old Prius broke down?`）。
-#    ⇒ 它们在 E0/E1 上的"提升"**含记忆成分，不能算泛化证据**；
-#    泛化只看 E2（那批与 v3 的例子零重叠）。
+# Three examples also appear in repository test samples. Results on those rows reflect
+# prior exposure and are not held-out generalization evidence.
 {"probe": "prompt-example", "probe_id": "ex3-default-dune", "query": "Who is the author of Dune?", "expected_route": "DEFAULT", "label_note": "提示词 v3 例 1"}
 {"probe": "prompt-example", "probe_id": "ex3-default-capitals", "query": "Give the capitals of Spain and Portugal.", "expected_route": "DEFAULT", "label_note": "提示词 v3 例 2（多个独立查找）"}
 {"probe": "prompt-example", "probe_id": "ex3-default-gdp", "query": "Compare GDP per capita of Japan and South Korea.", "expected_route": "DEFAULT", "label_note": "提示词 v3 例 4（直接比较）"}

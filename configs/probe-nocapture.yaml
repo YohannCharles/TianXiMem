@@ -1,14 +1,4 @@
-# 定向对照用的临时 profile —— **"`default.yaml` 减去请求采集"**。
-#
-# 与 `default.yaml` 只差一个键：**关掉请求采集**。
-# 理由：`default.yaml` 里 `capture.enabled: true`，而 `var/capture/` 那份是
-# **官方流量的采集产物**（S6 的唯一直接观察口）——诊断探针发的不是官方流量，
-# 落进去会把它污染成"官方 + 自测"的混合体，而采集文件本身没有区分标记。
-#
-# ⛔ 其余一切**继承 `default.yaml`**（路由 / 多跳 plan / 共同取证 / 精排 /
-#    集合 `memories`），本文件**不复制**它们——复制就等于给"口径差在哪"再开一个家。
-#
-# 用途：`tools/` 或 `selection_suite` 的**定向重跑**（只重跑某几个数据集，
-# 复用已 add 的语料）。见 `eval/reports/runs/*-probe-*/`。
+# Diagnostic profile: product defaults without request capture.
+
 capture:
   enabled: false

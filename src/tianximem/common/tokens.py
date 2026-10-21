@@ -1,19 +1,17 @@
-"""Token 计数 —— **必须用答案模型自己的分词器**（§6.4）。
+"""Token 计数，使用答案模型自己的分词器（`o200k_base`）。
 
-> §6.4 逐字：token 用答案模型自己的分词器（`gpt-4o-mini` 的 `o200k_base`），
-> **不要用字符数或空格切分近似**——**单次近似偏差会在 100 个对上被放大到几千 token**。
+不要用字符数或空格切分近似；单次近似误差会在长上下文中累积。
 
-## 这个模块只回答一个问题
+## 职责
 
-**"这段文本是多少 token"** —— 它**不决定截谁**。"槽位数 + token 数"的**双预算决策**在
-[`../rank/`](../rank/)（§10 / §11.3）——那样切分才不需要知道分词器是什么。
+本模块只回答“这段文本有多少 token”，不决定截断哪些内容。槽位与 token 的双预算
+由 [`../rank/`](../rank/) 负责。
 
-## ⚠ 一条 R1 类风险（§6.4 / E7）
+## Model-Switch Risk
 
-本地开发期用的是 qwen3.5-9b，**它的分词器与 `gpt-4o-mini` 不同** ⇒
-**本地量出的"能装多少对"不能直接搬到线上**。§12.1 的四条对冲里**没有这一条**，
-PRD §6.4 明确"应补上"：**Step 5 切换后必须重新量一次单请求实际返回的对数**
-（见 `docs/open-questions.md` E7）。本模块的**实现**不会因此变——变的只是"预算够装几条"这个结论。
+Development and submission models may use different tokenizers. A context budget measured
+with one model is not guaranteed to fit another. Re-measure the effective budget whenever
+the answer model or tokenizer changes; this module's implementation remains unchanged.
 
 ## 为什么计数发生在**拼接之后**
 
@@ -38,12 +36,12 @@ __all__ = [
     "load_counter",
 ]
 
-#: `gpt-4o-mini` 的分词器（§2.3 规定提交期只能用 `gpt-4o-mini`）。
+#: 提交用答案模型 `gpt-4o-mini` 的 `o200k_base` 分词器。
 DEFAULT_TOKENIZER: Final[str] = "o200k_base"
 
-#: 答案窗口 128k 扣掉输出与安全余量后剩下的 input 预算（§2.2 / §6.4）。
-#: ⚠ **A 类外部契约常量**：AML 定的，**我们无权改**；写进配置只为追溯，不是为了调。
-#: 见 config-reference §7（`budget.max_tokens`）。
+#: 答案窗口 128k 扣除输出与安全余量后的输入预算。
+#: 这是 AML 外部契约常量，不是调优参数；见 `docs/config-reference.md` 的
+#: `budget.max_tokens`。
 MAX_INPUT_TOKENS: Final[int] = 117_760
 
 #: **提交口径的嵌入窗口**：`text-embedding-v4` 单条文本最多 **8,192 token**
@@ -57,17 +55,14 @@ MAX_INPUT_TOKENS: Final[int] = 117_760
 #: ⇒ **"一个记忆块不能超这个数"这条线只能由本仓自己守**。它由打包预算
 #: （`eval/harness/batching.py` 的 20 条 / 2,000 词）间接保证，而
 #: `tests/test_datasets.py` 有一条**跑真数据**的用例把它钉住。
-#: 2026-10-20 起它有运行时消费方：`embed/truncate.py` 在**查询侧发送之前**
-#: 按这个窗口截断超长 query（官方采集里 CL-Bench 有一组 query 远超它；
-#: 数字见 `eval/reports/embedding-20261020.md`）。
+#: `embed/truncate.py` 在查询发送前使用该窗口截断超长查询；部分官方查询会超过它。
 EMBED_MAX_TOKENS: Final[int] = 8_192
 
 
 class TokenCounterError(RuntimeError):
     """分词器加载失败。
 
-    ⚠ **必须响亮**：分词器拿不到就没有预算可言，而"没有预算"会退化成
-    "把所有证据都塞进去"——那会让排在后面的证据**整段作废**（§2.2），而**不报错**。
+    分词器加载失败必须响亮报错，否则预算无法执行，排在后面的证据可能被静默截断。
     """
 
 

@@ -114,7 +114,7 @@ def entries_for(dataset: str, *, purpose: str = "eval") -> list[dict]:
 def _download(url: str, dest: Path) -> None:
     """仅下载到调用者的临时文件，最终路径由校验后的发布步骤写入。"""
     # ⚠ 先做百分号编码：清单里有真实带空格的路径（doc-pp 的 `ACL 2025_*` 资产），
-    #    `urllib` 对它们直接抛 `InvalidURL`（httpx 会自动编码，所以旧工具从没暴露过）。
+    #    `urllib` 对它们直接抛 `InvalidURL`；httpx 会自动编码，不会暴露这条路径。
     request = urllib.request.Request(
         urllib.parse.quote(url, safe=":/%#?=@[]!$&'()*+,;"),
         headers={"User-Agent": "tianximem/prepare-dataset"},
@@ -227,7 +227,7 @@ def ensure_dataset(
 
 
 def migrate_archive(source: Path, root: Path) -> int:
-    """先校验整份迁移计划，再移动；未知文件也保留，碰到冲突不覆盖。"""
+    """先校验整份搬移计划，再移动；未知文件也保留，碰到冲突不覆盖。"""
     source, root = source.resolve(), root.resolve()
     if not source.is_dir() or source == root or source in root.parents or root in source.parents:
         raise PreparationError("迁移源和目标必须是不同的、互不包含的目录")

@@ -1,4 +1,4 @@
-"""混合检索的**策略与参数所有权**（§7.3）。
+"""混合检索的策略与参数所有权。
 
 **本模块说"用什么参数"（取值 / 校验 / 标定），`store/qdrant_store.py` 说"怎么发给
 Qdrant"**（翻成 `prefetch` + `rrf`）。**一份实现不许两边都写**——分工表见
@@ -11,7 +11,7 @@ Qdrant"**（翻成 `prefetch` + `rrf`）。**一份实现不许两边都写**—
 才等价于文献的 60（`1/(0+61) = 1/(1+60)`）。**填错不会报错**——两种写法产出的名次都
 "看起来正常"，只有分数差一个数量级。
 
-因此本模块**拒绝**任何 `k != 61` 的配置，而不是"警告后照用"（D5；值见 config-reference §3）。
+因此本模块**拒绝**任何 `k != 61` 的配置，而不是"警告后照用"。
 """
 
 from __future__ import annotations
@@ -36,12 +36,10 @@ __all__ = [
 ]
 
 #: ⚠ **`DEFAULT_PREFETCH_LIMIT` / `DEFAULT_WEIGHTS` 的初值住在
-#: [`../common/config/constants.py`](../common/config/constants.py)**（理由与 `DEFAULT_EXPANSION_SEED_LIMIT`
-#: 同一条：`retrieve/` 与 `store/` 都要用，而 `common/` 是最底层）。本模块**只 import**，
-#: 不再各写一份字面量。§7.3 的两条注意事项（`prefetch_limit` **不是**种子数/Top-K；
-#: 权重调整需 ablation 数据）也写在那里，**不在这里重复**——重复描述就是漂移的开始。
+#: [`../common/config/constants.py`](../common/config/constants.py)**：`retrieve/` 与
+#: `store/` 共用这些值，而 `common/` 位于依赖链底层。本模块只导入，不重复定义字面量。
 
-#: **正确性常量，不是可调项**（D5）。
+#: **正确性常量，不是可调项**。
 #:
 #: ⚠ 与 `common/config/constants.py` 的 `RRF_K` **各有一份**，这是**有意的**：那边是配置层的拒绝依据，
 #: 这里是**策略层对直接调用方的防御**——不能只靠"配置层已经查过"。两处相等由
@@ -61,9 +59,8 @@ class Candidate:
     """一个检索候选。**这是 `retrieve/` 交给 `rank/` 的东西。**
 
     * `rank` 是 **0-based 名次**——**唯一有意义的量**
-    * **没有 `score`，这是故意的。** 融合分数**不是校准量**（§8：Qdrant 官方明确警告
-      不要把单路阈值用到根级 `score_threshold`），而响应里的 `score` 必须是
-      **最终名次的函数**（`1/(rank+1)`，由 `rank/` 现算）。
+    * **没有 `score`，这是故意的。** 融合分数不是校准量，不能用于单路阈值；
+      响应里的 `score` 是最终名次的函数（`1/(rank+1)`，由 `rank/` 计算）。
 
     ⇒ **上游手里根本没有那个值，也就漏不出去**——这是**结构性**防止透传，
     而不是靠一句"记得别传"。Rerank 接入后名次会变，届时 `score` 也随之重算。
@@ -97,8 +94,8 @@ def make_hybrid_params(
     if rrf_k != RRF_K:
         raise RetrievalParamError(
             f"rrf_k 必须是 {RRF_K}，收到 {rrf_k}。\n"
-            "  它是【正确性常量】不是可调项：Qdrant 的 k 默认是 2、文献是 60，"
-            f"而 Qdrant 的秩 0-based，只有 {RRF_K} 才等价于文献的 60（D5）。\n"
+            "  它是【正确性常量】不是可调项：Qdrant 的 k 默认是 2、RRF 文献是 60，"
+            f"Qdrant 的秩从 0 开始，只有 {RRF_K} 才等价于文献公式中的 60。\n"
             "  填错【不会报错】——两种写法的名次都看起来正常，只有分数差一个数量级。"
         )
     return HybridParams(
@@ -114,12 +111,8 @@ def dedup_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
     **"稳定"= 保留名次最好的那一次**（第一次出现）：只有"最早的那条"能与 RRF 的
     名次语义对上。
 
-    ⚠ **必须重新编号**，不能只删元素：下游有"**只对前 N 条**做扩窗"这类判据
-    （§10 的种子数），而它读的是名次。留着空洞会让"前 N 条"实际少于 N 条，
-    而**不会报错**——只是扩得比预期少。
-
-    ⚠ 这一步在 **rerank 之前**（§10 的流水线）：留着重复项会让同一份证据
-    被 rerank 两次、在预算里占两个名额。
+    ⚠ **必须重新编号**：下游按名次选择扩窗种子；保留空洞会让“前 N 条”少于 N 条。
+    去重发生在 rerank 之前，避免同一份证据被重复评分和计入预算。
     """
     seen: dict[str, int] = {}
     out: list[Candidate] = []
@@ -142,11 +135,9 @@ class HybridRetriever:
     [`make_hybrid_params`](#make_hybrid_params) 校验后，**在装配处注入 `QdrantStore`**
     ——因为**执行**它们的是 `store/qdrant_store.hybrid_search()`。
 
-    ⚠ **别把 `params` 字段加回本类**：参数需要一个能被执行处读到的地方，而不是编排者
-    手里——留着它却从不传给 store（装配处也不传 `hybrid=`），改 yaml 里的
-    `retrieval.prefetch_limit` / `rrf.weights` 就会**静默无效**（两边默认值恰好相等时
-    尤其看不出来）。回归用例：
-    `tests/test_retrieve.py::test_build_services_forwards_retrieval_params_to_the_store`。
+    融合参数直接配置到 `QdrantStore`，不存放在编排对象中。这样
+    `retrieval.prefetch_limit` 和 `rrf.weights` 的修改会到达实际执行处；
+    回归用例见 `tests/test_retrieve.py::test_build_services_forwards_retrieval_params_to_the_store`。
     """
 
     store: QdrantStore
@@ -159,8 +150,7 @@ class HybridRetriever:
     def search(self, *, user_id: str, query: str, top_k: int) -> list[Candidate]:
         """按 `top_k` 取候选。
 
-        ⚠ **`top_k` 来自请求，不写死 100**（§7.3）：AML 说它固定是 100，但契约字段就是
-        `top_k`——写死会在它传更小值时变成"返回超限"，那是**契约错误**而不是截断。
+        `top_k` 来自请求，不能写死；请求传入更小值时，返回数量必须遵守该值。
         """
         if top_k <= 0:
             return []
@@ -172,19 +162,19 @@ class HybridRetriever:
             query_text=lexical_query(query),
             dense_vector=dense_vector,
         )
-        # ★ V13（2026-09-26）：**并列分数的次序必须在这里定死。**
+        # ★：**并列分数的次序必须在这里定死。**
         #   RRF 的分数是离散的（`1/(61+名次)`），一趟里几十条并列是**常态**；而
         #   Qdrant 对**同分项**的返回顺序在两次相同请求之间都可能变
-        #   （实测：同一请求连打 6 次，前 3 名 6 次全同，**第 7 名起有 3 次不同，
+        #   （同一请求连打 6 次时，前 3 名 6 次全同，**第 7 名起有 3 次不同，
         #   而两侧的 `score` 完全相同**）。名次是**位置派生**的（下面的 `enumerate`），
         #   所以不排序的话，整条链（种子 → 扩窗 → 打包顺序）会跟着抖——
         #   表现为"**同配置重跑差 ±3pt**"，而**没有任何东西会报错**。
         #   ⇒ 主键 `score` 降序、**次级键 `memory_id` 升序**：纯确定性，不带排序意图。
         #     （更讲究的一档是拿 dense 分当次级键——同类实现有这么做——但那要求
-        #     拿得到**分路**分数，而融合整个交给 Qdrant 是我们既定的形态，见 D5。）
+        #     拿得到**分路**分数，而融合整个交给 Qdrant 是既定形态。）
         #   ⚠ 分数在这里**只用于排序**，排完照旧丢掉（它不是校准量，见下）。
         #   ⚠ **截断也必须在这里、排在排序之后**：否则并列**卡在截断线上**时，
-        #     **谁进谁出**由 Qdrant 随机决定（实测同一请求连打 12 次，第 100 位的 id
+        #     **谁进谁出**由 Qdrant 随机决定（同一请求连打 12 次，第 100 位的 id
         #     有 2 种、两条 `score` 都是 0.01）⇒ store 回**全部**融合结果、不自己截。
         ordered = sorted(hits, key=lambda h: (-h.score, h.memory_id))[:top_k]
         # ⚠ 这里【丢掉】store 返回的融合分数：它不是校准量，且响应里的 `score`

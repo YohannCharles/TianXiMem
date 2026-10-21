@@ -1,15 +1,5 @@
-# 定向对照用的临时 profile —— **`default.yaml` 换 `agentic.mode` 为 `react`，并关掉请求采集**。
-#
-# 与 `default.yaml` 只差两个键：
-#
-#   * `agentic.mode: react` —— 把多跳执行器换成**原版 Chain-of-Query**（`CoqAgent`），
-#     与提交口径的 `plan`（`PlanAgent`）做对照。⚠ 两者是**两套提示词/解析/停止判据**，
-#     差别是"下一跳问什么由谁决定"（react：模型；plan：程序按 `{{sN}}` 绑定）。
-#   * `capture.enabled: false` —— `default.yaml` 里是 `true`，而这里发的是**诊断流量**，
-#     落进 `var/capture/` 会污染 S6 那份「官方请求原文」采集（文件本身没有区分标记）。
-#
-# ⛔ 其余一切**继承 `default.yaml`**（路由 / 共同取证 / 精排 / 集合 `memories`，
-#    `agentic.enabled` 与 `router.enabled` 都保持 `true`）——本文件**不复制**它们。
+# Diagnostic profile: react executor without request capture.
+
 agentic:
   mode: react
 

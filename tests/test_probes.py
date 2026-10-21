@@ -145,10 +145,9 @@ def test_unjudged_questions_are_neither_right_nor_wrong() -> None:
 
 
 def test_the_report_carries_no_model_verdict_field() -> None:
-    """⛔ **回归护栏**：`judge_*` 那一套（模型当裁判）已作废，不许再回到汇总里。
+    """⛔ **回归护栏**：`judge_*`（模型当裁判）不属于当前汇总口径。
 
-    它当时给出的 9/25 是**事实性错判**（连金标有几跳都数错），若哪天有人"顺手加回来"，
-    两个数字会并列出现在报告里，而其中一个是不该被采信的。
+    该口径会把语义正确的回答判错，并可能让错误分数与当前指标并列出现在报告里。
     """
     report = _summarize(
         [
@@ -219,15 +218,14 @@ def test_the_markdown_dump_never_claims_a_verdict_it_does_not_have() -> None:
 
 
 def test_the_shipped_labels_are_well_formed() -> None:
-    """⚠ **不再断言"标签覆盖清单"**：这份标签是 **2026-10-12 那次 25 题的探针** 的判定记录，
-    而清单随后已经变成 **50 条**（换掉了 1 道、剔掉 10 道金标坏掉的、又补了 25 道）
-    ⇒ 两者**本来就不该相等**。逐题对照留在探针的产物 `decompositions.md` 里。
+    """    ⚠ **不要求"标签覆盖清单"**：标签是探针判定记录，题单是另一份当前输入，
+    两者**本来就不该相等**。逐题对照留在探针的产物 `decompositions.md` 里。
 
     能钉的是**形状**：条数、id 形状（`4hop1__` + 4 个 hop id 段）、词表封闭、id 不重复。
     ⚠ 下次跑探针时这份标签要**跟着重生成**（覆盖 50 条），那时再恢复覆盖率断言。
     """
     labels = load_labels(Path("eval/coq-decompose-labels.jsonl"))
-    assert len(labels) == 25  # 那次探针的题数
+    assert len(labels) == 25  # 当前探针题单的题数
     for question_id, defect in labels.items():
         prefix, _, hop_part = question_id.partition("__")
         assert prefix in {"3hop1", "4hop1"}, question_id

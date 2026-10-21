@@ -1,4 +1,4 @@
-"""T1 / A3（以及将来的 A0 / A4）共用的**两臂对照脚手架**。
+"""命名实验臂共用的**两臂对照脚手架**。
 
 **为什么单独一层**：每个对照实验唯一的真正差别是「改哪几个配置键」；而
 「把当前 `configs/` 冻成一份可追溯的快照 → 跑之前核对它没掉队 → 按同一套姿势驱动
@@ -6,7 +6,7 @@
 
 各写一份的代价不是行数，而是**两份 `verify` 会各自漂移**：快照掉队时两边看起来都
 "配置齐全"，你会**认真地跑完一次对照、得到"两臂没有差别"**——而那个结论是假的
-（§13 的开关纯度规则）。那正是这条检查本身要防的东西。
+。那正是这条检查本身要防的东西。
 
 ⇒ **`verify()` 的判据从 `arm.overrides()` 现算**：`overrides()` 里的每个叶子都必须
 原样落在冻结的 `local.yaml` 里。于是"这个臂该改什么"与"怎么核对它"**不可能漂移**。
@@ -42,10 +42,8 @@ RUNS_DIR: Final[Path] = Path("configs/runs")
 #: `base_drift()` 会给提示，但**只比 `default.yaml` 一份**、而且只是提示不是错误——
 #: **`local.yaml` 里改了什么它看不见。**
 #:
-#: 实例（2026-09-28）：`rerank.enabled` 的默认值 09-25 翻成 `false`、09-28 又翻回 `true`，
-#: 而"开发期关掉精排"挪进了 `configs/local.yaml`。已冻的快照各自钉着**当时**的值
-#: （`t1-{plain,dated}` 的 `default.yaml` 是 `true` ⇒ **T1 那轮是开着精排跑的**；
-#: `a3-{on,off}` 两臂各自在 `local.yaml` 里显式覆盖那个键 ⇒ 不受基线变化影响）。
+#: 冻结快照固定的是冻结时的基线值。开发期覆盖应写入 `configs/local.yaml`，
+#: 需要独立于基线的臂则必须在自己的 profile 中显式覆盖相关键。
 #: ⇒ **重新冻结任何一条臂之前，先 diff 一遍基线**。
 BASE_FILES: Final[tuple[str, ...]] = ("default.yaml", "local.yaml")
 
@@ -107,7 +105,7 @@ class Arm:
         """写进 run record 的消融声明（`config_fingerprint` 的 `switches`）。
 
         ⚠ **它不一定等于 `overrides()`**：`overrides()` 里可能夹着"必须分集合"这类
-        非开关项，而 `switches` 只记**开关**（§13 的对照内容）。
+        非开关项，而 `switches` 只记**开关**。
         """
         raise NotImplementedError
 
@@ -149,7 +147,7 @@ def _dig(node: dict, path: str) -> Any:
 
 
 def freeze(arm: Arm, *, configs_dir: Path = Path("configs")) -> list[Path]:
-    """把当前 `configs/` 冻结成这个臂的**独立快照**（§13）。
+    """把当前 `configs/` 冻结成这个臂的**独立快照**。
 
     * `default.yaml`：**逐字复制**（保住那些写满理由的注释——它们是配置的一部分）
     * `local.yaml`：解析后套上本臂的覆盖项再写回，**带头注释**记录冻结时刻与基线哈希
@@ -210,7 +208,7 @@ def verify(arm: Arm) -> list[str]:
 def base_drift(arm: Arm, *, configs_dir: Path = Path("configs")) -> str | None:
     """快照的基线**是否还等于当前 `configs/default.yaml`**——只提示，不算错。
 
-    漂移是**正常的**（快照本来就该冻住当时的基线），但你要知道自己跑的是哪一份：
+    漂移是**正常的**（快照固定冻结时的基线），但你要知道自己跑的是哪一份：
     在两臂之间改过 `configs/*.yaml` 而没重新冻结，两臂比的就不是同一套参数，
     **而两边看起来都"配置齐全"**。
     """

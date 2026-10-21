@@ -1,15 +1,15 @@
-"""`official-extra` 各家族的 answer / evaluate **共用底座**（`extra_pipeline.py` 拆出来的第一层）。
+"""`official-extra` 各家族的 answer / evaluate **共用底座**。
 
 这里是**跨家族复用**的东西：所有精确判分共用的归一化（`normalize` / `_contains`）、
 判词 JSON 的修复与布尔归一（`_escape_stray_quotes` / `_repair_memtrap_string_escapes` /
 `_as_bool`）、模型调用的两个工具与两个超时（`_chat` / `_config` / `ANSWER_TIMEOUT` /
 `JUDGE_TIMEOUT`）、通用答案 prompt（`ANSWER_PROMPT`）与判分行形状（`_verdict`）。
 
-## 三层与依赖方向（拆自 `extra_pipeline.py`，2026-10-15）
+## 三层与依赖方向
 
     extra_base ← extra_<家族>（六个）← extra_pipeline（façade）
 
-家族模块**不许** import façade；façade 把搬走的名字全部重新导出，
+家族模块**不许** import façade；façade 把各家族名字重新导出，
 `from eval.harness.extra_pipeline import X` 全线照旧。
 
 ⚠ **`_chat` / `_config` 定义在这一层，但调用它们的是 façade**（`cmd_answer` / `cmd_evaluate` /
@@ -57,7 +57,7 @@ def _contains(haystack: str, needle: str) -> bool:
 def _escape_stray_quotes(text: str) -> str:
     """把**字符串值里**的裸 `"` 转义掉。**只在严格解析已经失败之后才配用它。**
 
-    ## 为什么需要它（2026-10-03 实测）
+    ## 为什么需要它
 
     裁判写中文理由时会**混用全角开引号与半角闭引号**：
 

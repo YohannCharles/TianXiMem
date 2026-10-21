@@ -1,7 +1,7 @@
 """位置模型的**性质探针**：**乱序 + 并发投喂**与**顺序投喂**得到逐字相同的真源。
 
-这是"位置是请求的纯函数"这条性质真正要买的东西（D25 起，**D28 之后更强**：
-位置里连"顺序"这个概念都不再有了，跨 Add 既不比较先后、也不建立邻接）。
+这验证了“位置是请求的纯函数”：位置中没有“顺序”概念，跨 Add 不比较先后，
+也不建立邻接。
 两条臂各起一个干净服务（各自的库与集合）：
 
   A. 顺序：harness 的 driver 按源序逐批 Add（= 线上正常情况下 AML 的形态）
@@ -16,7 +16,7 @@
   1. `(request_id, local_index)` 的集合相同
   2. 每个位置的 `(question, answer, event_time)` 逐字相同
   3. **`id` 集合相同**（位置派生 ⇒ 位置一致就该 id 一致）
-  4. **`prev` / `next` 指针逐字相同**（邻接只由请求决定，与到达顺序无关——D28）
+  4. **`prev` / `next` 指针逐字相同**
 
 跑法：`make order-probe`（= `uv run python tools/order_probe.py`）
       `make order-probe PROCESSES=4` —— B 臂起 **4 个独立进程**共享同一套存储，
@@ -24,7 +24,7 @@
 前置：`.env` 里的 `AML_EMB_*` 可用；`127.0.0.1:8131` / `:8132` 两个端口空着。
 产物：`var/order-a/` 与 `var/order-b/`（各自的库、集合名、服务日志；都在 gitignore 里）。
 ⚠ **每条臂各自一个 Qdrant 集合**（`memories_ab_order_a` / `_b`）——不复用开发集合，
-  否则上一轮的 point 会**静默留在里面**（[`../docs/decisions.md`](../docs/decisions.md) V9）。
+  否则已有 point 会**静默留在里面**并污染本次比较。
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def _serve(name: str, port: int, collection: str, db: Path, tag: str = "") -> su
     ——那正是 `uvicorn --workers N` 的形状（N 个进程共享一套存储）。
     每个前端各有各的 Qdrant 客户端与 SQLite 连接，共享的只有库文件与集合。
     """
-    # ⚠ **起之前必须先确认端口空着**——否则会撞上"上一轮没杀干净的服务"。
+    # ⚠ **起之前必须先确认端口空着**——否则会撞上残留服务。
     #   后果不是报错，而是**静默测了别人的库**：`_serve` 的探活会立刻拿到那个残留服务的
     #   `/health` 200、返回一个马上死掉的进程，随后所有请求都打到残留服务上
     #   （它的 `TIANXIMEM_SQLITE_PATH` 指向别的目录）⇒ 断言失败在一个与被测对象无关的地方。
@@ -123,8 +123,8 @@ def _serve(name: str, port: int, collection: str, db: Path, tag: str = "") -> su
         stdout=(cfg / f"serve{tag}.log").open("wb"),
         stderr=subprocess.STDOUT,
         # ⚠ **必须自己开一个进程组**：`uv run` 是包装进程，真正的 uvicorn 是它的**子进程**。
-        #   只 `kill()` 包装进程的话，uvicorn 会活下来继续占着端口——
-        #   上一版就是这样在 8131/8132 上留了两个孤儿，害得下一轮跑测错了对象。
+        #   只 `kill()` 包装进程的话，uvicorn 会活下来继续占着端口，
+        #   下一轮探测会连接到残留服务而不是本次启动的实例。
         start_new_session=True,
     )
     for _ in range(120):

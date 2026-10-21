@@ -1,8 +1,8 @@
 """分层抽样——**"跑一部分"时按类别按比例取题**（两个数据集共用）。
 
-## 为什么必须有它（2026-09-26，LongMemEval 上的真实教训）
+## 为什么必须有它
 
-`lme_s_cleaned.json` **按 `question_type` 分块排**（实测 7 个连续块：70 个
+`lme_s_cleaned.json` **按 `question_type` 分块排**（ 7 个连续块：70 个
 `single-session-user` → 62 个 `multi-session` → …）。所以 `entries[:limit]`
 **取到的是单一类型**——"跑一部分"会变成"**跑一类**"，而**分数看起来完全正常**。
 CL-Bench 同理（按 `context_category` 排）。

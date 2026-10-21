@@ -1,21 +1,19 @@
-"""把**官方真跑抓下来的 `POST /add` 请求体**原样回放给服务——S6 的收口验证。
+"""把**官方运行抓下来的 `POST /add` 请求体**原样回放给服务。
 
 ## 它是什么
 
-输入是**请求采集**（`capture.enabled`，见 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md) §0.6）
-在服务器上抓到的真实流量导出：`kind=req` 的行里有 `body`（**与官方原文逐字节相同**）
-与当时的 `status` / `error` / `retry_count`。
+输入是**请求采集**（`capture.enabled`，见 [`../deploy/CLAUDE.md`](../deploy/CLAUDE.md)）
+在服务端抓到的真实流量导出：`kind=req` 的行里有 `body`（**与官方原文逐字节相同**）
+以及记录时的 `status` / `error` / `retry_count`。
 
-2026-09-29 那次官方 run 的结论是 **24 个 `request_id` / 328 次投递 / 全部失败**
-（`ValueError`：`request_id` 形如 `r_<64 hex>`，D25 的正则取不出 chunk 序号）。
-D28 把那条解析整个删掉之后，同一批 body 必须**全部写进去**——这就是本工具要证的事。
+本工具验证重放时同一批 body 必须**全部写进去**，且不依赖 `request_id` 的内部形状。
 
 ## 它证三件事
 
-1. **写得进**：每个 body 都拿到 200（D28 之前这里 100% 是 500）
+1. **写得进**：每个 body 都拿到 200
 2. **重放干净**：`--repeat 2` 时第二次必须是 `applied=False` 的正常重放，
    **不是 409**（同 `request_id`、同 payload ⇒ 指纹相同）
-3. **立即可检索**：写完之后按 `--verify-query` 搜一条，确认记忆真的进了索引（§2.1）
+3. **立即可检索**：写完之后按 `--verify-query` 搜一条，确认记忆真的进了索引
 
 ⚠ **它写进的是你指的那个服务/库**（默认本机开发服务）——用的是官方那批 `user_id`，
 与本地 harness 的 `user_id` 不重叠，所以不会串到别的实验里。
@@ -100,7 +98,7 @@ def replay(
 
 
 def _verify_search(base_url: str, body: dict, *, timeout: float = 60.0) -> str:
-    """写完之后搜一发：拿该 body 里第一条消息的几个词当 query（§2.1 的"立即可搜索"）。"""
+    """写完之后搜一发：拿该 body 里第一条消息的几个词当 query，验证立即可搜索。"""
     user_id = str(body.get("user_id", ""))
     words = str(body["messages"][0].get("content", "")).split()[:6]
     query = " ".join(words) or "a"

@@ -1,7 +1,7 @@
 """LongMemEval（`lme_s_cleaned.json`）加载器。
 
 > ⚠ **只用 `lme_s_cleaned.json`，不要用 `lme_test.json`。** 后者多出 **1,230 个
-> 0-turn session**，而空 session 会污染按"20 条消息"切批的埋点逻辑（§6.5）。
+> 0-turn session**，而空 session 会污染按"20 条消息"切批的埋点逻辑。
 > 那份文件**不在归档里**（它就是等着被误用的坑）；要复核这条结论得先从上游取回它，
 > 线索在 `eval/datasets/manifest.py` 的 `DELETED` 段。
 
@@ -18,13 +18,13 @@ turn 的键只有 `role` + `content`（可选 `has_answer`），时间在**与 `
 按下标平行**的 `haystack_dates` 里（形如 `"2023/05/20 (Sat) 02:21"`）。
 不合成则 `event_time` 全 NULL、`created_at` 只能发 `""`——
 **而同一个 session 内所有消息拿到同一个日期，所以位置是唯一能保证
-邻域稳定的东西**（§6.1；D28 之后位置 = `(request_id, local_index)`，`request_id` 不解析）。
+邻域稳定的东西**：位置是 `(request_id, local_index)`，`request_id` 不解析。
 
 ## 归档里 `question_date` / `has_answer` / `answer_session_ids` **都没有 pipeline 读它们**
 
 已核对：`pipeline_longmemeval-s.py` 与 `pipeline_locomo-refined.py` **除 docstring 外
 逐字节相同**，两者都只读 `id` / `question` / gold 四键之一 / `speaker_*_memories`。
-`answer_session_ids` 在这里只作为**诊断证据**保留（§13 的 T2 要用），不进 Add 载荷。
+`answer_session_ids` 在这里只作为 **T2 诊断证据**保留，不进 Add 载荷。
 """
 
 from __future__ import annotations
@@ -71,23 +71,22 @@ def _sessions(entry: dict, *, source: Path) -> tuple[Session, ...]:
         )
 
     sessions = []
-    # ⚠ **haystack 内的 `session_id` 会重复**（2026-10-02 实测：**9 / 301 个样本**，
-    # 例如 `lme-58bf7951` 的 57 个 session 里 `07b7a667_1` 出现两次，指向**两段不同的对话**）。
+    # ⚠ **haystack 内的 `session_id` 会重复**：当前文件有 **9 / 301 个样本**如此，
+    # 例如 `lme-58bf7951` 的 57 个 session 里 `07b7a667_1` 出现两次，指向**两段不同的对话**。
     #
     # 不消重的后果是**两重的，且都不报错**：
     #
     # 1. **`request_id` 撞车**——它由 `(user_id, session_id, 批序号)` 派生
     #    （[`harness/batching.py`](../../eval/harness/batching.py) 的 `request_id_for`），
     #    同一 id 的第二段会话会算出**同一个 `request_id`、不同的 payload** ⇒
-    #    服务按 **D28 回 409**。**实测把整条 LME 基线链打死在 `[3/301]`**
-    #    （`lme-58bf7951|07b7a667_1|0`）。那是**响亮**的那一半。
+    #    服务返回 409，使 LME 跑批中断。那是**响亮**的那一半。
     # 2. **语义漂移**——`session_id` 在本仓是三个机制的作用域：配对、扩窗、
     #    **段合并的分组键**。两段无关对话共用一个 id ⇒ 它们被当成"同一个 session"。
-    #    这一半**静默**（正是 `docs/open-questions.md` 的 S7 警告的那类）。
+    #    这一半**静默**。
     #
     # ⇒ 首次出现原样保留，之后再出现加 `#n` 后缀。**确定性**（按数组顺序，不依赖哈希/随机），
-    # 所以同一份文件每次给出同一批 id。⚠ 这样会改变那 9 个样本的 `id` 与段合并分组
-    # ⇒ **与 2026-10-02 之前的 LME 数字严格来说不可比**（影响的题面很小，但它是比对的前提）。
+    # 所以同一份文件每次给出同一批 id。⚠ 这会使那 9 个样本的 `id` 与段合并分组不同；
+    # 比较不同去重策略下的 LME 数字时必须记住这一差异。
     known = set(ids)
     seen: dict[str, int] = {}
     renamed: list[tuple[str, str]] = []
@@ -124,25 +123,25 @@ def _sessions(entry: dict, *, source: Path) -> tuple[Session, ...]:
 def _messages(
     turns: list[dict], *, session_id: str, timestamp_ms: int, source: Path
 ) -> tuple[Message, ...]:
-    """缝一个 session 的 turn；**空正文的 turn 跳过并告警**（**V14**）。
+    """缝一个 session 的 turn；**空正文的 turn 跳过并告警**。
 
-    ⚠ **为什么是跳过，而不是照旧抛**：归档那份里确实有空正文的消息——2026-09-28
-    实测**10 条唯一**（12 次出现，跨 5 个 session；同一 session
-    会被多道题的 haystack 复用，所以出现次数 > 唯一数）。而按 §11.3 的口径
+    ⚠ **为什么跳过而不是直接抛**：归档那份里确实有空正文的消息——
+    **10 条唯一**（12 次出现，跨 5 个 session；同一 session
+    会被多道题的 haystack 复用，所以出现次数 > 唯一数）。而按契约口径
     **空正文必须拒绝**（AML 只做 `"\\n".join(...)`，空正文会让相邻两项粘在一起）。
     两条都成立的唯一做法是**在评测层把它剔掉、并把剔掉这件事说出来**：
 
     | 做法 | 后果 |
     | --- | --- |
-    | 照旧抛 | **全量 500 题根本跑不起来**——Step 5 的大跑批直接崩（不是慢） |
+    | 直接抛 | **全量 500 题根本跑不起来**——大跑批直接崩（不是慢） |
     | 静默放行 | 空正文进了 `join`，模型读到的两项粘连，**而没人知道** |
     | **跳过 + 告警** | 全量可跑；剔掉的是**零信息量**的那一条，且每次都被念出来 |
 
     ⚠ **代价要认**：剔掉之后该 session 后面的位置序号（`local_index`）各前移一位，
     于是这些题的 `id` 与"不剔"的世界不同。但**同一份数据每次跑都剔同样那几条**，
-    所以两次 run 之间仍然可比（§13 要的正是这个）。
+    所以两次 run 之间仍然可比。
 
-    **验收**（2026-09-28，全量）：`load_longmemeval("benchmark_data")` ⇒ **500 题 /
+    **验收**：`load_longmemeval("benchmark_data")` ⇒ **500 题 /
     246,738 条消息**（= 246,750 − 12），4.8 秒。
     """
     messages = []

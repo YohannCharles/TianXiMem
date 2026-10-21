@@ -84,7 +84,7 @@ FIRST_PERSON = frozenset({"i", "user", "用户", "我"})
 #: type` 是同一件事）。只收**同一字段的不同叫法**，不收相邻但不同的字段。
 #: 档案字段白名单（**原文里真写、题面里能问**的那些）。抽取侧
 #: [`grammar.py`](./grammar.py) 与查询侧 [`paths.py`](./paths.py) 都从这里取，
-#: ⛔ 不要再各抄一份——两边对不上时，题会**静默匹配不到**（2026-10-18 实测）。
+#: ⛔ 不要再各抄一份——两边对不上时，题会**静默匹配不到**。
 #: ⚠ 增删必须同时确认 `_PROFILE_ALIASES` 的归一结果仍在白名单里。
 PROFILE_FIELDS = frozenset(
     {
@@ -114,7 +114,7 @@ _PROFILE_ALIASES = {
     "education": "education level",
     "current job title": "job title",
     "life goal statement": "life goal",
-    # 题面的"状态"说法与原文的字段名是同一件事（HaluMem，2026-10-19）。
+    # 题面的"状态"说法与原文的字段名是同一件事。
     "physical health status": "physical condition",
     "physical health": "physical condition",
     "mental health status": "mental health",
@@ -131,7 +131,7 @@ def relation_key(value: str) -> str:
     if value in _ALIASES:
         return _ALIASES[value]
     # 档案字段的**同义写法**归一到同一字段名：原文写 `my personality type is INTJ`，
-    # 题面问 `MBTI personality type`——不归一就永远匹配不上（2026-10-18 实测）。
+    # 题面问 `MBTI personality type`——不归一就永远匹配不上。
     if value in _PROFILE_ALIASES:
         return _PROFILE_ALIASES[value]
     mapped = {_ALIASES[w] for w in value.split() if w in _ALIASES}

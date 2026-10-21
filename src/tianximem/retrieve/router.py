@@ -14,8 +14,8 @@ Search(query, top_k)
                    └ DEFAULT   → 原混合检索链
 ```
 
-⚠ **路由不是 Search 的第一站**（2026-10-14 起）：共同事实取证无条件先试。
-`COUNT` 已随 v5 提示词取消——计数 / 名单类改由共同取证处理，处理不了就落 `DEFAULT`。
+⚠ **路由不是 Search 的第一站**：共同事实取证无条件先试。计数和名单类问题由共同取证
+处理；无法处理时走 `DEFAULT`。路由器只输出 `MULTI_HOP` 或 `DEFAULT`。
 
 ## 三条不变量（本模块的存在理由）
 
@@ -23,7 +23,7 @@ Search(query, top_k)
    让模型吐绑定键只有两种结局：静默匹配不上，或**带着逐字引句静默选错事实**。
 2. **它的失败不改变失败面的形状**：端点挂 / 超时 / 输出非法 / 执行器未接 ⇒ **一律降级**，
    绝不让一次正常的 Search 变成 500。
-3. **关掉它，Search 的行为逐字不变**（§13）：`router.enabled = false` ⇒ 零 LLM 调用。
+3. **关闭它时不发生路由 LLM 调用**，Search 保持默认混合检索行为。
 
 ## 为什么"只要二选一"是安全的
 
@@ -56,61 +56,42 @@ __all__ = [
 class Route(StrEnum):
     """两个互斥的检索策略类别。**值就是模型该原样吐出来的那个词。**
 
-    继承 `str` 是为了它能直接进 §14 的指标快照（JSON 可序列化、比较与打印都直观）。
+    继承 `str` 使路由值可直接写入 JSON 指标快照。
 
-    ⚠ **只有两个取值**（`COUNT` 已随 v5 删除）：`parse_route` 遍历本枚举做整串匹配
-    ⇒ 模型若吐 `COUNT`，**自动按非法输出降级到 `DEFAULT`**。计数 / 名单类问题
-    由**共同取证**（先于本模块运行）处理。
+    **只有两个取值**。`parse_route` 对枚举值做整串匹配；其他输出按非法输出降级到
+    `DEFAULT`。计数和名单类问题由先运行的共同取证处理。
     """
 
     MULTI_HOP = "MULTI_HOP"
     DEFAULT = "DEFAULT"
 
 
-#: 提示词版本 —— **当前生效的那一版**，也是 `router.prompt_version` 的默认合法值。
+#: 当前路由提示词版本，也是 `router.prompt_version` 的合法值。
 #:
-#: ⚠ **它不是一个说明性的字符串，是一条断言**：`QueryRouter` 在构造时要求配置里的值是
-#: 与 `ROUTER_PROMPT_VERSION` 相等，否则**响亮失败**（同 `rerank.envelope` 的口径——
-#: 配置化 ≠ 可调）。理由：可复现性要求"固定 Prompt 版本"，而**改了提示词却忘了改版本号**
-#: 的表现是"两轮实验的 run record 声称同一份提示词"——那种漂移查不出来。
-#: ⇒ **改提示词文字，就必须同时改这个常量与 `configs/*.yaml`。**
-#:
-#: 📌 **当前是 `v5`**（二分类：`MULTI_HOP` / `DEFAULT`）。版本演进与逐版对照见
-#: [`../../../eval/reports/`](../../../eval/reports/) 的 `router-*` 报告与
-#: [`../CLAUDE.md`](../CLAUDE.md) 的「提示词只有一版」一节——本文件不复制历史。
+#: 这是配置身份断言：`QueryRouter` 在构造时要求配置值与此常量相等，否则启动失败。
+#: 修改提示词文字时必须同时更新本常量和 `configs/*.yaml`。
 ROUTER_PROMPT_VERSION: Final[str] = "v5"
 
-#: ⛔ **当前生效的提示词**（`ROUTER_PROMPT_VERSION = "v5"`）。**逐字定稿，不要"顺手润色"。**
+#: 当前生效的路由提示词，逐字定稿，不要润色。
 #:
-#: ⚠ **这是本仓唯一的 Router 提示词**：2026-10-10 按要求把 v1 / v2 / v3 删掉了，只留这一版。
-#: 那三版的实测数字仍在报告里（[`../../../eval/reports/router-v3-20261010.md`](../../../eval/reports/router-v3-20261010.md)），
-#: 但**它们本身已不可重跑**——要给"换提示词值不值"重跑基线，得先从报告里把那一版抄回来。
+#: 这是本仓库唯一的 Router 提示词，版本号用于校验提示词身份。
 #:
-#: 相对最初那版（已删）它改了三处，每一处都对着一次实测失败（数字见上面的报告）：
+#: 提示词包含三条关键约束：
 #:
-#: 1. **删掉了「不确定就选 DEFAULT」那句兜底**——它会让绝大多数题落进 `DEFAULT`；
+#: 1. **没有「不确定就选 DEFAULT」的兜底**——它会让绝大多数题落进 `DEFAULT`；
 #: 2. **`MULTI_HOP` 的判据压成一句可执行的检验 + 一串显式依赖信号词**
 #:    （`"then"` / `"after"` / `"using that"` …），
 #:    并显式排除「多个具名实体 / 多条事实 / 普通比较」；
-#: 3. **`COUNT` 已随 v5 整体删除**（计数 / 名单类改由共同取证处理）。
+#: 3. **不包含 `COUNT`**（计数 / 名单类由共同取证处理）。
 #:
-#: ## ⛔ 本版**没有 `NONE` 这个输出**
+#: ## 没有 `NONE` 输出
 #:
-#: * **AML 的响应形状里没有它的位置**：200 就是 `data` 数组、空结果就是空数组（§2.1）
-#:   ⇒ 第 4 个取值在对外契约上**无处可落**；
-#: * **空 / 无效输入是「入口校验」，不是「分类问题」** ⇒ 归 [`../service/`](../service/) 那一层
-#:   （HTTP 边界 + `SearchPipeline` 的 `blank_query` 短路），**不该外包给 LLM**：
-#:   既多花一次调用，又要靠模型执行一条它没有强制力的规矩。
+#: * AML 的响应只有 `data` 数组，空结果也是空数组，因此不存在第四个对外取值；
+#: * 空或无效输入属于入口校验，由 HTTP 边界和 `SearchPipeline` 的 `blank_query`
+#:   短路处理，不交给 LLM。
 #:
-#: ⚠ 解析层仍**单独认得出**游离的 `NONE`（记 `model_none` 而不是 `invalid_output`），
-#: 那是**诊断**用的：好把"模型想拒答"与"模型说胡话"分开。两者**同样降级到 `DEFAULT`**。
-#:
-#: ⚠ **它自带 10 个标定例子**，其中两条**同时在本仓的测试样本里**
-#: （`What type of car did Evan get after his old Prius broke down?` /
-#: `How many children does Melanie have?`）⇒ 那两条上的提升**含记忆成分，不能算泛化证据**。
-#:
-#: ⚠ **格式上有一处照抄的瑕疵**：`OUTPUT FORMAT` 里 `DEFAULT` 那行带了两个前导空格。
-#: **照抄不修**——解析层本来就去首尾空白，而「照抄会怎样」是这个提示词的一部分。
+#: 解析层可以区分游离的 `NONE`（`model_none`）和其他非法输出，但两者都降级到
+#: `DEFAULT`。格式中的前导空白由解析层去除，提示词文本保持不变。
 ROUTER_PROMPT: Final[
     str
 ] = """You are a  router. Your task is to select exactly ONE tool name from the provided list that best fits the user query. Do not call any tools. Use only the text in {query}; do not assume external context or missing metadata. You may interpret dependency only from explicit linguistic structure (e.g., "use X to find Y", possessive/relationship chains).
@@ -171,9 +152,8 @@ CLASSIFICATION EXAMPLES (for calibration; do not output these)
 
 #: 版本 → 提示词。**这是"哪些版本存在"的唯一声明处。**
 #:
-#: ⚠ **只留一版是刻意的**：2026-10-10 按要求删掉了 v1 / v2 / v3。
-#: 代价写在这里——**代价是"换提示词值不值"的基线不能再原样重跑**（要重跑得先从报告里抄回来）。
-#: 想再开一版就在 `cfg` 里改这个常量 + `configs/*.yaml`，两处不一致在构造期就报错。
+#: ⚠ **当前只启用这一版提示词**。若要评估另一版，必须同时声明新的提示词与版本号；
+#: `cfg` 和 `configs/*.yaml` 两处不一致时会在构造期报错。
 
 
 #: `NONE` —— **v3 引入的"模型明确拒答"**。⛔ **它不是第三条执行路**：
@@ -222,7 +202,7 @@ def parse_route(text: str) -> Route | None:
 
 @dataclass(frozen=True, slots=True)
 class RouteDecision:
-    """一次路由的结果 **+ 执行元数据**（元数据不进响应，只进 §14 与测试）。
+    """一次路由的结果和执行元数据；元数据只进入指标与测试，不进入响应。
 
     | 字段 | 含义 |
     | --- | --- |
@@ -230,7 +210,7 @@ class RouteDecision:
     | `status` | `success`（模型正常分类）/ `degraded`（降级到 DEFAULT） |
     | `reason` | 降级的**具体原因**（成功时为 `None`）——`llm_unavailable` / `invalid_output` / … |
     | `raw` | 模型原样回的那段文本（成功时=枚举值；用于诊断"它到底说了什么"） |
-    | `latency_ms` | 这一次路由的墙钟耗时（§6 的成本分析要它） |
+    | `latency_ms` | 这一次路由的墙钟耗时 |
     """
 
     route: Route
@@ -242,7 +222,7 @@ class RouteDecision:
 
 #: `RouteDecision.status` 的取值域（**唯一声明处**）。与 `rerank` 的
 #: `calls` / `disabled` / `degraded` 三分法同形：**"没打算用它"与"想用但没成"必须分得开**
-#: ——混为一谈会把"端点一直挂"看成"我们本来就没开路由"（D12 的那条教训）。
+#: ——混为一谈会把"端点一直挂"看成"我们本来就没开路由"。
 ROUTE_STATUSES: Final[tuple[str, ...]] = ("success", "degraded")
 
 
@@ -323,8 +303,7 @@ class QueryRouter:
             # ★ **兜底捕获是刻意的**（与 `RemoteReranker.score` 同一条理由）：
             #   "Router 的失败不能直接导致一次正常 Search 返回 500"。协议级假实现
             #   在测试里会抛任意异常，而生产上"端点行为超出预期"也是常态。
-            # ⚠ 但它**必须留下痕迹**：`reason` 里带着异常类型，所以"未预期的 bug"
-            #   与"端点不可用"在 §14 上分得开。
+            # reason 保留异常类型，使未预期缺陷与端点不可用在指标中可区分。
             return self._degrade("llm_error", f"{type(exc).__name__}: {exc}", started)
 
         if is_none_output(raw):
@@ -333,8 +312,8 @@ class QueryRouter:
             return self._degrade("model_none", None, started, raw=raw)
         route = parse_route(raw)
         if route is None:
-            # **非法输出 ⇒ DEFAULT**（§4.3）。⚠ 这里**不重试**：重试会与 AML 的 32 次
-            # 重试叠加，而且"再问一遍"在没有置信度的前提下没有依据。
+            # 非法输出 ⇒ DEFAULT。这里不重试，避免与 AML 的重试叠加，也避免无依据地
+            # 重复询问没有置信度信号的模型。
             return self._degrade("invalid_output", None, started, raw=raw)
         return RouteDecision(
             route=route,

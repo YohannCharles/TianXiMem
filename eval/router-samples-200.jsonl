@@ -1,49 +1,21 @@
-# 第四批样本（E4，2026-10-12）：**200 题留出集**，供 `tools/router_eval.py` 跑逐类 P/R/F1。
+# Router held-out sample set (200 questions) for `tools/router_eval.py`.
 #
-# ## 与前三批零重叠（已断言）
-# 本文件里的 `(dataset, question_id)` 与 `router-samples.jsonl`(46) ·
-# `router-samples-e2.jsonl`(37) · `router-samples-e3.jsonl`(47) · `router-probes.jsonl`(9)
-# **一对都不重复**（写入后用脚本核对过）。
+# `(dataset, question_id)` pairs do not overlap the other router sample manifests.
+# Question text is read through `benchmark_dir()` at runtime; it is not stored here.
 #
-# ## ⛔ 不存问题原文
-# 与前三批同一口径：那是数据集内容，没理由进 git。问题由 `tools/router_eval.py` 经
-# `benchmark_dir()` 现读（D16）。路径经 `TIANXIMEM_BENCHMARK_DIR`，**不硬编码**。
+# `expected_route` is human-labelled from `ROUTER_PROMPT` in
+# `src/tianximem/retrieve/router.py`, not from dataset category fields.
 #
-# ## 真值口径（两处，缺一不可）
-#   * `tools/router_eval.py` 顶部「真值从哪来」一节；
-#   * `src/tianximem/retrieve/router.py` 的 `ROUTER_PROMPT`（v4）**提示词原文**。
-# `expected_route` 是**人读着提示词逐条判的**，**没有用数据集自带的 `category` /
-# `question_type`**——那两样描述的是**答案类型**，不是检索依赖结构。
+# Current route classes:
+# * `MULTI_HOP`: an unnamed intermediate entity or anchor must be resolved before the
+#   remaining lookup can be expressed.
+# * `DEFAULT`: all other queries, including comparisons where every entity is named.
 #
-# ### 三类的判据（与提示词逐条对应）
-# * `MULTI_HOP` —— 要**先解出一个未点名的中间实体 / 锚点**，后面的检索才表述得出来。
-#   本批只认三种形状：(a) 相对从句 / 属有关系链（`the book that inspired him …`）；
-#   (b) `after / before <某件事>` 且那件事**必须先被检索定位**（`after it got out`）；
-#   (c) 可数的集合**由某件未点名的事定义**（`how many properties did I view before
-#   making an offer …`）。**相对时间是查询条件、不是依赖锚点**（`before August 3, 2023`
-#   已在问句里给死）⇒ 归 `DEFAULT`。
-# * `COUNT` —— 计数、穷举（`list all` / 复数的完整集合）、或**从被多次更新的历史里取
-#   当前状态**（`how many bikes do I currently own`）。**两个具名事件之间的区间聚合**
-#   （`how many days passed between A and B`）也算 `COUNT`——它没有"必须先解出 X"，
-#   只是把两端各自取到再相减。⚠ 这是本批**最模糊的一族**，逐条标了 `boundary`。
-#   **反向边界照旧**：`date` / `year` / `age` / 度量这类**直接数值属性**不算 `COUNT`
-#   （`What year did …` / `How long …` ⇒ `DEFAULT`）。
-# * `DEFAULT` —— 其余，含**多实体比较**、**独立事实的先后比较**（`Which happened first,
-#   A or B`，A / B 都已点名）、普通时间与数值问题。
-# * **优先级 `MULTI_HOP` > `COUNT` > `DEFAULT`**（提示词原文）：依赖 + 计数同时成立时记
-#   `MULTI_HOP`。
+# Legacy `COUNT` rows are retained in the fixture and skipped by the evaluator; current
+# counting questions use grounded evidence before routing.
 #
-# ## `boundary` 的意思
-# 我判得**真的有争议**的题才设 `true`——`router_eval.py` 会把它们**单列一节，
-# 不混进主矩阵的结论**。主要落在两族：(1) 区间聚合到底是 `COUNT` 还是 `MULTI_HOP`；
-# (2) 带 `currently` / `most recent` / `previous` 的**单值**属性查询算不算「从更新历史里
-# 取当前状态」。⚠ **不要为了让它好看而把 boundary 关掉**——它的存在正是为了让这两族
-# 的结论不被当成硬结论。
-#
-# ## 分布（写入后按实际统计填，见交付消息）
-# 问题类型 7 类、`expected_route` 3 类。**类型均衡 ≠ 类别均衡**：
-# `DEFAULT` 在本判据下天然占多数（这正是提示词那三类分布的真实形状），
-# `MULTI_HOP` 是**最稀缺**的一类。
+# `boundary: true` marks subjective cases. The evaluator reports them separately from
+# the main confusion matrix. `DEFAULT` is intentionally more frequent than `MULTI_HOP`.
 {"dataset": "locomo-refined", "question_id": "conv-30#q0067", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「在社交活动上收到建议」那件事——先取它，才表述得出「之后的计划」。", "question_type": "多跳"}
 {"dataset": "locomo-refined", "question_id": "conv-42#q0096", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「一起徒步」那件事——先取它，再取 Nate 之后打趣要做的创作活动。", "question_type": "多跳"}
 {"dataset": "locomo-refined", "question_id": "conv-42#q0118", "expected_route": "MULTI_HOP", "boundary": false, "label_note": "锚点是「有人读完她的博客后写信」——先定位那封信 / 那篇博客，再取 Joanna 的感受。", "question_type": "多跳"}
