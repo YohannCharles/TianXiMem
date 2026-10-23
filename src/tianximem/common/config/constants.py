@@ -76,14 +76,12 @@ RRF_K: Final[int] = 61
 #: Neighbor Expansion 的默认值。值的唯一来源在这里，消费方直接引用，避免默认值漂移。
 #: 它们与 `default.yaml` 中的取值必须一致。
 #:
-#: `DEFAULT_RADIUS = 0` 关闭扩窗。评分池全部是 user 消息，无法形成邻接链；现有评测也未
-#: 显示扩窗带来超过噪声的收益，而上下文成本明显增加。代码仍保留扩窗能力，启用时需要
-#: 同时修改这里和 `default.yaml`，并重新运行消融。
+#: `DEFAULT_RADIUS = 2` 在 v1.2 主线默认开启扩窗，取回前后各两整对记忆。
+#: 设为 0 可关闭扩窗；代码保留该能力供显式消融。
 #:
-#: `DEFAULT_EXPANSION_SEED_LIMIT` 在半径为 0 时不参与执行，也不应作为调优依据。
 #: 种子数、窗口大小、Top-K 和 token 预算需要一起评估；修改前必须提供消融数据。
 DEFAULT_EXPANSION_SEED_LIMIT: Final[int] = 1000
-DEFAULT_RADIUS: Final[int] = 0
+DEFAULT_RADIUS: Final[int] = 2
 
 #: `neighbor.seed_placement` 的取值域。
 SEED_PLACEMENTS: Final[tuple[str, ...]] = ("keep", "front", "echo")

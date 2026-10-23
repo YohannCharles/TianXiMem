@@ -25,6 +25,23 @@ from tianximem.facts.query import QueryPlan
 class EvidenceSelection:
     facts: tuple[EvidenceFact, ...]
     projection: str
+    # Original-message indices aligned with facts for source_record projection.
+    # The service resolves these against retained source messages, never text offsets.
+    source_indices: tuple[int, ...] = ()
+
+    @property
+    def source_count(self) -> int:
+        if self.projection == "source_record":
+            return len(
+                set(
+                    zip(
+                        (fact.parent_memory_id for fact in self.facts),
+                        self.source_indices,
+                        strict=True,
+                    )
+                )
+            )
+        return len({fact.parent_memory_id for fact in self.facts})
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,9 +155,7 @@ def _walk(
             return None
         # 读取期已把第一人称事实的主语换成真名；walk 的根实体若仍是 `"i"`，
         # 把它解析成 owner，否则整条路径在**有自我介绍的用户**上永远断在第一步。
-        frontier = {
-            owner if owner and plan.walk_root in FIRST_PERSON else plan.walk_root
-        }
+        frontier = {owner if owner and plan.walk_root in FIRST_PERSON else plan.walk_root}
         selected: dict[str, EvidenceFact] = {}
         for relation in plan.walk_relations:
             candidates = [
@@ -247,9 +262,7 @@ def sources_supported(
                 if re.search(plan.guard_assertion_pattern, body, re.I):
                     return False
         return True
-    subjects = {
-        key(f.subject) for f in facts if any(p.matches(f, owner) for p in plan.patterns)
-    }
+    subjects = {key(f.subject) for f in facts if any(p.matches(f, owner) for p in plan.patterns)}
     for source in sources:
         residue = (source.question or "") + "\n" + (source.answer or "")
         for fact in facts:

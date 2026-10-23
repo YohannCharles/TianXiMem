@@ -53,8 +53,8 @@ retrieval:
 neighbor:
   # C: highest-ranked candidates eligible for expansion.
   expansion_seed_limit: 1000
-  # C: expansion distance in memory blocks. Zero disables expansion.
-  radius: 0
+  # C: expansion distance in memory blocks. The v1.2 default expands +/-2.
+  radius: 2
   # C: segment-internal ordering: keep, front, or echo.
   seed_placement: keep
 

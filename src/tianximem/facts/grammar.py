@@ -514,6 +514,7 @@ def extract_evidence(
     answer: str | None,
     event_time: int | None,
     entity_extractor: EntityExtractor | None = None,
+    position_prefix: str = "",
 ) -> tuple[EvidenceFact, ...]:
     facts: list[EvidenceFact] = []
 
@@ -544,7 +545,7 @@ def extract_evidence(
                     source_side=side,
                     event_time=event_time,
                     source_date=date,
-                    position=f"{len(facts)}:{relation}:{obj}",
+                    position=f"{position_prefix}{len(facts)}:{relation}:{obj}",
                     qualifiers={**(attributes or {}), **attrs},
                     record_fields=record_fields,
                 )

@@ -171,7 +171,13 @@ def test_quantities_preserve_units_source_order_and_never_sum(store, counter):
     )
     with store.read() as conn:
         rows = store.fetch_evidence(conn, "u", compile_query(queries[0]).patterns, limit=100)
-        assert [f.get("quantity") for f in rows if f.subject == "林悦"] == [4, 2, 1, 4, 2, 1]
+        assert [f.get("quantity") for f in rows if f.subject == "林悦"] == [4, 2, 1]
+        observations = store.fetch_evidence(
+            conn, "u", compile_query(queries[0]).patterns, limit=100, deduplicate=False
+        )
+        own = [f for f in observations if f.subject == "林悦"]
+        assert sorted(f.get("quantity") for f in own) == [1, 1, 2, 2, 4, 4]
+        assert len({f.id for f in own}) == 6
         assert all(f.source_quote == claim for f in rows if f.subject == "林悦")
 
 
@@ -233,7 +239,8 @@ def test_explicit_negative_with_modifier_excludes_outsider_but_blocks_conflictin
 def test_same_amount_with_different_units_cannot_be_silently_deduplicated(store, counter):
     add(store, "林悦：我的箱子里有两个水。", "林悦：我的箱子里有两瓶水。")
     hits = search(store, counter, "林悦的箱子里有哪些物品？")
-    assert len(hits) == 2 and all("Memory fact" not in h.content for h in hits)
+    assert len(hits) == 1 and "Memory fact" not in hits[0].content
+    assert "两个水" in hits[0].content and "两瓶水" in hits[0].content
 
 
 def test_overlapping_item_names_preserve_literal_item_order_and_source_position(store, counter):

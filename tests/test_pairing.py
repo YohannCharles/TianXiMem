@@ -60,11 +60,7 @@ def test_1_user_assistant_user_assistant(M: Callable[..., Message]) -> None:
 
 
 def test_2_runs_merge_within_one_memory(M: Callable[..., Message]) -> None:
-    """`U U A A A U A` ⇒ **3 块**——一段 user 只把**最后一条**配进去。
-
-    ⚠ 一段 user 只配最后一条：把整段长 user 放进 question 可能超过嵌入窗口，
-    导致线上截断或本地请求失败。代价是前面的 `Q0` 变成**有问无答**。
-    """
+    """历史 v1.0 规则：连续 user 和连续 assistant 均在配对块中合并。"""
     blocks = compose_memory_blocks(
         [
             M("user", "Q0"),
@@ -77,11 +73,10 @@ def test_2_runs_merge_within_one_memory(M: Callable[..., Message]) -> None:
         ]
     )
     assert [_text(b) for b in blocks] == [
-        "Q: Q0",
-        "Q: Q1\nA: [assistant] A0\n[assistant] A1\n[assistant] A2",
+        "Q: Q0\nQ1\nA: [assistant] A0\n[assistant] A1\n[assistant] A2",
         "Q: Q2\nA: [assistant] A3",
     ]
-    assert len(blocks) == 3  # 7 条消息 ⇒ 3 个块（多出来的那个是配不上的 Q0）
+    assert len(blocks) == 2
 
 
 def test_3_leading_assistant_stands_alone(M: Callable[..., Message]) -> None:
@@ -92,11 +87,28 @@ def test_3_leading_assistant_stands_alone(M: Callable[..., Message]) -> None:
     assert blocks[0].is_paired is False
 
 
+def test_leading_unpaired_non_user_run_is_merged(M: Callable[..., Message]) -> None:
+    blocks = compose_memory_blocks(
+        [M("assistant", "A0"), M("assistant", "A1"), M("user", "Q"), M("assistant", "A2")]
+    )
+    assert [_text(block) for block in blocks] == [
+        "A: [assistant] A0\n[assistant] A1",
+        "Q: Q\nA: [assistant] A2",
+    ]
+
+
 def test_4_trailing_user_stands_alone(M: Callable[..., Message]) -> None:
     """`U A U` ⇒ `[U+A] [U]`——末尾的 U 配不上，**独立成块**。"""
     blocks = compose_memory_blocks([M("user", "Q0"), M("assistant", "A0"), M("user", "Q1")])
     assert [_text(b) for b in blocks] == ["Q: Q0\nA: [assistant] A0", "Q: Q1"]
     assert blocks[1].answer is None
+
+
+def test_unpaired_trailing_user_run_is_merged(M: Callable[..., Message]) -> None:
+    blocks = compose_memory_blocks(
+        [M("user", "Q0"), M("assistant", "A0"), M("user", "Q1"), M("user", "Q2")]
+    )
+    assert [_text(block) for block in blocks] == ["Q: Q0\nA: [assistant] A0", "Q: Q1\nQ2"]
 
 
 def test_5_lone_assistant(M: Callable[..., Message]) -> None:
@@ -115,12 +127,8 @@ def test_6_lone_user(M: Callable[..., Message]) -> None:
 # ── 组合的边界（补上容易漏的形状）──────────────────────────────────────────
 
 
-def test_adjacent_same_role_runs_alternate_strictly(M: Callable[..., Message]) -> None:
-    """⚠ **相邻的 user-only 块是正常的**，不是"漏合并"。
-
-    当前规则只把一段 user 的**最后一条**配进 question ⇒ 一段 `U U A` 产出 `[U] [U+A]`，
-    那两个 `U` **是独立的两条消息**。形状变了要有人知道，所以这条钉住当前形状。
-    """
+def test_contiguous_same_role_messages_merge_before_pairing(M: Callable[..., Message]) -> None:
+    """连续同 role 先合并，再按相邻 role block 配对。"""
     blocks = compose_memory_blocks(
         [
             M("user", "Q0"),
@@ -133,53 +141,36 @@ def test_adjacent_same_role_runs_alternate_strictly(M: Callable[..., Message]) -
         ]
     )
     assert [_roles(b) for b in blocks] == [
-        ("user",),  # Q0 配不上（它后面还有 user）
-        ("user", "assistant"),  # Q1 + A0 —— 这段 user 的**最后一条**
-        ("user",),  # Q2 配不上
-        ("user",),  # Q3 配不上
-        ("user", "assistant"),  # Q4 + A1
+        ("user", "user", "assistant"),
+        ("user", "user", "user", "assistant"),
     ]
-    # 只有**完整的对**能连成链（`link_blocks` 的口径），落单的 Q0/Q2/Q3 不进链
-    assert [b.is_paired for b in blocks] == [False, True, False, False, True]
+    assert [b.is_paired for b in blocks] == [True, True]
 
 
-def test_wholly_non_user_batch_splits_per_message(M: Callable[..., Message]) -> None:
-    """整批没有 user ⇒ **每条各自一块**。
-
-    ⚠ 相邻同 role 消息不合并。否则判分池那种全 `user` 的批会塌成一块。
-    """
+def test_wholly_non_user_batch_merges_contiguous_roles(M: Callable[..., Message]) -> None:
+    """开头未配对的连续非 user 同样先合并成一个 RoleBlock。"""
     blocks = compose_memory_blocks([M("assistant", "A0"), M("assistant", "A1")])
-    assert len(blocks) == 2
+    assert len(blocks) == 1
     assert all(b.question is None for b in blocks)
-    assert [b.answer for b in blocks] == ["[assistant] A0", "[assistant] A1"]
+    assert blocks[0].answer == "[assistant] A0\n[assistant] A1"
 
 
-def test_a_user_run_without_a_reply_does_not_merge(M: Callable[..., Message]) -> None:
-    """**判分池那种形状**：`U U U U` ⇒ **4 个独立的 Q-only 块**，不是一个巨块。
-
-    官方**判分池**的 Add 是 100% `role: user`。若把这些消息合并成一块，
-    就没有任何配对块，`link_blocks` 的邻接链为空，扩窗与段合并也不会执行。
-    """
+def test_trailing_user_run_merges_without_a_reply(M: Callable[..., Message]) -> None:
+    """未配对的末尾 user run 也依 v1.0 合为一个 Q-only 块。"""
     blocks = compose_memory_blocks([M("user", f"Q{i}") for i in range(4)])
-    assert [b.question for b in blocks] == ["Q0", "Q1", "Q2", "Q3"]
-    assert all(b.answer is None for b in blocks)
-    assert all(not b.is_paired for b in blocks)
+    assert len(blocks) == 1
+    assert blocks[0].question == "Q0\nQ1\nQ2\nQ3"
+    assert blocks[0].answer is None
+    assert not blocks[0].is_paired
 
 
-def test_a_user_run_pairs_only_its_last_message(M: Callable[..., Message]) -> None:
-    """`U U U A` ⇒ `[U] [U] [U+A]`——只有**最后一条**进对。
-
-    ⚠ 平台会把超长 user 消息切成多片，硬上限约为 8,000 字符。若把整段 user
-    并进一个 question，块可达 38,270 token，超过 `text-embedding-v4` 的 8,192 窗口。
-
-    ⇒ **两条路都错，只是错的地方不同**：合并 ⇒ 块嵌不进去（线上静默截断）；
-    不合并 ⇒ 前面那些 `q` **有问无答**。 选了后者，这条用例钉住这个取舍。
-    """
+def test_a_user_run_pairs_as_one_question(M: Callable[..., Message]) -> None:
+    """`U U U A` ⇒ `[UUU+A]`，按 v1.0 合并整个连续 user run。"""
     blocks = compose_memory_blocks([M("user", f"Q{i}") for i in range(3)] + [M("assistant", "A")])
-    assert len(blocks) == 3
-    assert [b.question for b in blocks] == ["Q0", "Q1", "Q2"]
-    assert [b.answer for b in blocks] == [None, None, "[assistant] A"]
-    assert [b.is_paired for b in blocks] == [False, False, True]
+    assert len(blocks) == 1
+    assert blocks[0].question == "Q0\nQ1\nQ2"
+    assert blocks[0].answer == "[assistant] A"
+    assert blocks[0].is_paired
 
 
 def test_alternating_roles_never_pair_across_a_run(M: Callable[..., Message]) -> None:
@@ -259,17 +250,13 @@ def test_source_indexes_cover_every_message_exactly_once(M: Callable[..., Messag
 
 
 def test_source_metadata_is_kept_verbatim(M: Callable[..., Message]) -> None:
-    """`messages` / `roles` / `timestamps` 与原始输入**逐条对应**。
-
-    ⚠ 当前规则下 `U U A` 产出**两块**（`[Q0]` 与 `[Q1+A0]`）⇒ 断言要跨两块收集，
-    不能只取一个块。`source_idxs` 合起来仍必须是 `0..n-1` 的排列（不丢不重）。
-    """
+    """合并不丢消息、role、时间戳或来源下标。"""
     m0, m1, m2 = M("user", "Q0", 100), M("user", "Q1", 200), M("assistant", "A0", 300)
-    blocks = compose_memory_blocks([m0, m1, m2])
-    assert [b.messages for b in blocks] == [(m0,), (m1, m2)]
-    assert [b.roles for b in blocks] == [("user",), ("user", "assistant")]
-    assert [b.timestamps for b in blocks] == [(100,), (200, 300)]
-    assert sorted(i for b in blocks for i in b.source_idxs) == [0, 1, 2]
+    (block,) = compose_memory_blocks([m0, m1, m2])
+    assert block.messages == (m0, m1, m2)
+    assert block.roles == ("user", "user", "assistant")
+    assert block.timestamps == (100, 200, 300)
+    assert block.source_idxs == (0, 1, 2)
 
 
 def test_event_time_is_the_first_message_of_the_block(M: Callable[..., Message]) -> None:

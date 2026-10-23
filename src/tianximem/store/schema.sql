@@ -22,6 +22,19 @@ CREATE TABLE IF NOT EXISTS qa_pairs (
     UNIQUE(user_id, session_id, request_id, local_index)
 );
 
+-- Original Add messages for boundary-preserving derived fact extraction.
+-- The parent row remains the merged/searchable memory block.
+CREATE TABLE IF NOT EXISTS qa_pair_messages (
+    parent_memory_id TEXT NOT NULL REFERENCES qa_pairs(id) ON DELETE CASCADE,
+    source_index     INTEGER NOT NULL,
+    role             TEXT NOT NULL,
+    content          TEXT NOT NULL,
+    timestamp        INTEGER,
+    PRIMARY KEY(parent_memory_id, source_index)
+);
+CREATE INDEX IF NOT EXISTS qa_pair_messages_parent
+    ON qa_pair_messages(parent_memory_id, source_index);
+
 -- Batch-level idempotency guard. One append-only row records each applied request.
 --
 -- This cannot be replaced by qa_pairs.request_id: that column records which request

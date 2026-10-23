@@ -58,6 +58,15 @@ grounded evidence
 
 The grounded-evidence path runs first when enabled. If it cannot return complete evidence, it falls back as a whole rather than mixing partial evidence with hybrid candidates.
 
+For a literal relation walk, source projection may return the selected original
+messages instead of their merged parent blocks. This requires an unambiguous
+whole-message quotation, role and timestamp match against retained source rows.
+The walk order and each message's date are preserved; source limits count the
+original messages. Related-source auditing must include the omitted parts of a
+selected parent. Missing or ambiguous boundaries retain whole-parent projection.
+Narrative retrieval, indexed block composition and Add-scoped adjacency do not
+change.
+
 The final rerank runs exactly once on the merged candidate list. Round-local reranking inside the multi-hop executor is separate and never enters the response.
 
 Optional failures must produce contract-valid responses with a named diagnostic reason or fallback state. They must not silently claim successful execution.

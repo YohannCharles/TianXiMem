@@ -26,6 +26,12 @@ Every fact carries:
 
 Normalized keys are for matching only. They never replace or mutate source quotes.
 
+The Add owner invokes extraction once per retained original message, preserving
+its role and timestamp even when several messages share a merged parent block.
+The source position participates in derived fact identity. Original-record
+projection is resolved and validated by `service/`; the extractor does not
+choose response packaging.
+
 ## Extraction Rules
 
 - A positive fact requires a literal source assertion.

@@ -89,10 +89,13 @@ def test_search_pipeline_falls_back_only_when_the_literal_path_is_incomplete(
     response = pipeline.run(user_id="u", query=QUERY, top_k=100)
     with store.read() as conn:
         originals = {render_pair(p) for p in store.iter_pairs(conn)}
-    assert response.items and all(item.content in originals for item in response.items)
+    assert response.items
     if complete:
         assert hybrid_calls == []
         assert len(response.items) == 2
+        assert [item.content for item in response.items] == [
+            "Q: " + SOURCES[name] for name in ("citizenship", "leader")
+        ]
         assert not any("Other Person" in item.content for item in response.items)
     else:
         assert hybrid_calls == [("u", QUERY, 100)]
@@ -195,11 +198,12 @@ def test_unrecognized_work_predicates_do_not_short_circuit_with_employment_sourc
 def test_walk_preserves_unparsed_related_declarations_and_speaker_ownership(
     store, question, sources, fallback
 ):
-    apply_batch(
-        store,
-        AddBatch("opaque", "u", "s", tuple(Message("user", text) for text in sources)),
-        grounded_evidence=True,
-    )
+    for index, text in enumerate(sources):
+        apply_batch(
+            store,
+            AddBatch(f"source-{index}", "u", "s", (Message("user", text),)),
+            grounded_evidence=True,
+        )
     calls = []
 
     def retrieve(*, user_id, query, top_k):
@@ -234,11 +238,12 @@ def test_walk_audit_overflow_returns_all_original_evidence_in_hybrid(store):
     sources = ["Alex: I work for Acme."] + [
         f"Alex: I may change jobs after milestone {i}." for i in range(97)
     ]
-    apply_batch(
-        store,
-        AddBatch("opaque", "u", "s", tuple(Message("user", text) for text in sources)),
-        grounded_evidence=True,
-    )
+    for index, text in enumerate(sources):
+        apply_batch(
+            store,
+            AddBatch(f"source-{index}", "u", "s", (Message("user", text),)),
+            grounded_evidence=True,
+        )
     calls = []
 
     def retrieve(**kwargs):

@@ -52,7 +52,7 @@ from tianximem.rank import (
     merge_segments,
     package,
 )
-from tianximem.rank.neighbor import ContextSegment
+from tianximem.rank.neighbor import ContextSegment, SelectedMemory
 from tianximem.retrieve import EvidenceChecker, HybridRetriever, dedup_candidates
 from tianximem.retrieve.evidence import (
     EvidenceDecision,
@@ -64,7 +64,7 @@ from tianximem.retrieve.router import QueryRouter, Route
 from tianximem.service.grounded_planner import GroundedPlanner
 from tianximem.service.search_stages import GroundedEvidenceStage
 from tianximem.store.qdrant_store import QdrantStore
-from tianximem.store.sqlite_store import QaPair, SqliteStore
+from tianximem.store.sqlite_store import QaPair, SqliteStore, make_source_message_id
 
 __all__ = ["AgenticSearch", "SearchPipeline"]
 
@@ -296,8 +296,8 @@ class SearchPipeline:
     def reranker(self) -> Reranker | None:
         """当前接的 reranker（`None` = 没配 / 显式关掉）。
 
-        只读暴露给**测试**（断言装配真的接上了，不是又传了 `None`）与**诊断**
-。
+                只读暴露给**测试**（断言装配真的接上了，不是又传了 `None`）与**诊断**
+        。
         """
         return self._reranker
 
@@ -435,7 +435,7 @@ class SearchPipeline:
                     packaged = self._package_evidence(selected, top_k=top_k)
                     trace.grounded_projection = selected.projection
                     trace.selected_facts = len(selected.facts)
-                    trace.selected_sources = len({f.parent_memory_id for f in selected.facts})
+                    trace.selected_sources = selected.source_count
                     if not (
                         packaged.truncated_by_top_k
                         or packaged.truncated_by_budget
@@ -588,12 +588,62 @@ class SearchPipeline:
                 p.id: p
                 for p in self._store.fetch_pairs_by_ids(conn, [f.parent_memory_id for f in facts])
             }
+            messages = (
+                {
+                    parent: {
+                        m.source_index: m for m in self._store.fetch_pair_messages(conn, parent)
+                    }
+                    for parent in parents
+                }
+                if selection.projection == "source_record"
+                else {}
+            )
         valid = [
             f
             for f in facts
             if f.parent_memory_id in parents and parents[f.parent_memory_id].user_id == f.user_id
         ]
-        if selection.projection == "source":
+        if selection.projection == "source_record":
+            original_records: dict[tuple[str, int], SelectedMemory] = {}
+            for fact, index in zip(facts, selection.source_indices, strict=True):
+                parent = parents.get(fact.parent_memory_id)
+                message = messages.get(fact.parent_memory_id, {}).get(index)
+                if (
+                    parent is None
+                    or parent.user_id != fact.user_id
+                    or message is None
+                    or message.role != "user"
+                    or message.content != fact.source_quote
+                    or message.timestamp != fact.event_time
+                ):
+                    return PackagedResponse(items=(), dropped_missing=1)
+                record_key = (parent.id, index)
+                if record_key not in original_records:
+                    original_records[record_key] = SelectedMemory(
+                        memory_id=make_source_message_id(parent.id, index),
+                        pair=replace(
+                            parent,
+                            id=make_source_message_id(parent.id, index),
+                            local_index=index,
+                            question=message.content,
+                            answer=None,
+                            event_time=message.timestamp,
+                            prev_memory_id=None,
+                            next_memory_id=None,
+                        ),
+                        rerank_rank=len(original_records),
+                        is_neighbor=False,
+                    )
+            # Detached presentation records cannot join the parent's adjacency
+            # chain. The existing renderer and annotations preserve each message's
+            # date, while best_rank retains the selected walk order.
+            segments = merge_segments(
+                tuple(original_records.values()),
+                counter=self._counter,
+                inject_abs_time=self._inject_abs_time,
+                annotate_relatives=self._annotate_relatives,
+            )
+        elif selection.projection == "source":
             expansion = expand_neighbors(
                 [Candidate(memory_id=f.parent_memory_id, rank=i) for i, f in enumerate(valid)],
                 store=self._store,

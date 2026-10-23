@@ -30,6 +30,7 @@ import pytest
 from tests.conftest import Wired, seed_line
 from tests.conftest import seed_pair_in as _seed
 
+from tianximem.common.config import DEFAULT_RADIUS
 from tianximem.common.render import render
 from tianximem.rank import RemoteReranker, RerankUnavailable
 from tianximem.retrieve import EvidenceChecker
@@ -76,14 +77,11 @@ class FakeReranker:
 
 
 #: 本文件**显式传过**的最大扩窗半径（`_wire(..., radius=1)` 那两条用例）。
-#: ⚠ 间距只跟本文件用例实际传入的半径有关，不能跟随产品默认值。
-#: `radius=1` 需要间距 **> 3**，否则两个窗口首尾相接、候选塌成一段——
-#: **不报错，只是段数少了**。
 _MAX_RADIUS_UNDER_TEST: Final[int] = 1
 
-#: 候选之间的间隔：必须 **> 2 × radius + 1**（理由见
-#: `test_contract.py` 同名常量的注释——尤其第 3 条"窗口首尾相接"）。
-_STEP: Final[int] = 2 * _MAX_RADIUS_UNDER_TEST + 3
+#: 候选之间的间隔必须让它们不被产品默认扩窗合并，也不能小于本文件显式使用的半径。
+#: 必须 **> 2 × radius + 1**（理由见 `test_contract.py` 同名常量的注释）。
+_STEP: Final[int] = 2 * max(DEFAULT_RADIUS, _MAX_RADIUS_UNDER_TEST) + 3
 
 
 def _ids(store: SqliteStore, count: int, *, step: int = _STEP, session_id: str = "s1") -> list[str]:
@@ -747,8 +745,8 @@ def test_rank_zero_after_rerank_is_the_expansion_seed(wired: Wired) -> None:
 
     ⚠ `seed_limit=1` 是**必须的**：默认 30 会让 A 和 B **都**是种子，
     于是两边的邻居都会进来，本用例就什么也证明不了（那是"两条都过"的假绿）。
-    ⚠ `radius=1` 也是**必须显式的**：产品默认是 **0 = 不扩窗**，
-    继承它则两条断言都不成立——而那是"**两条都不过**"，至少不假绿。
+    ⚠ `radius=1` 也是**必须显式的**：本用例需要固定单跳扩窗，
+    不能随产品默认半径变化；继承默认值会让断言受无关配置影响。
     """
     # ⚠ 邻居必须是**同一次 Add 内**的相邻块⇒ 用 `seed_line` 一次落两条
     s1 = seed_line(

@@ -60,7 +60,7 @@ built-in defaults
 | `retrieval.rrf.weights` | `[0.5, 0.5]` | C | BM25 and dense RRF weights. |
 | `retrieval.query_instruction` | `""` | C | Optional query-side instruction prefix. |
 | `neighbor.expansion_seed_limit` | `1000` | C | Candidates eligible for neighbor expansion. |
-| `neighbor.radius` | `0` | C | Expansion distance in blocks; zero disables expansion. |
+| `neighbor.radius` | `2` | C | Expansion distance in blocks; v1.2 expands two blocks on each side, and zero disables expansion. |
 | `neighbor.seed_placement` | `keep` | C | Segment-internal order: `keep`, `front`, or `echo`. |
 | `budget.max_tokens` | `117760` | A | Answer-model input budget. |
 | `budget.tokenizer` | `o200k_base` | A | Submission answer-model tokenizer. |

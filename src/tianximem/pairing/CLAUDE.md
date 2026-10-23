@@ -9,7 +9,7 @@ apply.py    idempotency check, composition, source insert, fact indexing, and tr
 
 ## Block Rules
 
-A block is formed from the last user message in a contiguous user segment plus the immediately following contiguous non-user segment. Earlier consecutive user messages remain independent. Any remaining message is stored independently.
+A block is formed by first merging each contiguous same-role run into a role block. A user role block and all immediately following non-user role blocks form one memory block. Leading non-user role blocks and a trailing user role block remain standalone blocks. Consecutive messages in those unmatched runs are still merged by role.
 
 The role test is exactly `role == "user"`. Do not use a role allowlist. Non-user roles are preserved and labeled during rendering.
 
@@ -18,11 +18,18 @@ Examples:
 | Messages | Blocks |
 | --- | --- |
 | `U A U A` | `[U+A] [U+A]` |
-| `U U A A U A` | `[U] [U+A+A] [U+A]` |
+| `U U A A U A` | `[UU+AA] [U+A]` |
 | `A U A` | `[A] [U+A]` |
-| `U U U A` | `[U] [U] [U+A]` |
+| `U U U A` | `[UUU+A]` |
+| `U U U` | `[UUU]` |
+| `U U A A` | `[UU+AA]` |
 
-Composition and adjacency are scoped to one Add. Different Adds are never paired, completed, merged, or repaired across the boundary.
+Composition and adjacency are scoped to one Add. Different Adds are never paired, completed, merged, or repaired across the boundary. This is the current mainline composition, restored from v1.0; adjacency-link rules are unchanged.
+
+Retain each original message's index, role, content and timestamp in
+`qa_pair_messages`. Fact extraction runs on those individual records and links
+facts to the composed parent block. Do not re-split joined text to infer missing
+boundaries.
 
 ## Position and ID
 
@@ -49,8 +56,8 @@ The ID does not depend on content or arrival order. Never parse `request_id`.
 
 1. Check `applied_batches` and payload fingerprint.
 2. Compose blocks and adjacency links.
-3. Insert all source rows with `status='complete'`.
-4. Derive and index grounded facts when enabled.
+3. Insert all blocks with `status='complete'` and their original source messages.
+4. Derive and index grounded facts per original message when enabled.
 5. Insert the batch guard row.
 6. Commit.
 7. Let the service perform the synchronous Qdrant upsert and recovery path.

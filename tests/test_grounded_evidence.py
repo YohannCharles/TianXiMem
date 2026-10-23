@@ -217,8 +217,9 @@ def test_unknown_quantities_and_conflicting_updates_fall_back_to_full_originals(
         )
         .items
     )
-    assert len(hits) == 2
+    assert len(hits) == 1
     assert all(" Q: " in hit.content for hit in hits)
+    assert "two brushes" in hits[0].content
     assert any(additional in hit.content for hit in hits)
 
 
@@ -240,7 +241,9 @@ def test_departure_and_unrecognized_member_preserve_originals(tmp_path):
             .run(user_id="u", query="How many members are there in Ridge Club?", top_k=100)
             .items
         )
-        assert len(hits) == 2 and all(" Q: " in hit.content for hit in hits)
+        assert len(hits) == 1 and " Q: " in hits[0].content
+        assert "Rosa Quinn: I am a member of Ridge Club." in hits[0].content
+        assert additional in hits[0].content
 
 
 @pytest.mark.parametrize(
@@ -255,21 +258,27 @@ def test_plan_or_quote_does_not_hide_a_real_claim_in_the_same_record(tmp_path, a
     store = SqliteStore.open(tmp_path / "test.db")
     apply_batch(
         store,
-        batch("Rosa Quinn: I volunteer at North Shelter.", additional),
+        batch("Rosa Quinn: I volunteer at North Shelter."),
+        grounded_evidence=True,
+    )
+    apply_batch(
+        store,
+        batch(additional, rid="second-source"),
         grounded_evidence=True,
     )
     hits = (
         pipeline(store).run(user_id="u", query="Who volunteers at North Shelter?", top_k=100).items
     )
     assert len(hits) == 2 and all(" Q: " in hit.content for hit in hits)
+    assert any("Rosa Quinn: I volunteer at North Shelter." in hit.content for hit in hits)
+    assert any(additional in hit.content for hit in hits)
 
 
 def test_replay_backfill_and_source_bounds_never_change_raw_memory(tmp_path):
     store = SqliteStore.open(tmp_path / "test.db")
-    original = batch(
-        "Rosa Quinn: I am a member of Ridge Club.", "Evan Cole: I am a member of Ridge Club."
-    )
+    original = batch("Rosa Quinn: I am a member of Ridge Club.")
     apply_batch(store, original)
+    apply_batch(store, batch("Evan Cole: I am a member of Ridge Club.", rid="second-source"))
     scope = FactPattern(("member",), object="ridge club")
     assert not facts(store, scope)
     with store.read() as conn:

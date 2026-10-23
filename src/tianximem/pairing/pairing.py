@@ -2,9 +2,9 @@
 
 ```text
 一次 Add 的消息（按原序）
-  → ① 一段连续 user + **紧随其后的一段连续非 user** ⇒ 配成一个 MemoryBlock
-       ⚠ 但只有该 user 段的**最后一条**进配对块
-  → ② **其余消息：每条各自独立成块**——同 role 相邻也不并
+  → ① 连续同 role 消息合并成一个 RoleBlock
+  → ② 一个 user RoleBlock + 紧随其后的全部非 user RoleBlock 配成一个 MemoryBlock
+  → ③ 开头的非 user RoleBlock 独立成块
   → 每个 MemoryBlock 恰好一次 embedding
 ```
 
@@ -163,24 +163,15 @@ def compose_memory_blocks(messages: Sequence[Message]) -> tuple[MemoryBlock, ...
     | 输入 | 输出 |
     | --- | --- |
     | `U A` | `[U+A]` |
-    | `U U A A A U A` | `[U] [U+AAA] [U+A]` |
+    | `U U A A A U A` | `[UU+AAA] [U+A]` |
     | `A U A` | `[A] [U+A]`（首个 A 配不上，独立成块） |
     | `U A U` | `[U+A] [U]`（末尾的 U 配不上，独立成块） |
     | `A` / `U` | `[A]` / `[U]` |
     | `U assistant tool assistant` | `[U+A0+T+A1]`（工具调用序列**不劈开**） |
-    | `U U U`（全 user，**没有任何非 user**） | `[U] [U] [U]`（**各自独立**） |
-    | `A A`（全 assistant） | `[A] [A]`（**各自独立**） |
+    | `U U U`（全 user） | `[UUU]` |
+    | `A A`（全 assistant） | `[AA]` |
 
-    ⚠ **合并只在"配得上对"时发生**：一段连续 user 后面**没有**非 user 时，那段**不合并**，
-    每条各自成块。理由见模块 docstring（判分池全是 `role: user`）。
-
-    ⚠ **配对时也只配这一段 user 的【最后一条】**——前面的各自独立。
-    这是被**嵌入窗口**逼出来的：一段长 user 全进一个 question 会到 **38,270 token**
-    （窗口 8,192）⇒ 线上静默截断、本地 400。**代价**：`q q q a` 里前面的 `q` 变得
-    **有问无答**——两条路都错， 选了"块不超窗口"那一侧。
-
-    ⚠ **不判断"是不是超长消息截断"**：配不上的消息**就是**独立块，原因是什么无关紧要。
-    任何"等下一个 Add 来补齐"的设计都会重新引入跨 Add 状态。
+    配对只在一次 Add 内发生；不会等待或合并后续 Add 的消息。
 
     ⚠ **空输入返回空元组**——调用方（`apply_batch`）在此之前就该抛错，见那里的注释。
     """
@@ -189,48 +180,19 @@ def compose_memory_blocks(messages: Sequence[Message]) -> tuple[MemoryBlock, ...
     i = 0
     while i < len(role_blocks):
         if not role_blocks[i].is_user:
-            # 非 user 段：配不上对（前面没有 user 段，或那段已经被配走了）⇒ **各自独立**
-            blocks.extend(_standalone(role_blocks[i]))
+            # 开头没有 user 可配；连续同 role 消息已在 RoleBlock 中合并。
+            blocks.append(_block_from(role_blocks[i]))
             i += 1
             continue
         end = i + 1
         while end < len(role_blocks) and not role_blocks[end].is_user:
             end += 1
         if end > i + 1:
-            # 后面跟着非 user ⇒ 配对。**但只有这一段 user 的【最后一条】配上**，
-            # 前面的各自独立。
-            #
-            # 为什么：平台的 8,000 **字符**
-            # 切分会把**一份长文档**切成十几条连续的 user 消息。而整段 user 全进 question
-            # 会涨到 **83,641 字符 / 38,270 token**，远超 `text-embedding-v4` 的 **8,192 token**
-            # 窗口 ⇒ 线上**静默截断**（尾巴搜不到）、本地开发网关 **400**（跑批直接死）。
-            # CL-Bench 全量：**14/12,793 个块超窗口**，最大 **45,160 token**。
-            #
-            # **只配最后一条**（同一份全量）：**最大块 5,541 token**，
-            # 块数只涨 **+2.2%**（12,793 → 13,080）。
-            #
-            # ⚠ **代价是 `q q q a` 产出 `[q] [q] [q+a]`**，前面那些 `q` **有问无答**——
-            # 而全进同一个 question 则**块大到嵌不进去**。两条路都错，只是错的地方不同
-            # ⇒ 选"块小"这一侧，理由在。
-            head = role_blocks[i]
-            blocks.extend(
-                _standalone(
-                    RoleBlock(
-                        role=head.role,
-                        messages=head.messages[:-1],
-                        source_idxs=head.source_idxs[:-1],
-                    )
-                )
-            )
-            last = RoleBlock(
-                role=head.role,
-                messages=(head.messages[-1],),
-                source_idxs=(head.source_idxs[-1],),
-            )
-            blocks.append(_block_from(last, *role_blocks[i + 1 : end]))
+            # 恢复 v1.0：合并整个 user 段及其后紧邻的全部非 user 段。
+            blocks.append(_block_from(*role_blocks[i:end]))
         else:
-            # 后面没有非 user ⇒ 这段 user 各自独立，**不合并**
-            blocks.extend(_standalone(role_blocks[i]))
+            # 末尾没有非 user；连续 user 已合并成一个 RoleBlock。
+            blocks.append(_block_from(role_blocks[i]))
         i = end
     return tuple(blocks)
 
@@ -277,18 +239,6 @@ def _merge_consecutive_roles(messages: Sequence[Message]) -> tuple[RoleBlock, ..
         else:
             blocks.append(RoleBlock(role=message.role, messages=(message,), source_idxs=(idx,)))
     return tuple(blocks)
-
-
-def _standalone(role_block: RoleBlock) -> tuple[MemoryBlock, ...]:
-    """**配不上对的一段 → 每条消息各自一个块**（不合并）。
-
-    这是"合并只在配对时发生"的落点：`A A` 是两块、`U U U` 是三块。
-    ⚠ **`source_idxs` 逐条带出来**——合并没了，但"这条块来自哪几条原消息"仍要可追。
-    """
-    return tuple(
-        _block_from(RoleBlock(role=role_block.role, messages=(message,), source_idxs=(index,)))
-        for message, index in zip(role_block.messages, role_block.source_idxs, strict=True)
-    )
 
 
 def _block_from(*role_blocks: RoleBlock) -> MemoryBlock:

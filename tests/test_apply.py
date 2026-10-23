@@ -72,6 +72,45 @@ def _shape(store: SqliteStore, user_id: str = "u1") -> list[str]:
     return out
 
 
+def test_merged_block_extracts_structured_messages_individually(store: SqliteStore) -> None:
+    """合并后的搜索块不应破坏每条结构化事实的原始边界。"""
+    messages = (
+        _msg(
+            "user",
+            'Corpus: {"subject": "Frank Herbert", "relation": "genre", '
+            '"object": "science fiction"}',
+        ),
+        _msg(
+            "user",
+            'Corpus: {"subject": "Dune Messiah", "relation": "author", '
+            '"object": "Frank Herbert"}',
+        ),
+    )
+    result = apply_batch(
+        store,
+        AddBatch(_rid(99), "u1", "s1", messages),
+        grounded_evidence=True,
+    )
+    assert len(result.blocks) == 1
+    with store.read() as conn:
+        pair = store.fetch_by_request(conn, "u1", "s1", _rid(99))[0]
+        source_messages = store.fetch_pair_messages(conn, pair.id)
+        facts = conn.execute(
+            "SELECT f.subject, f.relation, f.object, f.source_quote, f.parent_memory_id "
+            "FROM memory_facts f JOIN qa_pair_messages m "
+            "ON m.parent_memory_id=f.parent_memory_id AND f.source_quote=m.content "
+            "WHERE f.parent_memory_id=? ORDER BY m.source_index",
+            (pair.id,),
+        ).fetchall()
+    assert [message.source_index for message in source_messages] == [0, 1]
+    assert [(row["subject"], row["relation"], row["object"]) for row in facts] == [
+        ("Frank Herbert", "genre", "science fiction"),
+        ("Dune Messiah", "author", "Frank Herbert"),
+    ]
+    assert all(row["parent_memory_id"] == pair.id for row in facts)
+    assert all(row["source_quote"] in (pair.question or "") for row in facts)
+
+
 # ── 跨 Add 不拼接 ───────────────────────────────────────────────────────
 
 
@@ -117,14 +156,8 @@ def test_consecutive_assistants_still_merge_within_one_add(store: SqliteStore) -
 # ── `request_id` 是 opaque string────────────────────────────────
 
 
-def test_a_user_run_pairs_only_its_last_message(store: SqliteStore) -> None:
-    """`Q Q A A Q A` ⇒ `[Q0a] [Q0b+AA] [Q1+A1]` ⇒ **3 行、2 个完整 QA**。
-
-    连续 user 只把最后一条配进 question。若把两条 user 并进一个 question，
-    块可能超过嵌入窗口；代价是 `Q0a` **有问无答**，但它不是"漏了"，只是配不上。
-
-    ⚠ 链只连**完整的对**（`link_blocks` 的口径）⇒ `Q0a` 不进链。
-    """
+def test_a_user_run_pairs_as_one_question_and_retains_original_messages(store: SqliteStore) -> None:
+    """`Q Q A A Q A` produces two complete blocks with original message boundaries."""
     _apply(
         store,
         _rid(0),
@@ -139,15 +172,16 @@ def test_a_user_run_pairs_only_its_last_message(store: SqliteStore) -> None:
     )
 
     rows = _all(store)
-    assert len(rows) == 3
-    assert rows[0].question == "Q0a" and rows[0].answer is None  # 配不上 ⇒ 有问无答
-    assert rows[1].question == "Q0b"
-    assert rows[1].answer == "[assistant] A0a" + chr(10) + "[assistant] A0b"
-    assert rows[2].question == "Q1"
-    # 链只串完整的对：落单的 Q0a 两侧都是 None
-    assert rows[0].prev_memory_id is None and rows[0].next_memory_id is None
-    assert rows[1].next_memory_id == rows[2].id
-    assert rows[2].prev_memory_id == rows[1].id
+    assert len(rows) == 2
+    assert rows[0].question == "Q0a\nQ0b"
+    assert rows[0].answer == "[assistant] A0a\n[assistant] A0b"
+    assert rows[1].question == "Q1"
+    assert rows[0].prev_memory_id is None and rows[0].next_memory_id == rows[1].id
+    assert rows[1].prev_memory_id == rows[0].id and rows[1].next_memory_id is None
+    with store.read() as conn:
+        messages = store.fetch_pair_messages(conn, rows[0].id)
+    assert [m.content for m in messages] == ["Q0a", "Q0b", "A0a", "A0b"]
+    assert [m.source_index for m in messages] == [0, 1, 2, 3]
 
 
 def test_request_id_is_opaque_and_any_shape_works(store: SqliteStore) -> None:
@@ -285,19 +319,15 @@ def test_neighbours_never_cross_adds_even_in_the_same_session(store: SqliteStore
     assert [p.local_index for p in rows] == [0, 1, 0, 1]
 
 
-def test_all_questions_or_all_answers_are_all_isolated(store: SqliteStore) -> None:
+def test_unpaired_role_runs_merge_without_cross_add_adjacency(store: SqliteStore) -> None:
     """全 Q / 全 A 的批次：**全部内容都存下来**，且**没有一个进链**。"""
     _apply(store, _rid(0), (_msg("user", "Q0"), _msg("user", "Q1"), _msg("user", "Q2")))
     _apply(store, _rid(1), (_msg("assistant", "A0"), _msg("assistant", "A1")))
 
     rows = _all(store)
-    # **合并只在"配得上对"时发生** ⇒ 同 role 相邻不合并，每条各自一块。
     assert [(p.question, p.answer) for p in rows] == [
-        ("Q0", None),
-        ("Q1", None),
-        ("Q2", None),
-        (None, "[assistant] A0"),
-        (None, "[assistant] A1"),
+        ("Q0\nQ1\nQ2", None),
+        (None, "[assistant] A0\n[assistant] A1"),
     ]
     assert all(p.prev_memory_id is None and p.next_memory_id is None for p in rows)
 
@@ -379,10 +409,10 @@ def test_sessions_are_independent(store: SqliteStore) -> None:
 
 def test_every_row_is_complete_at_write_time(store: SqliteStore) -> None:
     """没有 pending、没有 repair —— **没有任何后台任务会回头改这些行**。"""
-    # ⚠ `U U A` 产出 **2** 块（`[Q0]` 与 `[Q1+A0]`），加上第二批的 1 块共 3 行
+    # U U A merges within its Add; a later assistant stays in a separate block.
     _apply(store, _rid(0), (_msg("user", "Q0"), _msg("user", "Q1"), _msg("assistant", "A0")))
     _apply(store, _rid(1), (_msg("assistant", "A1"),))
-    assert [p.status for p in _all(store)] == [STATUS_COMPLETE] * 3
+    assert [p.status for p in _all(store)] == [STATUS_COMPLETE] * 2
 
 
 # ── 空批次仍要响亮失败 ──────────────────────────────────────────────────

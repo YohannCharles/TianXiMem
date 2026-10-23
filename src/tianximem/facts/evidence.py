@@ -11,7 +11,9 @@ from typing import Literal
 
 from tianximem.common.render import day_granularity, render_evidence, render_record_evidence
 
-EVIDENCE_VERSION = "memory-facts-v14-event-verbs"
+# Message boundaries are part of the extraction input.  Bump the derived-index
+# version so existing coverage cannot mask a rebuild with the new semantics.
+EVIDENCE_VERSION = "memory-facts-v15-message-boundaries"
 Qualifier = str | int | bool
 SourceSide = Literal["question", "answer"]
 

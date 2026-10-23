@@ -494,7 +494,12 @@ def test_graph_selects_only_literal_sources_and_retains_contradictory_explicit_r
     hits = run(store, query)
     assert len(hits) == 2 and all("Old Writer" not in h.content for h in hits)
     with store.read() as conn:
-        originals = {render_pair(p) for p in store.iter_pairs(conn)}
+        originals = {
+            "Q: " + message.content
+            for pair in store.iter_pairs(conn)
+            for message in store.fetch_pair_messages(conn, pair.id)
+            if message.role == "user"
+        }
     assert all(h.content in originals for h in hits)
     assert not any("Book was born" in h.content for h in hits)
     add(
@@ -504,7 +509,10 @@ def test_graph_selects_only_literal_sources_and_retains_contradictory_explicit_r
     )
     hits = run(store, query)
     # The competing author has no birthplace edge: return the original pool.
-    assert len(hits) == 4 and any("Other Writer" in h.content for h in hits)
+    with store.read() as conn:
+        original_pool = {render_pair(p) for p in store.iter_pairs(conn)}
+    assert {h.content for h in hits} == original_pool
+    assert any("Other Writer" in h.content for h in hits)
     assert all("Q:" in h.content for h in run(store, query, limit=1))
 
 
@@ -519,7 +527,7 @@ def test_unparsed_explicit_edit_remains_original_text_without_an_invented_edge(t
     )
     hits = run(store, "Who is the head of government of the country of citizenship of Alex?")
     assert (
-        len(hits) == 3
+        len(hits) == 1
         and any("Old Leader" in h.content for h in hits)
         and any("New Leader" in h.content for h in hits)
     )
@@ -577,7 +585,9 @@ def test_interval_at_before_after_and_ties_are_generic_operations(tmp_path):
         "Source: Alice plays for New from Jan, 2000 to Jan, 2005.",
         "Source: Alice plays for Side from Jan, 2000 to Jan, 2003.",
     )
-    add(store, *sources, sources[1])
+    # Distinct Adds keep distinct source blocks for this interval-selection test.
+    for index, source in enumerate((*sources, sources[1])):
+        add(store, source, rid=f"interval-{index}")
     assert len(run(store, "Which team did Alice play for in Jun, 1997?")) == 1
     assert len(run(store, "Which team did Alice play for in Jan, 1995?")) == 2
     before = run(store, "Which team did Alice play for before Middle?")
@@ -590,11 +600,8 @@ def test_interval_at_before_after_and_ties_are_generic_operations(tmp_path):
 
 def test_inverse_interval_keeps_literal_entity_punctuation(tmp_path):
     store = SqliteStore.open(tmp_path / "db")
-    add(
-        store,
-        "Source: Alice is the head coach of C++ Team from Jan, 1990 to Jan, 1995.",
-        "Source: Bea is the head coach of C# Team from Jan, 1990 to Jan, 1995.",
-    )
+    add(store, "Source: Alice is the head coach of C++ Team from Jan, 1990 to Jan, 1995.")
+    add(store, "Source: Bea is the head coach of C# Team from Jan, 1990 to Jan, 1995.", rid="other-team")
     hits = run(store, "Who was the head coach of the team C++ Team in Jan, 1993?")
     assert len(hits) == 1 and "Alice" in hits[0].content and "Bea" not in hits[0].content
 
@@ -605,7 +612,8 @@ def test_title_filter_is_a_metadata_condition_and_returns_original_source(tmp_pa
         "document: Subject: Device validation\nDate: 2024-01-20\n"
         "CALENDAR INVITE\nScheduled for: 2024-02-01"
     )
-    add(store, source, "document: Subject: Device validation notes\nDate: 2024-02-01")
+    add(store, source)
+    add(store, "document: Subject: Device validation notes\nDate: 2024-02-01", rid="notes")
     add(store, source, rid="other", user="other")
     query = "How many times did the Device validation meeting occur in February of 2024?"
     hits = run(store, query)
@@ -630,7 +638,13 @@ def test_fresh_schema_contains_only_common_derived_tables_and_freezes_first_repr
     apply_batch(store, original, grounded_evidence=True)
     with store.read() as conn:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert tables == {"qa_pairs", "applied_batches", "memory_facts", "evidence_coverage"}
+        assert tables == {
+            "qa_pairs",
+            "qa_pair_messages",
+            "applied_batches",
+            "memory_facts",
+            "evidence_coverage",
+        }
         fact = store.fetch_evidence(conn, "u", (), limit=100)[0]
     with store.transaction() as conn:
         store.insert_evidence(conn, [replace(fact, content="Changed representation")])

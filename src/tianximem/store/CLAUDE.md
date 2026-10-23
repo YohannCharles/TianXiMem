@@ -13,9 +13,10 @@ qdrant_store.py  collection management, point writes, and hybrid query execution
 | Store | Contents | Recovery |
 | --- | --- | --- |
 | SQLite `qa_pairs` | Source blocks and explicit adjacency | Source of truth |
+| SQLite `qa_pair_messages` | Original message boundaries, roles, text and timestamps | Source of truth |
 | SQLite `applied_batches` | Batch idempotency and payload fingerprints | Source of truth |
-| SQLite `memory_facts` | Source-backed derived facts | Rebuild from `qa_pairs` |
-| SQLite `evidence_coverage` | Extractor-version coverage | Rebuild from `qa_pairs` |
+| SQLite `memory_facts` | Source-backed derived facts | Rebuild from original messages and their parent blocks |
+| SQLite `evidence_coverage` | Extractor-version coverage | Rebuild with fact extraction |
 | Qdrant | Dense and BM25 vectors plus filter metadata | Rebuild from SQLite |
 
 Qdrant does not store source text. Search resolves selected IDs back to SQLite.
@@ -34,7 +35,13 @@ qa_pairs
 - `local_index` is the block index within one Add.
 - `prev_memory_id` and `next_memory_id` form an Add-scoped chain.
 - New source rows always use `status='complete'`.
-- `user_id` is stored on every source row and every derived fact.
+- `user_id` is stored on every block and every derived fact.
+
+`qa_pair_messages` is keyed by `(parent_memory_id, source_index)` and retains the
+original role, content and timestamp. It shares the parent block's user
+isolation. A response-only source-message ID is derived from that key; it does
+not insert a new QA block or participate in block adjacency. A legacy block
+without original records remains readable through whole-parent projection.
 
 ## Idempotency
 
@@ -53,7 +60,7 @@ qa_pairs
 - Fact IDs are deterministic and insert-once.
 - `evidence_coverage` records extractor versions, including empty extraction.
 - Only current-version coverage counts as scanned.
-- Rebuilding derived facts must not modify `qa_pairs` or `applied_batches`.
+- Rebuilding derived facts must not modify `qa_pairs`, `qa_pair_messages` or `applied_batches`.
 
 ## Connection Model
 

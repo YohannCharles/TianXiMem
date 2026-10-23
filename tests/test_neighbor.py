@@ -70,9 +70,8 @@ def _expand(
 ) -> tuple[SelectedMemory, ...]:
     """⚠ **半径在这里显式给（默认 1），不要吃 `DEFAULT_RADIUS`。**
 
-    本文件测的**就是**扩窗，而产品默认是 **`radius=0`（= 不扩窗）**——
-    继承它会让整个文件**静默地什么都不测**：返回的段照样合法、`id` 照样对，
-    只有"邻居有没有进来"这一件事没了。要关扩窗的用例**自己写 `radius=0`**。
+    本文件测的**就是**扩窗，不能让行为随产品默认半径漂移：
+    继承默认值会改变断言覆盖的跳数。要关扩窗的用例**自己写 `radius=0`**。
     """
     return expand_neighbors(ranked, store=store, radius=radius, **kwargs).selected
 

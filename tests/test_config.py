@@ -336,10 +336,10 @@ def test_default_profile_loads_the_repo_yaml(config_dir: Path) -> None:
     assert cfg.server.workers == 1
     # 当前默认启用日期前缀，这条断言固定该配置行为。
     assert cfg.packaging.inject_abs_time is True
-    # 当前默认半径为 0，这条断言固定该配置行为。
+    # v1.2 默认开启邻域扩展，前后各扩展两整对。
     # ⚠ 与 `common/config/` 的 `DEFAULT_RADIUS` **必须相等**（两处不等就又分叉了）；
     # 代码常量那一侧由 `test_reranker.py` 的 `_MAX_RADIUS_UNDER_TEST` 注释说明为何解耦。
-    assert cfg.neighbor.radius == 0
+    assert cfg.neighbor.radius == 2
 
 
 def test_packaging_switch_rejects_a_non_bool(config_dir: Path) -> None:

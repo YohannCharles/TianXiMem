@@ -7,7 +7,7 @@ Add
   -> fingerprint request
   -> check applied_batches
   -> compose blocks within this Add
-  -> write qa_pairs and derived facts in one SQLite transaction
+  -> write blocks, original messages and derived facts in one SQLite transaction
   -> render and embed changed blocks
   -> upsert Qdrant points with wait=true
   -> return
@@ -39,6 +39,7 @@ The service owns memory storage and evidence retrieval only. It does not generat
 4. Link adjacent complete blocks inside this request only.
 5. Atomically write:
    - `qa_pairs` source rows.
+   - `qa_pair_messages` original roles, text, source indices and timestamps.
    - `memory_facts` and `evidence_coverage` when grounded extraction is enabled.
    - The `applied_batches` guard row.
 6. Synchronously update Qdrant.
@@ -48,7 +49,17 @@ SQLite is the source of truth. A Qdrant failure leaves a recoverable derived-ind
 
 ## Block Composition
 
-A block contains the last user message of a contiguous user segment and the immediately following contiguous non-user segment. Earlier user messages remain independent. Unpaired messages are stored independently and are still searchable.
+A block is composed by merging contiguous runs of the same role, then pairing a
+user run with the following non-user runs. Leading non-user runs and trailing
+user runs remain standalone blocks, with their same-role messages still merged.
+For example, `U U U` becomes `[UUU]`, `U U A A` becomes `[UU+AA]`, and
+`U A U A` becomes `[U+A] [U+A]`.
+
+The original messages remain separate source records in SQLite. Fact extraction
+processes each original message with its own role and timestamp and associates
+the derived facts with the composed parent block. Older databases without those
+records retain the parent-block extraction fallback; their original boundaries
+cannot be inferred from joined text.
 
 Only one role predicate is used: `role == "user"`. Non-user roles are retained and receive role labels during rendering. No role allowlist is used.
 
@@ -70,6 +81,15 @@ question -> common query plan -> source-backed fact execution
 Supported plan types are `filter`, `walk`, `interval`, and `current`. Lists and counts share the same evidence plan. Final list construction and counting remain AML responsibilities.
 
 The path falls back as a whole when a plan is unsupported, source coverage is incomplete, evidence limits are exceeded, unresolved branches remain, or source review finds conflicts.
+
+For explicit source-backed relation walks, a selected quotation can be projected
+to an original user message when its full content and timestamp match exactly
+one retained source record. These records are returned in selected hop order,
+with their own dates and identities. Omitted portions of the parent still
+participate in the related-source audit. Missing or ambiguous original records
+retain whole-parent projection. Source-record limits count original messages;
+an incomplete result after slot or token packaging falls back as a whole.
+This presentation path does not alter indexed blocks or their adjacency links.
 
 ### Routing
 

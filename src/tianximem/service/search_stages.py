@@ -10,12 +10,14 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 
 from tianximem.facts.evidence import EVIDENCE_VERSION
 from tianximem.facts.query import FactPattern, QueryPlan
 from tianximem.pairing.apply import index_pair_facts
 from tianximem.retrieve.evidence import (
     EvidenceDecision,
+    EvidenceSelection,
     evaluate_evidence,
     walk_source_literals,
     walk_sources_supported,
@@ -132,6 +134,14 @@ class GroundedEvidenceStage:
                 audit_facts=audit,
                 owner=owner,
             )
+            if plan.operator == "walk" and decision.selection is not None:
+                selection = self._original_record_projection(conn, decision.selection)
+                if (
+                    selection.projection == "source_record"
+                    and selection.source_count > self._evidence_limit
+                ):
+                    return EvidenceDecision(None, "source_limit")
+                decision = replace(decision, selection=selection)
             if (
                 plan.operator != "walk"
                 or not plan.require_complete_walk
@@ -168,3 +178,39 @@ class GroundedEvidenceStage:
             ):
                 return EvidenceDecision(None, "unsupported_source")
             return decision
+
+    def _original_record_projection(
+        self, conn: sqlite3.Connection, selection: EvidenceSelection
+    ) -> EvidenceSelection:
+        """Narrow explicit records only when the entire original message is known.
+
+        A substring quotation cannot establish a complete record boundary. Missing
+        legacy boundaries or ambiguous repeated messages retain parent projection.
+        Extraction and source writes are unchanged.
+        """
+        if (
+            selection.projection != "source"
+            or not selection.facts
+            or any(
+                fact.get("projection") != "source" or fact.source_side != "question"
+                for fact in selection.facts
+            )
+        ):
+            return selection
+        messages = {
+            parent: self._store.fetch_pair_messages(conn, parent)
+            for parent in dict.fromkeys(f.parent_memory_id for f in selection.facts)
+        }
+        indices: list[int] = []
+        for fact in selection.facts:
+            matches = [
+                message
+                for message in messages[fact.parent_memory_id]
+                if message.role == "user"
+                and message.content == fact.source_quote
+                and message.timestamp == fact.event_time
+            ]
+            if len(matches) != 1:
+                return selection
+            indices.append(matches[0].source_index)
+        return replace(selection, projection="source_record", source_indices=tuple(indices))

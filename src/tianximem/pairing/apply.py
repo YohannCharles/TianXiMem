@@ -153,14 +153,32 @@ def index_pair_facts(store: SqliteStore, conn: sqlite3.Connection, pair: QaPair)
     永远匹配不上。查找范围**只限这一次 Add**（`fetch_by_request`）——跨 Add 没有可信
     的顺序，而同一批里的自我介绍与档案字段是同一个人的同一次自述。
     """
-    facts = extract_evidence(
-        parent_memory_id=pair.id,
-        user_id=pair.user_id,
-        question=pair.question,
-        answer=pair.answer,
-        event_time=pair.event_time,
-        entity_extractor=_default_entity_extractor(),
-    )
+    source_messages = store.fetch_pair_messages(conn, pair.id)
+    if source_messages:
+        facts = []
+        extractor = _default_entity_extractor()
+        for message in source_messages:
+            extracted = extract_evidence(
+                parent_memory_id=pair.id,
+                user_id=pair.user_id,
+                question=message.content if message.role == "user" else None,
+                answer=message.content if message.role != "user" else None,
+                event_time=message.timestamp,
+                entity_extractor=extractor,
+                position_prefix=f"message:{message.source_index}:",
+            )
+            facts.extend(extracted)
+    else:
+        # Databases created before boundary retention remain rebuildable.  New
+        # Adds always take the branch above.
+        facts = extract_evidence(
+            parent_memory_id=pair.id,
+            user_id=pair.user_id,
+            question=pair.question,
+            answer=pair.answer,
+            event_time=pair.event_time,
+            entity_extractor=_default_entity_extractor(),
+        )
     owner = _batch_owner_name(store, conn, pair)
     if owner:
         facts = tuple(
@@ -268,6 +286,16 @@ def apply_batch(
                 event_time=block.event_time,
             )
             written.append(pair.id)
+            store.insert_pair_messages(
+                conn,
+                pair.id,
+                tuple(
+                    (source_index, message.role, message.content, message.timestamp)
+                    for source_index, message in zip(
+                        block.source_idxs, block.messages, strict=True
+                    )
+                ),
+            )
             if grounded_evidence:
                 index_pair_facts(store, conn, pair)
 

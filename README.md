@@ -24,6 +24,13 @@ Search request
 
 The service returns source text or source-backed fact projections. It does not answer the user directly.
 
+The current mainline merges contiguous role runs within each Add and retains
+every original message for per-message fact extraction. Explicit grounded walks
+can return the matched original records in hop order; narrative retrieval keeps
+the merged blocks. Neighbor expansion defaults to radius 2. The composition,
+source validation and fallback rules are described in
+[`docs/architecture.md`](docs/architecture.md).
+
 ## Requirements
 
 - Python 3.12

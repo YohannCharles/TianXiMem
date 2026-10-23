@@ -101,6 +101,12 @@ def make_pair_id(user_id: str, session_id: str, request_id: str, local_index: in
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def make_source_message_id(parent_memory_id: str, source_index: int) -> str:
+    """Stable response identity for a retained original message, not a stored block."""
+    payload = _canonical("source-message", parent_memory_id, str(source_index))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class QaPair:
     """一个记忆块的领域对象。
@@ -133,6 +139,16 @@ class QaPair:
         照样能被检索到，但它们**不参与邻接**（`prev` / `next` 恒为 `None`）。
         """
         return self.question is not None and self.answer is not None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceMessage:
+    """One original message retained under its merged parent memory block."""
+
+    source_index: int
+    role: str
+    content: str
+    timestamp: int | None
 
 
 def _now_ms() -> int:
@@ -576,6 +592,38 @@ class SqliteStore:
             status=status,
             event_time=event_time,
         )
+
+    def insert_pair_messages(
+        self,
+        conn: sqlite3.Connection,
+        parent_memory_id: str,
+        messages: Sequence[tuple[int, str, str, int | None]],
+    ) -> None:
+        """Persist original message boundaries for one merged pair."""
+        conn.executemany(
+            "INSERT INTO qa_pair_messages(parent_memory_id,source_index,role,content,timestamp)"
+            " VALUES (?,?,?,?,?) ON CONFLICT(parent_memory_id,source_index) DO NOTHING",
+            [(parent_memory_id, index, role, content, timestamp)
+             for index, role, content, timestamp in messages],
+        )
+
+    def fetch_pair_messages(
+        self, conn: sqlite3.Connection, parent_memory_id: str
+    ) -> list[SourceMessage]:
+        rows = conn.execute(
+            "SELECT source_index,role,content,timestamp FROM qa_pair_messages"
+            " WHERE parent_memory_id=? ORDER BY source_index",
+            (parent_memory_id,),
+        ).fetchall()
+        return [
+            SourceMessage(
+                source_index=row["source_index"],
+                role=row["role"],
+                content=row["content"],
+                timestamp=row["timestamp"],
+            )
+            for row in rows
+        ]
 
     # ── 读 ─────────────────────────────────────────────────────────────
 
