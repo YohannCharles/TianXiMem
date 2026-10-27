@@ -1,0 +1,16 @@
+# Compatibility profile for the v1.0 hybrid retrieval shape.
+
+storage:
+  qdrant:
+    collection: memories_v1flow
+
+retrieval:
+  grounded_evidence: false
+  grounded_planner:
+    enabled: false
+
+router:
+  enabled: false
+
+agentic:
+  enabled: false

@@ -1,0 +1,260 @@
+"""记忆块的组合规则。
+
+```text
+一次 Add 的消息（按原序）
+  → ① 连续同 role 消息合并成一个 RoleBlock
+  → ② 一个 user RoleBlock + 紧随其后的全部非 user RoleBlock 配成一个 MemoryBlock
+  → ③ 开头的非 user RoleBlock 独立成块
+  → 每个 MemoryBlock 恰好一次 embedding
+```
+
+**不同 Add 之间永不组合**：不拼 QA、不合并连续 assistant、不等下一个 chunk、
+不 repair、不重新 embedding。**邻接也只在这一个作用域内**（`link_blocks`）。
+
+本模块是**纯函数**：不认识 SQLite、Qdrant、任何数据集，**没有任何跨 Add 状态**。
+落库在 [`apply.py`](./apply.py)。
+
+组合、邻接与来源边界见 [`../../../../docs/architecture.md`](../../../../docs/architecture.md)。
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+__all__ = [
+    "MemoryBlock",
+    "Message",
+    "RoleBlock",
+    "compose_memory_blocks",
+    "encode_answer",
+    "is_user",
+    "join_question",
+    "link_blocks",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class Message:
+    """一条消息，**只保留 canonical Add 契约的三个字段**。
+
+    ⚠ 这里**不允许**出现任何数据集专属字段（`dia_id` / `speaker` / `has_answer` …）。
+    加载层负责把各数据集的形状归一化到这三个字段——**核心系统不认识任何数据集**。
+    """
+
+    role: str
+    content: str
+    timestamp: int | None = None  # Unix 毫秒，可选
+
+    def __post_init__(self) -> None:
+        if not self.role:
+            raise ValueError("role 不得为空")
+        # 首尾空白在**进入核心之前**去掉：
+        # AML 使用 "\n".join(...) 拼接返回项且不插分隔符；首尾留白会使拼接处粘连。
+        object.__setattr__(self, "content", self.content.strip())
+
+
+def is_user(message: Message) -> bool:
+    """**唯一判据**：这条消息的 `role` 是否等于 `user`。
+
+    ⚠ **不要枚举 role 白名单。** AML 传入的取值域**没有文档**，
+    白名单会在遇到没见过的 role 时**静默丢消息**。其他 role
+    （`assistant` / `system` / 工具输出…）**一律按"非 user"处理**——
+    它们进同一个 block，且**每条都带 `[role]` 标记**（见 `encode_answer`）。
+    """
+    return message.role == "user"
+
+
+def encode_answer(messages: Sequence[Message]) -> str:
+    """把一个块里的非 user 消息编码成 `answer` 列的文本。
+
+    一个块里有多条非 user 消息时，每条都带 role 标记，以保留消息边界。渲染模板是
+    `A: {answer}`，因此标记必须在写入 `answer` 时生成。即使只有一条非 user 消息也加标记。
+
+    空 content 不丢弃，而是渲染成 `[role]`，避免静默丢消息。
+    丢掉它是"静默丢消息"，正是本项目要避免的失败模式。
+    """
+    return "\n".join(f"[{m.role}] {m.content}" if m.content else f"[{m.role}]" for m in messages)
+
+
+def join_question(messages: Sequence[Message]) -> str:
+    """把一段**连续 user 消息**拼成一个 `question`。
+
+    **与 `encode_answer` 相反：这里不加 role 标记。** 两条理由：这段文本是同一个人的
+    发言、role 均一（role 由渲染的 `Q: ` 前缀给出）；而拼接的首要用途是**把被物理切开
+    的一条原消息拼回去**（AML 可能按句边界拆超长 message），只有不加标记才与原消息
+    **逐字接近**。标记会进入 embedding，从而直接改变检索输入。
+
+    只有 `answer` 一侧需要 role 标记，因为一个块里可能混有 `assistant`、`system`
+    或工具输出。
+    """
+    return "\n".join(m.content for m in messages)
+
+
+@dataclass(frozen=True, slots=True)
+class RoleBlock:
+    """一段**连续同 role** 的消息（组合的第 ① 步产物）。
+
+    ⚠ **连续同 role 只在本次 Add 内合并**——跨 Add 的连续 assistant 永远是两块。
+    """
+
+    role: str
+    messages: tuple[Message, ...]
+    source_idxs: tuple[int, ...]
+    """这些消息在**本次 Add 的消息列表**里的下标（保留原始来源，便于调试）。"""
+
+    @property
+    def is_user(self) -> bool:
+        return self.role == "user"
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryBlock:
+    """**检索单元**：一个 user 段 +（若有）紧随其后的非 user 段。
+
+    落库后它就是 `qa_pairs` 的一行；**每个 MemoryBlock 恰好一次 embedding**。
+    它内部**不再逐条 message 单独 embedding**。
+
+    `messages` / `source_idxs` 把**原始来源**原样带出来：合并只发生在文本层，
+    没有任何一条消息因为合并而丢失或改变（调试、邻域扩展、未来做来源定位都要靠它）。
+    """
+
+    question: str | None
+    """连续 user 消息的拼接；`None` = 块里没有 user 消息（如以 assistant 开头的 Add）。"""
+
+    answer: str | None
+    """非 user 消息的拼接，每条带 `[role]` 标记；`None` = 块里没有非 user 消息。"""
+
+    event_time: int | None
+    """**该块首条消息**的 timestamp（Unix 毫秒，可空）——§6.1 的 `event_time` 口径。"""
+
+    messages: tuple[Message, ...]
+    """这个块覆盖的全部原始消息，**按原序**。"""
+
+    source_idxs: tuple[int, ...]
+    """它们在**本次 Add 的消息列表**里的下标。"""
+
+    @property
+    def roles(self) -> tuple[str, ...]:
+        """来源消息的 role，与 `messages` 一一对应。"""
+        return tuple(m.role for m in self.messages)
+
+    @property
+    def timestamps(self) -> tuple[int | None, ...]:
+        """来源消息的 timestamp，与 `messages` 一一对应。"""
+        return tuple(m.timestamp for m in self.messages)
+
+    @property
+    def is_paired(self) -> bool:
+        """user 段与非 user 段**都**在（= 一个完整的 QA 块）。
+
+        `False` 的块是**合法的**、必须照样存——它就是"首尾配不上"的那一类，
+        **不要**去等下一个 Add 把它补齐。
+        """
+        return self.question is not None and self.answer is not None
+
+
+def compose_memory_blocks(messages: Sequence[Message]) -> tuple[MemoryBlock, ...]:
+    """**一次 `Add` 的消息 → 它的记忆块**。这是组合规则的唯一实现。
+
+    决定性的、无副作用的纯函数：不碰数据库、不算 embedding、**没有任何跨 Add 状态**
+    ⇒ 同一批消息无论第几次调用、无论哪次 Add 到达，产出的块**逐字相同**。
+
+    | 输入 | 输出 |
+    | --- | --- |
+    | `U A` | `[U+A]` |
+    | `U U A A A U A` | `[UU+AAA] [U+A]` |
+    | `A U A` | `[A] [U+A]`（首个 A 配不上，独立成块） |
+    | `U A U` | `[U+A] [U]`（末尾的 U 配不上，独立成块） |
+    | `A` / `U` | `[A]` / `[U]` |
+    | `U assistant tool assistant` | `[U+A0+T+A1]`（工具调用序列**不劈开**） |
+    | `U U U`（全 user） | `[UUU]` |
+    | `A A`（全 assistant） | `[AA]` |
+
+    配对只在一次 Add 内发生；不会等待或合并后续 Add 的消息。
+
+    ⚠ **空输入返回空元组**——调用方（`apply_batch`）在此之前就该抛错，见那里的注释。
+    """
+    role_blocks = _merge_consecutive_roles(messages)
+    blocks: list[MemoryBlock] = []
+    i = 0
+    while i < len(role_blocks):
+        if not role_blocks[i].is_user:
+            # 开头没有 user 可配；连续同 role 消息已在 RoleBlock 中合并。
+            blocks.append(_block_from(role_blocks[i]))
+            i += 1
+            continue
+        end = i + 1
+        while end < len(role_blocks) and not role_blocks[end].is_user:
+            end += 1
+        if end > i + 1:
+            # 恢复 v1.0：合并整个 user 段及其后紧邻的全部非 user 段。
+            blocks.append(_block_from(*role_blocks[i:end]))
+        else:
+            # 末尾没有非 user；连续 user 已合并成一个 RoleBlock。
+            blocks.append(_block_from(role_blocks[i]))
+        i = end
+    return tuple(blocks)
+
+
+def link_blocks(
+    blocks: Sequence[MemoryBlock],
+) -> tuple[tuple[int | None, int | None], ...]:
+    """**Add 内的邻接链**：每个块的 `(prev_local_index, next_local_index)`。
+
+    ⚠ **只连完整 QA**（`MemoryBlock.is_paired`）。A-only / Q-only 照样存、照样 embedding、
+    照样能被检索到，但**不进链**——两侧都是 `None`。它们没有"上下文邻居"可言，
+    硬连上去只会让段合并把一段不完整的对话当成连续的。
+
+    ⚠ **这条链只在一次 Add 内成立**：跨 Add 不存在可信的全局序，
+    所以这里**只看传进来的这一批块**，不看库、不看别的 Add（与组合规则同一个作用域）。
+
+    不完整块通常出现在两端，但实现不依赖该位置：实现只连接完整 QA，其余块不进入链。
+
+    返回值与 `blocks` **等长同序**：第 i 项是第 i 个块的 `(前一块的 local_index,
+    后一块的 local_index)`。调用方把它翻成 `memory_id`（`store.make_pair_id`）。
+    """
+    links: list[tuple[int | None, int | None]] = [(None, None)] * len(blocks)
+    complete = [index for index, block in enumerate(blocks) if block.is_paired]
+    for position, index in enumerate(complete):
+        prev_index = complete[position - 1] if position else None
+        next_index = complete[position + 1] if position + 1 < len(complete) else None
+        links[index] = (prev_index, next_index)
+    return tuple(links)
+
+
+def _merge_consecutive_roles(messages: Sequence[Message]) -> tuple[RoleBlock, ...]:
+    """第 ① 步：把**连续同 role** 的消息并成一个 `RoleBlock`。"""
+    blocks: list[RoleBlock] = []
+    for idx, message in enumerate(messages):
+        if blocks and blocks[-1].role == message.role:
+            last = blocks.pop()
+            blocks.append(
+                RoleBlock(
+                    role=last.role,
+                    messages=(*last.messages, message),
+                    source_idxs=(*last.source_idxs, idx),
+                )
+            )
+        else:
+            blocks.append(RoleBlock(role=message.role, messages=(message,), source_idxs=(idx,)))
+    return tuple(blocks)
+
+
+def _block_from(*role_blocks: RoleBlock) -> MemoryBlock:
+    """第 ② / ③ 步：一个 user 段 + 紧随其后的非 user 段（0 个或多个）→ 一个 `MemoryBlock`。
+
+    两个调用形状：`(user, 非user…)`（②）与 `(单独一个任意 role 段,)`（③）。
+    """
+    messages = tuple(m for rb in role_blocks for m in rb.messages)
+    source_idxs = tuple(i for rb in role_blocks for i in rb.source_idxs)
+    user_messages = [m for rb in role_blocks if rb.is_user for m in rb.messages]
+    other_messages = [m for rb in role_blocks if not rb.is_user for m in rb.messages]
+    return MemoryBlock(
+        question=join_question(user_messages) or None,
+        answer=encode_answer(other_messages) or None,
+        # 该块首条消息的 timestamp；传入顺序即原始消息顺序。
+        event_time=messages[0].timestamp if messages else None,
+        messages=messages,
+        source_idxs=source_idxs,
+    )

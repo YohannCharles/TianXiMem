@@ -1,0 +1,38 @@
+# Runtime state
+var/*
+!var/.gitkeep
+
+# Secrets and environment
+.env
+.env.*
+!.env.example
+L20-推理服务API.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.codegraph/
+.tmp/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+
+# Local TianxiCode state
+.claude/*
+!.claude/settings.json
+
+# Legacy archive and capture exports
+benchmark_data/
+official-add-bodies-*.jsonl
+official-dataset-*
+/memory600-*/

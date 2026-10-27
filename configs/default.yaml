@@ -1,0 +1,125 @@
+# Product profile. All other profiles inherit this file.
+#
+# Environment variables own endpoints, credentials, paths, and process shape.
+# YAML owns runtime thresholds, weights, model IDs, collection names, and switches.
+#
+# A: external contract constant; do not tune.
+# B: correctness constant; invalid values must fail validation.
+# C: tunable threshold or switch; changes require an evaluation record.
+
+models:
+  # Server-side model ID. It participates in the embedding cache coordinate.
+  embedder: text-embedding-v4
+
+storage:
+  sqlite:
+    # C: maximum wait when another writer holds the SQLite write lock.
+    busy_timeout_ms: 5000
+  qdrant:
+    # C: a new collection name isolates a new index namespace.
+    collection: memories
+
+retrieval:
+  # C: deterministic grounded-evidence short path.
+  grounded_evidence: true
+  # C: maximum returned evidence and source-review candidates.
+  evidence_limit: 12
+  # C: maximum relation-walk depth.
+  evidence_hop_limit: 4
+  # C: maximum source rows backfilled in one Search request.
+  fact_backfill_limit: 1024
+
+  grounded_planner:
+    # C: use one bounded LLM plan when deterministic compilation fails.
+    enabled: true
+    timeout_seconds: 10.0
+    max_output_tokens: 256
+    temperature: 0.0
+    # B: must match the prompt version implemented in code.
+    prompt_version: v3
+
+  # C: candidates entering RRF from each retrieval arm.
+  prefetch_limit: 200
+
+  rrf:
+    # B: Qdrant uses zero-based ranks. This is equivalent to literature k=60.
+    k: 61
+    # C: [BM25, dense].
+    weights: [0.5, 0.5]
+
+  # C: optional query-side instruction prefix. Empty means send the query unchanged.
+  query_instruction: ""
+
+neighbor:
+  # C: highest-ranked candidates eligible for expansion.
+  expansion_seed_limit: 1000
+  # C: expansion distance in memory blocks. The v1.2 default expands +/-2.
+  radius: 2
+  # C: segment-internal ordering: keep, front, or echo.
+  seed_placement: keep
+
+budget:
+  # A: answer-model input budget.
+  max_tokens: 117760
+  # A: tokenizer used by the submission answer model.
+  tokenizer: o200k_base
+
+packaging:
+  # C: include the source date prefix in rendered indexed text.
+  inject_abs_time: true
+  # C: annotate relative expressions in response content only.
+  annotate_relatives: true
+  # C: add source-stated unit totals for supported transaction facts only.
+  annotate_unit_totals: false
+
+rerank:
+  # C: rerank candidates when a reranker endpoint is configured.
+  enabled: true
+  # B: request envelope accepted by the configured endpoint: query or queries.
+  envelope: query
+  # C: per-request timeout.
+  timeout_seconds: 30.0
+
+router:
+  # C: classify an incomplete grounded-evidence query as MULTI_HOP or DEFAULT.
+  enabled: true
+  timeout_seconds: 10.0
+  max_output_tokens: 8
+  temperature: 0.0
+  # B: must match the router prompt version implemented in code.
+  prompt_version: v5
+
+agentic:
+  # C: construct the configured multi-hop executor.
+  enabled: true
+  # C: executor mode: plan or react.
+  mode: plan
+  # C: force every query through MULTI_HOP. Diagnostic only.
+  force: false
+  # C: retrieval rounds, including the first round.
+  max_rounds: 4
+  # C: candidates retained for the model after each round's rerank.
+  per_round_top_k: 20
+  # C: react mode early-stop confidence threshold.
+  sufficiency_threshold: 0.8
+  # C: react output budget.
+  max_output_tokens: 512
+  # C: plan output budget.
+  plan_max_output_tokens: 1536
+  # C: per-call timeout.
+  timeout_seconds: 30.0
+  temperature: 0.0
+  # C: rerank candidates inside each multi-hop round.
+  round_rerank_enabled: true
+  # C: final rerank query: combined or original.
+  final_rerank_query_mode: combined
+  # B: prompt version assertions.
+  prompt_version: coq-original
+  plan_decompose_prompt_version: plan-decompose-v2
+  plan_step_prompt_version: plan-step-v2
+
+capture:
+  # C: record raw Add/Search requests for protocol diagnostics.
+  enabled: true
+  # C: rotate to a new file after this many bytes.
+  max_bytes: 52428800

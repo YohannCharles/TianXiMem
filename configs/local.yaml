@@ -1,0 +1,10 @@
+# Development profile. Override only settings that must differ from the product profile.
+
+storage:
+  qdrant:
+    # Keep development points isolated from the product collection.
+    collection: memories_dev
+
+rerank:
+  # Disable remote reranking for faster local iteration.
+  enabled: false

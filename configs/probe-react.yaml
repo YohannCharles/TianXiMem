@@ -1,0 +1,7 @@
+# Diagnostic profile: react executor without request capture.
+
+agentic:
+  mode: react
+
+capture:
+  enabled: false

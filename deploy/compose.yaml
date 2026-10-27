@@ -1,0 +1,72 @@
+# Application plus Qdrant server.
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: tianximem:local
+    container_name: tianxi-app
+    restart: unless-stopped
+    stop_grace_period: 60s
+    ports:
+      - "${TIANXIMEM_BIND:-127.0.0.1}:${TIANXIMEM_PORT:-8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TIANXIMEM_QDRANT_URL: "${TIANXIMEM_QDRANT_URL:-http://qdrant:6333}"
+      TIANXIMEM_PROFILE: "${TIANXIMEM_PROFILE:-local}"
+      TIANXIMEM_SQLITE_PATH: /data/tianxi.db
+      TIANXIMEM_EMBED_CACHE_DIR: /data/embed_cache
+      TIANXIMEM_CAPTURE_PATH: /data/capture/requests.jsonl
+      TIANXIMEM_METRICS_PATH: /data/metrics.json
+      TIANXIMEM_WORKERS: "1"
+    volumes:
+      - tianxi_data:/data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,httpx; sys.exit(0 if httpx.get('http://127.0.0.1:8000/health', timeout=4).status_code == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  qdrant:
+    image: "${TIANXIMEM_QDRANT_IMAGE:-qdrant/qdrant:v1.17.0}"
+    container_name: tianxi-qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TIANXIMEM_QDRANT_PORT:-6333}:6333"
+      - "127.0.0.1:${TIANXIMEM_QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      QDRANT__LOG_LEVEL: INFO
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/6333 &&
+          printf 'GET /readyz HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 &&
+          grep -q '200 OK' <&3
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+volumes:
+  qdrant_storage:
+  tianxi_data:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

@@ -1,0 +1,4 @@
+# Diagnostic profile: product defaults without request capture.
+
+capture:
+  enabled: false

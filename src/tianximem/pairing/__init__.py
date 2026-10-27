@@ -1,0 +1,44 @@
+"""记忆块组合与落库。
+
+**一次 `Add` = 组合与邻接的唯一边界**：`Add` 内"一段连续 user + 紧随的非 user"才配对合并、
+非UserBlock 配对、配不上的独立成块；邻接（`prev` / `next`）也**只在这一批内**相连。
+**不同 `Add` 永不拼接、也不建立邻接**——`request_id` 是 opaque string，
+跨 Add 不存在可信的全局顺序。
+
+组合规则见 [`pairing.py`](./pairing.py)（纯函数、无跨 Add 状态），落库见
+[`apply.py`](./apply.py)。
+"""
+
+from tianximem.pairing.apply import (
+    AddBatch,
+    ApplyBatchResult,
+    PayloadMismatchError,
+    apply_batch,
+    payload_fingerprint,
+)
+from tianximem.pairing.pairing import (
+    MemoryBlock,
+    Message,
+    RoleBlock,
+    compose_memory_blocks,
+    encode_answer,
+    is_user,
+    join_question,
+    link_blocks,
+)
+
+__all__ = [
+    "AddBatch",
+    "ApplyBatchResult",
+    "MemoryBlock",
+    "Message",
+    "PayloadMismatchError",
+    "RoleBlock",
+    "apply_batch",
+    "compose_memory_blocks",
+    "encode_answer",
+    "is_user",
+    "join_question",
+    "link_blocks",
+    "payload_fingerprint",
+]
