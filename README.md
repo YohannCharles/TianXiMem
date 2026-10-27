@@ -27,7 +27,7 @@ derived state. The service runs as one process.
 
 ## Requirements
 
-- Python 3.12 for the container image; Python 3.11-3.13 for local execution
+- Python 3.12 for the container image; Python 3.11-3.12 for local execution
 - `uv`
 - Docker with Compose
 - An OpenAI-compatible embedding endpoint
