@@ -1,0 +1,4 @@
+# Diagnostic profile: react executor instead of the plan executor.
+
+agentic:
+  mode: react

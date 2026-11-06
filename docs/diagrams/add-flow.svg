@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="910" viewBox="0 0 1060 910">
+<style>text{font-family:"Noto Sans CJK SC","Noto Sans SC","PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;}</style>
+<rect width="1060" height="910" fill="#ffffff"/>
+<rect x="350" y="30" width="380" height="54" rx="10" fill="#dae8fc" stroke="#6c8ebf" stroke-width="2"/>
+<text x="540.0" y="63.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">POST /add</text>
+<rect x="350" y="118" width="380" height="64" rx="10" fill="#fff2cc" stroke="#d6b656" stroke-width="2"/>
+<text x="540.0" y="156.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">幂等守卫</text>
+<rect x="350" y="218" width="380" height="64" rx="10" fill="#fff2cc" stroke="#d6b656" stroke-width="2"/>
+<text x="540.0" y="256.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">组合记忆块</text>
+<rect x="350" y="318" width="380" height="44" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<text x="540.0" y="346.65" font-size="19" font-weight="bold" text-anchor="middle" fill="#000000">提交真源事务</text>
+<rect x="130" y="396" width="820" height="158" rx="6" fill="#f4faf0" stroke="#a9d08e" stroke-width="2" stroke-dasharray="10 6"/>
+<text x="148" y="423" font-size="19" font-weight="bold" fill="#375623">SQLite（真源）</text>
+<path d="M150 461 a90.0 13 0 0 1 180 0 v60 a90.0 13 0 0 1 -180 0 z" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<ellipse cx="240.0" cy="461" rx="90.0" ry="13" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<text x="240.0" y="483.65" font-size="19" text-anchor="middle" fill="#000000">qa_pairs</text>
+<text x="240.0" y="511.65" font-size="19" text-anchor="middle" fill="#000000">记忆块原文</text>
+<path d="M350 461 a90.0 13 0 0 1 180 0 v60 a90.0 13 0 0 1 -180 0 z" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<ellipse cx="440.0" cy="461" rx="90.0" ry="13" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<text x="440.0" y="483.65" font-size="19" text-anchor="middle" fill="#000000">qa_pair_messages</text>
+<text x="440.0" y="511.65" font-size="19" text-anchor="middle" fill="#000000">原始消息</text>
+<path d="M550 461 a90.0 13 0 0 1 180 0 v60 a90.0 13 0 0 1 -180 0 z" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<ellipse cx="640.0" cy="461" rx="90.0" ry="13" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<text x="640.0" y="483.65" font-size="19" text-anchor="middle" fill="#000000">applied_batches</text>
+<text x="640.0" y="511.65" font-size="19" text-anchor="middle" fill="#000000">批次登记</text>
+<path d="M750 461 a90.0 13 0 0 1 180 0 v60 a90.0 13 0 0 1 -180 0 z" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<ellipse cx="840.0" cy="461" rx="90.0" ry="13" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<text x="840.0" y="483.65" font-size="19" text-anchor="middle" fill="#000000">memory_facts</text>
+<text x="840.0" y="511.65" font-size="19" text-anchor="middle" fill="#000000">抽取事实</text>
+<rect x="350" y="592" width="380" height="44" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<text x="540.0" y="620.65" font-size="19" font-weight="bold" text-anchor="middle" fill="#000000">抽取事实（独立事务）</text>
+<rect x="310" y="670" width="460" height="50" rx="10" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+<text x="540.0" y="701.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">渲染文本 → 向量化 → 写入派生索引</text>
+<path d="M350 767 a190.0 13 0 0 1 380 0 v66 a190.0 13 0 0 1 -380 0 z" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+<ellipse cx="540.0" cy="767" rx="190.0" ry="13" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+<text x="540.0" y="792.65" font-size="19" text-anchor="middle" fill="#000000">Qdrant 集合</text>
+<text x="540.0" y="820.65" font-size="19" text-anchor="middle" fill="#000000">dense + bm25 两路向量</text>
+<line x1="540" y1="84" x2="540" y2="106" stroke="#6c8ebf" stroke-width="2"/>
+<polygon points="540,118 533,106 547,106" fill="#6c8ebf"/>
+<line x1="540" y1="182" x2="540" y2="206" stroke="#6c8ebf" stroke-width="2"/>
+<polygon points="540,218 533,206 547,206" fill="#6c8ebf"/>
+<line x1="540" y1="282" x2="540" y2="306" stroke="#6c8ebf" stroke-width="2"/>
+<polygon points="540,318 533,306 547,306" fill="#6c8ebf"/>
+<line x1="540" y1="362" x2="540" y2="384" stroke="#82b366" stroke-width="2"/>
+<polygon points="540,396 533,384 547,384" fill="#82b366"/>
+<line x1="540" y1="554" x2="540" y2="580" stroke="#82b366" stroke-width="2"/>
+<polygon points="540,592 533,580 547,580" fill="#82b366"/>
+<line x1="540" y1="636" x2="540" y2="658" stroke="#82b366" stroke-width="2"/>
+<polygon points="540,670 533,658 547,658" fill="#82b366"/>
+<line x1="540" y1="720" x2="540" y2="742" stroke="#9673a6" stroke-width="2"/>
+<polygon points="540,754 533,742 547,742" fill="#9673a6"/>
+<polyline points="740,614 988,614 988,533 934,533" fill="none" stroke="#82b366" stroke-width="2"/>
+<polygon points="934,533 946.0,539.0 946.0,527.0" fill="#82b366"/>
+<text x="980" y="604" font-size="14" text-anchor="end" fill="#375623">写入 memory_facts</text>
+</svg>

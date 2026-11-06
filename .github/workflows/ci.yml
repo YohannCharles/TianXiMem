@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --dev --python ${{ matrix.python }}
+      - name: Ruff
+        run: uv run python -m tianximem.dev lint
+      - name: Format
+        run: uv run python -m tianximem.dev format-check
+      - name: Mypy
+        run: uv run python -m tianximem.dev typecheck
+      - name: Config contract
+        run: uv run python -m tianximem.dev config-check
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose
+        run: docker compose --env-file deploy/.env.example -f deploy/compose.yaml config --quiet
+      - name: Build image
+        run: docker build -f deploy/Dockerfile -t tianximem:ci .
+      - name: Verify image
+        run: |
+          docker run --rm --entrypoint python tianximem:ci -c \
+            "import tianximem; print(tianximem.__file__)"

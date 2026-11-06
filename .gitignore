@@ -1,0 +1,34 @@
+# 运行时状态
+var/*
+
+# 密钥与环境变量
+.env
+.env.*
+!.env.example
+!deploy/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 编辑器与操作系统
+.vscode/
+.idea/
+.DS_Store
+
+# 本地校验脚本
+scratch/
+
+# 本地数据集
+dataset/
+
+# draw.io 自动备份
+.*.bkp

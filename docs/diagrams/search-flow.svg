@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="990" viewBox="0 0 960 990">
+<style>text{font-family:"Noto Sans CJK SC","Noto Sans SC","PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif;}</style>
+<rect width="960" height="990" fill="#ffffff"/>
+<rect x="300" y="30" width="360" height="50" rx="6" fill="#dae8fc" stroke="#6c8ebf" stroke-width="2"/>
+<text x="480.0" y="61.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">POST /search</text>
+<polyline points="480,80 480,118" fill="none" stroke="#6c8ebf" stroke-width="2"/>
+<polygon points="480,118 486.0,106.0 474.0,106.0" fill="#6c8ebf"/>
+<rect x="300" y="118" width="360" height="50" rx="6" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<text x="480.0" y="149.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">参数校验</text>
+<polyline points="480,168 480,206" fill="none" stroke="#6c8ebf" stroke-width="2"/>
+<polygon points="480,206 486.0,194.0 474.0,194.0" fill="#6c8ebf"/>
+<rect x="300" y="206" width="360" height="50" rx="6" fill="#fff2cc" stroke="#d6b656" stroke-width="2"/>
+<text x="480.0" y="237.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">查询路由</text>
+<polyline points="300,231 210,231 210,300" fill="none" stroke="#6c8ebf" stroke-width="2"/>
+<polygon points="210,300 216.0,288.0 204.0,288.0" fill="#6c8ebf"/>
+<rect x="30" y="300" width="360" height="74" rx="6" fill="#ffe6cc" stroke="#d69556" stroke-width="2"/>
+<text x="210.0" y="329.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">多跳检索</text>
+<text x="210.0" y="357.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">plan / react</text>
+<polyline points="660,231 750,231 750,300" fill="none" stroke="#6c8ebf" stroke-width="2"/>
+<polygon points="750,300 756.0,288.0 744.0,288.0" fill="#6c8ebf"/>
+<rect x="570" y="300" width="360" height="74" rx="6" fill="#ffe6cc" stroke="#d69556" stroke-width="2"/>
+<text x="750.0" y="329.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">混合检索</text>
+<text x="750.0" y="357.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">BM25 + dense → RRF</text>
+<polyline points="390,337 570,337" fill="none" stroke="#6c8ebf" stroke-width="2"/>
+<polygon points="570,337 558.0,331.0 558.0,343.0" fill="#6c8ebf"/>
+<polyline points="210,374 210,430 480,430" fill="none" stroke="#6c8ebf" stroke-width="2"/>
+<polyline points="750,374 750,430 480,430" fill="none" stroke="#6c8ebf" stroke-width="2"/>
+<polyline points="480,430 480,444" fill="none" stroke="#6c8ebf" stroke-width="2"/>
+<polygon points="480,444 486.0,432.0 474.0,432.0" fill="#6c8ebf"/>
+<rect x="300" y="444" width="360" height="50" rx="6" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+<text x="480.0" y="475.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">候选去重与检查</text>
+<polyline points="480,494 480,532" fill="none" stroke="#9673a6" stroke-width="2"/>
+<polygon points="480,532 486.0,520.0 474.0,520.0" fill="#9673a6"/>
+<rect x="300" y="532" width="360" height="50" rx="6" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+<text x="480.0" y="563.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">精排</text>
+<polyline points="480,582 480,620" fill="none" stroke="#9673a6" stroke-width="2"/>
+<polygon points="480,620 486.0,608.0 474.0,608.0" fill="#9673a6"/>
+<rect x="300" y="620" width="360" height="50" rx="6" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+<text x="480.0" y="651.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">邻居扩窗与段合并</text>
+<polyline points="480,670 480,708" fill="none" stroke="#9673a6" stroke-width="2"/>
+<polygon points="480,708 486.0,696.0 474.0,696.0" fill="#9673a6"/>
+<rect x="300" y="708" width="360" height="50" rx="6" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+<text x="480.0" y="739.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">按词元预算打包</text>
+<polyline points="480,758 480,796" fill="none" stroke="#9673a6" stroke-width="2"/>
+<polygon points="480,796 486.0,784.0 474.0,784.0" fill="#9673a6"/>
+<rect x="300" y="796" width="360" height="70" rx="6" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+<text x="480.0" y="837.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">事实追加</text>
+<polyline points="480,866 480,904" fill="none" stroke="#9673a6" stroke-width="2"/>
+<polygon points="480,904 486.0,892.0 474.0,892.0" fill="#9673a6"/>
+<rect x="300" y="904" width="360" height="50" rx="6" fill="#dae8fc" stroke="#6c8ebf" stroke-width="2"/>
+<text x="480.0" y="935.65" font-size="19" font-weight="normal" text-anchor="middle" fill="#000000">返回 ≤ top_k 条结果</text>
+<text x="230" y="223.25" font-size="15" font-weight="normal" text-anchor="middle" fill="#333333">MULTI_HOP</text>
+<text x="730" y="223.25" font-size="15" font-weight="normal" text-anchor="middle" fill="#333333">其他</text>
+<text x="480" y="327.25" font-size="15" font-weight="normal" text-anchor="middle" fill="#333333">失败回退</text>
+</svg>

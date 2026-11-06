@@ -1,0 +1,23 @@
+# The build context is the repository root.
+
+.git
+.gitignore
+.venv
+.python-version
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.env
+.env.*
+!.env.example
+var
+docs
+.github
+dist
+build
+.vscode
+.idea
+*.swp
+.DS_Store

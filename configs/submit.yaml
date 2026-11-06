@@ -1,0 +1,5 @@
+# Submission profile. The endpoint and credentials remain in environment variables.
+
+models:
+  # Required submission embedding model.
+  embedder: text-embedding-v4

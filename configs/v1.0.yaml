@@ -1,0 +1,18 @@
+# Compatibility profile for the v1.0 hybrid retrieval shape.
+
+storage:
+  qdrant:
+    collection: memories_v1flow
+
+retrieval:
+  fact_augmentation: false
+
+extraction:
+  # The v1.0 shape has no derived fact layer at all, on either side.
+  enabled: false
+
+router:
+  enabled: false
+
+agentic:
+  enabled: false

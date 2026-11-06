@@ -1,0 +1,24 @@
+# Development profile. Override only settings that must differ from the product profile.
+
+models:
+  # Development uses a self-hosted Qwen3 embedding model; the product profile's
+  # text-embedding-v4 is not served there. Both are 1024-dim, so switching is
+  # invisible downstream.
+  embedder: Qwen/Qwen3-Embedding-4B
+
+storage:
+  qdrant:
+    # Keep development points isolated from the product collection.
+    collection: memories_dev
+
+rerank:
+  # The development gateway serves Qwen3-Reranker-4B, so reranking is exercised locally.
+  enabled: true
+
+extraction:
+  # Inherited from the product profile; kept here so the development shape is explicit.
+  enabled: true
+
+retrieval:
+  # Inherited from the product profile; kept here so the development shape is explicit.
+  fact_augmentation: true

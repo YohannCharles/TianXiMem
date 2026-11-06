@@ -1,0 +1,75 @@
+<mxfile host="Electron" agent="TianXiMem">
+  <diagram name="Add" id="add-flow">
+    <mxGraphModel dx="1610" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1060" pageHeight="910" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="s1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=19;arcSize=10;" value="POST /add" vertex="1">
+          <mxGeometry height="54" width="380" x="350" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="s2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=19;arcSize=10;" value="幂等守卫" vertex="1">
+          <mxGeometry height="64" width="380" x="350" y="118" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=19;arcSize=10;" value="组合记忆块" vertex="1">
+          <mxGeometry height="64" width="380" x="350" y="218" as="geometry" />
+        </mxCell>
+        <mxCell id="s4" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=19;fontStyle=1;" value="提交真源事务" vertex="1">
+          <mxGeometry height="44" width="380" x="350" y="318" as="geometry" />
+        </mxCell>
+        <mxCell id="sqlbox" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f4faf0;strokeColor=#a9d08e;dashed=1;dashPattern=10 6;verticalAlign=top;align=left;spacingLeft=18;spacingTop=6;fontSize=19;fontStyle=1;fontColor=#375623;arcSize=4;" value="SQLite（真源）" vertex="1">
+          <mxGeometry height="158" width="820" x="130" y="396" as="geometry" />
+        </mxCell>
+        <mxCell id="db1" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=9;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=19;" value="qa_pairs&#xa;记忆块原文" vertex="1">
+          <mxGeometry height="86" width="180" x="150" y="448" as="geometry" />
+        </mxCell>
+        <mxCell id="db2" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=9;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=19;" value="qa_pair_messages&#xa;原始消息" vertex="1">
+          <mxGeometry height="86" width="180" x="350" y="448" as="geometry" />
+        </mxCell>
+        <mxCell id="db4" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=9;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=19;" value="applied_batches&#xa;批次登记" vertex="1">
+          <mxGeometry height="86" width="180" x="550" y="448" as="geometry" />
+        </mxCell>
+        <mxCell id="db3" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=9;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=19;" value="memory_facts&#xa;抽取事实" vertex="1">
+          <mxGeometry height="86" width="180" x="750" y="448" as="geometry" />
+        </mxCell>
+        <mxCell id="s5" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=19;fontStyle=1;" value="抽取事实（独立事务）" vertex="1">
+          <mxGeometry height="44" width="380" x="350" y="592" as="geometry" />
+        </mxCell>
+        <mxCell id="s6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=19;arcSize=10;" value="渲染文本 → 向量化 → 写入派生索引" vertex="1">
+          <mxGeometry height="50" width="460" x="310" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="qd" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=9;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=19;" value="Qdrant 集合&#xa;dense + bm25 两路向量" vertex="1">
+          <mxGeometry height="92" width="380" x="350" y="754" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="s1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#6c8ebf;strokeWidth=2;fontSize=19;" target="s2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="s2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#6c8ebf;strokeWidth=2;fontSize=19;" target="s3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="s3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#6c8ebf;strokeWidth=2;fontSize=19;" target="s4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="s4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#82b366;strokeWidth=2;fontSize=19;" target="sqlbox">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="sqlbox" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#82b366;strokeWidth=2;fontSize=19;" target="s5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="s5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#82b366;strokeWidth=2;fontSize=19;" target="s6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="s6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeColor=#9673a6;strokeWidth=2;fontSize=19;" target="qd">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="s5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=1;exitY=0.5;entryX=1;entryY=0.5;strokeColor=#82b366;strokeWidth=2;fontSize=14;fontColor=#375623;labelBackgroundColor=none;" target="db3" value="写入 memory_facts">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="988" y="614" />
+              <mxPoint x="988" y="491" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

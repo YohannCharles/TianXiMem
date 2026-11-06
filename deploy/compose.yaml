@@ -1,0 +1,109 @@
+# TianXiMem full stack: application + Qdrant server.
+#
+# Run from the repository root:
+#   cp deploy/.env.example deploy/.env      # then fill in the model endpoints
+#   docker compose -f deploy/compose.yaml up -d --build
+#
+# Compose interpolates `${...}` from the shell and from `deploy/.env`, so that
+# file is both the build/deploy knobs and the container environment.
+#
+# Single worker is a correctness constraint: SQLite is the source of truth and
+# every row is written through one writer. Do not scale this service.
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        # Restricted networks can point these at a mirror without editing the
+        # Dockerfile. Both must serve the same artifacts as upstream.
+        PYTHON_IMAGE: "${TIANXIMEM_PYTHON_IMAGE:-python:3.12-slim-bookworm}"
+        PYPI_INDEX: "${TIANXIMEM_PYPI_INDEX:-https://pypi.org/simple}"
+        UV_VERSION: "${TIANXIMEM_UV_VERSION:-0.12.15}"
+    image: "${TIANXIMEM_IMAGE:-tianximem}:${TIANXIMEM_TAG:-local}"
+    container_name: tianxi-app
+    restart: unless-stopped
+    stop_grace_period: 60s
+    ports:
+      # Loopback by default. Exposing this port publicly requires TLS and
+      # authentication in front of it: the service has none of its own.
+      - "${TIANXIMEM_BIND:-127.0.0.1}:${TIANXIMEM_PORT:-8000}:8000"
+    extra_hosts:
+      # Lets the container reach a model gateway running on the host.
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Endpoints and credentials come from env_file. These are the in-container
+      # paths and the cross-service address, which must not follow the host.
+      TIANXIMEM_QDRANT_URL: "${TIANXIMEM_QDRANT_URL:-http://qdrant:6333}"
+      # Selects configs/<profile>.yaml. Listed here so a shell override works
+      # even when deploy/.env omits it; the image also defaults to `default`.
+      TIANXIMEM_PROFILE: "${TIANXIMEM_PROFILE:-default}"
+      TIANXIMEM_SQLITE_PATH: /data/tianxi.db
+      TIANXIMEM_EMBED_CACHE_DIR: /data/embed_cache
+      # `-` (not `:-`) so an explicit empty value in deploy/.env disables the
+      # metric snapshot: the loader treats "" as "do not write".
+      TIANXIMEM_METRICS_PATH: "${TIANXIMEM_METRICS_PATH-/data/metrics.json}"
+      TIANXIMEM_WORKERS: "1"
+    volumes:
+# SQLite, the embedding cache and metrics. The only stateful mount; it is
+      # what survives a restart and what must be backed up.
+      - tianxi_data:/data
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,httpx; sys.exit(0 if httpx.get('http://127.0.0.1:8000/health', timeout=4).status_code == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      # Unbounded container logs are one way a long run fills a host; the other
+      # is the metric snapshot under /data.
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  qdrant:
+    image: "${TIANXIMEM_QDRANT_IMAGE:-qdrant/qdrant:v1.17.0}"
+    container_name: tianxi-qdrant
+    restart: unless-stopped
+    ports:
+      # Only published on loopback. The application talks to qdrant over the
+      # compose network; these ports exist for local inspection.
+      - "127.0.0.1:${TIANXIMEM_QDRANT_PORT:-6333}:6333"
+      - "127.0.0.1:${TIANXIMEM_QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      QDRANT__LOG_LEVEL: INFO
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/6333 &&
+          printf 'GET /readyz HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 &&
+          grep -q '200 OK' <&3
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  # Derived index. Rebuildable by replaying the same Add requests; losing it
+  # costs recomputation, not memory.
+  qdrant_storage:
+  # Stores the memories. Back it up; the other volume can be rebuilt.
+  tianxi_data:
